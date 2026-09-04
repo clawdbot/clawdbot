@@ -14,6 +14,7 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
+import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { proveHotReloadBrowserSettings } from "./gateway-config-hot-reload-browser.js";
 import { proveHotReloadChannels } from "./gateway-config-hot-reload-channels.js";
@@ -100,6 +101,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         runtimeEnvPatch: {
           ...pairingFixture.runtimeEnvPatch,
           OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: undefined,
           OPENCLAW_APNS_RELAY_ALLOW_HTTP: "true",
           OPENCLAW_APNS_RELAY_BASE_URL: undefined,
           OPENCLAW_APNS_RELAY_TIMEOUT_MS: undefined,
@@ -132,6 +134,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
             noSandbox: true,
             executablePath: browserExecutable,
             defaultProfile: "openclaw",
+            ssrfPolicy: { allowedHostnames: [new URL(fixture.baseUrl).hostname] },
             tabCleanup: { enabled: false },
           },
           plugins: {
@@ -161,6 +164,11 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         }),
       });
       const activeGateway = gateway;
+      assert.equal(
+        activeGateway.runtimeEnv.OPENCLAW_SKIP_CANVAS_HOST,
+        undefined,
+        "Canvas hot reload proof requires the Canvas host",
+      );
       const primary = await connectHotReloadClient(activeGateway);
       connections.push(primary);
       const pid = activeGateway.pid;
@@ -727,7 +735,11 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
     () => pairingFixture?.close(),
     () => fixture.close(),
     () => mock.stop(),
-    () => fs.rm(temporaryRoot, { recursive: true, force: true }),
+    async () => {
+      // Child cleanup does not own this parent identity store or its live WAL.
+      closeOpenClawStateDatabaseByPath(path.join(temporaryRoot, "state", "openclaw.sqlite"));
+      await fs.rm(temporaryRoot, { recursive: true, force: true });
+    },
   );
   return { summary, passedChecks, failures };
 }

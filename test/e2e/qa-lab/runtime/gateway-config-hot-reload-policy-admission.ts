@@ -165,13 +165,14 @@ process.stdout.write(JSON.stringify({ protocolVersion: 1, decision, reason: 'Syn
                 enabled: phase.enabled,
                 targets: [phase.target],
                 exec: {
+                  source: "exec",
                   command,
                   args: [script, phase.decision],
                   trustedDirs: [root, path.dirname(command)],
                 },
               },
             },
-          },
+          } satisfies OpenClawConfig,
           [
             "security.installPolicy.targets",
             "security.installPolicy.exec.args",
@@ -183,7 +184,10 @@ process.stdout.write(JSON.stringify({ protocolVersion: 1, decision, reason: 'Syn
         const invoked = phase.enabled && phase.target === "skill";
         const blocked = invoked && phase.decision === "block";
         if (blocked) {
-          await assert.rejects(invoke(), /blocked by install policy: Synthetic policy block/);
+          await assert.rejects(
+            invoke(),
+            /Install blocked by policy[\s\S]*Reason: Synthetic policy block/,
+          );
           await assert.rejects(fs.stat(target), { code: "ENOENT" });
         } else {
           assert((await invoke()).includes(`Installed ${slug} from path ->`));

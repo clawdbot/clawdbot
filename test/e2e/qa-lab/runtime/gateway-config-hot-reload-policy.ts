@@ -178,9 +178,10 @@ export async function proveHotReloadPolicy({
     await hook("first", "policy-recorder", "session", "A");
     await hook("second", "policy-recorder", "session", "B");
     await hook("broken", "policy-recorder", "session", "X");
+    const rejectedImportMarker = `Synthetic rejected hook import ${randomUUID()}`;
     await fs.writeFile(
       path.join(root, "broken", "policy-recorder", "handler.js"),
-      'throw new Error("Synthetic rejected hook import");\nexport default function() {}\n',
+      `throw new Error(${JSON.stringify(rejectedImportMarker)});\nexport default function() {}\n`,
     );
     // General session handlers run before the specific patch witness, including after entry disable.
     await hook("common", "policy-witness", "session:patch", "W");
@@ -220,7 +221,6 @@ export async function proveHotReloadPolicy({
     try {
       await configure("first");
       await trigger(["A", "W"]);
-      const logMark = gateway.logs().length;
       await assert.rejects(configure("broken"), (error: unknown) => {
         const message = String(error);
         assert.match(
@@ -231,7 +231,7 @@ export async function proveHotReloadPolicy({
         return true;
       });
       await waitForHotReloadFact("rejected managed hook import diagnostic", () =>
-        gateway.logs().slice(logMark).includes("Synthetic rejected hook import") ? true : undefined,
+        gateway.logs().includes(rejectedImportMarker) ? true : undefined,
       );
       await trigger(["A", "W"]);
       await configure("first");
@@ -479,14 +479,17 @@ export async function proveHotReloadChannelPolicy({
 
   await proveGroup("accessGroups", async () => {
     try {
-      await patchChannels({
-        channels: {
-          [channel]: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: ["accessGroup:hot-reload-policy"],
+      await patchChannels(
+        {
+          channels: {
+            [channel]: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["accessGroup:hot-reload-policy"],
+            },
           },
         },
-      });
+        ["channels.qa-channel.groupAllowFrom"],
+      );
       for (const [index, allowed] of [true, false, true].entries()) {
         await patchChannels(
           {
@@ -517,8 +520,15 @@ export async function proveHotReloadChannelPolicy({
     } finally {
       await patchChannels(
         {
-          channels: { [channel]: { groupPolicy: "open", groupAllowFrom: null } },
-          accessGroups: initial.accessGroups ?? null,
+          channels: {
+            [channel]: {
+              groupPolicy: initial.channels?.[channel]?.groupPolicy ?? null,
+              groupAllowFrom: initial.channels?.[channel]?.groupAllowFrom ?? null,
+            },
+          },
+          accessGroups: {
+            "hot-reload-policy": initial.accessGroups?.["hot-reload-policy"] ?? null,
+          },
         },
         ["channels.qa-channel.groupAllowFrom", "accessGroups.hot-reload-policy.members.qa-channel"],
       );

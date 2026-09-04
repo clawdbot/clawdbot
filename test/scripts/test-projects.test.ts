@@ -88,6 +88,8 @@ describe("test runtime prerequisites", () => {
       ["src/gateway/gateway-cron-process-identity.windows.test.ts"],
       "runtime",
     ],
+    ["real Gateway config edits", ["src/gateway/server.config-patch.test.ts"], "runtime"],
+    ["Gateway server config", ["test/vitest/vitest.gateway-server.config.ts"], "runtime"],
     ["Gateway directory", ["src/gateway"], "runtime"],
     ["Gateway core config", ["test/vitest/vitest.gateway-core.config.ts"], "runtime"],
     ["Gateway umbrella config", ["test/vitest/vitest.gateway.config.ts"], "runtime"],

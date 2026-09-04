@@ -51,6 +51,15 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
+  {
+    file: "src/gateway/server.config-patch.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "src/gateway",
+  },
   ...[
     "src/gateway/gateway-active-memory.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",
