@@ -84,7 +84,7 @@ describe("Discord native verbose menu", () => {
         ephemeralDefault: true,
         threadBindings: createNoopThreadBindingManager("default"),
       });
-      await command.run(interaction as Parameters<typeof command.run>[0]);
+      await command.run(interaction);
       if (mode === "unavailable") {
         expect(conversationRuntime.ensureConfiguredBindingRouteReady).toHaveBeenCalled();
       }
