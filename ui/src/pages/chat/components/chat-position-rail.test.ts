@@ -172,7 +172,7 @@ describe("conversation position rail", () => {
       expect(preview()).toContain("Checkpoint 5");
       markers()[2]!.dispatchEvent(new Event("pointerenter"));
       expect(preview()).toContain("Checkpoint 2");
-      markers()[2]!.dispatchEvent(new Event("pointerleave"));
+      container.querySelector(".chat-position-rail")!.dispatchEvent(new Event("pointerleave"));
       expect(preview()).toContain("Checkpoint 5");
       markers()[4]!.dispatchEvent(
         new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
@@ -192,6 +192,13 @@ describe("conversation position rail", () => {
       markers()[0]!.focus();
       expect(preview()).toBeDefined();
       render(nothing, container);
+      const escapeAfterRemoval = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      document.dispatchEvent(escapeAfterRemoval);
+      expect(escapeAfterRemoval.defaultPrevented).toBe(false);
       rerender();
       expect(preview()).toBeUndefined();
       props.sessionKey = "agent:main:second";

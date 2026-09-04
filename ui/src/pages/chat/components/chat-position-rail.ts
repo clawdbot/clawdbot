@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
+import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../../../i18n/index.ts";
@@ -30,8 +31,38 @@ class ChatPositionRailDirective extends AsyncDirective {
   private session: ChatTranscriptSession | null = null;
   private interaction = initialInteraction();
   private requestUpdate: (() => void) | undefined;
+  private previewElement: Element | undefined;
+
+  private readonly dismissPreview = (event: KeyboardEvent) => {
+    const rail = this.previewElement?.closest(".chat-position-rail");
+    if (
+      event.key !== "Escape" ||
+      event.defaultPrevented ||
+      this.interaction.dismissed ||
+      !rail ||
+      rail.ownerDocument.defaultView?.getComputedStyle(rail).display === "none"
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.interaction.hoveredId = null;
+    this.interaction.dismissed = true;
+    this.requestUpdate?.();
+  };
+
+  private readonly bindPreview = (element?: Element) => {
+    this.previewElement?.ownerDocument.defaultView?.removeEventListener(
+      "keydown",
+      this.dismissPreview,
+      true,
+    );
+    this.previewElement = element;
+    element?.ownerDocument.defaultView?.addEventListener("keydown", this.dismissPreview, true);
+  };
 
   protected override disconnected() {
+    this.bindPreview();
     this.interaction.hoveredId = null;
     this.interaction.focusedId = null;
     this.interaction.dismissed = false;
@@ -143,7 +174,14 @@ class ChatPositionRailDirective extends AsyncDirective {
         ?.focus({ preventScroll: true });
     };
     return html`
-      <aside class="chat-position-rail" aria-label=${t("chat.thread.positionRail")}>
+      <aside
+        class="chat-position-rail"
+        aria-label=${t("chat.thread.positionRail")}
+        @pointerleave=${() => {
+          interaction.hoveredId = null;
+          requestUpdate();
+        }}
+      >
         <div class="chat-position-rail__track">
           ${repeat(
             markers,
@@ -172,10 +210,6 @@ class ChatPositionRailDirective extends AsyncDirective {
                     interaction.dismissed = false;
                     requestUpdate();
                   }}
-                  @pointerleave=${() => {
-                    interaction.hoveredId = null;
-                    requestUpdate();
-                  }}
                   @focus=${() => {
                     interaction.focusedId = marker.id;
                     interaction.rovingId = marker.id;
@@ -193,11 +227,6 @@ class ChatPositionRailDirective extends AsyncDirective {
                       )
                     ) {
                       moveFocus(event, index);
-                    } else if (event.key === "Escape") {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      interaction.dismissed = true;
-                      requestUpdate();
                     }
                   }}
                   @click=${() => transcript.revealMessage(marker.id)}
@@ -212,6 +241,7 @@ class ChatPositionRailDirective extends AsyncDirective {
             previewMarker
               ? html`
                   <div
+                    ${ref(this.bindPreview)}
                     class="chat-position-rail__preview"
                     aria-hidden="true"
                     style=${styleMap({ "--chat-position-preview": previewMarker.position })}

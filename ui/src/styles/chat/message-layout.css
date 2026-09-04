@@ -82,6 +82,7 @@
 
 .chat-position-rail__marker {
   position: absolute;
+  z-index: 1;
   top: var(--chat-position-marker);
   left: -13px;
   display: grid;
@@ -156,8 +157,18 @@
   box-shadow: var(--shadow-md);
   font-size: 12px;
   line-height: 1.35;
-  pointer-events: none;
   transform: translateY(-50%);
+}
+
+/* A contiguous hover path lets magnifier users move from the marker onto the
+   preview. Marker hit targets stay above this transparent bridge. */
+.chat-position-rail__preview::after {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  width: 16px;
+  height: 100%;
+  content: "";
 }
 
 .chat-position-rail__preview-label {

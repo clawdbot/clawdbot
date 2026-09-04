@@ -66,6 +66,8 @@ suite.define(() => {
           });
           await expect.poll(currentMarkerIndex).toBe(0);
 
+          const composer = page.locator(".agent-chat__composer-combobox textarea");
+          await composer.focus();
           await markers.nth(4).hover();
           await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 32");
           await expect
@@ -99,6 +101,24 @@ suite.define(() => {
           expect(hoveredAppearance.targetHeight).toBeGreaterThanOrEqual(24);
           await captureUiProof(suite, page, "chat-position-rail", "scroll-follow-hover.png");
 
+          const previewBounds = await preview.boundingBox();
+          expect(previewBounds).not.toBeNull();
+          await page.mouse.move(
+            previewBounds!.x + previewBounds!.width / 2,
+            previewBounds!.y + previewBounds!.height / 2,
+            { steps: 20 },
+          );
+          expect(await preview.textContent()).toContain("Transcript checkpoint 32");
+          await captureUiProof(suite, page, "chat-position-rail", "hover-reading.png");
+          await page.keyboard.press("Escape");
+          await expect.poll(() => preview.count()).toBe(0);
+          expect(await composer.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+
+          await page.mouse.move(600, 100);
+          await markers.nth(4).hover();
+          await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 32");
           await page.mouse.move(600, 100);
           await expect.poll(() => preview.count()).toBe(0);
           await markers.nth(5).focus();
