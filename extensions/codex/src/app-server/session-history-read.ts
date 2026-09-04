@@ -5,10 +5,22 @@ import {
   readCodexSessionContext,
   type SessionTranscriptContextVersion,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
-import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
+import type {
+  SessionTranscriptTargetParams,
+  TranscriptTurnAdmission,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
-import type { ResolvedCodexHistoryTarget } from "./session-history.js";
+
+export type ResolvedCodexHistoryTarget =
+  | { kind: "empty" }
+  | { kind: "file"; sessionFile: string }
+  | {
+      kind: "sqlite";
+      target: Required<
+        Pick<SessionTranscriptTargetParams, "agentId" | "sessionId" | "sessionKey" | "storePath">
+      >;
+    };
 
 export function consumeCodexHistory<T>(
   messages: Iterable<AgentMessage>,

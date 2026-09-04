@@ -3,8 +3,10 @@ import type { SessionTranscriptContextVersion } from "openclaw/plugin-sdk/codex-
 import { serveWorkerTasks } from "openclaw/plugin-sdk/process-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { JsonValue } from "./src/app-server/protocol.js";
-import { readCodexNativeHistory } from "./src/app-server/session-history-read.js";
-import type { ResolvedCodexHistoryTarget } from "./src/app-server/session-history.js";
+import {
+  readCodexNativeHistory,
+  type ResolvedCodexHistoryTarget,
+} from "./src/app-server/session-history-read.js";
 import {
   projectVerifiedSettledCodexMessages,
   type SettledTurnMessages,

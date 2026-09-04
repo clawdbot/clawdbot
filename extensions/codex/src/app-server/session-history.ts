@@ -11,7 +11,11 @@ import type {
   TranscriptTurnAdmission,
   SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { consumeCodexHistory, readCodexNativeHistory } from "./session-history-read.js";
+import {
+  consumeCodexHistory,
+  readCodexNativeHistory,
+  type ResolvedCodexHistoryTarget,
+} from "./session-history-read.js";
 
 type CodexHistoryView = "native-evidence" | "model-context";
 export type CodexMirroredSessionHistoryTarget = {
@@ -21,16 +25,6 @@ export type CodexMirroredSessionHistoryTarget = {
   sessionKey?: string;
   sessionTarget?: Partial<SessionTranscriptTargetParams>;
 };
-
-export type ResolvedCodexHistoryTarget =
-  | { kind: "empty" }
-  | { kind: "file"; sessionFile: string }
-  | {
-      kind: "sqlite";
-      target: Required<
-        Pick<SessionTranscriptTargetParams, "agentId" | "sessionId" | "sessionKey" | "storePath">
-      >;
-    };
 
 export function resolveCodexHistoryTarget(
   target: CodexMirroredSessionHistoryTarget,
