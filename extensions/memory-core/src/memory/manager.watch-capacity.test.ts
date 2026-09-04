@@ -393,6 +393,12 @@ describe("memory watcher kernel capacity degrade", () => {
     expect(readDegradedDirs(active)).toContain(memoryDir);
     expect(createdChokidarWatchers.length).toBe(chokidarBaseline);
     expect(readIntervalTimer(active)).toBeTruthy();
+    // The degradation is recorded exactly once: the reattach reports capacity
+    // upward and only the callback degrades, so no duplicate warn appears.
+    const capacityWarns = memoryLoggerWarn.mock.calls.filter((call) =>
+      String(call[0]).includes("kernel watch capacity exhausted"),
+    );
+    expect(capacityWarns).toHaveLength(1);
   });
 
   // The full index pipeline needs the plugin state store; its sqlite temp-dir

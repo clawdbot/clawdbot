@@ -317,11 +317,10 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     );
     if (parentResult === "capacity") {
       // Parent creation hit capacity exhaustion: root replacement would stay
-      // uncovered, so this tree degrades instead of reporting "attached".
+      // uncovered. Close the fresh pair and report capacity upward — both
+      // callers (startup setup and the replacement callback) own the single
+      // degradation, so it is recorded exactly once.
       this.closeNativeMemoryWatchPair(pair);
-      if (!this.closed) {
-        this.degradeMemoryWatchToPollingSync(dir, markDirty);
-      }
       return "capacity";
     }
     return "attached";
@@ -450,6 +449,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         // A live main watcher still covers normal events without its parent.
       });
       pair.parent = attachedParent;
+      return "attached";
     } catch (err) {
       if (isKernelWatchCapacityError(err)) {
         // The kernel cannot grant the parent watch even at creation time.
