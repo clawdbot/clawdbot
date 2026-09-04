@@ -27,7 +27,6 @@ import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import { resolveSkillInvocationPolicy, resolveSkillKey } from "./frontmatter.js";
 import {
   loadSingleSkillDirectory,
-  loadSkillsFromDirSafe,
   type LoadedLocalSkill,
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
@@ -56,7 +55,7 @@ const MAX_SKILL_ENTRY_CACHE_SIZE = 64;
 const skillEntryCache = new Map<string, SkillEntry[]>();
 const reportedSkillCollisions = new Map<string, true>();
 
-type LoadedSkillRecord = LoadedLocalSkill & {
+type LoadedSkillRecord = Pick<LoadedLocalSkill, "skill" | "frontmatter"> & {
   syncSourceDir?: string;
   syncDirName?: string;
 };
@@ -175,26 +174,29 @@ function filterSkillEntries(
   return filtered;
 }
 
-function loadContainedSkillRecords(params: {
+function loadContainedSkillRecord(params: {
   skillDir: string;
+  skillDirRealPath: string;
   source: string;
   maxSkillFileBytes: number;
   canonicalSkillDir?: string;
   rejectHardlinks: boolean;
-}): LoadedSkillRecord[] {
-  const expectedBaseDir = path.resolve(params.skillDir);
-  const loaded = loadSkillsFromDirSafe({
-    dir: params.skillDir,
+}): LoadedSkillRecord | null {
+  const loaded = loadSingleSkillDirectory({
+    skillDir: params.skillDir,
+    rootRealPath: params.skillDirRealPath,
     source: params.source,
     maxBytes: params.maxSkillFileBytes,
     rejectHardlinks: params.rejectHardlinks,
     onDiagnostic: (diagnostic) => warnInvalidSkill(params.source, diagnostic),
   });
-  const records = loaded.filter((record) => path.resolve(record.skill.baseDir) === expectedBaseDir);
+  if (!loaded) {
+    return null;
+  }
+  // Discovery selected one terminal SKILL.md; keep its parsed facts, not its content, in the cache.
+  const record: LoadedSkillRecord = { skill: loaded.skill, frontmatter: loaded.frontmatter };
   const canonicalSkillDir = params.canonicalSkillDir;
-  return canonicalSkillDir
-    ? records.map((record) => canonicalizeLoadedSkillRecord(record, canonicalSkillDir))
-    : records;
+  return canonicalSkillDir ? canonicalizeLoadedSkillRecord(record, canonicalSkillDir) : record;
 }
 
 function canonicalizeLoadedSkillRecord(
@@ -246,17 +248,18 @@ function loadDiscoveredSkillRecords(params: {
   const discovered = discoverSkillCandidates(params);
   const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
   const loadCandidate = (candidate: CandidateSkillDir) =>
-    loadContainedSkillRecords({
+    loadContainedSkillRecord({
       skillDir: candidate.skillDir,
+      skillDirRealPath: candidate.skillDirRealPath,
       source: params.source,
       maxSkillFileBytes: params.limits.maxSkillFileBytes,
       canonicalSkillDir: canonicalSkillDirForSource(params.source, candidate.skillDirRealPath),
       rejectHardlinks: params.rejectHardlinks,
     });
   if (discovered.configuredRootCandidate) {
-    const rootRecords = loadCandidate(discovered.configuredRootCandidate);
-    if (rootRecords.length > 0) {
-      return rootRecords;
+    const rootRecord = loadCandidate(discovered.configuredRootCandidate);
+    if (rootRecord) {
+      return [rootRecord];
     }
   }
 
@@ -265,12 +268,10 @@ function loadDiscoveredSkillRecords(params: {
     if (!discovered.rootIsSkill && loadedSkills.length >= maxSkillsLoadedPerSource) {
       break;
     }
-    loadedSkills.push(...loadCandidate(candidate));
-  }
-  if (loadedSkills.length > maxSkillsLoadedPerSource && !discovered.rootIsSkill) {
-    return loadedSkills
-      .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
-      .slice(0, maxSkillsLoadedPerSource);
+    const record = loadCandidate(candidate);
+    if (record) {
+      loadedSkills.push(record);
+    }
   }
   return loadedSkills;
 }
@@ -285,25 +286,19 @@ function loadGeneratedPluginSkillRecords(params: {
   const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
   const loadedSkills: LoadedSkillRecord[] = [];
   for (const candidate of candidates) {
-    const loadedRecords = loadContainedSkillRecords({
+    const record = loadContainedSkillRecord({
       skillDir: candidate.skillDir,
+      skillDirRealPath: candidate.skillDirRealPath,
       source: params.source,
       maxSkillFileBytes: params.limits.maxSkillFileBytes,
       rejectHardlinks: candidate.rejectHardlinks,
     });
-    loadedSkills.push(
-      ...loadedRecords.map((record) =>
-        setSyncSourceForPluginSkill(record, candidate.skillDirRealPath),
-      ),
-    );
+    if (record) {
+      loadedSkills.push(setSyncSourceForPluginSkill(record, candidate.skillDirRealPath));
+    }
     if (loadedSkills.length >= maxSkillsLoadedPerSource) {
       break;
     }
-  }
-  if (loadedSkills.length > maxSkillsLoadedPerSource) {
-    return loadedSkills
-      .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
-      .slice(0, maxSkillsLoadedPerSource);
   }
   return loadedSkills;
 }
