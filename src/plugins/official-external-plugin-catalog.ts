@@ -299,12 +299,6 @@ function resolveHostedCatalogFeedSource(params: {
   };
 }
 
-function getOfficialExternalPluginCatalogSourceRefs(
-  config?: OfficialExternalPluginCatalogProfileConfig,
-): Set<string> {
-  return new Set(Object.keys(resolveOfficialExternalPluginCatalogProfileConfig(config).sources));
-}
-
 function getFeedEntryInstallCandidateRecords(
   entry: OfficialExternalPluginCatalogEntry,
 ): OfficialExternalPluginCatalogInstallCandidate[] {
@@ -389,35 +383,6 @@ function getManifestInstallSourceRefCandidate(
   };
 }
 
-function validateOfficialExternalPluginCatalogEntrySourceRefs(
-  entry: OfficialExternalPluginCatalogEntry,
-  params?: {
-    catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
-    requireManifestInstallSourceRef?: boolean;
-  },
-): string[] {
-  const configuredSourceRefs = getOfficialExternalPluginCatalogSourceRefs(params?.catalogConfig);
-  const errors: string[] = [];
-  let candidates = getFeedEntryInstallCandidateRecords(entry);
-  if (params?.requireManifestInstallSourceRef) {
-    const manifestCandidate = getManifestInstallSourceRefCandidate(entry);
-    if (manifestCandidate) {
-      candidates = [...candidates, manifestCandidate];
-    } else if (candidates.length === 0) {
-      candidates = [{}];
-    }
-  }
-  for (const candidate of candidates) {
-    const sourceRef = normalizeOptionalString(candidate.sourceRef);
-    if (!sourceRef) {
-      errors.push("feed install candidate is missing sourceRef");
-    } else if (!configuredSourceRefs.has(sourceRef)) {
-      errors.push(`feed install candidate references unknown sourceRef "${sourceRef}"`);
-    }
-  }
-  return errors;
-}
-
 function filterOfficialExternalPluginCatalogEntriesBySourceRefs(
   entries: OfficialExternalPluginCatalogEntry[],
   params?: {
@@ -425,9 +390,30 @@ function filterOfficialExternalPluginCatalogEntriesBySourceRefs(
     requireManifestInstallSourceRef?: boolean;
   },
 ): OfficialExternalPluginCatalogEntry[] {
-  return entries.filter(
-    (entry) => validateOfficialExternalPluginCatalogEntrySourceRefs(entry, params).length === 0,
-  );
+  let configuredSourceRefs: Set<string> | undefined;
+  return entries.filter((entry) => {
+    // One synchronous batch owns these configured facts; empty batches stay lazy.
+    configuredSourceRefs ??= new Set(
+      Object.keys(resolveOfficialExternalPluginCatalogProfileConfig(params?.catalogConfig).sources),
+    );
+    let candidates = getFeedEntryInstallCandidateRecords(entry);
+    if (params?.requireManifestInstallSourceRef) {
+      const manifestCandidate = getManifestInstallSourceRefCandidate(entry);
+      if (manifestCandidate) {
+        candidates = [...candidates, manifestCandidate];
+      } else if (candidates.length === 0) {
+        candidates = [{}];
+      }
+    }
+    let valid = true;
+    for (const candidate of candidates) {
+      const sourceRef = normalizeOptionalString(candidate.sourceRef);
+      if (!sourceRef || !configuredSourceRefs.has(sourceRef)) {
+        valid = false;
+      }
+    }
+    return valid;
+  });
 }
 
 function parseHostedCatalogContentLength(raw: string | null, maxBytes: number): void {

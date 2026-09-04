@@ -1737,7 +1737,7 @@ describe("official external plugin catalog", () => {
     }
   });
 
-  it("filters hosted entries that reference unknown source profiles", async () => {
+  it("filters every source reference and refreshes profiles between hosted loads", async () => {
     const body = JSON.stringify({
       schemaVersion: 1,
       id: "openclaw-official-external-plugins",
@@ -1760,22 +1760,57 @@ describe("official external plugin catalog", () => {
             install: { sourceRef: "attacker-npm", npmSpec: "@acme/unknown-source" },
           },
         },
+        {
+          name: "@acme/mixed-sources",
+          kind: "plugin",
+          install: {
+            candidates: [{ sourceRef: "acme-npm" }, { sourceRef: "attacker-npm" }],
+          },
+          openclaw: {
+            plugin: { id: "mixed-sources" },
+            install: { sourceRef: "acme-npm", npmSpec: "@acme/mixed-sources" },
+          },
+        },
+        {
+          name: "@acme/valid-tail",
+          kind: "plugin",
+          openclaw: {
+            plugin: { id: "valid-tail" },
+            install: { sourceRef: "acme-npm", npmSpec: "@acme/valid-tail" },
+          },
+        },
       ],
     });
-    const result = await loadHostedCatalog({
+    const sources: NonNullable<HostedCatalogConfig["sources"]> = {
+      "acme-npm": { type: "npm", registry: "https://packages.acme.example/npm/" },
+    };
+    const params: HostedCatalogLoadParams = {
       feedProfile: "acme",
       catalogConfig: {
         feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
-        sources: {
-          "acme-npm": { type: "npm", registry: "https://packages.acme.example/npm/" },
-        },
+        sources,
       },
       fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
       snapshotStore: null,
-    });
+    };
+    const result = await loadHostedCatalog(params);
 
     expectHosted(result);
-    expect(result.entries.map((entry) => entry.name)).toEqual(["@acme/known-source"]);
+    expect(result.entries.map((entry) => entry.name)).toEqual([
+      "@acme/known-source",
+      "@acme/valid-tail",
+    ]);
+    expect(result.entries[0]).toBe(result.feed.entries[0]);
+
+    sources["attacker-npm"] = { type: "npm" };
+    const refreshed = await loadHostedCatalog(params);
+    expectHosted(refreshed);
+    expect(refreshed.entries.map((entry) => entry.name)).toEqual([
+      "@acme/known-source",
+      "@acme/unknown-source",
+      "@acme/mixed-sources",
+      "@acme/valid-tail",
+    ]);
   });
 
   it("enforces hosted checksum and response-size limits", async () => {
