@@ -212,13 +212,15 @@ export function applyCommonResponsesParams<TApi extends Api>(
     return;
   }
 
-  if (options?.reasoningEffort || options?.reasoningSummary) {
+  if (options?.reasoningEffort !== undefined || options?.reasoningSummary !== undefined) {
     const effort = options?.reasoningEffort
       ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
       : "medium";
     params.reasoning = {
       effort: effort as NonNullable<typeof params.reasoning>["effort"],
-      summary: options?.reasoningSummary || "auto",
+      // OpenAI allows summary:null. Default only when the caller omitted the field —
+      // both `||` and `??` would incorrectly coerce null → "auto".
+      summary: options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary,
     };
     params.include = ["reasoning.encrypted_content"];
   } else if ((config?.setDefaultReasoningOff ?? true) && model.thinkingLevelMap?.off !== null) {

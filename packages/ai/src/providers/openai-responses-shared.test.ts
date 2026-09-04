@@ -347,6 +347,46 @@ describe("Responses reasoning effort", () => {
     expect(params).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
   });
 
+  it("preserves an explicit null reasoning summary instead of coercing to auto", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      nativeOpenAIModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+        reasoningSummary: null,
+      },
+    );
+    expect(params).toMatchObject({ reasoning: { effort: "medium", summary: null } });
+  });
+
+  it("preserves null reasoning summary without explicit effort (defaults effort to medium)", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      nativeOpenAIModel,
+      { messages: [] },
+      {
+        reasoningSummary: null,
+      },
+    );
+    expect(params).toMatchObject({ reasoning: { effort: "medium", summary: null } });
+  });
+
+  it("defaults an omitted reasoning summary to auto", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      nativeOpenAIModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+    expect(params).toMatchObject({ reasoning: { effort: "medium", summary: "auto" } });
+  });
+
   it("raises unsupported minimal reasoning to low for GPT-5.6 Sol", () => {
     expect(resolveResponsesReasoningEffort(gpt56SolModel, "minimal")).toBe("low");
   });

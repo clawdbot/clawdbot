@@ -404,6 +404,53 @@ describe("streamOpenAICodexResponses transport", () => {
     });
   });
 
+  it("preserves an explicit null reasoning summary on Codex Responses payloads", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      reasoningEffort: "medium",
+      reasoningSummary: null,
+      transport: "sse",
+      onPayload: (payload) => {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop after payload");
+      },
+    });
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      reasoning: { effort: "medium", summary: null },
+    });
+  });
+
+  it("includes an explicit null reasoning summary without an effort", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      reasoningSummary: null,
+      transport: "sse",
+      onPayload: (payload) => {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop after payload");
+      },
+    });
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      reasoning: { effort: "medium", summary: null },
+    });
+  });
+
   it("does not fall back to SSE when websocket transport is explicit", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("fetch should not run");

@@ -147,7 +147,7 @@ interface RequestBody {
   tool_choice?: "auto";
   parallel_tool_calls?: boolean;
   temperature?: number;
-  reasoning?: { effort?: string; summary?: string };
+  reasoning?: { effort?: string; summary?: string | null };
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
   text?: { verbosity?: string };
   include?: string[];
@@ -667,15 +667,17 @@ function buildRequestBody(
     }
   }
 
-  if (options?.reasoningEffort !== undefined) {
+  if (options?.reasoningEffort !== undefined || options?.reasoningSummary !== undefined) {
+    const requestedEffort = options.reasoningEffort ?? "medium";
     const effort =
-      options.reasoningEffort === "none"
+      requestedEffort === "none"
         ? (model.thinkingLevelMap?.off ?? "none")
-        : (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort);
+        : (model.thinkingLevelMap?.[requestedEffort] ?? requestedEffort);
     if (effort !== null) {
       body.reasoning = {
         effort,
-        summary: options.reasoningSummary ?? "auto",
+        // Preserve explicit null; only default when the field was omitted.
+        summary: options.reasoningSummary === undefined ? "auto" : options.reasoningSummary,
       };
     }
   }
