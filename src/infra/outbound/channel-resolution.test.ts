@@ -425,6 +425,14 @@ describe("outbound channel resolution", () => {
         allowBootstrap: true,
       }),
     ).toBeUndefined();
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+        requiredAction: "send",
+      }),
+    ).toBe(actionsOnlyPlugin);
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
   });
 

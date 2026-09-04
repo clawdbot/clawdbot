@@ -1,6 +1,6 @@
 // Covers send validation for target/channel mismatches, configured channel
 // availability, and explicit target requirements.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -138,6 +138,68 @@ describe("runMessageAction send validation", () => {
         },
       },
     });
+  });
+
+  it("routes an action-only current source plugin instead of the private sink", async () => {
+    const handleAction = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "plugin delivery" }],
+      details: { ok: true },
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "actiononly",
+          source: "test",
+          plugin: {
+            id: "actiononly",
+            meta: {
+              id: "actiononly",
+              label: "Action Only",
+              selectionLabel: "Action Only",
+              docsPath: "/channels/actiononly",
+              blurb: "Action-only source delivery fixture.",
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({ enabled: true }),
+              isConfigured: () => true,
+            },
+            messaging: {
+              targetResolver: {
+                looksLikeId: () => true,
+                resolveTarget: async ({ input }) => ({
+                  to: input,
+                  kind: "group" as const,
+                  source: "normalized" as const,
+                }),
+              },
+            },
+            actions: {
+              describeMessageTool: () => ({ actions: ["send"] }),
+              supportsAction: ({ action }) => action === "send",
+              handleAction,
+            },
+          },
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: { channels: { actiononly: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: { message: "hello" },
+      toolContext: {
+        currentChannelProvider: "actiononly",
+        currentChannelId: "current-target",
+        currentMessagingTarget: "current-target",
+      },
+      sessionKey: "agent:main:actiononly:direct:current-target",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(result).toMatchObject({ handledBy: "plugin" });
+    expect(handleAction).toHaveBeenCalledOnce();
   });
 
   it("requires source address context before inferring non-webchat source sinks", async () => {

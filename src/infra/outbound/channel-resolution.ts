@@ -3,6 +3,7 @@
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -33,6 +34,7 @@ function normalizeOutboundChannelForResolution(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
   allowBootstrap?: boolean;
+  requiredAction?: ChannelMessageActionName;
 }): {
   channel?: string;
   didBootstrap: boolean;
@@ -48,6 +50,7 @@ function normalizeOutboundChannelForResolution(params: {
   const activeRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistry(
     normalized,
     getOutboundRuntimeRegistry() ?? undefined,
+    params.requiredAction,
   );
   if (activeRuntimePlugin) {
     return {
@@ -65,10 +68,12 @@ function normalizeOutboundChannelForResolution(params: {
     channel: normalized,
     cfg: params.cfg,
     agentId: params.agentId,
+    requiredAction: params.requiredAction,
   });
   const bootstrappedRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistry(
     normalized,
     bootstrapRegistry,
+    params.requiredAction,
   );
   return {
     channel: bootstrappedRuntimePlugin?.id ?? normalized,
@@ -84,24 +89,47 @@ function resolveSendCapableMessageAdapter(
   return typeof message?.send?.text === "function" ? message : undefined;
 }
 
-function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
-  return Boolean(plugin?.outbound ?? resolveSendCapableMessageAdapter(plugin));
-}
-
-function channelPluginHasActivatedOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
+function channelPluginHasRuntimeOutboundSurface(
+  plugin: ChannelPlugin | undefined,
+  requiredAction?: ChannelMessageActionName,
+): boolean {
   return Boolean(
-    plugin?.outbound?.sendText ||
-    plugin?.outbound?.deliveryMode === "gateway" ||
-    resolveSendCapableMessageAdapter(plugin),
+    plugin?.outbound ??
+    resolveSendCapableMessageAdapter(plugin) ??
+    (requiredAction &&
+      plugin?.actions?.handleAction &&
+      (!plugin.actions.supportsAction ||
+        plugin.actions.supportsAction({ action: requiredAction }))),
   );
 }
 
-function resolveRuntimeOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
-  return channelPluginHasRuntimeOutboundSurface(plugin) ? plugin : undefined;
+function channelPluginHasActivatedOutboundSurface(
+  plugin: ChannelPlugin | undefined,
+  requiredAction?: ChannelMessageActionName,
+): boolean {
+  return Boolean(
+    plugin?.outbound?.sendText ||
+    plugin?.outbound?.deliveryMode === "gateway" ||
+    resolveSendCapableMessageAdapter(plugin) ||
+    (requiredAction &&
+      plugin?.actions?.handleAction &&
+      (!plugin.actions.supportsAction ||
+        plugin.actions.supportsAction({ action: requiredAction }))),
+  );
 }
 
-function resolveActivatedOutboundPlugin(plugin: ChannelPlugin): ChannelPlugin | undefined {
-  return channelPluginHasActivatedOutboundSurface(plugin) ? plugin : undefined;
+function resolveRuntimeOutboundPlugin(
+  plugin: ChannelPlugin,
+  requiredAction?: ChannelMessageActionName,
+): ChannelPlugin | undefined {
+  return channelPluginHasRuntimeOutboundSurface(plugin, requiredAction) ? plugin : undefined;
+}
+
+function resolveActivatedOutboundPlugin(
+  plugin: ChannelPlugin,
+  requiredAction?: ChannelMessageActionName,
+): ChannelPlugin | undefined {
+  return channelPluginHasActivatedOutboundSurface(plugin, requiredAction) ? plugin : undefined;
 }
 
 function resolveRuntimeOutboundPluginCandidate(params: {
@@ -111,10 +139,13 @@ function resolveRuntimeOutboundPluginCandidate(params: {
   bundled?: ChannelPlugin;
   allowSetupShell?: boolean;
   requireActivatedRuntime?: boolean;
+  requiredAction?: ChannelMessageActionName;
 }): ChannelPlugin | undefined {
   const hasRuntimeSurface = params.requireActivatedRuntime
-    ? channelPluginHasActivatedOutboundSurface
-    : channelPluginHasRuntimeOutboundSurface;
+    ? (plugin: ChannelPlugin | undefined) =>
+        channelPluginHasActivatedOutboundSurface(plugin, params.requiredAction)
+    : (plugin: ChannelPlugin | undefined) =>
+        channelPluginHasRuntimeOutboundSurface(plugin, params.requiredAction);
   if (hasRuntimeSurface(params.loaded)) {
     return params.loaded;
   }
@@ -149,15 +180,25 @@ function resolveDirectFromRuntimeRegistry(
 function resolveRuntimeOutboundPluginFromRuntimeRegistry(
   channel: string,
   registry?: PluginRegistry,
+  requiredAction?: ChannelMessageActionName,
 ): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistry(channel, resolveRuntimeOutboundPlugin, registry);
+  return resolveValueFromRuntimeRegistry(
+    channel,
+    (plugin) => resolveRuntimeOutboundPlugin(plugin, requiredAction),
+    registry,
+  );
 }
 
 function resolveActivatedOutboundPluginFromRuntimeRegistry(
   channel: string,
   registry?: PluginRegistry,
+  requiredAction?: ChannelMessageActionName,
 ): ChannelPlugin | undefined {
-  return resolveValueFromRuntimeRegistry(channel, resolveActivatedOutboundPlugin, registry);
+  return resolveValueFromRuntimeRegistry(
+    channel,
+    (plugin) => resolveActivatedOutboundPlugin(plugin, requiredAction),
+    registry,
+  );
 }
 
 /** Resolves a deliverable outbound channel plugin, optionally bootstrapping it. */
@@ -166,6 +207,7 @@ export function resolveOutboundChannelPlugin(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
   allowBootstrap?: boolean;
+  requiredAction?: ChannelMessageActionName;
 }): ChannelPlugin | undefined {
   const {
     channel: normalized,
@@ -183,7 +225,10 @@ export function resolveOutboundChannelPlugin(params: {
   if (scopedPlugin) {
     // A selected registration owns absent capabilities too. Only explicit
     // activation may replace a setup shell; never borrow a same-id sender.
-    if (params.allowBootstrap !== true || channelPluginHasActivatedOutboundSurface(scopedPlugin)) {
+    if (
+      params.allowBootstrap !== true ||
+      channelPluginHasActivatedOutboundSurface(scopedPlugin, params.requiredAction)
+    ) {
       return scopedPlugin;
     }
     if (didBootstrap) {
@@ -192,6 +237,7 @@ export function resolveOutboundChannelPlugin(params: {
     return resolveActivatedOutboundPluginFromRuntimeRegistry(
       normalized,
       bootstrapOutboundChannelPlugin({ ...params, channel: normalized }),
+      params.requiredAction,
     );
   }
 
@@ -200,8 +246,16 @@ export function resolveOutboundChannelPlugin(params: {
   const current = resolveLoaded();
   const requireActivatedRuntime = params.allowBootstrap === true;
   const runtimeCurrent = requireActivatedRuntime
-    ? resolveActivatedOutboundPluginFromRuntimeRegistry(normalized, bootstrapRegistry)
-    : resolveRuntimeOutboundPluginFromRuntimeRegistry(normalized, bootstrapRegistry);
+    ? resolveActivatedOutboundPluginFromRuntimeRegistry(
+        normalized,
+        bootstrapRegistry,
+        params.requiredAction,
+      )
+    : resolveRuntimeOutboundPluginFromRuntimeRegistry(
+        normalized,
+        bootstrapRegistry,
+        params.requiredAction,
+      );
   const setupFallback = resolveDirectFromRuntimeRegistry(normalized, bootstrapRegistry);
   const bundledCurrent = resolve();
   const candidate = resolveRuntimeOutboundPluginCandidate({
@@ -211,6 +265,7 @@ export function resolveOutboundChannelPlugin(params: {
     bundled: bundledCurrent,
     allowSetupShell: params.allowBootstrap !== true,
     requireActivatedRuntime,
+    requiredAction: params.requiredAction,
   });
   if (candidate) {
     return candidate;
@@ -224,13 +279,19 @@ export function resolveOutboundChannelPlugin(params: {
     channel: normalized,
     cfg: params.cfg,
     agentId: params.agentId,
+    requiredAction: params.requiredAction,
   });
   return resolveRuntimeOutboundPluginCandidate({
     loaded: resolveLoaded(),
-    runtime: resolveActivatedOutboundPluginFromRuntimeRegistry(normalized, registry),
+    runtime: resolveActivatedOutboundPluginFromRuntimeRegistry(
+      normalized,
+      registry,
+      params.requiredAction,
+    ),
     setupFallback: resolveDirectFromRuntimeRegistry(normalized, registry),
     bundled: resolve(),
     requireActivatedRuntime: true,
+    requiredAction: params.requiredAction,
   });
 }
 

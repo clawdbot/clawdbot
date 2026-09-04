@@ -110,6 +110,44 @@ describe("bootstrapOutboundChannelPlugin", () => {
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
   });
 
+  it("bootstraps a plugin-owned action when the caller declares it", () => {
+    const root = createEmptyPluginRegistry();
+    root.channels = [
+      {
+        pluginId: "actiononly",
+        plugin: { id: "actiononly", meta: {} },
+        source: "setup",
+      },
+    ] as never;
+    setActivePluginRegistry(root);
+
+    const handle = createEmptyPluginRegistry();
+    handle.channels = [
+      {
+        pluginId: "actiononly",
+        plugin: {
+          id: "actiononly",
+          meta: {},
+          actions: {
+            handleAction: async () => ({ content: [] }),
+            supportsAction: ({ action }: { action: string }) => action === "send",
+          },
+        },
+        source: "runtime",
+      },
+    ] as never;
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
+
+    expect(
+      bootstrapOutboundChannelPlugin({
+        channel: "actiononly",
+        cfg: { channels: { actiononly: {} } },
+        requiredAction: "send",
+      }),
+    ).toBe(handle);
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledOnce();
+  });
+
   it("uses the admitted agent workspace during outbound preparation", async () => {
     installDiscordSetupShell();
     const handle = createEmptyPluginRegistry();

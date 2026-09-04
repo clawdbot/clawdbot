@@ -4,6 +4,7 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveAmbientOwnerAgentId,
 } from "../../agents/agent-scope.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -63,8 +64,19 @@ export function resetOutboundChannelBootstrapStateForTests(): void {
   bootstrapRegistriesByConfig.clear();
 }
 
-function channelEntryCanSend(entry: PluginChannelRegistration | undefined): boolean {
-  return Boolean(entry?.plugin?.outbound?.sendText ?? entry?.plugin?.message?.send?.text);
+function channelEntryCanSend(
+  entry: PluginChannelRegistration | undefined,
+  requiredAction?: ChannelMessageActionName,
+): boolean {
+  if (Boolean(entry?.plugin?.outbound?.sendText ?? entry?.plugin?.message?.send?.text)) {
+    return true;
+  }
+  const actions = entry?.plugin?.actions;
+  return Boolean(
+    requiredAction &&
+    actions?.handleAction &&
+    (!actions.supportsAction || actions.supportsAction({ action: requiredAction })),
+  );
 }
 
 function findChannelEntry(
@@ -77,8 +89,9 @@ function findChannelEntry(
 function resolveSendCapableRegistry(
   registry: PluginRegistry | null | undefined,
   channel: string,
+  requiredAction?: ChannelMessageActionName,
 ): PluginRegistry | undefined {
-  return registry && channelEntryCanSend(findChannelEntry(registry, channel))
+  return registry && channelEntryCanSend(findChannelEntry(registry, channel), requiredAction)
     ? registry
     : undefined;
 }
@@ -88,6 +101,7 @@ export function bootstrapOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
   agentId?: string;
+  requiredAction?: ChannelMessageActionName;
 }): PluginRegistry | undefined {
   const cfg = params.cfg;
   if (!cfg) {
@@ -97,7 +111,11 @@ export function bootstrapOutboundChannelPlugin(params: {
   const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const scopedEntry = findChannelEntry(scopedRegistry ?? null, params.channel);
   const activeRegistry = scopedEntry ? scopedRegistry : getActivePluginRegistry();
-  const activeSendRegistry = resolveSendCapableRegistry(activeRegistry, params.channel);
+  const activeSendRegistry = resolveSendCapableRegistry(
+    activeRegistry,
+    params.channel,
+    params.requiredAction,
+  );
   if (activeSendRegistry) {
     return activeSendRegistry;
   }
@@ -110,7 +128,7 @@ export function bootstrapOutboundChannelPlugin(params: {
   // plugin discovery only. Normalized agent ids never equal "", so "" is a
   // collision-free ownerless cache slot.
   const agentId = tryResolveAmbientOwnerAgentId(cfg, params.agentId);
-  const outcomeKey = `${agentId ?? ""}\0${params.channel}`;
+  const outcomeKey = `${agentId ?? ""}\0${params.channel}\0${params.requiredAction ?? ""}`;
   // Root-generation memoization cannot replace a selected scoped setup owner.
   // Its activation uses the loader's own registry-handle cache instead.
   const registries = scopedEntry ? undefined : resolveBootstrapRegistries(cfg);
@@ -118,7 +136,7 @@ export function bootstrapOutboundChannelPlugin(params: {
     const cachedRegistry = registries.get(outcomeKey);
     if (cachedRegistry !== undefined) {
       cacheBootstrapOutcome(registries, outcomeKey, cachedRegistry);
-      return resolveSendCapableRegistry(cachedRegistry, params.channel);
+      return resolveSendCapableRegistry(cachedRegistry, params.channel, params.requiredAction);
     }
   }
 
@@ -146,7 +164,7 @@ export function bootstrapOutboundChannelPlugin(params: {
         allowGatewaySubagentBinding: true,
       },
     });
-    sendRegistry = resolveSendCapableRegistry(registry, params.channel);
+    sendRegistry = resolveSendCapableRegistry(registry, params.channel, params.requiredAction);
   } catch {
     // Best-effort bootstrap; the caller reports the unavailable channel.
   }

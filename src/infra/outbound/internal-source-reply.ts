@@ -71,7 +71,14 @@ async function hasConfiguredCurrentSourceChannel(
   if (!isConfiguredChannel(input.cfg, provider)) {
     return false;
   }
-  if (!resolveOutboundChannelPlugin({ channel: provider, cfg: input.cfg, allowBootstrap: true })) {
+  if (
+    !resolveOutboundChannelPlugin({
+      channel: provider,
+      cfg: input.cfg,
+      allowBootstrap: true,
+      requiredAction: "send",
+    })
+  ) {
     return false;
   }
   const configuredChannels = await listConfiguredMessageChannels(input.cfg);
