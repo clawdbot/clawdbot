@@ -5,7 +5,7 @@ import {
   loadPatternListFromEnv,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
-import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { preserveIndependentVitestProject, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 
 const mediaTranscriptRealGatewayTest =
@@ -141,6 +141,7 @@ export function createUiE2eVitestConfig(
       include,
       maxWorkers: Math.min(2, baseTest.maxWorkers),
       // ui-e2e-projects-contract-v1: frozen-target preflight may select these projects.
+      // Each project already composes the complete shared config and must not inherit it again.
       projects: [
         {
           ...base,
@@ -188,7 +189,7 @@ export function createUiE2eVitestConfig(
             name: "ui-e2e-serial-standalone",
           },
         },
-      ],
+      ].map(preserveIndependentVitestProject),
       // Refit needs native file totals; verbose still reports cases to the output watchdog.
       reporters: [...baseTest.reporters, "default"],
       sequence: { ...baseSequence, sequencer: UiE2eSequencer },
