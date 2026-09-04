@@ -66,7 +66,9 @@ suite.define(() => {
         expect(request.params).toMatchObject({ message: "Check notification startup." });
         if (native) {
           const messages = await page.evaluate(
-            () => (window as Window & { notificationProof: NotificationProof[] }).notificationProof,
+            () =>
+              (window as typeof window & { notificationProof: NotificationProof[] })
+                .notificationProof,
           );
           expect(messages).toContainEqual({ type: "status", event: null, userActivation: false });
           expect(messages).toContainEqual({
