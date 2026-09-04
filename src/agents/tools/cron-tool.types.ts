@@ -72,11 +72,6 @@ export type CronToolOptions = {
   runId?: string;
 };
 
-export type CronToolCallerScope = {
-  kind: "agentTool";
-  agentId: string;
-};
-
 export type GatewayToolCaller = typeof callGatewayTool;
 
 export type CronToolDeps = {

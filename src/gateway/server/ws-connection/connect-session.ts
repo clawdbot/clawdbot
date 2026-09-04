@@ -30,7 +30,7 @@ import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "../../local-user-ingress.js";
-import { APPROVALS_SCOPE } from "../../method-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { resolveOperatorRolePolicyForProfile } from "../../operator-role-policy.js";
@@ -375,13 +375,23 @@ export async function attachAuthenticatedGatewayConnect(
     close(1008, truncateCloseReason(message));
     return;
   }
+  // Record the authenticated ingress after device and role scope restrictions.
+  // Later turns must not infer management authority from names or session routing.
+  const controlUiAdmin =
+    role === "operator" &&
+    authMethod !== undefined &&
+    authMethod !== "none" &&
+    connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
+    scopes.includes(ADMIN_SCOPE);
   const internal =
     isLocalClient ||
+    controlUiAdmin ||
     isTrustedApprovalRuntime ||
     trustedAgentRuntimeIdentity ||
     sharedSecretOperatorOwner
       ? {
           ...(isLocalClient ? { isLocalClient: true as const } : {}),
+          ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
           ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
           ...(trustedAgentRuntimeIdentity
             ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity }

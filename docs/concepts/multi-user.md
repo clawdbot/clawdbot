@@ -16,6 +16,8 @@ Everyone who can operate an agent can make it do anything that agent can do. Ses
 
 If people must not access each other's sessions, tools, credentials, or files, give them separate agents or separate gateway/host trust boundaries. Do not rely on owner avatars or filters for isolation.
 
+An authenticated Control UI administrator with `operator.admin` can [manage any automation conversationally](/automation/cron-jobs#conversational-management) on that Gateway, including jobs created from another channel or by another person. This authority comes from the admitted administrator turn, without matching channel identities to Gateway profiles. It does not transfer the job's creator attribution or scheduled execution policy.
+
 ## The three ownership layers
 
 Every session carries up to three layers of attribution:
