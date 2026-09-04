@@ -340,7 +340,7 @@ describe("GitHub public identity metadata cache", () => {
             ok: true,
             method: "tailscale",
             user: "ada@github",
-            tailscaleIdentity: { login: "ada@github" },
+            tailscaleIdentity: { login: "ada@github", name: "Ada" },
           },
         });
         assert(resolve);

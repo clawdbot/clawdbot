@@ -71,7 +71,7 @@ describe("Control UI GitHub failures", () => {
     },
   );
 
-  it.each([
+  it.each<{ headers: Record<string, string>; delay: number }>([
     { headers: { "retry-after": "90" }, delay: 90_000 },
     { headers: {}, delay: 60_000 },
     { headers: { "retry-after": "invalid", "x-ratelimit-reset": "Infinity" }, delay: 60_000 },
