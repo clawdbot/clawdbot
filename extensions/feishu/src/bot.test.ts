@@ -1035,15 +1035,15 @@ describe("handleFeishuMessage ACP routing", () => {
     // Wrap the runtime's inbound.run so the route selected for each message can be observed.
     const botRuntime = createFeishuBotRuntime();
     const routedTurns: Array<{ agentId?: string; sessionKey?: string }> = [];
-    botRuntime.channel.inbound.run = vi.fn(
-      async (params: {
-        adapter: { resolveTurn: () => { route: { agentId?: string; sessionKey?: string } } };
-      }) => {
-        const turn = params.adapter.resolveTurn();
-        routedTurns.push(turn.route);
-        return { admission: { kind: "dispatch" as const }, dispatched: true };
-      },
-    );
+    botRuntime.channel.inbound.run = vi.fn(async (params: unknown) => {
+      const turn = (
+        params as {
+          adapter: { resolveTurn: () => { route: { agentId?: string; sessionKey?: string } } };
+        }
+      ).adapter.resolveTurn();
+      routedTurns.push(turn.route);
+      return { admission: { kind: "dispatch" as const }, dispatched: true };
+    }) as unknown as typeof botRuntime.channel.inbound.run;
     setFeishuRuntime(botRuntime);
 
     // Bindings live at the configuration root: before the reload a wildcard group binding
@@ -1082,37 +1082,37 @@ describe("handleFeishuMessage ACP routing", () => {
     );
 
     // Route resolution follows the documented binding precedence: exact peer before wildcard.
-    mockResolveAgentRoute.mockImplementation(
-      (request: {
+    mockResolveAgentRoute.mockImplementation((raw: unknown) => {
+      const request = raw as {
         cfg: {
           bindings?: Array<{ agentId: string; match?: { peer?: { id?: string; kind?: string } } }>;
         };
         peer?: { id?: string; kind?: string };
-      }) => {
-        const bindings = request.cfg.bindings ?? [];
-        const exact = bindings.find(
-          (binding) =>
-            binding.match?.peer?.kind === request.peer?.kind &&
-            binding.match?.peer?.id === request.peer?.id,
-        );
-        const wildcard = bindings.find(
-          (binding) =>
-            binding.match?.peer?.kind === request.peer?.kind && binding.match?.peer?.id === "*",
-        );
-        const agentId = exact?.agentId ?? wildcard?.agentId ?? "main";
-        return {
-          agentId,
-          channel: "feishu",
-          accountId: "default",
-          sessionKey: `agent:${agentId}:feishu:group:${request.peer?.id}`,
-          mainSessionKey: `agent:${agentId}:main`,
-          lastRoutePolicy: "session",
-          matchedBy: exact ? "binding" : wildcard ? "wildcard" : "default",
-        };
-      },
-    );
+      };
+      const bindings = request.cfg.bindings ?? [];
+      const exact = bindings.find(
+        (binding) =>
+          binding.match?.peer?.kind === request.peer?.kind &&
+          binding.match?.peer?.id === request.peer?.id,
+      );
+      const wildcard = bindings.find(
+        (binding) =>
+          binding.match?.peer?.kind === request.peer?.kind && binding.match?.peer?.id === "*",
+      );
+      const agentId = exact?.agentId ?? wildcard?.agentId ?? "main";
+      return {
+        agentId,
+        channel: "feishu",
+        accountId: "default",
+        sessionKey: `agent:${agentId}:feishu:group:${request.peer?.id}`,
+        mainSessionKey: `agent:${agentId}:main`,
+        lastRoutePolicy: "session",
+        matchedBy: exact ? "binding.peer" : wildcard ? "binding.peer.wildcard" : "default",
+      };
+    });
 
     const event = createFeishuTestEvent({
+      messageId: "msg-group-route",
       senderOpenId: "ou_sender_1",
       chatId: "oc_group_chat",
       chatType: "group",
