@@ -59,6 +59,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     respond(true, { session: row });
   },
   "sessions.get": async ({ params, respond, context, client }) => {
+    // SAFETY: Gateway dispatch supplies object params; each optional field is narrowed before use.
     const p = params as {
       key?: unknown;
       sessionKey?: unknown;
