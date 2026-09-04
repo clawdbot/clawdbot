@@ -8,6 +8,7 @@ import {
   renderProviderBrandIcon,
 } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
+import { generateUUID } from "../../../lib/uuid.ts";
 import {
   type ChatContextWindowControlParams,
   renderContextWindowControl,
@@ -44,6 +45,7 @@ type ChatModelPickerParams = {
   sessionModelPinned: boolean;
   sessionKey: string;
   triggerModelLabel: string;
+  triggerModelValue?: string;
   triggerStatusLabel?: string;
   triggerLoading?: boolean;
   onModelSetup?: () => void;
@@ -82,7 +84,7 @@ function ensureModelPickerIds(menu: HTMLElement): void {
   if (!details || !input || listboxes.length === 0) {
     return;
   }
-  const prefix = details.dataset.chatModelPickerId ?? `chat-model-picker-${crypto.randomUUID()}`;
+  const prefix = details.dataset.chatModelPickerId ?? `chat-model-picker-${generateUUID()}`;
   details.dataset.chatModelPickerId = prefix;
   listboxes.forEach((listbox, index) => {
     listbox.id = `${prefix}-listbox-${index}`;
@@ -262,7 +264,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     params.selectedModelValue === ""
       ? defaultModelOption
       : params.modelOptions.find((option) => option.value === params.selectedModelValue);
-  const modelToolsUnavailable = activeModelOption?.supportsTools === false;
+  const triggerModelOption = params.triggerModelValue
+    ? params.modelOptions.find((option) => option.value === params.triggerModelValue)
+    : activeModelOption;
+  const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
   const selectedContextWindowOption = params.contextWindow?.options.find(
     (option) => option.id === params.contextWindow?.selected,
   );
@@ -284,9 +289,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   const triggerProviderIcon =
     !params.triggerLoading &&
     !params.triggerStatusLabel &&
-    activeModelOption &&
-    hasProviderBrandIcon(activeModelOption.provider)
-      ? renderProviderBrandIcon(activeModelOption.provider, {
+    triggerModelOption &&
+    hasProviderBrandIcon(triggerModelOption.provider)
+      ? renderProviderBrandIcon(triggerModelOption.provider, {
           className: "chat-controls__trigger-provider-icon",
         })
       : nothing;

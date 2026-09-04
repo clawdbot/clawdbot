@@ -189,15 +189,14 @@ suite.define(() => {
               .toContain(
                 `Ask an administrator to approve the pending ${COMMAND} request, or pick another device.`,
               );
-            // Element clips corrupt recorded Chromium frames; crop proof after recording.
+            // Keep captures at the recorded viewport size: clips and larger full-page
+            // screenshots temporarily resize Chromium's shared screencast surface.
             await page.screenshot({
               animations: "disabled",
-              fullPage: true,
               path: path.join(suite.artifactDir, "00-undeclared.png"),
             });
             await page.screenshot({
               animations: "disabled",
-              fullPage: true,
               path: path.join(suite.artifactDir, "01-pending-approval.png"),
             });
             await page.keyboard.press("Escape");
@@ -232,7 +231,6 @@ suite.define(() => {
               );
             await page.screenshot({
               animations: "disabled",
-              fullPage: true,
               path: path.join(suite.artifactDir, "02-unauthorized-after-hot-reload.png"),
             });
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
@@ -266,7 +264,6 @@ suite.define(() => {
             expect(await row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
             await page.screenshot({
               animations: "disabled",
-              fullPage: true,
               path: path.join(suite.artifactDir, "03-invocable-after-reallow.png"),
             });
           },

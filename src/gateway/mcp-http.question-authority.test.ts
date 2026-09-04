@@ -65,6 +65,7 @@ const caller: ReplyToolAuthorityOverlay = {
   disableTools: false,
   traceAuthorized: false,
 };
+let nativeToolProjector: ((tools: readonly string[]) => readonly string[]) | undefined;
 
 type McpResponse = {
   result: {
@@ -75,6 +76,7 @@ type McpResponse = {
 };
 
 beforeEach(() => {
+  nativeToolProjector = undefined;
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
     resolveRuntimeCliBackends: () => [
@@ -84,6 +86,7 @@ beforeEach(() => {
         nativeToolMode: "selectable",
         toolAvailabilityEnforcement: "execution-args",
         resolveExecutionArgs: ({ baseArgs }) => baseArgs,
+        projectNativeToolAuthority: nativeToolProjector,
       },
     ],
   });
@@ -365,11 +368,22 @@ describe("CLI loopback question creator authority", () => {
     },
   );
 
-  it.each(["reactivate", "rebind", "deactivate-reactivate"] as const)(
+  it.each(["reactivate", "rebind", "deactivate-reactivate", "native-publication"] as const)(
     "rematerializes cached questions after same-token and same-capture %s",
     async (change) => {
+      if (change === "native-publication") {
+        nativeToolProjector = () => [];
+      }
       await withCliQuestionLoopback(async (fixture) => {
         const owner = await fixture.prepare();
+        const publishNative =
+          change === "native-publication"
+            ? expectDefined(
+                owner.context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
+                "native capture observer",
+              )
+            : undefined;
+        publishNative?.([]);
         await fixture.list(owner.token);
         const cachedCount = fixture.resolutionCount();
         await fixture.list(owner.token);
@@ -383,7 +397,9 @@ describe("CLI loopback question creator authority", () => {
           runtimeOwnerToken: fixture.runtimeOwnerToken,
           captureKey,
         };
-        if (change === "rebind") {
+        if (publishNative) {
+          publishNative([]);
+        } else if (change === "rebind") {
           expect(
             bindMcpLoopbackClientGrantAdmission({
               ...binding,
@@ -397,7 +413,7 @@ describe("CLI loopback question creator authority", () => {
           if (change === "deactivate-reactivate") {
             expect(deactivateMcpLoopbackClientGrantCapture(binding)).toBe(true);
           }
-          expect(activateMcpLoopbackClientGrantCapture(binding)).toBe(true);
+          expect(activateMcpLoopbackClientGrantCapture(binding)).toBeTruthy();
         }
         await expect(fixture.answer()).rejects.toThrow();
         expect(fixture.persist).not.toHaveBeenCalled();
@@ -435,7 +451,7 @@ describe("CLI loopback question creator authority", () => {
           runtimeOwnerToken: fixture.runtimeOwnerToken,
           captureKey,
         }),
-      ).toBe(true);
+      ).toBeTruthy();
       await expect(fixture.answer()).rejects.toThrow();
       expect(fixture.persist).not.toHaveBeenCalled();
       fixture.retire(old.id);

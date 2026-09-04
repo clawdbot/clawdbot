@@ -16,15 +16,15 @@ and Gateway protocol. For the operator workflow, see
 ## Vision
 
 A dashboard turns the session into a workbench: the agent renders interactive
-widgets, the user pins them onto a persistent board, and the board opens beside
-its chat or expands across the task area. The board and conversation remain part
-of the same session.
+widgets, the user pins them onto a persistent board, and the board can occupy
+either the main area or a side panel alongside chat. Focusing the main view gives
+it the full task area. The board and conversation remain part of the same session.
 
 Principles:
 
 - **A board belongs to a session; it is not a new workspace.** A session with no
   pinned widgets is plain chat. Pin one widget and the board exists in that
-  session's dashboard side panel. Boards inherit the session's identity, agent
+  session's Dashboard view. Boards inherit the session's identity, agent
   ownership, naming, pinning, and lifecycle. There is no `dashboard_create`, no
   board registry, and no separate ACL model.
 - **Agent parity.** Everything the user can do on a board, the agent can do
@@ -50,7 +50,7 @@ Principles:
 | Widget              | Named, sandboxed HTML/JS program owned by the session. Addressed as `sessionKey` + `name`. Updated in place by name.                               |
 | Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).       |
 | Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                          |
-| Pin (session)       | Existing sidebar pinning of sessions. A pinned session with a board opens its owning chat with the dashboard panel restored.                       |
+| Pin (session)       | Existing sidebar pinning of sessions. Opening a pinned session restores that browser's saved task layout.                                          |
 
 ## UX flows
 
@@ -60,17 +60,28 @@ Principles:
   channel presenter can instead make the same core document visible on the
   current transport.
 - **Board view:** the first pinned widget opens a resizable dashboard side panel
-  beside the chat. Expanding the panel gives the board the full task area;
-  collapsing it restores the split layout; closing it restores chat alone.
-  Later board updates preserve the user's current panel state.
+  beside chat. The task toolbar's **Swap** button exchanges the main view and
+  active side-panel content, including Chat, Dashboard, Browser, Terminal,
+  Files, and Review. Its tooltip names the two views. The same toolbar's
+  **Layout** menu positions the side panel left, right, or below. **Focus** in
+  the main pane header gives that view the full task area; **Restore split**
+  restores the side panel.
+  Later board updates preserve the user's current layout. Closing the Dashboard
+  tab removes only its view; closing the whole side panel hides it without
+  changing the main view.
+- **Layout ownership:** the browser stores the arrangement per session, including
+  the main view, active side tab, dock position, dimensions, and focus state.
+  Ordinary revisits restore it. Gallery links with `?dashboard=expanded` explicitly
+  make Dashboard main and focus it. Placement changes reuse the mounted content
+  so widget frames, browser views, terminals, and chat drafts survive a swap.
 - **Drag:** user drags widgets; grid auto-compacts (widgets float up, neighbors
   reflow). Resize by handle snaps to size steps. No pixel placement — for
   anyone.
 - **Reset warning:** `/new` / `/reset` on a board-bearing session asks for
   confirmation in the web UI ("context resets, the dashboard stays") and keeps
   the board.
-- **Sidebar:** pinned sessions with a board restore that dashboard in the owning
-  chat. The Home session's board is the default "agent dashboard".
+- **Sidebar:** opening a pinned session restores its saved task arrangement.
+  The Home session's board is the default "agent dashboard".
 - **Interactions** (three tiers, see below): silent state events, visible
   prompt sends, and automation triggers.
 
@@ -374,8 +385,13 @@ presentation?, capabilities? }` — create/update by name; `kind` defaults to `h
   Headless scheduled authoring requires `pin: true`, cannot select a presentation
   target, and is unavailable to detached cron-run sessions.
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
-  `tab_update`, `tab_delete`, `tabs_reorder`, `widget_move`, `widget_remove`,
-  `unpin`, `focus_tab`, `set_chat_dock`.
+  `tab_update`, `tab_delete`, `tabs_reorder`, `widget_put`, `widget_move`,
+  `widget_resize`, `widget_remove`, `focus_tab`, `set_presentation`.
+  Presentation is `split` or `expanded`; `expanded` makes Dashboard main and
+  focuses it, while `split` reveals Dashboard using the current arrangement and
+  brings chat alongside when Dashboard is main. The Control UI owns the side
+  panel's dock position. The tool maps presentation onto the existing
+  `set_chat_dock` wire command without changing the Gateway protocol.
 - The existing `automations` tool covers the automation tier; no new tool needed.
 
 Tool descriptions teach the size/anchor vocabulary and the tier model. The

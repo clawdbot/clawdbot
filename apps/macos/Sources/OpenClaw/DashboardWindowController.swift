@@ -50,12 +50,6 @@ private final class DashboardLinkSplitView: NSSplitView {
         else { return }
         self.onDividerDragEnded?()
     }
-
-    #if DEBUG
-    func _testCompleteDividerDrag() {
-        self.onDividerDragEnded?()
-    }
-    #endif
 }
 
 @MainActor
@@ -94,7 +88,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     let webView: DashboardWebView
     private let linkBrowser: DashboardLinkBrowserView
     private let linkBrowserItem: NSSplitViewItem
-    private let linkBrowserSplitView: DashboardLinkSplitView
     private let splitViewController: NSSplitViewController
     private let updateMessageHandler: DashboardUpdateMessageHandler
     private(set) var currentURL: URL
@@ -210,7 +203,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
         self.linkBrowser = linkBrowser
         self.linkBrowserItem = linkBrowserItem
-        self.linkBrowserSplitView = linkBrowserSplitView
         self.splitViewController = splitViewController
 
         let preservedWindowFrame = reusingWindow?.frame
@@ -244,7 +236,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowser.webViewUIDelegate = self
         self.linkBrowser.onClose = { [weak self] in self?.closeLinkBrowser() }
         self.linkBrowser.onOpenExternal = { [weak self] url in self?.openExternal(url) }
-        self.linkBrowserSplitView.onDividerDragEnded = { [weak self] in
+        linkBrowserSplitView.onDividerDragEnded = { [weak self] in
             self?.persistLinkBrowserWidth()
         }
         self.window?.delegate = self
@@ -1589,10 +1581,6 @@ extension DashboardWindowController {
 
     var _testLinkBrowserTabBarHeight: CGFloat {
         self.linkBrowser._testTabBarHeight
-    }
-
-    func _testCompleteLinkBrowserDividerDrag() {
-        self.linkBrowserSplitView._testCompleteDividerDrag()
     }
 
     func _testOpenLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = false) {

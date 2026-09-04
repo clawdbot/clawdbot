@@ -24,7 +24,10 @@ function makeStream(chunks: Uint8Array[], delayMs?: number) {
   });
 }
 
-function makeStallingStream(initialChunks: Uint8Array[], onCancel?: (reason?: unknown) => void) {
+function makeStallingStream(
+  initialChunks: Uint8Array[],
+  onCancel?: UnderlyingSource<Uint8Array>["cancel"],
+) {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       for (const chunk of initialChunks) {
@@ -276,12 +279,13 @@ describe("readResponseWithLimit", () => {
   it("does not time out while chunks keep arriving", async () => {
     vi.useFakeTimers();
     try {
-      const body = makeStream([new Uint8Array([1]), new Uint8Array([2])], 10);
+      const body = makeStream([new Uint8Array([1]), new Uint8Array([2]), new Uint8Array([3])], 40);
       const res = new Response(body);
-      const readPromise = readResponseWithLimit(res, 100, { chunkTimeoutMs: 500 });
-      await vi.advanceTimersByTimeAsync(25);
+      const readPromise = readResponseWithLimit(res, 100, { chunkTimeoutMs: 50 });
+      await vi.advanceTimersByTimeAsync(125);
       const buf = await readPromise;
-      expect(buf).toEqual(Buffer.from([1, 2]));
+      expect(buf).toEqual(Buffer.from([1, 2, 3]));
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -304,28 +308,35 @@ describe("readResponseWithLimit", () => {
     }
   });
 
-  it("passes the idle-timeout error to stream cancellation", async () => {
-    vi.useFakeTimers();
-    try {
-      const cancel = vi.fn();
-      const body = makeStallingStream([new Uint8Array([1, 2])], cancel);
-      const res = new Response(body);
-      const readPromise = expect(
-        readResponseWithLimit(res, 1024, {
-          chunkTimeoutMs: 50,
-          onIdleTimeout: ({ chunkTimeoutMs }) => new Error(`custom idle ${chunkTimeoutMs}`),
-        }),
-      ).rejects.toThrow("custom idle 50");
+  it.each([false, true])(
+    "passes the idle-timeout error without waiting for cancellation (%s)",
+    async (pendingCancel) => {
+      vi.useFakeTimers();
+      try {
+        const cancel = vi.fn((_reason?: unknown) =>
+          pendingCancel ? new Promise<void>(() => {}) : undefined,
+        );
+        const body = makeStallingStream([new Uint8Array([1, 2])], cancel);
+        const res = new Response(body);
+        const readPromise = expect(
+          readResponseWithLimit(res, 1024, {
+            chunkTimeoutMs: 50,
+            onIdleTimeout: ({ chunkTimeoutMs }) => new Error(`custom idle ${chunkTimeoutMs}`),
+          }),
+        ).rejects.toThrow("custom idle 50");
 
-      await vi.advanceTimersByTimeAsync(60);
-      await readPromise;
-      expect(cancel).toHaveBeenCalledTimes(1);
-      expect(cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-      expect((cancel.mock.calls[0]?.[0] as Error | undefined)?.message).toBe("custom idle 50");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        await vi.advanceTimersByTimeAsync(60);
+        await readPromise;
+        expect(cancel).toHaveBeenCalledTimes(1);
+        expect(cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+        expect((cancel.mock.calls[0]?.[0] as Error | undefined)?.message).toBe("custom idle 50");
+        expect(body.locked).toBe(false);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("cancels a trickling body when its overall timeout expires", async () => {
     vi.useFakeTimers();

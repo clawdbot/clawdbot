@@ -24,7 +24,7 @@ export async function failNextDeviceIdentityMint(page: Page): Promise<void> {
 
 export async function openChatSidePanelType(page: Page, label: string): Promise<void> {
   const panel = page.locator(".sidebar-region__right-runtime .side-panel");
-  if ((await panel.count()) === 0) {
+  if (!(await panel.locator('[data-region-header="side"]').isVisible())) {
     await page.locator(".chat-side-panel-toggle").click();
   }
   // An empty panel offers its type list; a populated one offers the header "+" menu,
@@ -39,6 +39,32 @@ export async function openChatSidePanelType(page: Page, label: string): Promise<
   }
   await panel.getByRole("button", { name: "Add side panel tab" }).click();
   await panel.locator("wa-dropdown-item").filter({ hasText: label }).click();
+}
+
+export async function focusChatSidePanel(page: Page): Promise<void> {
+  await page.locator(".chat-panel-swap").click();
+  await page
+    .locator('[data-region-header="main"]')
+    .getByRole("button", { name: "Focus", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Restore split", exact: true }).waitFor();
+}
+
+export async function restoreChatAsMain(page: Page): Promise<void> {
+  const side = page.locator('[data-region-header="side"]');
+  await side.getByRole("tab", { name: "Chat", exact: true }).click();
+  await page.locator(".chat-panel-swap").click();
+  await page.locator('.sidebar-region__primary[data-region="main"]').waitFor();
+}
+
+export async function dockChatSidePanel(
+  page: Page,
+  dock: "left" | "right" | "bottom",
+): Promise<void> {
+  const menu = page.locator(".chat-panel-layout-menu");
+  await menu.getByRole("button", { name: "Layout", exact: true }).click();
+  await menu.locator(`wa-dropdown-item[value="${dock}"]`).click();
+  await page.locator(`.sidebar-region--${dock}`).waitFor();
 }
 
 export async function activateChatHeaderPanelAction(page: Page, label: string): Promise<void> {

@@ -143,14 +143,25 @@ private final class SkillsGatewayFixture: Sendable {
         case .reconnect:
             let source = try await self.gateway.acquireServerLease()
             self.session.latestTask()?.emitReceiveFailure()
-            let deadline = ContinuousClock.now + .seconds(2)
-            while self.gateway.serverLeaseMatchesCurrentState(source), ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(5))
-            }
+            let replacement = try await self.waitForReconnect(after: source)
             try #require(!self.gateway.serverLeaseMatchesCurrentState(source))
-            let replacement = try await self.gateway.acquireServerLease()
             #expect(replacement != source)
         }
+    }
+
+    func waitForReconnect(after source: GatewayConnection.ServerLease) async throws -> GatewayConnection.ServerLease {
+        // A failed handshake starts cleanup after the fixture's connect hook returns.
+        // Observe the replacement lease instead of racing that cleanup with another connect.
+        let deadline = ContinuousClock.now + .seconds(2)
+        var replacement = await self.gateway.captureServerLease()
+        while replacement == nil || replacement == source, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+            replacement = await self.gateway.captureServerLease()
+        }
+        let reconnected = try #require(replacement)
+        try #require(reconnected != source)
+        try #require(self.gateway.serverLeaseMatchesCurrentRoute(source))
+        return reconnected
     }
 
     private static func report(gateway: String, installedReference: String?) throws -> SkillsStatusReport {
@@ -627,7 +638,7 @@ struct SkillsGatewayOwnershipTests {
                 if outcome == "confirmation-reconnected" {
                     await statusGate.release()
                     offline.setValue(false)
-                    let reconnected = try await fixture.gateway.acquireServerLease()
+                    let reconnected = try await fixture.waitForReconnect(after: results.source)
                     try #require(await self.waitUntil {
                         model.searchResults?.source == reconnected && !model.isSearching
                     })
@@ -733,7 +744,11 @@ struct SkillsGatewayOwnershipTests {
                     #expect(browser.notices.first?.message.contains(reason) == false)
                 }
                 offline.withValue { $0 = false }
-                let replacement = try await fixture.gateway.acquireServerLease()
+                let replacement = if replaceGateway {
+                    try await fixture.gateway.acquireServerLease()
+                } else {
+                    try await fixture.waitForReconnect(after: source)
+                }
                 #expect(replacement != source)
                 try #require(await self.waitUntil {
                     model.skills.first?.name == (replaceGateway ? "Gateway B skill" : "Gateway A skill") &&
@@ -802,7 +817,7 @@ struct SkillsGatewayOwnershipTests {
             fixture.rejectedMethods.setValue(["skills.search"])
             let searches = fixture.requests.value.count { $0.method == "skills.search" }
             offline.setValue(false)
-            let reconnected = try await fixture.gateway.acquireServerLease()
+            let reconnected = try await fixture.waitForReconnect(after: results.source)
             try #require(await self.waitUntil {
                 fixture.requests.value.count { $0.method == "skills.search" } > searches && !model.isSearching
             })

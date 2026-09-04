@@ -2,7 +2,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   extractActiveMemorySearchDebugFromSessionRecord,
   extractToolResultNameFromSessionRecord,
-  fileTranscriptSource,
   hasTerminalUnavailableMemoryResultInSessionRecord,
   hasUnavailableMemoryResultInSessionRecord,
   hasUsableMemoryResultInSessionRecord,
@@ -17,43 +16,6 @@ import {
   type TranscriptReadLimits,
 } from "./types.js";
 
-async function readActiveMemoryTranscriptState(
-  source: ActiveMemoryTranscriptSource | string,
-  limits?: TranscriptReadLimits,
-  toolsAllow?: readonly string[],
-): Promise<{
-  searchDebug?: ActiveMemorySearchDebug;
-  hasUsableMemoryResult: boolean;
-  hasUnavailableMemorySearchResult: boolean;
-}> {
-  let searchDebug: ActiveMemorySearchDebug | undefined;
-  let hasUsableMemoryResult = false;
-  let hasUnavailableMemorySearchResult = false;
-  await streamActiveMemoryTranscriptRecords({
-    source: typeof source === "string" ? fileTranscriptSource(source) : source,
-    limits,
-    onRecord: (record) => {
-      const debug = extractActiveMemorySearchDebugFromSessionRecord(record);
-      if (debug) {
-        searchDebug = debug;
-      }
-      hasUnavailableMemorySearchResult ||= hasUnavailableMemoryResultInSessionRecord(
-        record,
-        toolsAllow,
-      );
-      hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
-    },
-  });
-  return { searchDebug, hasUsableMemoryResult, hasUnavailableMemorySearchResult };
-}
-
-async function readActiveMemorySearchDebug(
-  source: ActiveMemoryTranscriptSource | string,
-  limits?: TranscriptReadLimits,
-): Promise<ActiveMemorySearchDebug | undefined> {
-  return (await readActiveMemoryTranscriptState(source, limits)).searchDebug;
-}
-
 async function readMergedActiveMemoryTranscriptState(params: {
   sources: readonly ActiveMemoryTranscriptSource[];
   toolsAllow: readonly string[];
@@ -65,20 +27,18 @@ async function readMergedActiveMemoryTranscriptState(params: {
   let searchDebug: ActiveMemorySearchDebug | undefined;
   let hasUsableMemoryResult = false;
   let hasUnavailableMemorySearchResult = false;
-  const seen = new Set<string>();
   for (const source of params.sources) {
-    const key =
-      source.kind === "runtime"
-        ? `runtime:${source.target.agentId ?? ""}:${source.target.sessionId}:${source.target.sessionKey}:${source.target.storePath ?? ""}:${source.target.threadId ?? ""}`
-        : `file:${source.sessionFile}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    const state = await readActiveMemoryTranscriptState(source, undefined, params.toolsAllow);
-    searchDebug = state.searchDebug ?? searchDebug;
-    hasUsableMemoryResult ||= state.hasUsableMemoryResult;
-    hasUnavailableMemorySearchResult ||= state.hasUnavailableMemorySearchResult;
+    await streamActiveMemoryTranscriptRecords({
+      source,
+      onRecord: (record) => {
+        searchDebug = extractActiveMemorySearchDebugFromSessionRecord(record) ?? searchDebug;
+        hasUnavailableMemorySearchResult ||= hasUnavailableMemoryResultInSessionRecord(
+          record,
+          params.toolsAllow,
+        );
+        hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, params.toolsAllow);
+      },
+    });
   }
   return { searchDebug, hasUsableMemoryResult, hasUnavailableMemorySearchResult };
 }
@@ -220,8 +180,4 @@ function watchTerminalMemorySearchResult(params: {
   };
 }
 
-export {
-  readActiveMemorySearchDebug,
-  readMergedActiveMemoryTranscriptState,
-  watchTerminalMemorySearchResult,
-};
+export { readMergedActiveMemoryTranscriptState, watchTerminalMemorySearchResult };

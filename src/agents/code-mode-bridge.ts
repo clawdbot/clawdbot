@@ -15,6 +15,7 @@ import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-run
 import { readCodeModeSkill } from "./code-mode-skills.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
+import { isCollectorSpawnTool } from "./subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import {
   consumeToolEffectReceipt,
@@ -27,7 +28,7 @@ import {
   registerTrustedToolNoStartError,
 } from "./tool-result-error.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
-import type { ToolSearchToolContext } from "./tool-search-types.js";
+import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
 
 const loadSwarmHandlers = createLazyRuntimeNamedExport(
@@ -175,6 +176,26 @@ export function codeModeReplayIdForToolCall(
   ]);
   const digest = createHash("sha256").update(identity).digest("hex").slice(0, 24);
   return `cm_replay_${digest}`;
+}
+
+export function isCodeModeSwarmAvailable(
+  ctx: ToolSearchToolContext,
+  catalog: readonly Pick<ToolSearchCatalogEntry, "source" | "name">[] | undefined,
+): boolean {
+  // Detached runs retain denied schemas; only an executable spawn capability
+  // may advertise Swarm declarations or install its guest globals.
+  return (
+    resolveSwarmConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId).enabled &&
+    (!ctx.toolExecutionAllow || isToolExecutionAllowed(ctx.toolExecutionAllow, "sessions_spawn")) &&
+    catalog?.some((entry) => entry.source === "openclaw" && entry.name === "sessions_spawn") ===
+      true &&
+    ctx.catalogRef?.current?.entries.some(
+      (entry) => entry.name === "sessions_spawn" && isCollectorSpawnTool(entry.tool),
+    ) === true &&
+    !ctx.catalogRef.current.entries.some(
+      (entry) => entry.source === "client" && entry.name === "sessions_spawn",
+    )
+  );
 }
 
 function requireCodeModeSwarmEnabled(ctx: ToolSearchToolContext): void {

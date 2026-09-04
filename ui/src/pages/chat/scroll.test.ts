@@ -11,6 +11,7 @@ import {
   resetChatScroll,
   saveChatSessionScrollPosition,
   scheduleChatScroll,
+  scheduleCommittedChatScroll,
 } from "./scroll.ts";
 
 /* ------------------------------------------------------------------ */
@@ -77,18 +78,26 @@ function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight
 }
 
 function installAnimationFrameQueue() {
-  const callbacks: FrameRequestCallback[] = [];
+  const callbacks = new Map<number, FrameRequestCallback>();
+  let nextId = 0;
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-    callbacks.push(callback);
-    return callbacks.length;
+    callbacks.set(++nextId, callback);
+    return nextId;
+  });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+    callbacks.delete(id);
   });
   return {
-    callbacks,
+    get callbacks() {
+      return [...callbacks.values()];
+    },
     runNext(timestamp = 0) {
-      const callback = callbacks.shift();
-      if (!callback) {
+      const entry = callbacks.entries().next().value;
+      if (!entry) {
         throw new Error("expected a queued animation frame");
       }
+      const [id, callback] = entry;
+      callbacks.delete(id);
       callback(timestamp);
     },
   };
@@ -515,6 +524,33 @@ describe("scheduleChatScroll", () => {
     expect(container.scrollTop).toBe(container.scrollHeight);
     expect(host.chatNewMessagesBelow).toBe(false);
   });
+
+  it.each(["commit", "resize", "schedule"] as const)(
+    "preserves a pending manual jump across an automatic %s",
+    (update) => {
+      const frames = installAnimationFrameQueue();
+      const { host, container } = createScrollHost({ scrollTop: 500 });
+      host.chatHasAutoScrolled = true;
+      host.chatFollowLocked = true;
+      host.chatUserNearBottom = false;
+
+      scheduleChatScroll(host, true, false, { source: "manual" });
+      if (update === "schedule") {
+        scheduleChatScroll(host);
+      } else {
+        scheduleCommittedChatScroll(host, false, false, {
+          source: update === "resize" ? "resize" : "auto",
+        });
+      }
+      frames.runNext();
+
+      expect(container.scrollTop).toBe(container.scrollHeight);
+      expect(host.chatScrollToEnd).toHaveBeenCalledWith({ behavior: "auto", source: "manual" });
+      expect(host.chatFollowLocked).toBe(false);
+      expect(host.chatNewMessagesBelow).toBe(false);
+      expect(frames.callbacks).toHaveLength(0);
+    },
+  );
 });
 
 /* ------------------------------------------------------------------ */
@@ -736,7 +772,7 @@ describe("programmatic scroll ownership", () => {
     scheduleChatScroll(host, true, true, { source: "manual" });
 
     handleChatScrollTakeover(host);
-    frames.runNext();
+    expect(frames.callbacks).toHaveLength(0);
 
     expect(host.chatScrollToEnd).not.toHaveBeenCalled();
     expect(container.scrollTop).toBe(500 + delta);

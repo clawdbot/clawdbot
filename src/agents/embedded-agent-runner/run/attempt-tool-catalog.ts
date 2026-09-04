@@ -6,6 +6,11 @@ import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
+import {
+  copyAgentToolAvailability,
+  finalizeAgentToolAvailability,
+  markAgentToolExecutionUnavailable,
+} from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -153,6 +158,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       runId: attempt.runId,
       catalogRef: preparedToolBase.toolSearchCatalogRef,
       toolHookContext: catalogToolHookContext,
+      toolExecutionAllow: attempt.toolExecutionAllow,
       codeModeSkills,
     });
     const projectedToolSearchTools = filterLocalModelLeanTools({
@@ -170,6 +176,11 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
     });
+    if (!toolSearch.catalogRegistered) {
+      finalizeAgentToolAvailability(toolSearchSchemaProjection.tools, {
+        toolExecutionAllow: attempt.toolExecutionAllow,
+      });
+    }
     effectiveTools = toolSearchSchemaProjection.tools.map((tool) =>
       wrapEmbeddedAttemptToolWithActivity(
         wrapToolWithAbortSignal(tool, abortSignal),
@@ -230,7 +241,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       ? null
       : buildEmptyExplicitToolAllowlistError({
           sources: explicitToolAllowlistSources,
-          callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
+          hasCallableTools: toolSearchRunPlan.hasCallableTools,
           toolsEnabled,
           disableTools: attempt.disableTools,
           toolsAllowExplicitlyEmpty: preparedToolBase.effectiveToolsAllow?.length === 0,
@@ -270,6 +281,11 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   };
   return Object.assign(current, {
     applyPromptToolPolicy: (allowedNames: ReadonlySet<string>) => {
+      if (!current.toolSearch.catalogRegistered) {
+        finalizeAgentToolAvailability(current.effectiveTools, {
+          toolExecutionAllow: [...allowedNames],
+        });
+      }
       for (const key of promptPlanKeys) {
         const names = current.toolSearchRunPlan[key];
         names.clear();
@@ -303,11 +319,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         hostPromptPlan[key] = new Set(next.toolSearchRunPlan[key]);
       }
       current.emptyExplicitToolAllowlistError = next.emptyExplicitToolAllowlistError;
-      current.toolSearchRunPlan.emptyAllowlistCallableNames.splice(
-        0,
-        current.toolSearchRunPlan.emptyAllowlistCallableNames.length,
-        ...next.toolSearchRunPlan.emptyAllowlistCallableNames,
-      );
+      current.toolSearchRunPlan.hasCallableTools = next.toolSearchRunPlan.hasCallableTools;
     },
   });
 }
@@ -319,11 +331,17 @@ function gateToolExecution(
   return tools.map((tool) =>
     isToolExecutionAllowed(allowNames, tool.name) || TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)
       ? tool
-      : {
-          ...tool,
-          execute: async () => {
-            throw new Error(TOOL_EXECUTION_GATED_MESSAGE);
-          },
-        },
+      : markAgentToolExecutionUnavailable(
+          copyAgentToolAvailability(tool, {
+            ...tool,
+            // Preparation can perform work too; a denied call must not enter the source path.
+            prepareArguments: undefined,
+            prepareBeforeToolCallParams: undefined,
+            finalizeBeforeToolCallParams: undefined,
+            execute: async () => {
+              throw new Error(TOOL_EXECUTION_GATED_MESSAGE);
+            },
+          }),
+        ),
   );
 }

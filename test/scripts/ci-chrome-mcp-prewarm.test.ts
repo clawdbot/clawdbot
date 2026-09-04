@@ -30,8 +30,8 @@ it("prewarms the runtime's pinned Chrome MCP package before offline browser E2E"
     options.match(/const DEFAULT_CHROME_MCP_PACKAGE_ARGS = (\[[^\]]+\]);/)?.[1] ?? "null",
   ) as string[];
   expect(command).toBe("npx");
-  expect(packageArgs).toHaveLength(2);
-  const packageSpec = packageArgs[1]!;
+  expect(packageArgs.slice(0, -1)).toEqual(["-y", "--audit=false"]);
+  const packageSpec = packageArgs.at(-1)!;
   const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
   const steps = workflow.jobs["checks-ui-e2e"].steps as WorkflowStep[];
   const restore = steps.findIndex((step) => step.name === "Restore Chrome MCP npm cache");

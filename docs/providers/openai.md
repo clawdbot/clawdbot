@@ -3,6 +3,7 @@ summary: "Use OpenAI via API keys or Codex subscription in OpenClaw"
 read_when:
   - You want to use OpenAI models in OpenClaw
   - You want Codex subscription auth instead of API keys
+  - You want Astra async tools, mid-turn steering, or cached reasoning changes
   - You need stricter GPT-5 agent execution behavior
 title: "OpenAI"
 ---
@@ -75,12 +76,62 @@ OpenClaw retains its ordinary 272,000-token active input budget by default.
 The supported reasoning efforts are `low`, `medium`, `high`, `xhigh`, and `max`.
 An existing `minimal` setting maps to `low`. Astra cannot disable reasoning;
 `off` never sends the unsupported `none` effort.
-Temperature is not sent.
+Temperature and `top_p` are not sent.
 
 Standard pricing per million tokens is $10 input, $1 cache reads, $12.50 cache
 writes, and $50 output. Requests above 272K input tokens have higher rates.
 See the [Astra model reference](https://developers.openai.com/api/docs/models/gpt-6-astra)
 and [migration guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra).
+
+### Async tools, steering, and reasoning changes
+
+Use an OpenAI Platform API-key profile and the built-in OpenClaw runtime for
+these Astra capabilities. They require the official `https://api.openai.com/v1`
+Responses endpoint. Configure the existing model settings:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-6-astra": {
+          agentRuntime: { id: "openclaw" },
+          params: {
+            transport: "auto",
+            responsesServerCompaction: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+- **Async function calls:** Astra can continue reasoning while OpenClaw runs a
+  direct function tool. OpenClaw sends the completed result in the next model
+  request after the active response finishes. This
+  applies to direct tools; code-mode tools retain their existing execution flow.
+- **Mid-turn steering:** [Steering messages](/concepts/queue#queue-modes) can
+  reach Astra while it is reasoning, using the active session's cached
+  WebSocket. Use `auto` or `websocket-cached`; SSE keeps ordinary queued
+  steering at the next available runtime boundary. Each live batch owns one
+  response; later messages can steer its successor. Context or payload hooks
+  that rewrite the active request's prefix keep ordinary queued delivery.
+- **Reasoning changes without rebuilding the cached prefix:** Change the
+  [thinking level](/tools/thinking), for example with `/think high`, before
+  the next user turn. OpenClaw preserves the original request-level effort
+  and places a `configuration_update` at the new turn. This optimization
+  works across matching session history over SSE or cached WebSockets.
+  A continuation for an already accepted steering message keeps its inherited effort.
+
+The example disables automatic server compaction because OpenAI cannot combine
+it with configuration updates. Cache-preserving effort changes also exclude
+automatic truncation, pro mode, and API multi-agent mode. The cache state is
+local to the running process or connection; expiry, restart, or rewritten
+history starts a fresh request using the selected effort.
+
+The native [Codex harness](/plugins/codex-harness) owns its own Responses loop;
+these built-in-runtime capabilities do not imply native Codex support.
 
 ## Naming map
 
@@ -955,7 +1006,7 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     path. Access and quota errors are reported without switching credential
     classes; OAuth support does not imply included or unlimited transcription.
     Custom endpoints and request overrides require an API-key profile.
-    See [Audio and voice notes](/nodes/audio#openai-transcription-alongside-chatgptcodex-oauth)
+    See [Audio and voice notes](/nodes/audio#openai-transcription-alongside-chatgpt%2Fcodex-oauth)
     for selecting a separate audio API-key profile when desired.
 
     - Default model: `gpt-4o-transcribe`
@@ -1038,6 +1089,28 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     such as `fable`, `nova`, or `onyx` is not valid for Realtime sessions.
     Set the model explicitly to `gpt-realtime-2.1-mini` when you prefer the
     smaller, lower-cost Realtime 2.1 variant.
+
+    #### Gateway-controlled Realtime call cleanup
+
+    Closing a Gateway-controlled GA Realtime WebRTC session retires its Gateway
+    authority and closes the local sideband before asking OpenAI to hang up the
+    provider call. These are separate events; control closure does not establish
+    provider acknowledgment or recall already queued media.
+
+    If hangup fails, explicit cancellation or cleanup reports the failure. The
+    broker retries automatically after 1 second, then 5 seconds, with the existing
+    30-second timeout for each attempt. After all three attempts fail, the log
+    reports `cleanup INCOMPLETE`. The exact cleanup obligation and its capacity
+    remain reserved, including across plugin replacement: eight sessions globally
+    and two per Gateway client. Restore provider connectivity; a later OpenAI
+    broker/plugin runtime cleanup can retry these retained calls. Repeating End
+    or `talk.client.close` is not that retry boundary because the Gateway session
+    may already be retired.
+
+    Cleanup obligations are in memory only. Gateway exit, crash, or restart can
+    lose them; restarting is not proof that the provider call ended. The
+    adapter's 30-minute active-session lease is not a remote-lifetime guarantee
+    or a fallback after failed hangup.
 
     #### GA Realtime browser Talk over ChatGPT OAuth
 

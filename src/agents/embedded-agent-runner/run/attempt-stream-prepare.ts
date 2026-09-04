@@ -63,6 +63,7 @@ import {
   type EmbeddedAgentQueueMessageOptions,
   setActiveEmbeddedRun,
 } from "../runs.js";
+import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
@@ -485,7 +486,20 @@ export function prepareEmbeddedAttemptStream(input: {
               } finally {
                 prepared.dispose();
               }
-            })().then(toolParams.acceptResultBeforeProjection),
+            })().then((result) => {
+              signal.throwIfAborted();
+              // Nested tools bypass the session's tool_result middleware hook.
+              // Preserve committed delivery before output acceptance can reject it.
+              recordEmbeddedToolReceipt(
+                manager,
+                toolParams.toolCallId,
+                result.details,
+                toolParams.source === "openclaw" &&
+                  toolParams.sourceName === "core" &&
+                  toolParams.toolName === "message",
+              );
+              return toolParams.acceptResultBeforeProjection(result);
+            }),
             signal,
             yieldRunSignal,
           );

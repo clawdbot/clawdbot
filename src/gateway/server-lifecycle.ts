@@ -28,6 +28,7 @@ import {
   type GatewayPluginRuntimeClaim,
 } from "./server-plugin-runtime-generation.js";
 import type { GatewayCloseOptions } from "./server-public.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import type { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
 import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import type { GatewayShutdownRuntime } from "./server-shutdown.runtime.js";
@@ -53,6 +54,7 @@ export async function prepareGatewayLifecycle(params: {
   shutdownRuntime: GatewayShutdownRuntime;
 }) {
   const { runtime, port, log, logCron, diagnosticsEnabled, shutdownRuntime } = params;
+  const requestEntryLifetime = new GatewayRequestEntryLifetime();
   const {
     minimalTestGateway,
     transportBridge,
@@ -358,10 +360,8 @@ export async function prepareGatewayLifecycle(params: {
   });
   const postReadyState: {
     maintenanceTimer: ReturnType<typeof setTimeout> | null;
-    retainedPluginCleanupHandle: { stop: () => void } | null;
   } = {
     maintenanceTimer: null,
-    retainedPluginCleanupHandle: null,
   };
   const clearPostReadyMaintenanceTimer = () => {
     if (!postReadyState.maintenanceTimer) {
@@ -385,6 +385,7 @@ export async function prepareGatewayLifecycle(params: {
       return;
     }
     lifecycle.closePreludeStarted = true;
+    requestEntryLifetime.beginClose();
     mentionInbox.dispose();
     postReadySidecarStopOwner.beginClose();
     gatewayLifetimeSidecarStopOwner.beginClose();
@@ -399,8 +400,6 @@ export async function prepareGatewayLifecycle(params: {
     gatewayInstanceRuntimeRef.current?.close();
     cronReconciliation.invalidate();
     clearPostReadyMaintenanceTimer();
-    postReadyState.retainedPluginCleanupHandle?.stop();
-    postReadyState.retainedPluginCleanupHandle = null;
   };
   let configReloaderStopPromise: Promise<void> | null = null;
   const stopConfigReloaderForClose = () => {
@@ -413,6 +412,7 @@ export async function prepareGatewayLifecycle(params: {
     // Owners are fenced synchronously above. Join them before any runtime they
     // can publish into is torn down.
     await Promise.all([
+      requestEntryLifetime.waitForPendingEntries(),
       stopDeliveryRecoveryForClose(),
       stopMediaCleanupForClose(),
       runtimeState.stopGatewayUpdateCheck(),
@@ -486,7 +486,7 @@ export async function prepareGatewayLifecycle(params: {
   };
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
     try {
-      markClosePreludeStarted();
+      await beginClosePrelude();
       const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
       const transport = transportBridge.current();
       await transport?.portalService.closeAll();
@@ -526,6 +526,7 @@ export async function prepareGatewayLifecycle(params: {
         },
         getPendingReplyCount: getTotalPendingReplies,
         clients,
+        finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
         configReloader: { stop: stopConfigReloaderForClose },
         ...(transport
           ? {
@@ -543,6 +544,7 @@ export async function prepareGatewayLifecycle(params: {
         closeProviderTransportDispatcherPool: shutdownRuntime.closeProviderTransportDispatcherPool,
       })(optsValue);
     } finally {
+      await requestEntryLifetime.sealAndJoin();
       params.releasePluginMetadata();
     }
   };
@@ -589,6 +591,7 @@ export async function prepareGatewayLifecycle(params: {
 
   return {
     ...runtime,
+    requestEntryLifetime,
     subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents,
     restartRecoveryCandidates,

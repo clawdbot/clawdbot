@@ -322,11 +322,21 @@ With code mode active, the logged model-facing tool names should be `exec` and
 ## Use Swarm for agent fan-out
 
 [Swarm](/tools/swarm) adds `agents.run()`, `phase()`, and `log()` guest globals
-for orchestrating concurrent sub-agents from Code Mode scripts. Enable
-`tools.swarm`, and ensure Code Mode engages through `"auto"` or `true`, then use
-normal JavaScript control flow for fan-out, decision gates, and structured
-collection. Swarm is a separate opt-in gate; engaging Code Mode alone does not
-expose the `agents.*` API.
+for orchestrating concurrent sub-agents from Code Mode scripts. Swarm is enabled
+by default; Code Mode remains separately opt-in through `"auto"` or `true`.
+Use normal JavaScript control flow for fan-out, decision gates, and structured
+collection.
+
+The Swarm globals, `API.read("agents.d.ts")`, and Swarm prompt hints appear only
+when Swarm is enabled and the native OpenClaw `sessions_spawn` tool is present
+in the Code Mode catalog and permitted by the run's execution allowlist. An MCP
+tool with the same name does not qualify. Code Mode waits for collector results
+internally, so `agents.run()` does not require the standalone `agents_wait`
+tool. Direct low-level Swarm use requires both tools allowed.
+
+Set `tools.swarm: false` or `tools.swarm.enabled: false` to opt out, globally or
+under an agent's `tools`. Engaging Code Mode does not override that opt-out or
+grant access to tools denied by policy.
 
 ## Technical tour
 

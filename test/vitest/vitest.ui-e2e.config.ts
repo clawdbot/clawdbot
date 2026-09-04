@@ -14,11 +14,14 @@ const sessionHostCommandStateRealGatewayTest =
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts";
 const openClawDelegationRealGatewayTest =
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts";
+const automationManagementRealGatewayTest =
+  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
 const uiE2eIncludePatterns = [
   "ui/src/**/*.e2e.test.ts",
   mediaTranscriptRealGatewayTest,
   sessionHostCommandStateRealGatewayTest,
   openClawDelegationRealGatewayTest,
+  automationManagementRealGatewayTest,
 ];
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
@@ -31,6 +34,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
   mediaTranscriptRealGatewayTest,
   openClawDelegationRealGatewayTest,
+  automationManagementRealGatewayTest,
 ];
 
 // These files own their server instead of leasing the global production bundle.

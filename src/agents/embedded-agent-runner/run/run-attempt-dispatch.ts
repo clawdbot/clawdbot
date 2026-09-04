@@ -1,3 +1,4 @@
+import path from "node:path";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
@@ -221,7 +222,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
     toolsAllow: params.toolsAllow,
   });
   let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
-  let skillReferencePaths: import("../../../skills/types.js").SkillUsagePath[] | undefined;
+  let skillReferencePaths = pluginSandbox?.readOnlyResourceMounts?.map((mount) => ({
+    skillFile: path.join(mount.hostPath, "SKILL.md"),
+    readPath: path.posix.join(mount.containerPath, "SKILL.md"),
+  }));
   if (
     pluginSandbox?.enabled &&
     !pluginSandbox.readOnlyResourceMounts?.length &&
@@ -342,7 +346,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
-    explicitSkillSelections: params.explicitSkillSelections,
+    explicitSkillSelections: params.explicitSkillSelections?.map((selection) => ({
+      ...selection,
+      path: remapSkillReferencePaths(selection.path, skillReferencePaths),
+    })),
     images: promptMedia.images,
     imageOrder: promptMedia.imageOrder,
     media: promptMedia.media,
