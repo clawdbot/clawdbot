@@ -62,9 +62,6 @@ export {
 } from "./update-command-service-maintenance.js";
 
 const CLI_NAME = resolveCliName();
-const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
-const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
-
 export function shouldPrepareUpdatedInstallRestart(params: {
   updateMode: UpdateRunResult["mode"];
   serviceInstalled: boolean;
@@ -348,16 +345,19 @@ export async function maybeRestartService(params: {
         try {
           await runUpdatedInstallGatewayCommand(activation, "install");
           if (expectedGatewayVersion && (isPackageUpdate || expectedGatewayBuildId)) {
+            const service = resolveGatewayService();
             const health = await waitForGatewayHealthyRestart({
-              service: resolveGatewayService(),
+              service,
               port: activation.gatewayPort,
               expectedVersion: expectedGatewayVersion,
               ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
               env: activation.serviceEnv,
               requireRunningService: true,
-              attempts: POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS,
-              delayMs: POST_REFRESH_ALREADY_HEALTHY_DELAY_MS,
               settle: { probes: 12 },
+              supervisorKeepsAlive: await hasLoadedLaunchdKeepAliveSupervisor({
+                service,
+                env: activation.serviceEnv,
+              }),
             });
             refreshedGatewayAlreadyHealthy = health.healthy;
             if (refreshedGatewayAlreadyHealthy && !activation.opts.json) {
@@ -422,8 +422,8 @@ export async function maybeRestartService(params: {
           return false;
         }
       }
-      // Refresh can start the service directly. Once its version and source
-      // build are healthy, another restart only interrupts the new process.
+      // A verified service refresh owns activation. Only an unverified or
+      // non-healthy refresh reaches the existing restart path.
       if (!refreshedGatewayAlreadyHealthy && restartScriptPath) {
         if (!preserveDefinition) {
           await createUpdateConfigSnapshot();
@@ -467,13 +467,12 @@ export async function maybeRestartService(params: {
       }
 
       const shouldVerifyRestart =
-        refreshedGatewayAlreadyHealthy ||
         restartInitiated ||
         (restarted &&
           (preserveDefinition ||
             expectedGatewayVersion !== undefined ||
             activation.result.mode === "git")) ||
-        activation.requireRunningServiceAfterRestart;
+        (!refreshedGatewayAlreadyHealthy && activation.requireRunningServiceAfterRestart);
       if (shouldVerifyRestart) {
         const requireRunningService =
           updatedInstallRestartNeedsServiceRootProof ||

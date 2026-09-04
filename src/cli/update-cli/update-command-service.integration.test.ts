@@ -246,6 +246,74 @@ afterEach(async () => {
 });
 
 describe("preserved update activation with real version guards", () => {
+  it("lets a healthy service refresh remain the sole activation", async () => {
+    mocks.capability.mockResolvedValue({ kind: "writable" });
+    const before = await maybeStopManagedServiceBeforeMutableUpdate({
+      updateInstallKind: "package",
+      root,
+      shouldRestart: true,
+      jsonMode: true,
+    });
+    expect(before.serviceUpdateVerdict).toMatchObject({ kind: "owned", refreshDefinition: true });
+
+    mocks.child.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+    mocks.health.mockImplementation(async (params) =>
+      params.attempts === 10 && params.delayMs === 500
+        ? {
+            healthy: false,
+            staleGatewayPids: [],
+            runtime: { status: "running" },
+            portUsage: { port: params.port, status: "free", listeners: [], hints: [] },
+          }
+        : readyRecoveryHealth(params.port, true),
+    );
+
+    const activated = await maybeRestartService({
+      channel: "stable",
+      shouldRestart: true,
+      result: {
+        status: "ok",
+        mode: "npm",
+        root,
+        steps: [],
+        durationMs: 0,
+        before: { version: "2026.1.1" },
+        after: { version: VERSION },
+      },
+      opts: { json: true },
+      refreshServiceEnv: true,
+      serviceInstallEnv: process.env,
+      serviceUpdateVerdict: before.serviceUpdateVerdict,
+      serviceEnv: before.serviceEnv,
+      gatewayPort: 19305,
+      requireRunningServiceAfterRestart: true,
+      timeoutMs: 1_000,
+    });
+
+    expect(activated).toBe(true);
+    expect(mocks.child.mock.calls.filter(([args]) => args.includes("install"))).toHaveLength(1);
+    expect(mocks.child.mock.calls.filter(([args]) => args.includes("restart"))).toHaveLength(0);
+    expect(mocks.script).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.health).toHaveBeenCalledTimes(1);
+    const healthParams = mocks.health.mock.calls[0]?.[0];
+    expect(healthParams).toMatchObject({
+      port: 19305,
+      expectedVersion: VERSION,
+      requireRunningService: true,
+      settle: { probes: 12 },
+    });
+    expect(healthParams).not.toHaveProperty("attempts");
+    expect(healthParams).not.toHaveProperty("delayMs");
+  });
+
   it.each([
     ...(
       [
