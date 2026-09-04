@@ -13,6 +13,51 @@ import {
 setupRunAttemptTestHooks();
 
 describe("Codex reasoning effort across completed turns", () => {
+  it("forwards xhigh, medium, then xhigh on consecutive turns", async () => {
+    let turnCount = 0;
+    let turnStarted = createDeferred<void>();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/resume") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        const result = turnStartResult(`turn-${++turnCount}`);
+        turnStarted.resolve();
+        return result;
+      }
+      return undefined;
+    });
+    const params = createTestParams();
+
+    for (const [index, thinkLevel] of (["xhigh", "medium", "xhigh"] as const).entries()) {
+      turnStarted = createDeferred<void>();
+      const run = runCodexAppServerAttempt({
+        ...params,
+        thinkLevel,
+        runId: `run-${index + 1}`,
+      });
+      await Promise.race([turnStarted.promise, run]);
+      await harness.completeTurn({ threadId: "thread-1", turnId: `turn-${index + 1}` });
+      await run;
+    }
+
+    const turnRequests = harness.requests.filter(({ method }) => method === "turn/start");
+    expect(turnRequests.map(({ params: request }) => request)).toMatchObject([
+      {
+        effort: "xhigh",
+        collaborationMode: { settings: { reasoning_effort: "xhigh" } },
+      },
+      {
+        effort: "medium",
+        collaborationMode: { settings: { reasoning_effort: "medium" } },
+      },
+      {
+        effort: "xhigh",
+        collaborationMode: { settings: { reasoning_effort: "xhigh" } },
+      },
+    ]);
+  });
+
   it.each([
     {
       metadata: "Platform",

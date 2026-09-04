@@ -508,6 +508,19 @@ describe("runPreparedReply media-only handling", () => {
     ]);
   });
 
+  it.each([false, true])("preserves current-message thinking authority: %s", async (explicit) => {
+    await runPrepared({
+      directives: {
+        hasThinkDirective: explicit,
+        thinkLevel: explicit ? "high" : undefined,
+      } as Parameters<typeof runPreparedReply>[0]["directives"],
+    });
+    expect(requireRunReplyAgentCall().followupRun.run).toMatchObject({
+      thinkLevel: "high",
+      thinkLevelExplicit: explicit,
+    });
+  });
+
   it("loads configured and canonical workspace skills for managed-worktree sessions", async () => {
     const params = baseParams({
       workspaceDir: "/tmp/agent-workspace",

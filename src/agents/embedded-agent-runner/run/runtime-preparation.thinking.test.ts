@@ -2,6 +2,7 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadBundledPluginPublicSurface } from "../../../plugin-sdk/test-helpers/public-surface-loader.js";
 import { setCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata.test-support.js";
@@ -60,6 +61,14 @@ vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOrigin
       slug: "gpt-5.6-luna",
       supported_reasoning_levels: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
     },
+    {
+      slug: "gpt-5.5",
+      supported_reasoning_levels: ["none", "low", "medium", "high", "xhigh"],
+    },
+    {
+      slug: "gpt-5.4",
+      supported_reasoning_levels: ["none", "low", "medium", "high", "xhigh"],
+    },
   ],
 }));
 vi.mock("../../harness/runtime-plugin.js", () => ({
@@ -80,6 +89,8 @@ vi.mock("../../harness/selection.js", () => {
 });
 
 const MODEL_ID = "gpt-5.6-luna";
+const ROUTED_MODEL_ID = "gpt-5.5";
+const DEFAULT_MODEL_ID = "gpt-5.4";
 const PLATFORM = "https://api.openai.com/v1";
 const SUBSCRIPTION = "https://chatgpt.com/backend-api/codex";
 
@@ -259,4 +270,83 @@ describe("selected route thinking metadata at runtime preparation", () => {
       }
     },
   );
+
+  it("applies hook-selected thinking per turn without leaking across model routes", async () => {
+    const run = async (params: {
+      runId: string;
+      modelId: string;
+      thinkingOverride?: ThinkLevel;
+      thinkLevelExplicit?: boolean;
+    }) => {
+      const runParams = {
+        runId: params.runId,
+        admittedRunContext: createTestAdmittedRunContext(params.runId),
+        sessionId: "route-thinking-session",
+        sessionKey: "agent:main:route-thinking-session",
+        agentId: "main",
+        prompt: "Reply briefly.",
+        workspaceDir: root,
+        timeoutMs: 5_000,
+        config: preparedModelRuntime.config,
+        authProfileId: "openai:subscription",
+        authProfileIdSource: "user" as const,
+        thinkLevel: "low" as const,
+        thinkLevelExplicit: params.thinkLevelExplicit,
+      };
+      const runtime = await prepareEmbeddedRunRuntime({
+        runParams,
+        provider: "openai",
+        modelId: DEFAULT_MODEL_ID,
+        agentDir: preparedModelRuntime.agentDir,
+        workspaceDir: root,
+        globalLane: "test",
+        hookRunner: {
+          hasHooks: (hookName) => hookName === "before_model_resolve",
+          runBeforeModelResolve: async () => ({
+            modelOverride: params.modelId,
+            thinkingOverride: params.thinkingOverride,
+          }),
+        },
+        hookContext: { sessionId: "route-thinking-session", workspaceDir: root },
+        markStartupStage: () => {},
+        notifyExecutionPhase: () => {},
+        fallbackConfigured: false,
+        preparedModelRuntime,
+      });
+      try {
+        expect(runParams.thinkLevel).toBe("low");
+        return runtime.snapshot().thinkLevel;
+      } finally {
+        runtime.stopRuntimeAuthRefreshTimer();
+      }
+    };
+
+    const levels = [];
+    for (const turn of [
+      { runId: "route-first-1", modelId: ROUTED_MODEL_ID, thinkingOverride: "xhigh" },
+      { runId: "route-second", modelId: DEFAULT_MODEL_ID, thinkingOverride: "medium" },
+      { runId: "route-first-2", modelId: ROUTED_MODEL_ID, thinkingOverride: "xhigh" },
+    ] as const) {
+      levels.push(await run(turn));
+    }
+    expect(levels).toEqual(["xhigh", "medium", "xhigh"]);
+    await expect(run({ runId: "route-without-thinking", modelId: ROUTED_MODEL_ID })).resolves.toBe(
+      "low",
+    );
+    await expect(
+      run({
+        runId: "explicit-turn-thinking",
+        modelId: ROUTED_MODEL_ID,
+        thinkingOverride: "xhigh",
+        thinkLevelExplicit: true,
+      }),
+    ).resolves.toBe("low");
+    await expect(
+      run({
+        runId: "unsupported-route-thinking",
+        modelId: ROUTED_MODEL_ID,
+        thinkingOverride: "adaptive",
+      }),
+    ).resolves.toBe("medium");
+  });
 });

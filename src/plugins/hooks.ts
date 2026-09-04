@@ -443,6 +443,7 @@ export function createHookRunner(
     // Keep the first defined override so higher-priority hooks win.
     modelOverride: firstDefined(acc?.modelOverride, next.modelOverride),
     providerOverride: firstDefined(acc?.providerOverride, next.providerOverride),
+    thinkingOverride: firstDefined(acc?.thinkingOverride, next.thinkingOverride),
   });
 
   const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
@@ -1043,7 +1044,7 @@ export function createHookRunner(
 
   /**
    * Run before_model_resolve hook.
-   * Allows plugins to override provider/model before model resolution.
+   * Allows plugins to override provider/model/thinking before model resolution.
    */
   async function runBeforeModelResolve(
     event: PluginHookBeforeModelResolveEvent,

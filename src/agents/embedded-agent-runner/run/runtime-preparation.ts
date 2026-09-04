@@ -83,6 +83,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   const {
     requestedModelId,
     modelSelectionChangedByHook,
+    thinkingOverride,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
     pinnedHarnessId,
@@ -223,33 +224,36 @@ export async function prepareEmbeddedRunRuntime(input: {
     : undefined;
   let profileIndex = 0;
   const requestedThinkLevel = resolveInitialThinkLevel({
-    requested: params.thinkLevel,
+    requested: params.thinkLevelExplicit
+      ? params.thinkLevel
+      : (thinkingOverride ?? params.thinkLevel),
     config: params.config,
     provider,
     modelId,
     model: effectiveModel,
   });
-  const initialThinkLevel = modelSelectionChangedByHook
-    ? (resolveCandidateThinkingLevel({
-        cfg: params.config,
-        provider,
-        modelId,
-        level: requestedThinkLevel,
-        catalog: [
-          {
-            provider,
-            id: modelId,
-            api: effectiveModel.api,
-            reasoning: effectiveModel.reasoning,
-            params: effectiveModel.params,
-            compat: effectiveModel.compat,
-          },
-        ],
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        agentRuntime: agentHarness.id,
-      }) ?? requestedThinkLevel)
-    : requestedThinkLevel;
+  const initialThinkLevel =
+    modelSelectionChangedByHook || thinkingOverride !== undefined
+      ? (resolveCandidateThinkingLevel({
+          cfg: params.config,
+          provider,
+          modelId,
+          level: requestedThinkLevel,
+          catalog: [
+            {
+              provider,
+              id: modelId,
+              api: effectiveModel.api,
+              reasoning: effectiveModel.reasoning,
+              params: effectiveModel.params,
+              compat: effectiveModel.compat,
+            },
+          ],
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          agentRuntime: agentHarness.id,
+        }) ?? requestedThinkLevel)
+      : requestedThinkLevel;
   let thinkLevel = initialThinkLevel;
   const attemptedThinking = new Set<ThinkLevel>();
   let apiKeyInfo: ApiKeyInfo | null = null;

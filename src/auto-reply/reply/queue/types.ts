@@ -219,6 +219,8 @@ export type FollowupRun = {
     /** Prepared model metadata reused when fallbacks revalidate the immutable thinking request. */
     thinkingCatalog?: ThinkingCatalogEntry[];
     thinkLevel?: ThinkLevel;
+    /** The current message explicitly selected thinking and takes precedence over routing hooks. */
+    thinkLevelExplicit?: boolean;
     fastMode?: FastMode;
     fastModeAutoOnSeconds?: number;
     fastModeOverride?: boolean;

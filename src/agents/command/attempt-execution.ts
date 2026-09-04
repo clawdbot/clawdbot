@@ -1361,6 +1361,7 @@ export function runAgentAttempt(params: {
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
+    thinkLevelExplicit: Boolean(params.opts.thinking || params.opts.thinkingOnce),
     fastMode: params.fastMode,
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,

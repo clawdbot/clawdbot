@@ -7,6 +7,7 @@ import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-mod
 import type {
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
+  PluginHookBeforeModelResolveResult,
 } from "../../../plugins/types.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -45,7 +46,7 @@ type HookRunnerLike = {
   runBeforeModelResolve(
     input: PluginHookBeforeModelResolveEvent,
     context: HookContext,
-  ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
+  ): Promise<PluginHookBeforeModelResolveResult | undefined>;
 };
 
 /** Durable harness sessions run only with their exact persisted identity and runtime lock. */
@@ -107,7 +108,7 @@ export async function resolveHookModelSelection(params: {
   if (params.modelSelectionLocked === true) {
     return { provider, modelId };
   }
-  let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+  let modelResolveOverride: PluginHookBeforeModelResolveResult | undefined;
   const hookRunner = params.hookRunner;
 
   // Run before_model_resolve hooks early so plugins can override the
@@ -135,6 +136,7 @@ export async function resolveHookModelSelection(params: {
   return {
     provider,
     modelId,
+    thinkingOverride: modelResolveOverride?.thinkingOverride,
   };
 }
 

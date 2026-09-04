@@ -274,7 +274,7 @@ contracts above; a modifying hook is not an observation hook.
 
 | Hook                            | Kind    | Purpose                                                                                                     |
 | ------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
-| `before_model_resolve`          | Modify  | Override provider or model before session messages load                                                     |
+| `before_model_resolve`          | Modify  | Override provider, model, or turn-local thinking before session messages load                               |
 | `agent_turn_prepare`            | Modify  | Inspect drained plugin turn injections and add context before prompt hooks                                  |
 | `before_prompt_build`           | Modify  | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment |
 | `before_agent_run`              | Gate    | Inspect the final prompt and session messages before model submission; can block the run                    |
@@ -446,8 +446,12 @@ text. The hook does not include the inbound message body or media.
 
 ## Debug runtime hooks
 
-Use `before_model_resolve` to switch provider or model for an agent turn - it
-runs before model resolution. `llm_output` describes an attempt's output when
+Use `before_model_resolve` to switch provider, model, or thinking level for an
+agent turn - it runs before model resolution. A returned `thinkingOverride`
+applies only to the current turn and does not change stored session thinking.
+An explicit thinking level in the current user message takes precedence.
+Existing model-selection locks continue to bypass this hook entirely.
+`llm_output` describes an attempt's output when
 the runtime emits it; `assistantTexts` can be empty and `lastAssistant` absent,
 so the event alone does not prove a successful final answer.
 
@@ -747,7 +751,8 @@ not prompt content:
 Use the phase-specific hooks for new plugins:
 
 - `before_model_resolve`: receives only the current prompt and attachment
-  metadata. Return `providerOverride` or `modelOverride`.
+  metadata. Return `providerOverride`, `modelOverride`, or the typed,
+  turn-local `thinkingOverride`.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
@@ -776,8 +781,9 @@ ordinary `before_prompt_build` → finalized tool policy → authorized prompt
 enrichment. `agent_turn_prepare` and queued-injection draining are not currently
 wired into the Codex or Copilot prompt paths.
 
-For multiple registrations, the first defined provider/model override and
-`systemPrompt` win. Context additions concatenate in priority order, and tool
+For multiple registrations, the first defined `providerOverride`, `modelOverride`,
+`thinkingOverride`, and `systemPrompt` win (higher-priority hooks run first).
+Context additions concatenate in priority order, and tool
 restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
 the same runner is skipped while its outer dispatch is active; other hook
 families and independent turns remain available.
