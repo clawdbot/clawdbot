@@ -742,8 +742,7 @@ enum DeviceIdentitySQLiteStore {
                 "\(claim.source.identityURL.path) (deviceId: \(claim.material.identity.deviceId))"
             }.joined(separator: ", ")
             throw DeviceIdentityStore.storageError(
-                "Legacy device identity sources conflict across [\(descriptions)]; all sources preserved. " +
-                    "Align device.json across Application Support and Group Containers or run openclaw doctor.")
+                "Legacy device identity sources conflict across [\(descriptions)]; all sources preserved.")
         }
     }
 

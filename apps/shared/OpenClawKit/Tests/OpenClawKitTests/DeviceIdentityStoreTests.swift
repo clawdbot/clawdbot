@@ -754,8 +754,12 @@ struct DeviceIdentityStoreTests {
     @Test
     func `conflicting legacy sources across directories throw detailed diagnostic`() throws {
         let fixture = DeviceIdentityMigrationFixture()
-        let source1 = try fixture.source("source1", contents: DeviceIdentityStoreTests.nodePEMIdentityJSON())
-        let source2 = try fixture.source("source2", contents: DeviceIdentityStoreTests.shareExtensionIdentityJSON())
+        let source1 = try fixture.source(
+            "source1",
+            contents: DeviceIdentityStoreTests.nodePEMIdentityJSON(deviceId: "device-1"))
+        let source2 = try fixture.source(
+            "source2",
+            contents: DeviceIdentityStoreTests.nodePEMIdentityJSON(deviceId: "device-2"))
 
         do {
             _ = try fixture.load(sources: [source1, source2])
@@ -764,6 +768,8 @@ struct DeviceIdentityStoreTests {
             #expect(error.localizedDescription.contains("Legacy device identity sources conflict across"))
             #expect(error.localizedDescription.contains(source1.identityURL.path))
             #expect(error.localizedDescription.contains(source2.identityURL.path))
+            #expect(error.localizedDescription.contains("device-1"))
+            #expect(error.localizedDescription.contains("device-2"))
         }
     }
 
