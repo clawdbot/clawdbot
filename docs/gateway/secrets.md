@@ -30,6 +30,8 @@ To move supported credentials out of plaintext, follow this three-step workflow:
     ```
   </Step>
   <Step title="Configure and apply SecretRefs">
+    Run this step from an interactive TTY. Applying a migration is one-way for migrated plaintext values: after you confirm, targeted plaintext credentials are scrubbed and cannot be restored by the CLI. Review the proposed changes before confirming.
+
     ```bash
     openclaw secrets configure --apply
     ```
@@ -50,6 +52,8 @@ If the migration includes exec SecretRefs or providers, use this complete exec-a
     ```
   </Step>
   <Step title="Configure and apply SecretRefs">
+    Run this step from an interactive TTY. Applying a migration is one-way for migrated plaintext values: after you confirm, targeted plaintext credentials are scrubbed and cannot be restored by the CLI. Review the proposed changes before confirming.
+
     ```bash
     openclaw secrets configure --apply --allow-exec
     ```
