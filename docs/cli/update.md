@@ -164,8 +164,9 @@ include `registry.reason` (`selector_missing`, `selector_query_failed`,
 ## Run history and reports
 
 Every admitted update has a durable `runId`, including updates requested from
-chat, the Control UI, the CLI, and automatic update campaigns. Refused and dry-run
-updates keep a skipped or failed record with their reason. The same ID follows
+chat, the Control UI, the CLI, and automatic update campaigns. Dry-run previews
+and updates refused after admission keep a skipped or failed record with their
+reason. CLI invocations rejected before admission leave state untouched. The same ID follows
 the detached updater and the restarted Gateway, so reconnecting does not lose
 the outcome.
 

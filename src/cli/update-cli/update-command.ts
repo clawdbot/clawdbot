@@ -33,10 +33,7 @@ import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import {
-  assertOpenClawStateWriteAllowedAtPath,
-  OpenClawStateOwnershipError,
-} from "../../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import { VERSION } from "../../version.js";
 import { resolveCliName } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
@@ -86,16 +83,10 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
   const recoveryState: UpdateCommandRecoveryState = {
     triageTarget: { env: resolveServiceRefreshEnv(process.env, invocationCwd) },
   };
-  let prepared: Awaited<ReturnType<typeof prepareUpdateCommand>>;
-  try {
-    prepared = await withUpdateInProgressEnv(invocationCwd, () => prepareUpdateCommand(inputOpts));
-  } catch (error) {
-    if (!(error instanceof OpenClawStateOwnershipError)) {
-      const run = await admitUpdateCommandRun({ opts: inputOpts, invocationCwd });
-      failUpdateCommandRun(error, run);
-    }
-    throw error;
-  }
+  // Rejected arguments and handoffs must not open or recover persistent state.
+  const prepared = await withUpdateInProgressEnv(invocationCwd, () =>
+    prepareUpdateCommand(inputOpts),
+  );
   const run = await admitUpdateCommandRun({
     opts: inputOpts,
     root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,

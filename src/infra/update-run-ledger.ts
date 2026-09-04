@@ -201,8 +201,8 @@ function writeRun<T>(operation: (db: DatabaseSync) => T, options: OpenClawStateD
     ({ db }) => {
       // Feature-local, idempotent DDL shares the write transaction; a failed write also rolls back first use.
       if (!readyDatabases.has(db)) {
-        db.exec(schema);
-      } // sqlite-allow-raw -- Canonical lazy additive DDL bootstrap only.
+        db.exec(schema); // sqlite-allow-raw -- Canonical lazy additive DDL bootstrap only.
+      }
       committedDatabase = db;
       return operation(db);
     },

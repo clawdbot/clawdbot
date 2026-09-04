@@ -4638,22 +4638,12 @@ describe("update-cli", () => {
   });
 
   it("does not clean managed-service handoffs before rejecting an invalid timeout", async () => {
+    const runsBefore = listUpdateRuns();
     await invokeUpdateCli({ timeout: "" });
 
     expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(listUpdateRuns({ limit: 1 })).toMatchObject([
-      {
-        status: "failed",
-        steps: [
-          {
-            step: "requested",
-            status: "failed",
-            detail: "--timeout must be a positive integer (seconds)",
-          },
-        ],
-      },
-    ]);
+    expect(listUpdateRuns()).toEqual(runsBefore);
   });
 
   it.each([

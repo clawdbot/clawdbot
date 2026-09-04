@@ -51,14 +51,13 @@ import {
 
 export async function admitUpdateCommandRun(params: {
   opts: UpdateCommandOptions;
-  root?: string;
+  root: string;
   invocationCwd?: string;
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
   let env = resolveServiceRefreshEnv(process.env, params.invocationCwd);
   // A preview belongs to its explicit state directory. Real updates follow the
   // same owned service selectors as finalization, then freeze them for all writers.
   if (
-    params.root &&
     !params.opts.dryRun &&
     !env[UPDATE_RUN_ID_ENV] &&
     isGatewayServiceManagementAllowedForUpdate(env)
@@ -232,17 +231,17 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   }
   const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
   const discoveredRoot = await resolveUpdateRoot();
-  const installKind = await resolveUpdateInstallKind(discoveredRoot);
-  const servicePlan =
-    installKind === "package"
-      ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot })
-      : undefined;
   const handoffRoot = controlPlaneUpdateSentinelMeta?.root;
   if (handoffRoot && !updateInstallRootsMatch(handoffRoot, discoveredRoot)) {
     throw new Error(
       `Managed update handoff root mismatch: expected ${handoffRoot}, running from ${discoveredRoot}.`,
     );
   }
+  const installKind = await resolveUpdateInstallKind(discoveredRoot);
+  const servicePlan =
+    installKind === "package"
+      ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot })
+      : undefined;
   if (opts.dryRun !== true) {
     try {
       assertConfigWriteAllowedInCurrentMode();
