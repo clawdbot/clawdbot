@@ -458,6 +458,66 @@ describe("Doctor ACP owner migration", () => {
     });
   });
 
+  it("rejects incompatible source metadata after an interrupted claim", async () => {
+    await withStateDirEnv("openclaw-doctor-acp-source-meta-incompatible-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const cfg = createConfig(stateDir);
+      seedLegacySession({ cfg, env });
+      expect(
+        claimAcpSessionMetaForOwnerMigration({
+          cfg,
+          entry,
+          env,
+          expectedAgent: "codex",
+          sourceAgentId: "codex",
+          sourceSessionKey: sourceKey,
+          targetAgentId: "reviewer",
+          targetSessionKey: targetKey,
+        }),
+      ).toBe("claimed");
+      const canonicalSourceKey = buildAcpDatabaseSessionKey(sourceKey, "codex");
+      writeAcpSessionMetaForMigration({
+        env,
+        lifecycleRevision: entry.lifecycleRevision,
+        meta: {
+          agent: "codex",
+          backend: "acpx",
+          lastActivityAt: 10,
+          mode: "persistent",
+          runtimeSessionName: "legacy-peer",
+          state: "idle",
+        },
+        sessionKey: canonicalSourceKey,
+      });
+      writeAcpSessionMetaForMigration({
+        env,
+        lifecycleRevision: entry.lifecycleRevision,
+        meta: {
+          agent: "other-harness",
+          backend: "acpx",
+          lastActivityAt: 10,
+          mode: "persistent",
+          runtimeSessionName: "other-peer",
+          state: "idle",
+        },
+        sessionKey: sourceKey,
+      });
+
+      const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
+
+      expect(report).toMatchObject({ conflicts: 1, eligible: 1, migrated: 0 });
+      const rows = withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => ({
+          canonicalSource: selectAcpSessionRow(db, canonicalSourceKey),
+          legacySource: selectAcpSessionRow(db, sourceKey),
+        }),
+        { env },
+      );
+      expect(rows?.canonicalSource?.agent).toBe("codex");
+      expect(rows?.legacySource?.agent).toBe("other-harness");
+    });
+  });
+
   it("canonicalizes matching target metadata left under a legacy key", async () => {
     await withStateDirEnv("openclaw-doctor-acp-target-meta-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

@@ -70,6 +70,10 @@ export function claimAcpSessionMetaForOwnerMigration(params: {
   let result: AcpOwnerMigrationClaimResult = "missing";
   runOpenClawStateWriteTransaction(
     (database) => {
+      const sourceRows = [...new Set(sourceDatabaseKeys)].flatMap((key) => {
+        const row = selectAcpSessionRow(database.db, key);
+        return row ? [row] : [];
+      });
       const targetMatches = [...new Set(targetDatabaseKeys)].flatMap((key) => {
         const row = selectAcpSessionRow(database.db, key);
         return row ? [{ key, row }] : [];
@@ -94,15 +98,12 @@ export function claimAcpSessionMetaForOwnerMigration(params: {
           result = "conflict";
           return;
         }
-        const divergentSource = [...new Set(sourceDatabaseKeys)]
-          .map((key) => selectAcpSessionRow(database.db, key))
-          .find(
-            (row) =>
-              row !== undefined &&
-              row.agent === params.expectedAgent &&
-              acpSessionRowMatchesEntry(row, params.entry) &&
-              !sameAcpSessionMetadata(row, targetRow),
-          );
+        const divergentSource = sourceRows.find(
+          (row) =>
+            row.agent !== params.expectedAgent ||
+            !acpSessionRowMatchesEntry(row, params.entry) ||
+            !sameAcpSessionMetadata(row, targetRow),
+        );
         if (divergentSource) {
           result = "conflict";
           return;
@@ -131,10 +132,6 @@ export function claimAcpSessionMetaForOwnerMigration(params: {
         result = "already-claimed";
         return;
       }
-      const sourceRows = [...new Set(sourceDatabaseKeys)].flatMap((key) => {
-        const row = selectAcpSessionRow(database.db, key);
-        return row ? [row] : [];
-      });
       const sourceRow = sourceRows.find(
         (row) => row.agent === params.expectedAgent && acpSessionRowMatchesEntry(row, params.entry),
       );
