@@ -16,6 +16,8 @@ import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
+const CLI_ASSISTANT_IDEMPOTENCY_PREFIX = "cli-assistant:";
+const CLI_ASSISTANT_COVERED_SEGMENT_MIN_LENGTH = 10;
 
 type ComparableHistoryMessage = {
   message: unknown;
@@ -246,6 +248,33 @@ function compareHistoryMessages(a: ComparableHistoryMessage, b: ComparableHistor
   return a.order - b.order;
 }
 
+function readCliAssistantIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const record = message as { idempotencyKey?: unknown };
+  const direct = normalizeOptionalString(record.idempotencyKey);
+  if (direct?.startsWith(CLI_ASSISTANT_IDEMPOTENCY_PREFIX)) {
+    return direct;
+  }
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  const nested = normalizeOptionalString(meta?.idempotencyKey);
+  return nested?.startsWith(CLI_ASSISTANT_IDEMPOTENCY_PREFIX) ? nested : undefined;
+}
+
+function importedAssistantCoversCliAggregate(
+  aggregateText: string | undefined,
+  importedAssistantTexts: readonly string[],
+): boolean {
+  if (!aggregateText) {
+    return false;
+  }
+  return importedAssistantTexts.some(
+    (segment) =>
+      segment.length >= CLI_ASSISTANT_COVERED_SEGMENT_MIN_LENGTH && aggregateText.endsWith(segment),
+  );
+}
+
 /** Merges imported CLI transcript messages into local history without duplicating overlaps. */
 export function mergeImportedChatHistoryMessages(params: {
   localMessages: unknown[];
@@ -306,6 +335,15 @@ export function mergeImportedChatHistoryMessages(params: {
     indexEntry(imported);
     nextOrder += 1;
   }
-  merged.sort(compareHistoryMessages);
-  return merged.map((entry) => entry.message);
+  const importedAssistantTexts = merged.flatMap((entry) =>
+    entry.role === "assistant" && entry.text && entry.externalIdentityKey ? [entry.text] : [],
+  );
+  const uncovered = merged.filter((entry) => {
+    if (entry.role !== "assistant" || !readCliAssistantIdempotencyKey(entry.message)) {
+      return true;
+    }
+    return !importedAssistantCoversCliAggregate(entry.text, importedAssistantTexts);
+  });
+  uncovered.sort(compareHistoryMessages);
+  return uncovered.map((entry) => entry.message);
 }
