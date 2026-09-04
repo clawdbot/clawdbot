@@ -18,6 +18,7 @@ const gatewayMocks = vi.hoisted(() => ({
       ) => Promise<void>)
     | undefined,
   onMessageError: undefined as ((error: Error) => void) | undefined,
+  onOutbound: undefined as (() => void) | undefined,
   onFatalError: undefined as ((error: Error) => void) | undefined,
   onRoomDirectoryChanged: undefined as (() => void) | undefined,
   resolveAgentIdentity: vi.fn(),
@@ -138,6 +139,7 @@ describe("Buzz gateway lifecycle", () => {
     vi.clearAllMocks();
     gatewayMocks.onMessage = undefined;
     gatewayMocks.onMessageError = undefined;
+    gatewayMocks.onOutbound = undefined;
     gatewayMocks.onFatalError = undefined;
     gatewayMocks.onRoomDirectoryChanged = undefined;
     gatewayMocks.busSendText.mockResolvedValue("event-id");
@@ -180,11 +182,13 @@ describe("Buzz gateway lifecycle", () => {
           assertCurrent: () => void,
         ) => Promise<void>;
         onMessageError?: (error: Error) => void;
+        onOutbound?: () => void;
         onFatalError?: (error: Error) => void;
         onRoomDirectoryChanged?: () => void;
       }): Promise<BuzzBus> => {
         gatewayMocks.onMessage = options.onMessage;
         gatewayMocks.onMessageError = options.onMessageError;
+        gatewayMocks.onOutbound = options.onOutbound;
         gatewayMocks.onFatalError = options.onFatalError;
         gatewayMocks.onRoomDirectoryChanged = options.onRoomDirectoryChanged;
         return createMockBus();
@@ -335,6 +339,42 @@ describe("Buzz gateway lifecycle", () => {
       to: CHANNEL_ID,
       messageId: "standalone-event-id",
     });
+  });
+
+  it("stamps activity telemetry on gateway bus inbound and outbound", async () => {
+    const setStatus = vi.fn();
+    const { abortController, account, lifecycle } = startTestGateway({ setStatus });
+
+    await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+    vi.spyOn(Date, "now").mockReturnValueOnce(1_700_000_100_000);
+    await gatewayMocks.onMessage?.(
+      {
+        id: "forum-event",
+        kind: BUZZ_NORMAL_MESSAGE_KIND,
+        channelId: CHANNEL_ID,
+        senderPubkey: "b".repeat(64),
+        text: "@OpenClaw hello from Buzz",
+        createdAt: 1_700_000_100,
+        mentionedPubkeys: [],
+      },
+      createMockBus(),
+      new AbortController().signal,
+      () => {},
+    );
+    expect(setStatus).toHaveBeenCalledWith({
+      accountId: account.accountId,
+      lastInboundAt: 1_700_000_100_000,
+    });
+
+    vi.spyOn(Date, "now").mockReturnValueOnce(1_700_000_101_000);
+    gatewayMocks.onOutbound?.();
+    expect(setStatus).toHaveBeenCalledWith({
+      accountId: account.accountId,
+      lastOutboundAt: 1_700_000_101_000,
+    });
+
+    abortController.abort();
+    await expect(lifecycle).resolves.toBeUndefined();
   });
 
   it("routes a named default send with only that account's credentials", async () => {

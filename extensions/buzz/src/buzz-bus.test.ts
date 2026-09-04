@@ -2,6 +2,7 @@ import { finalizeEvent } from "nostr-tools";
 import { describe, expect, it } from "vitest";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
+  BUZZ_FORUM_MESSAGE_KIND,
   BUZZ_NORMAL_MESSAGE_KIND,
   buildBuzzMessageTags,
   formatBuzzMessageForAgent,
@@ -56,6 +57,24 @@ describe("Buzz message events", () => {
     expect(parseBuzzMessageEvent(event)).toMatchObject({
       kind: BUZZ_RICH_MESSAGE_KIND,
       text: "**hello** OpenClaw",
+    });
+  });
+
+  it("parses Buzz forum posts", () => {
+    const event = finalizeEvent(
+      {
+        kind: BUZZ_FORUM_MESSAGE_KIND,
+        created_at: 1_700_000_000,
+        content: "@Down forum message",
+        tags: [["h", "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"]],
+      },
+      SECRET_KEY,
+    );
+
+    expect(parseBuzzMessageEvent(event)).toMatchObject({
+      kind: BUZZ_FORUM_MESSAGE_KIND,
+      text: "@Down forum message",
+      channelId: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
     });
   });
 
