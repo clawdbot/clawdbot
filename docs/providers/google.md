@@ -14,6 +14,12 @@ The Google plugin provides access to Gemini models through Google AI Studio, plu
 - Managed-cloud provider: `google-vertex` with Google Cloud Application Default Credentials
 - Optional runtime: `agentRuntime.id: "google-gemini-cli"` runs an explicitly configured model through the local Gemini CLI
 
+<Note>
+  To use Gemini models through Google Cloud Vertex AI with GCP project billing,
+  see the [Google Vertex AI](/providers/google-vertex) guide, which covers the
+  ADC setup path.
+</Note>
+
 ## Getting started
 
 For most installations, use a Google AI Studio API key. Use `google-vertex` when
@@ -508,5 +514,8 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
   </Card>
   <Card title="Music generation" href="/tools/music-generation" icon="music">
     Shared music tool parameters and provider selection.
+  </Card>
+  <Card title="Google (Vertex AI)" href="/providers/google-vertex" icon="cloud">
+    Gemini models via GCP project billing and ADC.
   </Card>
 </CardGroup>

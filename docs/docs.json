@@ -1675,6 +1675,7 @@
                   "providers/github-copilot",
                   "providers/gmi",
                   "providers/google",
+                  "providers/google-vertex",
                   "providers/gradium",
                   "providers/groq",
                   "providers/huggingface",
