@@ -1,6 +1,6 @@
+import { createSessionEventRefreshCoordinator } from "@openclaw/gateway-client/model";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
@@ -288,6 +288,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         }
         const queued = entry.queued;
         entry.queued = null;
+        if (queued && pageActive) {
+          entry.coordinator.absorb();
+        }
         next = pageActive ? queued : null;
       }
     };
@@ -537,7 +540,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     if (inFlight) {
       eventRefreshQueued = true;
-      return inFlight;
+      return Promise.resolve();
     }
     eventRefreshQueued = false;
     return startRefresh({ ...lastListOptions, force: true });
