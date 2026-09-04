@@ -31,11 +31,11 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
-import { retireDeviceTokenClients } from "../device-token-client-lifecycle.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
+import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
@@ -472,22 +472,31 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
-    context.invalidateClientsForDevice?.(removed.deviceId, {
-      reason: "device-pair-removed",
-    });
-    await reconcileRevokedDeviceWorker(context, removed.deviceId);
-    context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
-    emitDevicePairingLifecycleSecurityEvent({
-      action: "device.pairing.removed",
-      severity: "medium",
-      authz,
-      targetDeviceId: removed.deviceId,
-      controlId: "device.pair.remove",
-    });
-    respond(true, removed, undefined);
-    queueMicrotask(() => {
-      context.disconnectClientsForDevice?.(removed.deviceId);
-    });
+    // Removal can retire its requester. Keep only its final reply, without
+    // letting a failed claim or worker reconciliation skip client teardown.
+    try {
+      try {
+        holdGatewayPolicyResponse(respond);
+      } finally {
+        context.invalidateClientsForDevice?.(removed.deviceId, {
+          reason: "device-pair-removed",
+        });
+        await reconcileRevokedDeviceWorker(context, removed.deviceId);
+      }
+      context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
+      emitDevicePairingLifecycleSecurityEvent({
+        action: "device.pairing.removed",
+        severity: "medium",
+        authz,
+        targetDeviceId: removed.deviceId,
+        controlId: "device.pair.remove",
+      });
+      respond(true, removed, undefined);
+    } finally {
+      queueMicrotask(() => {
+        context.disconnectClientsForDevice?.(removed.deviceId);
+      });
+    }
   },
   "device.pair.rename": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateDevicePairRenameParams, "device.pair.rename", respond)) {
@@ -660,7 +669,19 @@ export const deviceHandlers: GatewayRequestHandlers = {
     if (entry.role === "node") {
       invalidateNodeWakeState(normalizedDeviceId);
     }
-    retireDeviceTokenClients(context, normalizedDeviceId, [entry.role], "device-token-rotated");
+    // Claim after the awaited commit, while the caller is still current. Fence
+    // pipelined frames even if the claim fails; close after the synchronous reply.
+    try {
+      holdGatewayPolicyResponse(respond);
+    } finally {
+      context.invalidateClientsForDevice?.(normalizedDeviceId, {
+        role: entry.role,
+        reason: "device-token-rotated",
+      });
+      queueMicrotask(() => {
+        context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
+      });
+    }
     // Record the delivery decision on the wire: an absent token alone cannot tell a
     // client whether the rotation withheld the secret by policy or the response
     // predates this field, and the two need different operator-facing outcomes.
@@ -770,7 +791,19 @@ export const deviceHandlers: GatewayRequestHandlers = {
       clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
       await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
     }
-    retireDeviceTokenClients(context, normalizedDeviceId, [entry.role], "device-token-revoked");
+    // Preserve only this committed mutation's reply across its own invalidation;
+    // a caller revoked during the await cannot claim it or skip target teardown.
+    try {
+      holdGatewayPolicyResponse(respond);
+    } finally {
+      context.invalidateClientsForDevice?.(normalizedDeviceId, {
+        role: entry.role,
+        reason: "device-token-revoked",
+      });
+      queueMicrotask(() => {
+        context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
+      });
+    }
     respond(
       true,
       {
