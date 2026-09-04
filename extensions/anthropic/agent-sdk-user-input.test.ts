@@ -134,7 +134,72 @@ describe("Claude Agent SDK user input adapter", () => {
       }),
     ).resolves.toEqual({
       behavior: "deny",
-      message: "OpenClaw rejected malformed Claude user questions.",
+      message:
+        "OpenClaw rejected malformed Claude user questions: questions[0].header must be at most 12 characters (received 19).",
+    });
+    expect(requestUserInput).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "questions is not an array",
+      input: { questions: "nope" },
+      error: "questions must be an array of 1 to 4 items",
+    },
+    {
+      name: "question text is missing",
+      input: { questions: [{ header: "Pick" }] },
+      error: "questions[0].question must be a string",
+    },
+    {
+      name: "header is empty",
+      input: { questions: [{ header: "", question: "Which one?" }] },
+      error: "questions[0].header must not be empty",
+    },
+    {
+      name: "options has a single entry",
+      input: {
+        questions: [{ header: "Pick", question: "Which one?", options: [{ label: "Only" }] }],
+      },
+      error: "questions[0].options must be an array of 2 to 4 items",
+    },
+    {
+      name: "multiSelect is not a boolean",
+      input: {
+        questions: [
+          {
+            header: "Pick",
+            question: "Which one?",
+            options: [{ label: "A" }, { label: "B" }],
+            multiSelect: "yes",
+          },
+        ],
+      },
+      error: "questions[0].multiSelect must be a boolean",
+    },
+    {
+      name: "an option description is missing",
+      input: {
+        questions: [
+          {
+            header: "Pick",
+            question: "Which one?",
+            options: [{ label: "A", description: "First" }, { label: "B" }],
+            multiSelect: false,
+          },
+        ],
+      },
+      error: "questions[0].options[1].description must be a string",
+    },
+  ])("names the failing constraint when $name", async ({ input, error }) => {
+    const requestUserInput = vi.fn();
+    const authorizer = createClaudeAgentSdkUserInputAuthorizer(createContext(requestUserInput));
+
+    await expect(
+      authorizer.authorize({ input, signal: new AbortController().signal }),
+    ).resolves.toEqual({
+      behavior: "deny",
+      message: `OpenClaw rejected malformed Claude user questions: ${error}.`,
     });
     expect(requestUserInput).not.toHaveBeenCalled();
   });
