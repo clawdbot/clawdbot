@@ -565,6 +565,26 @@ describe("canonical image presentation handoff", () => {
     },
   );
 
+  it("keeps a decoded native image when disconnect precedes its load task", async () => {
+    const fixture = createCanonicalImageTranscript();
+    fixture.publish();
+    fixture.requests[0]?.resolve(mediaMetadataResponse());
+    await flushDeferredRowPrune();
+    const displayed = expectDefined(fixture.displayed[0], "decoded native image");
+    Object.defineProperties(displayed, {
+      complete: { value: true },
+      naturalWidth: { value: 1 },
+    });
+
+    fixture.root().setConnected(false);
+    fixture.root().setConnected(true);
+    displayed.dispatchEvent(new Event("load"));
+    displayed.dispatchEvent(new Event("error"));
+    await flushDeferredRowPrune();
+
+    expect(fixture.images()).toHaveLength(1);
+  });
+
   it.each([
     {
       name: "renewal",
