@@ -109,14 +109,20 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     };
   }
 
-  private resolveCurrentTurnEntryId(): string | null {
+  resolveCurrentTurnEntryId(isInterruptedTail?: (entry: SessionEntry) => boolean): string | null {
     let parentId = this.appendParentId;
     let remainingAncestors = this.byId.size;
     // Compaction rewrites context without consuming the current user turn.
-    // Stop at message and reset boundaries so old keyed turns stay closed.
+    // Walk physical parents: opaque/context-excluded users still close older
+    // turns. Replay may recognize its interrupted tail, never skip missing rows.
     while (parentId && remainingAncestors-- > 0) {
       const parent = this.byId.get(parentId);
-      if (!parent || (!isSessionContextMetadataEntry(parent) && parent.type !== "compaction")) {
+      if (
+        !parent ||
+        (!isSessionContextMetadataEntry(parent) &&
+          parent.type !== "compaction" &&
+          !isInterruptedTail?.(parent))
+      ) {
         break;
       }
       parentId = parent.parentId;

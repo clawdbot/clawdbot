@@ -27,6 +27,8 @@ type SessionPrefetchUpdate = {
   client: GatewayBrowserClient | null;
   listRevision: number;
   openSessionKeys: readonly string[];
+  /** Presented panes still fetching their transcript; omitted panes report committed. */
+  loadingSessionKeys?: readonly string[];
   rows: readonly GatewaySessionRow[] | null;
 };
 
@@ -185,10 +187,32 @@ describe("recent session prefetch", () => {
     current = update;
     host.replaceChildren(
       ...update.openSessionKeys.map((sessionKey) =>
-        Object.assign(document.createElement("openclaw-chat-pane"), { sessionKey }),
+        Object.assign(document.createElement("openclaw-chat-pane"), {
+          sessionKey,
+          transcriptLoading: update.loadingSessionKeys?.includes(sessionKey) === true,
+        }),
       ),
     );
     controller.hostUpdated?.();
+  }
+
+  /** Resolves pending history requests in arrival order, one per settle, like a serial socket. */
+  async function drainSequentially(
+    pending: Array<{
+      resolve: (value: ReturnType<typeof historyResult>) => void;
+      sessionKey: string;
+    }>,
+    request: { mock: { calls: unknown[][] } },
+    expectedOrder: readonly string[],
+  ): Promise<void> {
+    for (const [index, sessionKey] of expectedOrder.entries()) {
+      // Only the head of the queue is on the wire until it resolves.
+      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(expectedOrder.slice(0, index + 1));
+      const head = pending.shift();
+      expect(head?.sessionKey).toBe(sessionKey);
+      head?.resolve(historyResult(sessionKey));
+      await settlePromises();
+    }
   }
 
   it("does not repopulate a removed session from an in-flight prefetch before the next list revision", async () => {
@@ -213,7 +237,7 @@ describe("recent session prefetch", () => {
     expect(await store.read(key)).toBeNull();
   });
 
-  it("quickly warms five eligible sessions together without reopening fresh or active history", async () => {
+  it("warms five eligible sessions one at a time without reopening fresh or active history", async () => {
     store.write("agent:main:fresh", historySnapshot("fresh"));
     await store.flush();
     const open = vi.spyOn(indexedDB, "open");
@@ -259,24 +283,14 @@ describe("recent session prefetch", () => {
     expect(request).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(300);
     await settlePromises();
-    expect(request).toHaveBeenCalledTimes(5);
-
-    for (let index = 0; index < 5; index += 1) {
-      const pendingRequest = pending[index];
-      if (!pendingRequest) {
-        throw new Error(`missing pending history request ${index}`);
-      }
-      pendingRequest.resolve(historyResult(pendingRequest.sessionKey));
-    }
-    await settlePromises();
-
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([
+    await drainSequentially(pending, request, [
       "agent:main:eligible-1",
       "agent:main:eligible-2",
       "agent:main:eligible-3",
       "agent:main:eligible-4",
       "agent:main:eligible-5",
     ]);
+    expect(request).toHaveBeenCalledTimes(5);
     expect(request.mock.calls.every((call) => (call[1] as { limit: number }).limit === 800)).toBe(
       true,
     );
@@ -303,6 +317,149 @@ describe("recent session prefetch", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await settlePromises();
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("waits for the presented transcript to commit before warming other sessions", async () => {
+    const request = vi.fn(async (_method: string, params: unknown) =>
+      historyResult((params as { sessionKey: string }).sessionKey),
+    );
+    const state: SessionPrefetchUpdate = {
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: ["agent:main:main"],
+      loadingSessionKeys: ["agent:main:main"],
+      rows: [row("agent:main:main", NOW - 1), row("agent:main:recent", NOW - 2)],
+    };
+    updatePrefetch(state);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settlePromises();
+    // The visible transcript owns the socket until it has committed.
+    expect(request).not.toHaveBeenCalled();
+
+    updatePrefetch({ ...state, loadingSessionKeys: [] });
+    host.dispatchEvent(
+      new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
+  });
+
+  it("stops the queued warming when a presented transcript starts loading mid-cycle", async () => {
+    const pending: Array<{
+      resolve: (value: ReturnType<typeof historyResult>) => void;
+      sessionKey: string;
+    }> = [];
+    const request = vi.fn((_method: string, params: unknown) => {
+      const sessionKey = (params as { sessionKey: string }).sessionKey;
+      return new Promise<ReturnType<typeof historyResult>>((resolve) => {
+        pending.push({ resolve, sessionKey });
+      });
+    });
+    const state: SessionPrefetchUpdate = {
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: ["agent:main:main"],
+      rows: [
+        row("agent:main:main", NOW - 1),
+        row("agent:main:recent-1", NOW - 2),
+        row("agent:main:recent-2", NOW - 3),
+      ],
+    };
+    updatePrefetch(state);
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent-1"]);
+
+    // The user opens another session while the first warm-up is in flight.
+    updatePrefetch({ ...state, loadingSessionKeys: ["agent:main:main"] });
+    pending.shift()?.resolve(historyResult("agent:main:recent-1"));
+    await settlePromises();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent-1"]);
+
+    updatePrefetch({ ...state, loadingSessionKeys: [] });
+    host.dispatchEvent(
+      new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([
+      "agent:main:recent-1",
+      "agent:main:recent-2",
+    ]);
+  });
+
+  it("resamples when a presented pane reports a transcript loading edge", async () => {
+    const request = vi.fn(async (_method: string, params: unknown) =>
+      historyResult((params as { sessionKey: string }).sessionKey),
+    );
+    const state: SessionPrefetchUpdate = {
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: ["agent:main:main"],
+      rows: [row("agent:main:main", NOW - 1), row("agent:main:recent", NOW - 2)],
+    };
+    updatePrefetch(state);
+    // The pane starts its load inside its own update; the page never re-renders,
+    // so only the pane's signal can retire the "ready" snapshot the page sampled.
+    const pane = host.firstElementChild as HTMLElement & { transcriptLoading: boolean };
+    pane.transcriptLoading = true;
+    pane.dispatchEvent(
+      new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    await settlePromises();
+    expect(request).not.toHaveBeenCalled();
+
+    pane.transcriptLoading = false;
+    pane.dispatchEvent(
+      new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
+  });
+
+  it("rechecks readiness after the persisted snapshot read before requesting history", async () => {
+    const sessionKey = "agent:main:stored";
+    const stored = historySnapshot("stored", "session-stored");
+    store.write(sessionKey, stored);
+    await store.flush();
+    cache.clear();
+    const read = createDeferred<ChatSessionSnapshot | null>();
+    const readSpy = vi.spyOn(store, "read").mockReturnValueOnce(read.promise);
+    const request = vi.fn(async (_method: string, params: unknown) =>
+      historyResult((params as { sessionKey: string }).sessionKey),
+    );
+    const state: SessionPrefetchUpdate = {
+      client: { request } as unknown as GatewayBrowserClient,
+      listRevision: 1,
+      openSessionKeys: ["agent:main:main"],
+      rows: [row("agent:main:main", NOW - 1), row(sessionKey, NOW + 1)],
+    };
+    updatePrefetch(state);
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(readSpy).toHaveBeenCalledWith(sessionKey);
+    expect(request).not.toHaveBeenCalled();
+
+    // The presented pane starts loading while IndexedDB is still answering.
+    const pane = host.firstElementChild as HTMLElement & { transcriptLoading: boolean };
+    pane.transcriptLoading = true;
+    pane.dispatchEvent(
+      new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
+    );
+    read.resolve(stored);
+    await settlePromises();
+    expect(request).not.toHaveBeenCalled();
+
+    pane.transcriptLoading = false;
+    pane.dispatchEvent(
+      new CustomEvent("openclaw-chat-transcript-loading-changed", { bubbles: true }),
+    );
+    await vi.advanceTimersByTimeAsync(300);
+    await settlePromises();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([sessionKey]);
   });
 
   it("keeps repeated roster refreshes within the bounded recent-session snapshot window", async () => {

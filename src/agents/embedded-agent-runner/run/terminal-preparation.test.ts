@@ -777,6 +777,16 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(prepared.reportedModelRef.model).toBe("cost-model");
   });
 
+  it("records producer source delivery without an extracted messaging target", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        sourceReplyDelivered: true,
+        messagingToolSentTargets: [],
+      },
+    });
+    expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
+  });
+
   it("marks a provider-only response route as rerouted", async () => {
     const prepared = await prepareStats({ assistantProvider: "routed-provider" });
 

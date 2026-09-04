@@ -429,11 +429,14 @@ describe("prepareSqliteReadOnlyLocation", () => {
       );
 
       expect(inProcessError).toMatchObject({
+        code: "ERR_SQLITE_ERROR",
         errcode: 11,
         message: "database disk image is malformed",
       });
       expect(workerError).toBeInstanceOf(Error);
-      expect((workerError as Error).message).toContain("database disk image is malformed");
+      expect((workerError as Error).message).toContain(
+        "database disk image is malformed (code=ERR_SQLITE_ERROR, errcode=11)",
+      );
       expect((workerError as Error).message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
     });
   });
@@ -531,21 +534,21 @@ describe("prepareSqliteReadOnlyLocation", () => {
       const reported = JSON.parse(child.stdout) as { message: string };
       expect(reported.message).toContain(cacheRoot);
       expect(reported.message).toMatch(/free.*space|quota/iu);
-      expect(reported.message).toContain("778");
+      expect(reported.message).toContain("(code=ERR_SQLITE_ERROR, errcode=778)");
     },
   );
 
   it("propagates async public entry point failures", async () => {
     const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");
     await expect(prepareSqliteReadOnlyLocation(missingPath)).rejects.toThrow(
-      /SQLite read-only worker .*ENOENT/u,
+      /SQLite read-only worker .*ENOENT.*\(code=ENOENT\)/u,
     );
   });
 
   it("propagates sync public entry point failures", () => {
     const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");
     expect(() => prepareSqliteReadOnlyLocationSync(missingPath)).toThrow(
-      /SQLite read-only worker .*ENOENT/u,
+      /SQLite read-only worker .*ENOENT.*\(code=ENOENT\)/u,
     );
   });
 

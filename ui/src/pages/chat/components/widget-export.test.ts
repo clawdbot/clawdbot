@@ -107,6 +107,27 @@ describe("widget export", () => {
     await expect(result).resolves.toBe("png");
   });
 
+  it("downloads retained authenticated HTML when an isolated widget cannot snapshot", async () => {
+    vi.useFakeTimers();
+    const frame = createWidgetFrame();
+    frame.src = "https://sandbox.example/mcp-app-sandbox";
+    const fetchDocument = vi.fn();
+    const download = vi.fn();
+    const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:widget-source");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const result = exportWidget("download", frame, "Isolated widget", {
+      timeoutMs: 10,
+      documentHtml: "<p>Authenticated document</p>",
+      fetch: fetchDocument,
+      download,
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(result).resolves.toBe("html");
+    expect(fetchDocument).not.toHaveBeenCalled();
+    expect(createUrl.mock.calls[0]?.[0]).toMatchObject({ size: 29, type: "text/html" });
+    expect(download).toHaveBeenCalledWith("blob:widget-source", "Isolated-widget.html");
+  });
+
   it("does not use legacy fallbacks for an explicit bridge error", async () => {
     const frame = createWidgetFrame();
     const fetchDocument = vi.fn();

@@ -1,9 +1,12 @@
 /* @vitest-environment jsdom */
 
+import { Buffer } from "node:buffer";
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createChatSubmissions } from "../../../app/chat-submissions.ts";
+import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { releaseChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../history-merge.ts";
 import { buildInitialChatSubmission, buildLocalUserMessage } from "../user-message-content.ts";
@@ -15,6 +18,9 @@ import {
   resetTranscriptTestDom,
   threadProps,
 } from "./chat-transcript.test-support.ts";
+
+const ownedAttachments: ChatAttachment[] = [];
+const previewBlobs = new Map<string, Blob>();
 
 function expectSameImageNodes(actual: HTMLImageElement[], expected: HTMLImageElement[]) {
   expect(actual).toHaveLength(expected.length);
@@ -70,7 +76,7 @@ function mountTranscriptPane(props: Parameters<typeof renderChatThread>[0]) {
   return { container, renderPane, root: () => root };
 }
 
-function createCanonicalImageTranscript(
+async function createCanonicalImageTranscript(
   factIndexes = [0],
   inlineUrls = ["data:image/png;base64,aW5saW5l"],
   origin: "canonical" | "queued" | "submitted" | "initial receipt" = "canonical",
@@ -95,12 +101,13 @@ function createCanonicalImageTranscript(
     text: "Cached text",
     createdAt: 1_000,
     runId: "canonical-image-send",
-    attachments: inlineUrls.map((dataUrl, index) => ({
-      id: `image-${index}`,
+    attachments: inlineUrls.map((dataUrl) => ({
+      id: crypto.randomUUID(),
       mimeType: "image/png",
       dataUrl,
     })),
   };
+  ownedAttachments.push(...input.attachments);
   const local = expectDefined(buildLocalUserMessage(input), "submitted image message");
   const cached = origin === "canonical" ? { ...local, __openclaw: canonical } : local;
   const owner = {
@@ -140,6 +147,24 @@ function createCanonicalImageTranscript(
   const images = () => [...container.querySelectorAll<HTMLImageElement>(".chat-message-image")];
   const displayed = images();
   expect(displayed).toHaveLength(inlineUrls.length);
+  const previewUrls = displayed.map((image) =>
+    expectDefined(image.getAttribute("src"), "displayed preview URL"),
+  );
+  const previewBytes = await Promise.all(
+    previewUrls.map(async (url) =>
+      url.startsWith("data:")
+        ? Buffer.from(url.split(",")[1]!, "base64")
+        : Buffer.from(
+            await expectDefined(previewBlobs.get(url), "owned preview Blob").arrayBuffer(),
+          ),
+    ),
+  );
+  expect(previewBytes).toEqual(inlineUrls.map((url) => Buffer.from(url.split(",")[1]!, "base64")));
+  if (origin === "initial receipt") {
+    expect(previewUrls).toEqual(inlineUrls);
+  } else {
+    expect(new Set(previewUrls).size).toBe(previewUrls.length);
+  }
   for (const image of displayed) {
     // jsdom has no decoder; deliver the browser's successful load boundary.
     Object.defineProperty(image, "naturalWidth", { value: 1 });
@@ -174,7 +199,7 @@ function createCanonicalImageTranscript(
     container,
     props,
     displayed,
-    inlineUrls,
+    previewUrls,
     media,
     requests,
     images,
@@ -185,13 +210,36 @@ function createCanonicalImageTranscript(
 }
 
 describe("canonical image presentation handoff", () => {
-  beforeEach(installTranscriptDomMocks);
-  afterEach(resetTranscriptTestDom);
+  beforeEach(() => {
+    installTranscriptDomMocks();
+    // jsdom has no native Blob URL store; retain its actual Blob for byte checks.
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+      if (!(blob instanceof Blob)) {
+        throw new Error("Attachment preview must allocate a Blob URL");
+      }
+      const url = `blob:${crypto.randomUUID()}`;
+      previewBlobs.set(url, blob);
+      return url;
+    });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation((url) => {
+      expect(previewBlobs.delete(url)).toBe(true);
+    });
+  });
+  afterEach(() => {
+    try {
+      releaseChatAttachmentPayloads(ownedAttachments);
+      expect(previewBlobs.size).toBe(0);
+    } finally {
+      ownedAttachments.length = 0;
+      previewBlobs.clear();
+      resetTranscriptTestDom();
+    }
+  });
 
   it.each(["canonical", "submitted", "initial receipt"] as const)(
     "keeps the displayed %s image while fresh history text and media metadata arrive",
     async (origin) => {
-      const fixture = createCanonicalImageTranscript(undefined, undefined, origin);
+      const fixture = await createCanonicalImageTranscript(undefined, undefined, origin);
       const displayed = expectDefined(fixture.displayed[0], "displayed inline image");
       if (origin === "initial receipt") {
         fixture.publish();
@@ -202,7 +250,7 @@ describe("canonical image presentation handoff", () => {
       expect(fixture.container.textContent).toContain("Fresh authoritative text");
       expect(fixture.container.textContent).not.toContain("Cached text");
       expectSameImageNodes(fixture.images(), [displayed]);
-      expect(displayed.getAttribute("src")).toBe(fixture.inlineUrls[0]);
+      expect(displayed.getAttribute("src")).toBe(fixture.previewUrls[0]);
 
       fixture.requests[0]?.resolve(mediaMetadataResponse());
       await flushDeferredRowPrune();
@@ -247,8 +295,8 @@ describe("canonical image presentation handoff", () => {
         },
       },
     },
-  ])("does not borrow an inline preview for $name", ({ metadata, origin }) => {
-    const fixture = createCanonicalImageTranscript(undefined, undefined, origin);
+  ])("does not borrow an inline preview for $name", async ({ metadata, origin }) => {
+    const fixture = await createCanonicalImageTranscript(undefined, undefined, origin);
     fixture.publish(metadata, fixture.media, "Cached text");
     expect(fixture.images()).toHaveLength(0);
     expect(fixture.container.querySelector('[aria-busy="true"]')).not.toBeNull();
@@ -257,14 +305,14 @@ describe("canonical image presentation handoff", () => {
   it.each([
     { name: "missing inline block", factIndexes: [0, 2] },
     { name: "duplicate fact index", factIndexes: [0, 0] },
-  ])("does not guess cached correspondence with $name", ({ factIndexes }) => {
-    const fixture = createCanonicalImageTranscript(factIndexes);
+  ])("does not guess cached correspondence with $name", async ({ factIndexes }) => {
+    const fixture = await createCanonicalImageTranscript(factIndexes);
     fixture.publish();
     expect(fixture.images()).toHaveLength(0);
   });
 
-  it("does not lend a displayed inline image to another pane of the same canonical message", () => {
-    const fixture = createCanonicalImageTranscript();
+  it("does not lend a displayed inline image to another pane of the same canonical message", async () => {
+    const fixture = await createCanonicalImageTranscript();
     fixture.publish();
     const { container } = mountTranscriptPane({ ...fixture.props, paneId: "other-image-pane" });
     expectSameImageNodes(fixture.images(), fixture.displayed);
@@ -274,8 +322,8 @@ describe("canonical image presentation handoff", () => {
 
   it.each(["complete", "partial"] as const)(
     "handles a %s receipt for duplicate submitted attachments",
-    (receipt) => {
-      const fixture = createCanonicalImageTranscript(
+    async (receipt) => {
+      const fixture = await createCanonicalImageTranscript(
         [0, 1, 2],
         ["data:image/png;base64,YQ==", "data:image/png;base64,YQ==", "data:image/png;base64,Yg=="],
         "submitted",
@@ -292,8 +340,8 @@ describe("canonical image presentation handoff", () => {
     },
   );
 
-  it("binds local previews by fact position when inline blocks reorder mixed image receipts", () => {
-    const fixture = createCanonicalImageTranscript(
+  it("binds local previews by fact position when inline blocks reorder mixed image receipts", async () => {
+    const fixture = await createCanonicalImageTranscript(
       [0, 1],
       ["data:image/png;base64,aW1hZ2VB", "data:image/png;base64,aW1hZ2VC"],
       "queued",
@@ -314,12 +362,12 @@ describe("canonical image presentation handoff", () => {
 
     expectSameImageNodes(fixture.images(), fixture.displayed.toReversed());
     expect(fixture.images().map((image) => image.getAttribute("src"))).toEqual(
-      fixture.inlineUrls.toReversed(),
+      fixture.previewUrls.toReversed(),
     );
   });
 
-  it("adopts submitted images across interleaved non-image fact slots", () => {
-    const fixture = createCanonicalImageTranscript(
+  it("adopts submitted images across interleaved non-image fact slots", async () => {
+    const fixture = await createCanonicalImageTranscript(
       [1, 3],
       ["data:image/png;base64,YQ==", "data:image/png;base64,Yg=="],
       "submitted",
@@ -346,7 +394,7 @@ describe("canonical image presentation handoff", () => {
   ])(
     "retains exact slots for $name through reversed completion and removal",
     async ({ factIndexes, inlineUrls }) => {
-      const fixture = createCanonicalImageTranscript(factIndexes, inlineUrls);
+      const fixture = await createCanonicalImageTranscript(factIndexes, inlineUrls);
       const firstIndexByUrl = new Map<string, number>();
       for (const [index, url] of inlineUrls.entries()) {
         const factIndex = expectDefined(factIndexes[index], "image fact index");
@@ -366,7 +414,7 @@ describe("canonical image presentation handoff", () => {
       );
       expectSameImageNodes(fixture.images(), expected);
       expect(fixture.images().map((image) => image.getAttribute("src"))).toEqual(
-        order.map(({ index }) => inlineUrls[index]),
+        order.map(({ index }) => fixture.previewUrls[index]),
       );
 
       for (const request of fixture.requests.toReversed()) {
@@ -394,7 +442,7 @@ describe("canonical image presentation handoff", () => {
   it.each(["auth", "connection epoch", "session"] as const)(
     "clears retained inline presentation on %s change and ignores old metadata",
     async (change) => {
-      const fixture = createCanonicalImageTranscript();
+      const fixture = await createCanonicalImageTranscript();
       fixture.publish();
       expectSameImageNodes(fixture.images(), fixture.displayed);
       const old = expectDefined(fixture.requests[0], "pending metadata");
@@ -421,7 +469,7 @@ describe("canonical image presentation handoff", () => {
   it.each(["removal", "replacement", "disconnect", "denial"] as const)(
     "clears an exact image handoff on %s without resurrection",
     async (change) => {
-      const fixture = createCanonicalImageTranscript();
+      const fixture = await createCanonicalImageTranscript();
       fixture.publish();
       expectSameImageNodes(fixture.images(), fixture.displayed);
       const old = expectDefined(fixture.requests[0], "pending metadata");
@@ -451,7 +499,7 @@ describe("canonical image presentation handoff", () => {
   it.each(["removal", "auth", "replacement", "disconnect"] as const)(
     "retires a pending native image on %s and ignores its late load and error",
     async (change) => {
-      const fixture = createCanonicalImageTranscript();
+      const fixture = await createCanonicalImageTranscript();
       fixture.publish();
       fixture.requests[0]?.resolve(mediaMetadataResponse());
       await flushDeferredRowPrune();
@@ -505,7 +553,7 @@ describe("canonical image presentation handoff", () => {
     async ({ response, reason }) => {
       vi.useFakeTimers();
       try {
-        const fixture = createCanonicalImageTranscript();
+        const fixture = await createCanonicalImageTranscript();
         fixture.publish();
         fixture.requests[0]?.resolve(mediaMetadataResponse(true, "before-refresh"));
         await vi.advanceTimersByTimeAsync(0);
@@ -544,7 +592,7 @@ describe("canonical image presentation handoff", () => {
     async ({ presentation, responseStatus }) => {
       vi.useFakeTimers();
       try {
-        const fixture = createCanonicalImageTranscript(
+        const fixture = await createCanonicalImageTranscript(
           undefined,
           presentation === "canonical" ? [] : undefined,
         );
@@ -585,7 +633,7 @@ describe("canonical image presentation handoff", () => {
     async (failure) => {
       vi.useFakeTimers();
       try {
-        const fixture = createCanonicalImageTranscript();
+        const fixture = await createCanonicalImageTranscript();
         fixture.publish();
         fixture.requests[0]?.resolve(mediaMetadataResponse());
         await vi.advanceTimersByTimeAsync(0);
@@ -616,7 +664,7 @@ describe("canonical image presentation handoff", () => {
   it("keeps a successfully loaded native image after the handoff deadline", async () => {
     vi.useFakeTimers();
     try {
-      const fixture = createCanonicalImageTranscript();
+      const fixture = await createCanonicalImageTranscript();
       fixture.publish();
       fixture.requests[0]?.resolve(mediaMetadataResponse());
       await vi.advanceTimersByTimeAsync(0);

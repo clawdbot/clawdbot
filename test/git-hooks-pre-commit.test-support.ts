@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
 
@@ -94,8 +101,12 @@ export function installPreCommitFixture(dir: string): string {
       path.join(dir, "scripts/pre-commit", name),
     );
   }
-  writeFileSync(path.join(dir, rulePath), `${literals.join("\n")}\n`, { mode: 0o600 });
-  run(dir, "git", ["config", "--local", ruleSetting, path.join(dir, rulePath)]);
+  const privateRules = path.resolve(
+    dir,
+    run(dir, "git", ["rev-parse", "--git-path", "private rules.txt"]),
+  );
+  writeFileSync(privateRules, `${literals.join("\n")}\n`, { mode: 0o600 });
+  run(dir, "git", ["config", "--local", ruleSetting, privateRules]);
   mkdirSync(path.join(dir, "node_modules/.bin"), { recursive: true });
   // Stdin mode must echo the blob or the hook treats the empty output as formatter failure.
   writeExecutable(
@@ -123,3 +134,25 @@ export function stageContent(dir: string, name: string, content: string | Buffer
 }
 
 export const commitArgs = ["-c", "core.hooksPath=git-hooks", "commit", "-qm", "guard proof"];
+
+export function installFormattingRecorder(dir: string, body = ""): string {
+  const logPath = path.join(dir, "hook-tool.log");
+  writeExecutable(
+    path.join(dir, "node_modules/.bin"),
+    "oxfmt",
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf 'oxfmt %s\n' "$*" >> hook-tool.log
+case "$*" in *--stdin-filepath=*) cat ;; esac
+${body}
+`,
+  );
+  return logPath;
+}
+
+export function readFormatterLog(logPath: string): string[] {
+  if (!existsSync(logPath)) {
+    return [];
+  }
+  return readFileSync(logPath, "utf8").split("\n").filter(Boolean);
+}

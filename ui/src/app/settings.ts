@@ -4,12 +4,7 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import {
-  DEFAULT_SIDEBAR_ENTRIES,
-  isPersistedSidebarRoute,
-  normalizeSidebarEntries,
-  serializeSidebarEntry,
-} from "../app-navigation.ts";
+import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
@@ -229,7 +224,7 @@ export type UiSettings = {
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
+  sidebarEntries: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
@@ -520,15 +515,8 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
       ? null
       : Array.isArray(parsedRecord.sidebarPinnedRoutes)
         ? normalizeSidebarEntries(
-            parsedRecord.sidebarPinnedRoutes.flatMap((value) =>
-              isPersistedSidebarRoute(value)
-                ? [
-                    serializeSidebarEntry({
-                      type: "route",
-                      route: value,
-                    }),
-                  ]
-                : [],
+            parsedRecord.sidebarPinnedRoutes.map((value) =>
+              typeof value === "string" ? `route:${value}` : value,
             ),
           )
         : null;

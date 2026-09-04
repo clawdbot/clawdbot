@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -13,6 +14,7 @@ import {
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
@@ -491,8 +493,10 @@ unset NPM_CONFIG_REGISTRY npm_config_registry
 export NPM_CONFIG_REGISTRY=http://127.0.0.1:1 npm_config_registry=http://127.0.0.1:1
 start_npm_fixture_registry fixture-pkg 1.0.0 "$REGISTRY_ROOT/fixture.tgz" "$REGISTRY_ROOT"
 # Duplicate-case precedence depends on environment order; exercise each accepted spelling.
+registry_index=0
 for registry_key in NPM_CONFIG_REGISTRY npm_config_registry; do
-  env -u "$registry_key" npm view fixture-pkg@1.0.0 version --json --fetch-retries=0 --fetch-timeout=1000 --cache "$REGISTRY_ROOT/cache"
+  env -u "$registry_key" npm view fixture-pkg@1.0.0 version --json --fetch-retries=0 --fetch-timeout=1000 --cache "$REGISTRY_ROOT/cache" > "$REGISTRY_ROOT/version-$registry_index.json"
+  registry_index=$((registry_index + 1))
 done
 `,
       {
@@ -502,12 +506,11 @@ done
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(
-      result.stdout
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual(["1.0.0", "1.0.0"]);
+    for (const index of [0, 1]) {
+      const version = JSON.parse(readFileSync(path.join(root, `version-${index}.json`), "utf8"));
+      // npm versions differ in scalar/array output; each command emits one complete JSON value.
+      expect(Array.isArray(version) ? version : [version]).toEqual(["1.0.0"]);
+    }
   });
 
   it("cleans npm fixture registry children when readiness times out", () => {
@@ -707,6 +710,160 @@ done
       expect(result.stdout).not.toContain("DO_NOT_DUMP_PLUGIN_FIXTURE_PREFIX");
     } finally {
       rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    { initial: null, fault: "", label: "new destination" },
+    { initial: "", fault: "", label: "existing empty destination" },
+    { initial: "12345", fault: "", label: "existing port" },
+    { initial: null, fault: "write", label: "failed write" },
+    { initial: "12345", fault: "rename", label: "failed replacement" },
+  ])("publishes complete npm fixture port bytes: $label", async ({ initial, fault }) => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-publication-");
+    const registryScript = "scripts/e2e/lib/plugins/npm-registry-server.mjs";
+    // Docker and private observers copy this plain-Node closure without repository packages.
+    for (const file of [registryScript, "scripts/lib/bounded-response.mjs"]) {
+      mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      copyFileSync(file, path.join(root, file));
+    }
+    const portDir = path.join(root, "readiness");
+    mkdirSync(portDir);
+    const portFile = path.join(portDir, "port");
+    if (initial !== null) {
+      writeFileSync(portFile, initial);
+    }
+    const tarballPath = path.join(root, "fixture.tgz");
+    const archive = "fixture package archive";
+    writeFileSync(tarballPath, archive);
+    const preload = path.join(root, "publication-preload.mjs");
+    writeFileSync(
+      preload,
+      `import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+const portFile = process.argv[2];
+const fault = ${JSON.stringify(fault)};
+const probe = 'const fs = require("node:fs"); const file = process.argv[1]; process.stdout.write(JSON.stringify(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null));';
+function observe(phase, payload) {
+  const observed = JSON.parse(execFileSync(process.execPath, ["-e", probe, portFile], { encoding: "utf8" }));
+  fs.writeSync(1, JSON.stringify({ phase, payload, observed }) + "\\n");
+}
+const writeFile = fs.writeFileSync;
+fs.writeFileSync = (file, data, options) => {
+  if (path.dirname(file) !== path.dirname(portFile)) return writeFile(file, data, options);
+  const bytes = Buffer.from(data);
+  const fd = fs.openSync(file, options?.flag ?? "w", options?.mode);
+  try {
+    observe("opened", data);
+    fs.writeSync(fd, bytes, 0, 1);
+    observe("first-byte", data);
+    if (fault === "write") throw new Error("injected port write failure");
+    fs.writeSync(fd, bytes, 1, bytes.length - 1);
+  } finally {
+    fs.closeSync(fd);
+  }
+  observe("complete", data);
+  setImmediate(() => observe("ready", data));
+};
+const rename = fs.renameSync;
+fs.renameSync = (source, destination) => {
+  if (destination === portFile && fault === "rename") throw new Error("injected port rename failure");
+  return rename(source, destination);
+};
+`,
+    );
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        pathToFileURL(preload).href,
+        registryScript,
+        portFile,
+        "fixture-pkg",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_PORT: "0",
+          OPENCLAW_NPM_REGISTRY_BIND_HOST: "127.0.0.1",
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: "",
+          OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: "",
+          OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: "",
+          OPENCLAW_NPM_REGISTRY_DIST_TAGS: "",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const stderr = createBoundedChildOutput();
+    child.stderr.on("data", stderr.append);
+    child.on("error", (error) => stderr.append(error));
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
+    const lines = createInterface({ input: child.stdout });
+    const observations: Array<{ phase: string; payload: string; observed: string | null }> = [];
+    try {
+      for await (const line of lines) {
+        const observation = JSON.parse(line) as (typeof observations)[number];
+        observations.push(observation);
+        if (observation.phase === "ready") {
+          break;
+        }
+      }
+      expect(
+        observations.map(({ phase }) => phase),
+        stderr.text(),
+      ).toEqual(
+        fault === "write"
+          ? ["opened", "first-byte"]
+          : fault === "rename"
+            ? ["opened", "first-byte", "complete"]
+            : ["opened", "first-byte", "complete", "ready"],
+      );
+      for (const { phase, payload, observed } of observations) {
+        expect(payload).toMatch(/^[1-9][0-9]*$/u);
+        expect([initial, payload], `port file exposed incomplete bytes at ${phase}`).toContain(
+          observed,
+        );
+      }
+      if (fault) {
+        await closed;
+        expect(child.exitCode, stderr.text()).toBe(1);
+        expect(stderr.text()).toContain(`injected port ${fault} failure`);
+        expect(existsSync(portFile) ? readFileSync(portFile, "utf8") : null).toBe(initial);
+      } else {
+        const published = readFileSync(portFile, "utf8");
+        expect(observations.at(-1)).toEqual({
+          phase: "ready",
+          payload: published,
+          observed: published,
+        });
+        const metadata = await requestFixtureRegistry(Number(published), "/fixture-pkg");
+        expect(metadata.statusCode, stderr.text()).toBe(200);
+        const manifest = JSON.parse(metadata.body).versions["1.0.0"];
+        expect(manifest).toMatchObject({ name: "fixture-pkg", version: "1.0.0" });
+        const tarball = new URL(manifest.dist.tarball);
+        expect(tarball.origin).toBe(`http://127.0.0.1:${published}`);
+        const response = await requestFixtureRegistry(Number(published), tarball.pathname);
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toBe(archive);
+        expect(response.contentLength).toBe(String(Buffer.byteLength(archive)));
+      }
+      expect(readdirSync(portDir)).toEqual(initial !== null || !fault ? ["port"] : []);
+    } finally {
+      clearTimeout(timeout);
+      lines.close();
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await closed;
+      rmSync(root, { recursive: true, force: true });
+      expect(existsSync(root)).toBe(false);
     }
   });
 

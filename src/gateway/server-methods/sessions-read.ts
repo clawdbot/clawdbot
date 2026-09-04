@@ -22,7 +22,6 @@ import {
 } from "../../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
-import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -51,6 +50,7 @@ import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
+import { projectGatewaySessionActiveRun } from "../session-utils-display.js";
 import {
   createGatewaySessionStoreDiscoveryCache,
   type GatewaySessionStoreCache,
@@ -68,10 +68,7 @@ import {
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
-import {
-  collectTrackedActiveSessionRuns,
-  resolveVisibleActiveSessionRunState,
-} from "./session-active-runs.js";
+import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import {
@@ -284,6 +281,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           }
           const { durableStorePath, durableTargets, modelCatalogByAgent, storePath } = loaded;
           const entryFilter = listFilter({ p, loaded, defaultsAgentId, client, cfg, options });
+          const selectionRuns = p.search?.trim()
+            ? createVisibleActiveSessionRunProjector(context)
+            : undefined;
           const result = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.rows",
             () =>
@@ -295,6 +295,18 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 store: loaded.store,
                 modelCatalog: modelCatalogByAgent,
                 opts: p,
+                ...(selectionRuns
+                  ? {
+                      projectActiveRun: (key, entry, agentId) =>
+                        selectionRuns({
+                          requestedKey: key,
+                          canonicalKey: key,
+                          sessionId: entry.sessionId,
+                          agentId,
+                          defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, key),
+                        }),
+                    }
+                  : {}),
                 ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
                 ...(p.ownerFirst === true && identityId ? { ownerFirstActorId: identityId } : {}),
               }),
@@ -385,8 +397,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           );
           const projectPlacement = createSessionPlacementBatchProjector(context, result.sessions);
-          const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
-          const projectedAgentRunIndex = buildProjectedAgentRunIndex();
+          const projectActiveRun = createVisibleActiveSessionRunProjector(context);
           // These rows are unpublished; decorate them with fresh caller facts after the yields.
           const sharing = prepareSessionSharing({ client, cfg });
           measureDiagnosticsTimelineSpanSync(
@@ -397,15 +408,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 const visibility = sharingTarget
                   ? resolveSessionVisibility(sharingTarget.entry)
                   : "shared";
-                const activeRunState = resolveVisibleActiveSessionRunState({
-                  context,
+                const activeRunState = projectActiveRun({
                   requestedKey: session.key,
                   canonicalKey: session.key,
                   sessionId: session.sessionId,
                   agentId: session.agentId,
                   defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, session.key),
-                  trackedActiveRuns,
-                  projectedAgentRunIndex,
                 });
                 Object.assign(session, {
                   visibility,
@@ -419,10 +427,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                         ),
                       }
                     : {}),
-                  hasActiveRun: activeRunState.active,
-                  ...(activeRunState.active
-                    ? { status: activeRunState.status ?? ("running" as const) }
-                    : {}),
+                  ...projectGatewaySessionActiveRun(activeRunState, session.status),
                   ...projectPlacement(session.sessionId),
                   ...(activeRunState.runIds !== undefined
                     ? { activeRunIds: activeRunState.runIds }

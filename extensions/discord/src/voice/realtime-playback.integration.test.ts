@@ -1,179 +1,305 @@
 import { once } from "node:events";
-import {
-  createRealtimeVoiceSessionHarness,
-  type RealtimeVoiceBridgeCallbacks,
-  type RealtimeVoiceBridgeSession,
-} from "openclaw/plugin-sdk/realtime-voice";
 import { expect, it, vi } from "vitest";
-import { createVoiceCaptureState } from "./capture-state.js";
-import { DiscordRealtimePlayback } from "./realtime-playback.js";
-import { DiscordRealtimePlayer } from "./realtime-player.js";
-import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
-import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
-import type { VoiceSessionEntry } from "./session.js";
+import { createRealtimePlaybackFixture } from "./realtime-playback.integration.test-support.js";
 
-function createRealtimePlaybackFixture() {
-  const voiceSdk = loadDiscordVoiceSdk();
-  const player = voiceSdk.createAudioPlayer({
-    behaviors: { noSubscriber: voiceSdk.NoSubscriberBehavior.Play, maxMissedFrames: 100 },
-  });
-  // A signalling-only connection supplies the session shape without opening Discord sockets.
-  const connection = new voiceSdk.VoiceConnection(
-    {
-      guildId: "guild",
-      channelId: "voice",
-      group: "playback-integration",
-      selfDeaf: true,
-      selfMute: false,
-    },
-    { adapterCreator: () => ({ sendPayload: () => true, destroy: () => {} }) },
-  );
-  const entry: VoiceSessionEntry = {
-    generation: 1,
-    autoJoinWhenOccupied: false,
-    sessionLifecycle: { status: "active" },
-    guildId: "guild",
-    channelId: "voice",
-    sessionChannelId: "voice",
-    voiceSessionKey: "agent:main:discord:voice",
-    route: {
-      agentId: "main",
-      channel: "discord",
-      accountId: "default",
-      sessionKey: "agent:main:discord:voice",
-      mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
-      matchedBy: "default",
-    },
-    connection,
-    player,
-    playbackQueue: Promise.resolve(),
-    processingQueue: Promise.resolve(),
-    audioInputBudget: { enabled: false },
-    ttsStreamFallbackWarned: false,
-    capture: createVoiceCaptureState(),
-    realtimeLifecycle: { status: "inactive", generation: 0 },
-    receiveRecovery: createVoiceReceiveRecoveryState(),
-    stop: vi.fn(),
-  };
-  const roomPlayer = new DiscordRealtimePlayer(player);
-  const lanes: Array<{ playback: DiscordRealtimePlayback<unknown>; close: () => void }> = [];
-  const createLane = (interruption: "decline" | "clear" | "unsupported" = "decline") => {
-    let closed = false;
-    let bridge: RealtimeVoiceBridgeSession | null = null;
-    let callbacks!: RealtimeVoiceBridgeCallbacks;
-    const harness = createRealtimeVoiceSessionHarness({
-      talk: {
-        sessionId: entry.voiceSessionKey,
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-      },
-      talkPayloads: {
-        turnStarted: () => ({}),
-        turnEnded: () => ({}),
-        inputAudioDelta: () => ({}),
-        outputAudioStarted: () => ({}),
-        outputAudioDelta: () => ({}),
-        outputAudioDone: () => ({}),
-      },
+it("acknowledges scoped marks only when the real resource consumes their PCM", async () => {
+  const fixture = createRealtimePlaybackFixture();
+  try {
+    fixture.callbacks.onAudio(Buffer.alloc(24_000));
+    const state = fixture.player.state;
+    if (state.status === fixture.voiceSdk.AudioPlayerStatus.Idle) {
+      throw new Error("expected first response resource");
+    }
+    const consumed: number[] = [];
+    fixture.callbacks.onMark?.("first", () => {
+      consumed.push(state.resource.playbackDuration);
+      fixture.acknowledgeMark("first");
     });
-    const cancel = vi.spyOn(harness, "handleBargeIn");
-    const onTerminalError = vi.fn();
-    const stopTerminally = vi.fn();
-    const sendUserMessage = vi.fn();
-    const playback = new DiscordRealtimePlayback({
-      bridge: () => bridge,
-      bridgeReady: () => true,
-      buildSpeakExactMessage: (text) => text,
-      entry,
-      player: roomPlayer,
-      harness,
-      markProviderGenerationObserved: () => {},
-      mode: "agent-proxy",
-      onTerminalError,
-      providerId: () => "openai",
-      realtimeConfig: () => undefined,
-      stopTerminally,
-      stopped: () => closed,
-      wakeNameRequired: () => false,
+    fixture.callbacks.onAudio(Buffer.alloc(24_000));
+    fixture.callbacks.onMark?.("last", () => {
+      consumed.push(state.resource.playbackDuration);
+      fixture.acknowledgeMark("last");
     });
-    bridge = harness.createBridge({
-      provider: {
-        id: "synthetic",
-        label: "Synthetic",
-        isConfigured: () => true,
-        createBridge: (events) => {
-          callbacks = events;
-          return {
-            connect: async () => {},
-            close: () => {},
-            sendAudio: () => {},
-            sendUserMessage,
-            setMediaTimestamp: () => {},
-            acknowledgeMark: () => {},
-            submitToolResult: () => {},
-            isConnected: () => true,
-            ...(interruption === "unsupported"
-              ? {}
-              : { handleBargeIn: () => interruption === "clear" && events.onClearAudio() }),
-          };
-        },
-      },
-      providerConfig: {},
-      audioSink: {
-        sendAudio: (audio) => playback.sendOutputAudio(audio),
-        clearAudio: () => harness.flushOutput(() => playback.clearOutputAudio("provider-clear")),
-      },
-      onResponseDone: (outcome) => playback.handleResponseDone(outcome),
-      onEvent: (event) => {
-        if (event.direction === "server" && event.type === "response.created") {
-          playback.beginResponse();
-        }
-      },
-    });
-    const lane = {
-      playback,
-      callbacks,
-      cancel,
-      onTerminalError,
-      stopTerminally,
-      sendUserMessage,
-      close() {
-        closed = true;
-        playback.close();
-        harness.close();
-        bridge?.close();
-        cancel.mockRestore();
-      },
-    };
-    lanes.push(lane);
-    return lane;
-  };
-  const firstLane = createLane();
-  const stop = vi.spyOn(player, "stop");
-  const onPlayerError = vi.fn();
-  player.on("error", onPlayerError);
+    fixture.callbacks.onResponseDone?.({ status: "completed" });
+    expect(fixture.acknowledgeMark).not.toHaveBeenCalled();
+    await fixture.voiceSdk.entersState(
+      fixture.player,
+      fixture.voiceSdk.AudioPlayerStatus.Idle,
+      3_000,
+    );
+    expect(fixture.acknowledgeMark.mock.calls).toEqual([["first"], ["last"]]);
+    expect(consumed).toEqual([500, 1_000]);
+  } finally {
+    fixture.close();
+  }
+});
 
-  return {
-    voiceSdk,
-    player,
-    ...firstLane,
-    createLane,
-    roomPlayer,
-    stop,
-    onPlayerError,
-    close() {
-      roomPlayer.close();
-      for (const lane of lanes) {
-        lane.close();
+it("retires the final consumed mark before a queued read microtask can lose it", async () => {
+  const fixture = createRealtimePlaybackFixture();
+  let restoreRead = () => {};
+  try {
+    fixture.callbacks.onAudio(Buffer.alloc(4_800));
+    fixture.callbacks.onMark?.("last", () => fixture.acknowledgeMark("last"));
+    fixture.callbacks.onResponseDone?.({ status: "completed" });
+    const state = fixture.player.state;
+    if (state.status === fixture.voiceSdk.AudioPlayerStatus.Idle) {
+      throw new Error("expected short response resource");
+    }
+    const consume = state.resource.read.bind(state.resource);
+    const read = vi.spyOn(state.resource, "read").mockImplementation(() => {
+      const packet = consume();
+      if (state.resource.playbackDuration === 100) {
+        fixture.player.stop(true);
       }
-      connection.destroy();
-      player.off("error", onPlayerError);
-      stop.mockRestore();
-    },
-  };
-}
+      return packet;
+    });
+    restoreRead = () => read.mockRestore();
+    await fixture.voiceSdk.entersState(
+      fixture.player,
+      fixture.voiceSdk.AudioPlayerStatus.Idle,
+      3_000,
+    );
+    await Promise.resolve();
+    expect(state.resource.playbackDuration).toBe(100);
+    expect(fixture.acknowledgeMark.mock.calls).toEqual([["last"]]);
+  } finally {
+    restoreRead();
+    fixture.close();
+  }
+});
+
+it.each(["clear", "close"] as const)(
+  "never acknowledges queued PCM discarded by %s",
+  async (ending) => {
+    const fixture = createRealtimePlaybackFixture();
+    const queued = fixture.createLane();
+    try {
+      fixture.callbacks.onAudio(Buffer.alloc(24_000));
+      fixture.callbacks.onResponseDone?.({ status: "completed" });
+      queued.callbacks.onAudio(Buffer.alloc(24_000));
+      queued.callbacks.onMark?.("unheard", () => queued.acknowledgeMark("unheard"));
+      queued.callbacks.onResponseDone?.({ status: "completed" });
+      if (ending === "clear") {
+        queued.playback.clearOutputAudio();
+      } else {
+        queued.close();
+      }
+      await fixture.voiceSdk.entersState(
+        fixture.player,
+        fixture.voiceSdk.AudioPlayerStatus.Idle,
+        3_000,
+      );
+      expect(queued.acknowledgeMark).not.toHaveBeenCalled();
+      expect(queued.onTerminalError).not.toHaveBeenCalled();
+    } finally {
+      fixture.close();
+    }
+  },
+);
+
+it("fails only the speaker whose encoder discards unconsumed scoped marks", async () => {
+  const fixture = createRealtimePlaybackFixture();
+  const next = fixture.createLane();
+  try {
+    fixture.playback.enqueueExactSpeechMessage("first");
+    fixture.callbacks.onAudio(Buffer.alloc(96_000));
+    fixture.callbacks.onMark?.("unheard-tail", () => fixture.acknowledgeMark("unheard-tail"));
+    fixture.callbacks.onResponseDone?.({ status: "completed" });
+    fixture.playback.enqueueExactSpeechMessage("queued answer");
+    next.callbacks.onAudio(Buffer.alloc(24_000));
+    next.callbacks.onResponseDone?.({ status: "completed" });
+    const state = fixture.player.state;
+    if (state.status === fixture.voiceSdk.AudioPlayerStatus.Idle) {
+      throw new Error("expected first speaker resource");
+    }
+    state.resource.playStream.destroy(new Error("synthetic encoder failure"));
+    await vi.waitFor(() => expect(fixture.onTerminalError).toHaveBeenCalledOnce());
+    expect(fixture.stopTerminally).toHaveBeenCalledOnce();
+    expect(fixture.acknowledgeMark).not.toHaveBeenCalled();
+    expect(fixture.sendUserMessage.mock.calls).toEqual([["first"]]);
+    expect(next.onTerminalError).not.toHaveBeenCalled();
+    await fixture.voiceSdk.entersState(
+      fixture.player,
+      fixture.voiceSdk.AudioPlayerStatus.Idle,
+      3_000,
+    );
+    expect(next.playback.isOutputAudioActive()).toBe(false);
+  } finally {
+    fixture.close();
+  }
+});
+
+it.each(["turn.started", "output.audio.started", "output.audio.delta"] as const)(
+  "keeps playback cleared when a %s observer interrupts the incoming item",
+  (eventType) => {
+    let observed: unknown;
+    const fixture = createRealtimePlaybackFixture((event) => {
+      if (event.type === eventType) {
+        observed = fixture.callbacks.getPlaybackState?.();
+        fixture.callbacks.onClearAudio();
+      }
+    });
+    try {
+      fixture.callbacks.onAudio(Buffer.alloc(480), { itemId: "cancelled" });
+      expect(observed).toEqual([{ itemId: "cancelled", audioEndMs: 0 }]);
+      expect(fixture.callbacks.getPlaybackState?.()).toEqual([]);
+      expect(fixture.playback.isOutputAudioActive()).toBe(false);
+      expect(fixture.harness.outputActivity.snapshot().chunks).toBe(0);
+      expect(fixture.player.state.status).toBe(fixture.voiceSdk.AudioPlayerStatus.Idle);
+    } finally {
+      fixture.close();
+    }
+  },
+);
+
+it("excludes fully heard items during the real player's trailing silence", async () => {
+  const fixture = createRealtimePlaybackFixture();
+  try {
+    fixture.callbacks.onAudio(Buffer.alloc(24_000), { itemId: "heard" });
+    fixture.callbacks.onResponseDone?.({ status: "completed" });
+    await fixture.voiceSdk.entersState(
+      fixture.player,
+      fixture.voiceSdk.AudioPlayerStatus.Playing,
+      3_000,
+    );
+    const state = fixture.player.state;
+    if (state.status === fixture.voiceSdk.AudioPlayerStatus.Idle) {
+      throw new Error("expected completed reply playback");
+    }
+    const resource = state.resource;
+    const consume = resource.read.bind(resource);
+    const read = vi.spyOn(resource, "read");
+    try {
+      await new Promise<void>((resolve) => {
+        read.mockImplementation(() => {
+          const packet = consume();
+          if (resource.silenceRemaining > 0) {
+            resolve();
+          }
+          return packet;
+        });
+      });
+      expect(resource.playbackDuration).toBe(500);
+      expect(fixture.player.state.status).toBe(fixture.voiceSdk.AudioPlayerStatus.Playing);
+      expect(fixture.callbacks.getPlaybackState?.()).toEqual([]);
+    } finally {
+      read.mockRestore();
+    }
+  } finally {
+    fixture.close();
+  }
+});
+
+it("reports consumed native items in playback order when a newer response is queued", async () => {
+  const fixture = createRealtimePlaybackFixture();
+  try {
+    fixture.callbacks.onAudio(Buffer.alloc(96_000), { itemId: "audible" });
+    fixture.callbacks.onResponseDone?.({ status: "completed" });
+    await fixture.voiceSdk.entersState(
+      fixture.player,
+      fixture.voiceSdk.AudioPlayerStatus.Playing,
+      3_000,
+    );
+    const state = fixture.player.state;
+    if (state.status === fixture.voiceSdk.AudioPlayerStatus.Idle) {
+      throw new Error("expected audible response");
+    }
+    await vi.waitFor(() => expect(state.resource.playbackDuration).toBeGreaterThanOrEqual(300));
+    fixture.callbacks.onAudio(Buffer.alloc(4_800), { itemId: "queued" });
+    fixture.callbacks.onResponseDone?.({ status: "completed" });
+    expect(fixture.callbacks.getPlaybackState?.()).toEqual([
+      { itemId: "audible", audioEndMs: state.resource.playbackDuration },
+      { itemId: "queued", audioEndMs: 0 },
+    ]);
+    fixture.playback.speakControlResult("Stopped.");
+    expect(fixture.callbacks.getPlaybackState?.()).toEqual([]);
+    expect(fixture.player.state.status).toBe(fixture.voiceSdk.AudioPlayerStatus.Idle);
+  } finally {
+    fixture.close();
+  }
+});
+
+it("measures each native item relative to its own PCM inside one response", async () => {
+  const fixture = createRealtimePlaybackFixture();
+  try {
+    fixture.callbacks.onAudio(Buffer.alloc(9_600), { itemId: "first" });
+    fixture.callbacks.onAudio(Buffer.alloc(48_000), { itemId: "second" });
+    await fixture.voiceSdk.entersState(
+      fixture.player,
+      fixture.voiceSdk.AudioPlayerStatus.Playing,
+      3_000,
+    );
+    const state = fixture.player.state;
+    if (state.status === fixture.voiceSdk.AudioPlayerStatus.Idle) {
+      throw new Error("expected response playback");
+    }
+    await vi.waitFor(() => expect(state.resource.playbackDuration).toBeGreaterThanOrEqual(300));
+    const expected = [
+      { itemId: "first", audioEndMs: 200 },
+      { itemId: "second", audioEndMs: state.resource.playbackDuration - 200 },
+    ];
+    expect(fixture.callbacks.getPlaybackState?.()).toEqual(expected);
+    expect(fixture.callbacks.getPlaybackState?.()).toEqual(expected);
+    fixture.callbacks.onResponseDone?.({ status: "completed" });
+    expect(fixture.callbacks.getPlaybackState?.()).toEqual([expected[1]]);
+  } finally {
+    fixture.close();
+  }
+});
+
+it.each(["resumed", "next-item"])(
+  "retains native item order and progress after starvation before %s",
+  async (nextItemId) => {
+    const fixture = createRealtimePlaybackFixture();
+    try {
+      fixture.callbacks.onAudio(Buffer.alloc(24_000), { itemId: "resumed" });
+      await fixture.voiceSdk.entersState(
+        fixture.player,
+        fixture.voiceSdk.AudioPlayerStatus.Idle,
+        4_000,
+      );
+      expect(fixture.callbacks.getPlaybackState?.()).toEqual([
+        { itemId: "resumed", audioEndMs: 500 },
+      ]);
+      expect(fixture.roomPlayer.isActive()).toBe(true);
+      fixture.callbacks.onAudio(Buffer.alloc(24_000), { itemId: nextItemId });
+      await fixture.voiceSdk.entersState(
+        fixture.player,
+        fixture.voiceSdk.AudioPlayerStatus.Playing,
+        3_000,
+      );
+      const state = fixture.player.state;
+      if (state.status === fixture.voiceSdk.AudioPlayerStatus.Idle) {
+        throw new Error("expected resumed native item");
+      }
+      const resumed = nextItemId === "resumed";
+      expect(fixture.callbacks.getPlaybackState?.()).toEqual([
+        { itemId: "resumed", audioEndMs: 500 + (resumed ? state.resource.playbackDuration : 0) },
+        ...(resumed ? [] : [{ itemId: nextItemId, audioEndMs: state.resource.playbackDuration }]),
+      ]);
+      fixture.callbacks.onResponseDone?.({ status: "completed" });
+      expect(fixture.callbacks.getPlaybackState?.()).toEqual([
+        { itemId: nextItemId, audioEndMs: (resumed ? 500 : 0) + state.resource.playbackDuration },
+      ]);
+      await fixture.voiceSdk.entersState(
+        fixture.player,
+        fixture.voiceSdk.AudioPlayerStatus.Idle,
+        3_000,
+      );
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        type: "response.created",
+        responseId: "pending",
+      });
+      expect(fixture.callbacks.getPlaybackState?.()).toEqual([]);
+      fixture.playback.speakControlResult("Stopped.");
+      expect(fixture.cancel).toHaveBeenCalledOnce();
+      expect(fixture.callbacks.getPlaybackState?.()).toEqual([]);
+    } finally {
+      fixture.close();
+    }
+  },
+);
 
 it("plays every frame of a burst through the real Opus encoder before releasing queued speech", async () => {
   const fixture = createRealtimePlaybackFixture();

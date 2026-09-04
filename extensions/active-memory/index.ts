@@ -61,7 +61,6 @@ import {
   resetActiveMemoryTranscriptForTests,
   setTimeoutPartialDataGraceMsForTests,
 } from "./transcript-result.js";
-import { readActiveMemorySearchDebug } from "./transcript-watch.js";
 import {
   createActiveMemoryHookDeadline,
   hasUsableMemoryResultInSessionRecord,
@@ -528,7 +527,6 @@ const testing = {
   isCircuitBreakerOpen,
   isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
-  readActiveMemorySearchDebug,
   readPartialAssistantText,
   shouldCacheResult,
   resetActiveRecallCacheForTests() {

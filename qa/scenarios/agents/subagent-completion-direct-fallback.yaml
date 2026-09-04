@@ -106,7 +106,7 @@ flow:
                     ref: conversationId
                   senderName: QA Terminal Reply Operator
                   text:
-                    expr: "`Subagent terminal reply QA check: ${terminalCase.name}. Spawn one native worker, reply to the requester after spawning, then finish the parent turn without waiting. Do not use ACP.`"
+                    expr: "`Subagent terminal reply QA check: ${terminalCase.name}. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.`"
               - call: waitForCondition
                 saveAs: terminalTask
                 args:
@@ -128,10 +128,6 @@ flow:
                   expr: "matchingOutbound.length === terminalCase.expectedSendCount"
                   message:
                     expr: "`terminal ${terminalCase.name}: expected ${terminalCase.expectedSendCount} outbound, got ${matchingOutbound.length}; messages=${JSON.stringify(state.getSnapshot().messages.slice(-10))} requests=${JSON.stringify(caseRequests)} logs=${JSON.stringify((env.gateway.logs?.().split('\\n') ?? []).filter((line) => /qa-channel|subagent|announce|completion|requester/i.test(line)).slice(-30))}`"
-              - assert:
-                  expr: "caseOutbound.filter((candidate) => String(candidate.text ?? '').trim() === 'QA-SUBAGENT-PARENT-ACK').length === 1"
-                  message:
-                    expr: "`terminal ${terminalCase.name}: expected one explicit parent acknowledgement; outbound=${recentOutboundSummary(state)}`"
               - assert:
                   expr: "caseOutbound.every((candidate) => !String(candidate.text ?? '').includes(config.metadataSentinel) && !String(candidate.text ?? '').includes('BEGIN_OPENCLAW_INTERNAL_CONTEXT'))"
                   message:
@@ -203,7 +199,7 @@ flow:
             senderId:
               ref: restartConversationId
             senderName: QA Restart Operator
-            text: "Subagent terminal reply QA check: restart. Spawn one native worker, reply to the requester after spawning, then finish the parent turn without waiting. Do not use ACP."
+            text: "Subagent terminal reply QA check: restart. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP."
         - call: waitForCondition
           saveAs: restartTask
           args:
@@ -219,10 +215,6 @@ flow:
             expr: "restartMatches.length === 1"
             message:
               expr: "`restart completion expected exactly one outbound, got ${restartMatches.length}; outbound=${recentOutboundSummary(state)}`"
-        - assert:
-            expr: "state.getSnapshot().messages.slice(restartStartIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === 'QA-SUBAGENT-PARENT-ACK').length === 1"
-            message:
-              expr: "`restart completion expected one parent acknowledgement; outbound=${recentOutboundSummary(state)}`"
         - assert:
             expr: "state.getSnapshot().messages.slice(restartStartIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId).every((candidate) => !String(candidate.text ?? '').includes(`Agent couldn't generate a response`))"
             message:

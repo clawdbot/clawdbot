@@ -64,7 +64,7 @@ type FileHandleRead = (
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
-const probeMediaFileDescriptorMock = vi.hoisted(() => vi.fn(async () => ({})));
+const runFfprobeMock = vi.hoisted(() => vi.fn(async () => "{}"));
 const resolvePlaybackModeForSourceMock = vi.hoisted(() => vi.fn<PlaybackModeForSourceResolver>());
 const resolvePlaybackTranscodeMock = vi.hoisted(() =>
   vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" })),
@@ -72,8 +72,9 @@ const resolvePlaybackTranscodeMock = vi.hoisted(() =>
 vi.mock("../infra/dev-install-branch.js", () => ({
   resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
 }));
-vi.mock("../media/media-probe.js", () => ({
-  probePlaybackMediaFileDescriptor: probeMediaFileDescriptorMock,
+vi.mock("../media/ffmpeg-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/ffmpeg-exec.js")>()),
+  runFfprobe: runFfprobeMock,
 }));
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
@@ -116,8 +117,8 @@ function createAuthRateLimiterSpy() {
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
-  probeMediaFileDescriptorMock.mockReset();
-  probeMediaFileDescriptorMock.mockResolvedValue({});
+  runFfprobeMock.mockReset();
+  runFfprobeMock.mockResolvedValue("{}");
   resolvePlaybackModeForSourceMock.mockReset();
   resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
     mimeType === "audio/x-caf" ? "transcode" : "native",
@@ -1157,7 +1158,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("reports assistant audio size, type, and probed duration metadata", async () => {
-    probeMediaFileDescriptorMock.mockResolvedValueOnce({ durationMs: 2345 });
+    runFfprobeMock.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2.345" } }));
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-audio-meta-",
       fn: async (tmpRoot) => {
@@ -1179,7 +1180,9 @@ describe("handleControlUiHttpRequest", () => {
           sizeBytes: contents.byteLength,
           durationMs: 2345,
         });
-        expect(probeMediaFileDescriptorMock).toHaveBeenCalledWith(expect.any(Number), "audio");
+        expect(runFfprobeMock).toHaveBeenCalledWith(expect.any(Array), {
+          stdinFileDescriptor: expect.any(Number),
+        });
       },
     });
   });

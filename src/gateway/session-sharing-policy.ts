@@ -22,9 +22,10 @@ import {
 } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
-import type {
-  GatewaySessionStoreCache,
-  GatewaySessionStoreDiscoveryCache,
+import {
+  resolveGatewaySessionStoreTargetsReadOnly,
+  type GatewaySessionStoreCache,
+  type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import {
   resolveCanonicalSessionStoreMatchFromStoreKeys,
@@ -83,9 +84,29 @@ export function resolveSessionSharingTarget(params: {
     clone: false,
     // Authorization rechecks current metadata; prompt snapshots are not part of that binding.
     projection: "list",
+    // Batch callers reuse one store snapshot; single-target checks must not
+    // materialize unrelated sessions for every task or authorization recheck.
+    exactRead: !params.storeCache,
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
+  return toSessionSharingTarget(target);
+}
+
+/** Fresh metadata for one synchronous batch; no authorization decisions are retained. */
+export function resolveSessionSharingTargets(params: {
+  cfg: OpenClawConfig;
+  targets: readonly { sessionKey: string; agentId?: string }[];
+}): Array<SessionSharingTarget | null> {
+  return resolveGatewaySessionStoreTargetsReadOnly({
+    cfg: params.cfg,
+    targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
+  }).map(toSessionSharingTarget);
+}
+
+function toSessionSharingTarget(
+  target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>,
+): SessionSharingTarget | null {
   const match = resolveCanonicalSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
   return match
     ? {

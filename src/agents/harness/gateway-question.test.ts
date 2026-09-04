@@ -5,6 +5,7 @@ import type { AgentHarnessQuestionGatewayCall } from "./gateway-question-dispatc
 import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
+  claimPendingAgentQuestionAnswerFromCaller,
   registerPendingAgentQuestion,
   runAgentHarnessGatewayQuestion,
 } from "./gateway-question.js";
@@ -21,6 +22,28 @@ const questions = [
 ] as const;
 
 describe("gateway harness questions", () => {
+  it("leaves an aborted caller without a pending question to ordinary admission", async () => {
+    const source = new AbortController();
+    source.abort();
+    const persist = vi.fn();
+
+    await expect(
+      claimPendingAgentQuestionAnswerFromCaller({
+        sessionKey: "agent:main:no-pending-question",
+        text: "Continue",
+        caller: {
+          senderIsOwner: true,
+          disableTools: false,
+          traceAuthorized: false,
+          messageProvider: "webchat",
+        },
+        assertSourceCurrent: () => source.signal.throwIfAborted(),
+        persist,
+      }),
+    ).resolves.toBe(false);
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it.each([
     { change: "open", cancel: false },
     { change: "closed", cancel: false },

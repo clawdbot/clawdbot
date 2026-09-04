@@ -469,7 +469,7 @@ describe("memory manager reindex recovery", () => {
     expect(harness.sessionsFullRetryDirty).toBe(false);
   });
 
-  it("closes the database after constructor schema failure", async () => {
+  it("requires doctor for legacy schemas before exposing a manager", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     const db = new DatabaseSync(databasePath);
@@ -483,9 +483,9 @@ describe("memory manager reindex recovery", () => {
     });
 
     expect(result.manager).toBeNull();
-    expect(result.error).toMatch(/no such column: path/);
+    expect(result.error).toContain("uses schema version 0; run openclaw doctor --fix");
     const reopened = new DatabaseSync(databasePath);
-    expect(reopened.prepare("SELECT 1 AS ok").get()).toEqual({ ok: 1 });
+    expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
     reopened.close();
   });
 

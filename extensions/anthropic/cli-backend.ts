@@ -58,6 +58,30 @@ const CLAUDE_CLI_DEFAULT_ARGS = [
   "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
 ] as const;
 
+// Only equivalent bare tools confer general capabilities; Glob and notebook-cell
+// edits do not. Bash is foreground-only at launch, so it never grants `process`.
+const CLAUDE_NATIVE_TOOL_CAPABILITIES: Readonly<Record<string, string>> = {
+  read: "read",
+  grep: "read",
+  write: "write",
+  edit: "edit",
+  bash: "exec",
+  webfetch: "web_fetch",
+  websearch: "web_search",
+};
+
+function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): readonly string[] {
+  const selected = new Set(nativeTools.map((name) => name.trim().toLowerCase()));
+  // Mapping order keeps persisted caps deterministic across native initialization events.
+  return [
+    ...new Set(
+      Object.entries(CLAUDE_NATIVE_TOOL_CAPABILITIES)
+        .filter(([name]) => selected.has(name))
+        .map(([, capability]) => capability),
+    ),
+  ];
+}
+
 function createClaudeCliAuthInput(params: {
   envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" | "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR";
   value: string;
@@ -162,6 +186,7 @@ export function buildAnthropicCliBackend(
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
     toolAvailabilityEnforcement: "execution-args",
+    projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     manualCompaction: {

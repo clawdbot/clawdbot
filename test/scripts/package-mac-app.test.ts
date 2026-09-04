@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   statSync,
   writeFileSync,
@@ -31,6 +32,17 @@ describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
         const scripts = path.join(root, "scripts/lib");
         mkdirSync(scripts, { recursive: true });
         mkdirSync(stage);
+        const mountParent = path.join(root, "Darwin private temp");
+        mkdirSync(mountParent);
+        const getconf = path.join(root, "getconf");
+        writeFileSync(
+          getconf,
+          `#!/bin/bash
+[[ "$*" == DARWIN_USER_TEMP_DIR ]] || exit 2
+printf '%s\\n' '${mountParent.replaceAll("'", "'\\''")}'
+`,
+        );
+        chmodSync(getconf, 0o755);
         const commit = "b".repeat(40);
         writeFileSync(
           path.join(scripts, "mac-swift-build.sh"),
@@ -45,13 +57,21 @@ exec "${process.execPath}" "${path.join(root, "worker.mjs")}" "$@"
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-const [operation, root, arch, config, jobs, commit, skip, work] = process.argv.slice(2);
+const [operation, root, arch, config, jobs, commit, skip, work, mount] = process.argv.slice(2);
 const mode = ${JSON.stringify(mode)};
 const event = (value) => fs.appendFileSync(path.join(root, 'events'), value + '\\n');
-if (operation === 'cleanup') {
-  event('cleanup:' + arch);
-  process.exit(mode === 'cleanup-failure' ? 55 : 0);
+if (!mount || path.dirname(path.dirname(mount)) !== fs.realpathSync(path.join(root, 'Darwin private temp'))) {
+  throw new Error('snapshot mount must use the OS temp location, independently of work or TMPDIR');
 }
+if (operation === 'cleanup') {
+  if (fs.readFileSync(path.join(root, 'mount-' + arch), 'utf8') !== mount) throw new Error('cleanup lost the build mount');
+  event('cleanup:' + arch);
+  if (mode === 'cleanup-failure') process.exit(55);
+  fs.rmdirSync(mount);
+  process.exit(0);
+}
+fs.mkdirSync(mount);
+fs.writeFileSync(path.join(root, 'mount-' + arch), mount);
 event('build:' + arch + ':' + jobs);
 const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
 fs.writeFileSync(path.join(root, 'pid-' + arch), String(child.pid));
@@ -95,7 +115,14 @@ ${cleanup}
 ${build}
 touch "$ROOT_DIR/assembled"
 `;
-        const child = spawn("/bin/bash", ["-c", launcher], { stdio: ["ignore", "pipe", "pipe"] });
+        const child = spawn("/bin/bash", ["-c", launcher], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            PATH: `${root}:${process.env.PATH}`,
+            TMPDIR: path.join(root, "unavailable"),
+          },
+        });
         let stderr = "";
         child.stderr.on("data", (chunk: Buffer) => {
           stderr += chunk.toString();
@@ -120,12 +147,18 @@ touch "$ROOT_DIR/assembled"
         );
         expect(existsSync(path.join(root, "assembled"))).toBe(mode === "success");
         expect(existsSync(stage)).toBe(mode === "cleanup-failure");
+        expect(readdirSync(mountParent)).toHaveLength(mode === "cleanup-failure" ? 1 : 0);
         const events = readFileSync(path.join(root, "events"), "utf8").trim().split("\n");
         expect(events.filter((event) => event.startsWith("cleanup:")).toSorted()).toEqual([
           "cleanup:arm64",
           "cleanup:x86_64",
         ]);
         for (const arch of ["arm64", "x86_64"]) {
+          const mount = readFileSync(path.join(root, `mount-${arch}`), "utf8");
+          expect(existsSync(mount)).toBe(mode === "cleanup-failure");
+          if (mode === "cleanup-failure") {
+            expect(statSync(path.dirname(mount)).mode & 0o777).toBe(0o700);
+          }
           const pid = Number(readFileSync(path.join(root, `pid-${arch}`), "utf8"));
           expect(() => process.kill(pid, 0)).toThrow();
           expect(
@@ -1987,6 +2020,7 @@ try {
       const buildPath = path.join(root, "build with spaces");
       const checkout = path.join(buildPath, "checkouts", "Peekaboo");
       const scratch = path.join(root, "temporary snapshots");
+      const mount = path.join(scratch, "mounted source");
       const unrelated = path.join(scratch, "unrelated-snapshot", "marker");
       const operationsPath = path.join(root, "operations");
       const expectedCommit = "b".repeat(40);
@@ -2028,7 +2062,7 @@ try {
         mountCommand,
         `#!/bin/bash
 printf 'mount\\n' >> "$operations"
-${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on %s/work/snapshot/mount (apfs, read-only)\\n' "$fixture_root"` : "exit 0"}
+${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on %s (apfs, read-only)\\n' "$fixture_mount"` : "exit 0"}
 `,
       );
       chmodSync(mountCommand, 0o755);
@@ -2038,10 +2072,12 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
       set -euo pipefail
       export fixture_root=${JSON.stringify(root)}
       export operations=${JSON.stringify(operationsPath)}
+      export fixture_mount=${JSON.stringify(mount)}
       export PATH=${JSON.stringify(`${root}:/usr/bin:/bin`)}
       TMPDIR=${JSON.stringify(scratch)}
       ROOT_DIR=${JSON.stringify(root)}
       ${getSwiftPackageResolutionBlock()}
+      PEEKABOO_SNAPSHOT_MOUNT="$fixture_mount"
       trap cleanup_swift_architecture EXIT
       BUILD_PATH=${JSON.stringify(buildPath)}
       compiled_peekaboo_commit() {
@@ -2060,7 +2096,6 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
 
       const snapshotRoot = readFileSync(path.join(root, "snapshot-root"), "utf8");
       const image = path.join(snapshotRoot, "Peekaboo.dmg");
-      const mount = path.join(snapshotRoot, "mount");
       const expectedOperations = [`verify:${checkout}:${expectedCommit}`, "create"];
       if (operation !== "create") {
         expectedOperations.push("attach");
@@ -2075,12 +2110,13 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
       const retained = mounts !== "empty";
       if (!retained) {
         expectedOperations.push(
-          `remove:-rf ${snapshotRoot}  ${path.join(root, "work/resource-backups")}`,
+          `remove:-rf ${snapshotRoot} ${mount}  ${path.join(root, "work/resource-backups")}`,
         );
       }
       expect(result.status).toBe(retained ? 1 : exitCode);
       expect(readFileSync(operationsPath, "utf8").trim().split("\n")).toEqual(expectedOperations);
       expect(existsSync(snapshotRoot)).toBe(retained);
+      expect(existsSync(mount)).toBe(retained);
       expect(readFileSync(path.join(checkout, "source"), "utf8")).toBe("source preserved\n");
       expect(readFileSync(unrelated, "utf8")).toBe("unrelated snapshot preserved\n");
       const readArgs = (command: string) =>

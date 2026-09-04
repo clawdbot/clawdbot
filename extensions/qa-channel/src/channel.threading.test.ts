@@ -9,6 +9,8 @@ describe("qa-channel thread delivery contracts", () => {
       NativeChannelId: "qa-room",
       ChatType: "group",
       root: "channel:qa-room",
+      bareTarget: "qa-room",
+      bareMatches: true,
     },
     {
       name: "direct thread with a distinct native root",
@@ -16,12 +18,16 @@ describe("qa-channel thread delivery contracts", () => {
       NativeChannelId: "native-peer",
       ChatType: "direct",
       root: "dm:native-peer",
+      bareTarget: "native-peer",
+      bareMatches: false,
     },
     {
       name: "group thread without native metadata",
       To: "thread:/v1/group/qa-room/thread-1",
       ChatType: "group",
       root: "group:qa-room",
+      bareTarget: "qa-room",
+      bareMatches: false,
     },
   ] as const)("keeps the typed root separate from $name", (testCase) => {
     const hasRepliedRef = { value: false };
@@ -45,6 +51,12 @@ describe("qa-channel thread delivery contracts", () => {
         toolContext: context!,
       }),
     ).toBe(true);
+    expect(
+      qaChannelPlugin.threading?.matchesToolContextTarget?.({
+        target: testCase.bareTarget,
+        toolContext: context!,
+      }),
+    ).toBe(testCase.bareMatches);
     expect(
       qaChannelPlugin.threading?.matchesToolContextTarget?.({
         target: "other-room",

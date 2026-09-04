@@ -18,7 +18,77 @@ vi.mock("./chat.js", () => {
   throw new Error("Cancellation must not load chat history or send handlers");
 });
 
+vi.mock("../../tts/tts-synthesis.js", () => {
+  throw new Error("Speech synthesis is unavailable");
+});
+
 describe("lazy core handler families", () => {
+  it.each([
+    {
+      name: "paired client",
+      params: { enabled: true, phase: "listening" },
+      webchat: false,
+      connectedTalkNode: false,
+      errorCode: undefined,
+    },
+    {
+      name: "webchat with a Talk node",
+      params: { enabled: false },
+      webchat: true,
+      connectedTalkNode: true,
+      errorCode: undefined,
+    },
+    {
+      name: "webchat without a Talk node",
+      params: { enabled: true },
+      webchat: true,
+      connectedTalkNode: false,
+      errorCode: "UNAVAILABLE",
+    },
+    {
+      name: "invalid mode parameters",
+      params: { enabled: "yes" },
+      webchat: false,
+      connectedTalkNode: false,
+      errorCode: "INVALID_REQUEST",
+    },
+  ])("handles Talk mode for $name without loading speech synthesis", async (testCase) => {
+    const { coreGatewayHandlers } = await import("../server-methods.js");
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    await expectDefined(
+      coreGatewayHandlers["talk.mode"],
+      "talk.mode lazy handler",
+    )({
+      req: { type: "req", id: "talk-mode-light-family", method: "talk.mode" },
+      params: testCase.params,
+      respond,
+      context: {
+        broadcast,
+        hasConnectedTalkNode: async () => testCase.connectedTalkNode,
+      } as never,
+      client: { connect: {} } as never,
+      isWebchatConnect: () => testCase.webchat,
+    });
+
+    if (testCase.errorCode) {
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: testCase.errorCode }),
+      );
+      expect(broadcast).not.toHaveBeenCalled();
+    } else {
+      const payload = {
+        enabled: testCase.params.enabled,
+        phase: testCase.params.phase ?? null,
+        ts: expect.any(Number),
+      };
+      expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+      expect(broadcast).toHaveBeenCalledWith("talk.mode", payload, { dropIfSlow: true });
+    }
+  });
+
   it("dispatches cancellation without importing unrelated chat workflows", async () => {
     const { coreGatewayHandlers } = await import("../server-methods.js");
     const respond = vi.fn();

@@ -402,6 +402,30 @@ describe("mattermost monitor resources", () => {
   });
 
   it.each(["channel", "user"] as const)(
+    "retries a failed %s lookup on the next event instead of caching the failure",
+    async (kind) => {
+      const fetchResource = kind === "channel" ? fetchMattermostChannel : fetchMattermostUser;
+      fetchResource
+        .mockRejectedValueOnce(new Error("mattermost api unavailable"))
+        .mockResolvedValueOnce({ id: `${kind}-1` });
+      const resources = createMattermostMonitorResources({
+        accountId: "default",
+        callbackUrl: "https://openclaw.test/callback",
+        client: {} as never,
+        logger: {},
+        mediaMaxBytes: 1024,
+        saveRemoteMedia: vi.fn(),
+        mediaKindFromMime: () => "document",
+      });
+      const resolve = kind === "channel" ? resources.resolveChannelInfo : resources.resolveUserInfo;
+
+      await expect(resolve(`${kind}-1`)).resolves.toBeNull();
+      await expect(resolve(`${kind}-1`)).resolves.toEqual({ id: `${kind}-1` });
+      expect(fetchResource).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["channel", "user"] as const)(
     "bounds the %s cache without refreshing insertion order on reads",
     async (kind) => {
       const fetchResource = kind === "channel" ? fetchMattermostChannel : fetchMattermostUser;

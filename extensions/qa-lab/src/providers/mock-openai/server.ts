@@ -80,8 +80,7 @@ import {
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
   QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER,
-  QA_SUBAGENT_PARENT_VISIBLE_MARKER,
-  QA_SUBAGENT_PARENT_VISIBLE_PROMPT_RE,
+  QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE,
   QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE,
   QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE,
   QA_SUBAGENT_SELF_YIELD_WORKER_RE,
@@ -716,27 +715,25 @@ function extractScenarioPlannedTool(events: StreamEvent[]) {
     : { name: wireName, args: wireArgs, wireName };
 }
 
-type TerminalRequesterResponseGate = {
-  markResponseSent: (caseName: string, childSessionKey: string) => void;
-  waitUntilResponseSent: (caseName: string, childSessionKey: string) => Promise<void>;
+type TerminalRequesterSettleGate = {
+  markSettled: (caseName: string, childSessionKey: string) => void;
+  waitUntilSettled: (caseName: string, childSessionKey: string) => Promise<void>;
 };
 
-// This gate observes mock HTTP response emission, not Gateway turn settlement.
-// An explicit parent acknowledgement keeps direct-completion fixtures out of implicit yield.
-function createTerminalRequesterResponseGate(): TerminalRequesterResponseGate {
-  const responsesSent = new Set<string>();
+function createTerminalRequesterSettleGate(): TerminalRequesterSettleGate {
+  const settledChildren = new Set<string>();
   const waiterPromises = new Map<string, Promise<void>>();
   const waiters = new Map<string, () => void>();
   const childKey = (caseName: string, childSessionKey: string) => `${caseName}\n${childSessionKey}`;
   return {
-    markResponseSent(caseName, childSessionKey) {
+    markSettled(caseName, childSessionKey) {
       const key = childKey(caseName, childSessionKey);
-      responsesSent.add(key);
+      settledChildren.add(key);
       waiters.get(key)?.();
     },
-    async waitUntilResponseSent(caseName, childSessionKey) {
+    async waitUntilSettled(caseName, childSessionKey) {
       const key = childKey(caseName, childSessionKey);
-      if (responsesSent.has(key)) {
+      if (settledChildren.has(key)) {
         return;
       }
       const existing = waiterPromises.get(key);
@@ -747,9 +744,7 @@ function createTerminalRequesterResponseGate(): TerminalRequesterResponseGate {
         const timeout = setTimeout(() => {
           waiters.delete(key);
           waiterPromises.delete(key);
-          reject(
-            new Error(`terminal requester response not sent: ${caseName} (${childSessionKey})`),
-          );
+          reject(new Error(`terminal requester did not settle: ${caseName} (${childSessionKey})`));
         }, 30_000);
         const finish = () => {
           clearTimeout(timeout);
@@ -842,7 +837,7 @@ async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
   options: {
-    waitForTerminalRequesterResponse?: (caseName: string, childSessionKey: string) => Promise<void>;
+    waitForTerminalRequesterSettled?: (caseName: string, childSessionKey: string) => Promise<void>;
     requestKind?: MockOpenAiRequestKind;
     compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
   } = {},
@@ -1308,8 +1303,8 @@ async function buildResponsesPayload(
     ?.toLowerCase();
   if (terminalWorkerCase) {
     const childSessionKey = resolveQaChildSessionKey(input, body);
-    if (options.waitForTerminalRequesterResponse && childSessionKey) {
-      await options.waitForTerminalRequesterResponse(terminalWorkerCase, childSessionKey);
+    if (options.waitForTerminalRequesterSettled && childSessionKey) {
+      await options.waitForTerminalRequesterSettled(terminalWorkerCase, childSessionKey);
     }
   }
   if (terminalWorkerCase === "silent") {
@@ -1348,7 +1343,8 @@ async function buildResponsesPayload(
   if (terminalCompletionCase) {
     if (!hasCompletedToolOutput && canCallSessionsSpawn) {
       const task =
-        terminalCompletionCase === "empty" && QA_SUBAGENT_PARENT_VISIBLE_PROMPT_RE.test(prompt)
+        terminalCompletionCase === "empty" &&
+        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
           ? "Subagent terminal reply QA worker: empty. Return no assistant output after the write."
           : `Subagent terminal reply QA worker: ${terminalCompletionCase}.`;
       return buildToolCallEventsWithArgs("sessions_spawn", {
@@ -1359,16 +1355,15 @@ async function buildResponsesPayload(
       });
     }
     if (hasCompletedToolOutput) {
-      // Visible acknowledgement closes the parent without implicit yield, leaving
-      // the child's later completion on the individual delivery path under test.
-      if (QA_SUBAGENT_PARENT_VISIBLE_PROMPT_RE.test(prompt)) {
-        return buildAssistantEvents(
-          terminalCompletionCase === "empty"
-            ? QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER
-            : QA_SUBAGENT_PARENT_VISIBLE_MARKER,
-        );
+      // A visible acknowledgment ends the requester turn; NO_REPLY keeps a
+      // delegated visible turn alive and hands completion to requester settlement.
+      if (
+        terminalCompletionCase === "empty" &&
+        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
+      ) {
+        return buildAssistantEvents(QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER);
       }
-      return buildAssistantEvents("NO_REPLY");
+      return buildAssistantEvents("Worker started.");
     }
   }
   // Protected completion context is excluded from the current user prompt;
@@ -2543,7 +2538,7 @@ export async function startQaMockOpenAiServer(params?: {
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
-  const terminalRequesterResponseGate = createTerminalRequesterResponseGate();
+  const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const scenarioStates = new Map<string, MockScenarioState>();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
   const scenarioStateFor = (body: Record<string, unknown>): MockScenarioState => {
@@ -2694,7 +2689,7 @@ export async function startQaMockOpenAiServer(params?: {
               : buildAssistantEvents("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
       } else {
         events = await buildResponsesPayload(body, scenarioState, {
-          waitForTerminalRequesterResponse: terminalRequesterResponseGate.waitUntilResponseSent,
+          waitForTerminalRequesterSettled: terminalRequesterSettleGate.waitUntilSettled,
           requestKind,
           compactionSummaryFaultMode,
         });
@@ -2713,15 +2708,15 @@ export async function startQaMockOpenAiServer(params?: {
     )
       ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
       ?.toLowerCase();
-    const terminalRequesterResponse =
+    const settledTerminalRequester =
       terminalRequesterCase && resolveQaRuntimeSessionId(input, body)
         ? {
             caseName: terminalRequesterCase,
             childSessionKey: resolveAcceptedChildSessionKey(input),
           }
         : undefined;
-    const terminalCaseName = terminalRequesterResponse?.caseName;
-    const childSessionKey = terminalRequesterResponse?.childSessionKey;
+    const settledTerminalCaseName = settledTerminalRequester?.caseName;
+    const settledChildSessionKey = settledTerminalRequester?.childSessionKey;
     const failure =
       injectedFailure ??
       (QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
@@ -2759,10 +2754,13 @@ export async function startQaMockOpenAiServer(params?: {
     return {
       events,
       model,
-      ...(terminalCaseName && childSessionKey
+      ...(settledTerminalCaseName && settledChildSessionKey
         ? {
             onResponseSent: () =>
-              terminalRequesterResponseGate.markResponseSent(terminalCaseName, childSessionKey),
+              terminalRequesterSettleGate.markSettled(
+                settledTerminalCaseName,
+                settledChildSessionKey,
+              ),
           }
         : {}),
       ...(failure ? { failure } : {}),

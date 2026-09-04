@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
-import { isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
+import { isPluginControlUiPath, isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
@@ -57,7 +57,7 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
-const CHANGED_EXTENSION_FALLBACK_JOB_SECONDS = 240;
+const CHANGED_EXTENSION_JOB_SECONDS = 240;
 const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
@@ -450,6 +450,7 @@ function createChangedExtensionConfigShardsForPaths(changedPaths: string[], cwd:
   const relevantPaths = changedPaths.filter(
     (changedPath) =>
       changedPath.startsWith("extensions/") &&
+      !isPluginControlUiPath(changedPath) &&
       (existsSync(path.join(cwd, changedPath)) || !isTestFileTarget(changedPath)),
   );
   return createChangedExtensionConfigShards(resolveChangedExtensionRoots(relevantPaths));
@@ -491,6 +492,18 @@ export function createChangedExtensionFallbackShards(
         listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
       )
     : createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
+  const jobs = packChangedExtensionConfigShards(shards);
+  if (jobs.length > MAX_CHANGED_EXTENSION_FALLBACK_JOBS) {
+    throw new Error(
+      `changed plugin fallback exceeds ${MAX_CHANGED_EXTENSION_FALLBACK_JOBS} jobs (${jobs.length} planned)`,
+    );
+  }
+  return jobs;
+}
+
+function packChangedExtensionConfigShards(
+  shards: ChangedExtensionConfigShard[],
+): ChangedNodeTestShard[] {
   const bins = packNodeTestGroups(
     shards.toSorted(
       (a, b) => b.predictedSeconds - a.predictedSeconds || a.shardName.localeCompare(b.shardName),
@@ -506,13 +519,8 @@ export function createChangedExtensionFallbackShards(
           entry.requiresDist === shard.requiresDist,
       ) &&
       bin.reduce((seconds, entry) => seconds + entry.predictedSeconds, shard.predictedSeconds) <=
-        CHANGED_EXTENSION_FALLBACK_JOB_SECONDS,
+        CHANGED_EXTENSION_JOB_SECONDS,
   );
-  if (bins.length > MAX_CHANGED_EXTENSION_FALLBACK_JOBS) {
-    throw new Error(
-      `changed plugin fallback exceeds ${MAX_CHANGED_EXTENSION_FALLBACK_JOBS} jobs (${bins.length} planned)`,
-    );
-  }
   // Singleton objects keep their full metadata and original relative order.
   return bins
     .toSorted((a, b) => shards.indexOf(a[0]) - shards.indexOf(b[0]))
@@ -569,11 +577,16 @@ export function createChangedNodeTestShards(
 
   const policyTargetsByPath = new Map(
     livePaths
-      .filter((changedPath) => !changedPath.startsWith("extensions/"))
+      .filter(
+        (changedPath) =>
+          !changedPath.startsWith("extensions/") || isPluginControlUiPath(changedPath),
+      )
       .map((changedPath) => [changedPath, resolvePolicyTestTargets([changedPath])]),
   );
   const regularLivePaths = livePaths.filter(
-    (changedPath) => !changedPath.startsWith("extensions/") && !isPolicyTestOwnedPath(changedPath),
+    (changedPath) =>
+      (!changedPath.startsWith("extensions/") || isPluginControlUiPath(changedPath)) &&
+      !isPolicyTestOwnedPath(changedPath),
   );
 
   // Workspace package consumers often use package specifiers, which the
@@ -627,7 +640,7 @@ export function createChangedNodeTestShards(
   // Boundary-config targets run as regular nondist targets: the boundary
   // suite scans the checked-out tree and never consumes the built dist.
   const shards = [
-    ...createChangedExtensionConfigShardsForPaths(livePaths, cwd),
+    ...packChangedExtensionConfigShards(createChangedExtensionConfigShardsForPaths(livePaths, cwd)),
     // Native browser files run in checks-ui, including precise changed-file plans.
     ...createChangedTargetShards(
       targets.filter((target) => !isUiBrowserTestFile(target)),

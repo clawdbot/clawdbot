@@ -15,12 +15,9 @@ import {
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
-import {
-  authorizeScopedUserProfileAvatarHttpRequestOrReply,
-  resolveSharedSecretHttpOperatorScopes,
-} from "./http-utils.js";
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
 const GRAVATAR_FETCH_TIMEOUT_MS = 5_000;
@@ -283,7 +280,7 @@ function sendAvatar(
   res.end(req.method === "HEAD" ? undefined : avatar.bytes);
 }
 
-/** Serves a profile avatar to authenticated HTTP or verified Tailscale UI sessions. */
+/** Serves a profile avatar to authenticated Control UI readers. */
 export async function handleUserProfileAvatarHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -321,15 +318,16 @@ export async function handleUserProfileAvatarHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const authResult = await authorizeScopedUserProfileAvatarHttpRequestOrReply({
+  // Personal avatars share the Control UI read boundary: paired device tokens
+  // must retain their approved scopes rather than be treated as shared secrets.
+  const authResult = await authorizeControlUiReadRequestOrReply({
     req,
     res,
     auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
+    trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
-    operatorMethod: "users.list",
-    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
+    requiredOperatorMethod: "users.list",
   });
   if (!authResult) {
     return true;

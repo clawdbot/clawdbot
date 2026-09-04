@@ -27,6 +27,7 @@ import {
 } from "./components/chat-message.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
@@ -887,8 +888,8 @@ describe("chat pane connection lifecycle", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const cancelCommit = vi.fn();
-    const initialScrollGeneration = state.chatScrollGeneration;
-    state.chatScrollCommitCleanup = cancelCommit;
+    state.renderLifecycle.afterCommit = () => cancelCommit;
+    scheduleChatScroll(state);
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
@@ -898,8 +899,6 @@ describe("chat pane connection lifecycle", () => {
     });
 
     expect(cancelCommit).toHaveBeenCalledOnce();
-    expect(state.chatScrollCommitCleanup).toBeNull();
-    expect(state.chatScrollGeneration).toBe(initialScrollGeneration + 1);
   });
 
   it("retires pending model selection state when the Gateway owner changes", () => {

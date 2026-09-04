@@ -136,6 +136,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     }
     const { schema, uiHints } = buildRuntimeConfigSchemaFromRegistry(
       pluginMetadataSnapshot.manifestRegistry,
+      snapshot.sourceConfig,
     );
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
     if (!res.found) {

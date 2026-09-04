@@ -25,6 +25,8 @@ import {
   listSessionEntriesReadOnly,
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
+  loadExactSessionEntryCandidates,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -78,6 +80,8 @@ export {
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
+  loadExactSessionEntryCandidates,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
@@ -168,17 +172,11 @@ function findCanonicalSessionEntryMatch(
   options: { readOnly?: boolean } = {},
 ): SessionEntrySummary | undefined {
   let selected: SessionEntrySummary | undefined;
-  for (const candidate of candidateKeys) {
-    const trimmed = candidate.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const loadExact =
-      options.readOnly === false ? loadExactSessionEntry : loadExactSessionEntryReadOnly;
-    const match = loadExact({ ...scope, sessionKey: trimmed });
-    if (!match) {
-      continue;
-    }
+  for (const match of loadExactSessionEntryCandidates({
+    ...scope,
+    sessionKeys: candidateKeys,
+    readOnly: options.readOnly !== false,
+  })) {
     if (selected) {
       throw canonicalSessionKeyMigrationRequiredError(
         `duplicate rows resolve to canonical session key ${canonicalKey}`,

@@ -14,7 +14,7 @@ import {
   anyChatOutboxPaneMatches,
   isDurableQueuedMessage,
   readQueuedMessageById,
-  removeVisibleOrScopedQueuedMessageWithoutReleasing,
+  removeQueuedMessageWithoutReleasing,
   type ChatQueueScopedSessionHost,
 } from "./chat-queue.ts";
 import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
@@ -214,7 +214,7 @@ export function retireEditedQueuedMessageSource(
     }
   }
   host.chatQueuedEdit = null;
-  removeVisibleOrScopedQueuedMessageWithoutReleasing(host, edit.id, edit.sessionKey);
+  removeQueuedMessageWithoutReleasing(host, edit.id);
   // Images the operator dropped during the edit lose their last owner here; the
   // ones the replacement still carries must survive, so release only the rest.
   // The payloads come from the token: a successful write already retired the row

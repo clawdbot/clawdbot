@@ -64,19 +64,18 @@ export function buildProxyConnectOptions(
     ...resolveUndiciAutoSelectFamilyConnectOptions(),
     ...(typeof options.connect === "object" ? options.connect : {}),
   };
+  const timeout = normalizedTimeout(timeoutMs);
   return {
     autoSelectFamily: connect.autoSelectFamily,
     autoSelectFamilyAttemptTimeout: connect.autoSelectFamilyAttemptTimeout,
     family: "family" in connect ? connect.family : undefined,
     keepAlive: connect.keepAlive,
     keepAliveInitialDelay: connect.keepAliveInitialDelay,
+    // Match native precedence: null/undefined proxy overrides select Undici's
+    // default, never the direct connector's deadline.
+    timeout: options.connectTimeout,
     ...options.proxyTls,
-    // Proxy-hop overrides must not replace the tunneled target's connectTimeout.
-    timeout:
-      normalizedTimeout(timeoutMs) ??
-      options.proxyTls?.timeout ??
-      options.connectTimeout ??
-      (typeof options.connect === "object" ? options.connect.timeout : undefined),
+    ...(timeout !== undefined ? { timeout } : {}),
     ...HTTP1_ONLY_DISPATCHER_OPTIONS,
   };
 }

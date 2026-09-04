@@ -213,7 +213,7 @@ function prepareConfig(
 
 describe("security-fast workflow", () => {
   it.each([0, 1, 2, 3, 130])(
-    "only downgrades unavailable audit exit %s to a warning",
+    "propagates audit exit %s in ordinary and scheduled CI",
     (auditExit) => {
       const repo = tempDirs.make("openclaw-audit-ci-");
       mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
@@ -222,11 +222,8 @@ describe("security-fast workflow", () => {
         `process.exit(${auditExit});\n`,
       );
       const result = runStep(securityStep("Audit production dependencies"), repo, {});
-      expect(result.status).toBe(auditExit === 2 ? 0 : auditExit);
-      expect(result.stdout.includes("::warning::")).toBe(auditExit === 2);
-      if (auditExit === 2) {
-        expect(result.stdout).toContain("incomplete");
-      }
+      expect(result.status).toBe(auditExit);
+      expect(result.stdout).toBe("");
       const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
         jobs: { audit: { steps: WorkflowStep[] } };
       };

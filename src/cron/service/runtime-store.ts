@@ -12,7 +12,7 @@ import {
   loadCronRuntimeAuthorities,
   repairCronRuntimeAuthorityRows,
 } from "../store/runtime-authority-store.js";
-import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronStoredJob } from "../types.js";
 import type { CronServiceState } from "./state.js";
 import { publishCronRuntimeRows } from "./store.js";

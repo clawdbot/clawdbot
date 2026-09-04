@@ -810,6 +810,31 @@ describe("native app i18n inventory", () => {
     }
   });
 
+  it("retranslates existing native strings only when a full refresh is requested", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const entry = testEntry("native.apple.open", "apple", "Open");
+    try {
+      await syncNativeLocale("sv", [entry], {
+        glossary: [],
+        translationsDir,
+        translate: async () => new Map([[entry.id, "Tidigare"]]),
+      });
+      const refreshed = await syncNativeLocale("sv", [entry], {
+        force: true,
+        glossary: [],
+        translationsDir,
+        translate: async (pending) => new Map(pending.map((item) => [item.id, "Öppna"])),
+      });
+      expect(refreshed.translated).toBe(1);
+      expect(
+        JSON.parse(await readFile(path.join(translationsDir, "sv.json"), "utf8")).translations,
+      ).toEqual({ [entry.id]: "Öppna" });
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
   it("rejects native printf placeholder drift", async () => {
     const tempDirs: string[] = [];
     const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
@@ -1000,6 +1025,12 @@ describe("native app i18n inventory", () => {
     });
     expect(() => parseNativeI18nCommand(["sync", "--write", "--locale"])).toThrow(
       "requires a locale value",
+    );
+    expect(parseNativeI18nCommand(["sync", "--write", "--locale", "sv", "--force"]).force).toBe(
+      true,
+    );
+    expect(() => parseNativeI18nCommand(["sync", "--write", "--force"])).toThrow(
+      "requires `sync --write --locale",
     );
     expect(() => parseNativeI18nCommand(["sync", "--write", "--locale", "--write"])).toThrow(
       "requires a locale value",

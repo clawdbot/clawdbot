@@ -11,7 +11,7 @@ import { repairMergedGatewayOwnerProfile } from "../state/user-profiles-owner-mi
 import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
-const authorizeScopedUserProfileAvatarHttpRequestOrReply = vi.hoisted(() => vi.fn());
+const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn());
 const getProfileAvatar = vi.hoisted(() => vi.fn());
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
@@ -25,9 +25,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 
 vi.mock("../infra/host-account-avatar.js", () => ({ resolveHostAccountAvatar }));
 
-vi.mock("./http-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./http-utils.js")>()),
-  authorizeScopedUserProfileAvatarHttpRequestOrReply,
+vi.mock("./http-auth-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-auth-utils.js")>()),
+  authorizeControlUiReadRequestOrReply,
 }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig }));
 vi.mock("../state/user-profiles.js", async () => ({
@@ -65,12 +65,12 @@ function request(path: string, headers: Record<string, string> = {}) {
 
 describe("profile avatar HTTP endpoint", () => {
   beforeEach(() => {
-    authorizeScopedUserProfileAvatarHttpRequestOrReply.mockReset();
+    authorizeControlUiReadRequestOrReply.mockReset();
     getProfileAvatar.mockReset();
     getUserProfileListItem.mockReset();
     getRuntimeConfig.mockReset();
     resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
-    authorizeScopedUserProfileAvatarHttpRequestOrReply.mockResolvedValue({});
+    authorizeControlUiReadRequestOrReply.mockResolvedValue({});
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
     });
@@ -88,7 +88,7 @@ describe("profile avatar HTTP endpoint", () => {
       auth: {} as never,
     });
 
-    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).not.toHaveBeenCalled();
+    expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
     expect(res.setHeader).toHaveBeenCalledWith(
       "Access-Control-Allow-Origin",
       "https://control.example",
@@ -114,8 +114,8 @@ describe("profile avatar HTTP endpoint", () => {
       { auth: {} as never },
     );
 
-    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).toHaveBeenCalledWith(
-      expect.objectContaining({ operatorMethod: "users.list" }),
+    expect(authorizeControlUiReadRequestOrReply).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredOperatorMethod: "users.list" }),
     );
     expect(res.writeHead).toHaveBeenCalledWith(
       200,
@@ -171,7 +171,7 @@ describe("profile avatar HTTP endpoint", () => {
     });
     expect(saved.end).toHaveBeenCalledWith(Buffer.from([9]));
 
-    authorizeScopedUserProfileAvatarHttpRequestOrReply.mockResolvedValue(null);
+    authorizeControlUiReadRequestOrReply.mockResolvedValue(null);
     const unauthorized = response();
     await handleUserProfileAvatarHttpRequest(request(pathname), unauthorized.response, pathname, {
       auth: {} as never,
@@ -190,7 +190,7 @@ describe("profile avatar HTTP endpoint", () => {
 
     expect(res.response.statusCode).toBe(405);
     expect(res.setHeader).toHaveBeenCalledWith("Allow", "GET, HEAD");
-    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).not.toHaveBeenCalled();
+    expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
     expect(getProfileAvatar).not.toHaveBeenCalled();
   });
 
@@ -255,7 +255,7 @@ describe("profile avatar HTTP endpoint", () => {
     );
 
     expect(handled).toBe(true);
-    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).toHaveBeenCalledOnce();
+    expect(authorizeControlUiReadRequestOrReply).toHaveBeenCalledOnce();
     expect(res.response.statusCode).toBe(404);
     expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
     expect(getProfileAvatar).not.toHaveBeenCalled();
@@ -274,7 +274,7 @@ describe("profile avatar HTTP endpoint", () => {
 
     expect(handled).toBe(false);
     expect(getRuntimeConfig).not.toHaveBeenCalled();
-    expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).not.toHaveBeenCalled();
+    expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
   });
 
   it("answers a matching ETag without a body", async () => {

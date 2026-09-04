@@ -1,5 +1,3 @@
-import { isCoreCanvasHostEnabled } from "../canvas/config.js";
-import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
@@ -10,7 +8,6 @@ import {
 import { isNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { resolveGatewayAuth } from "./auth.js";
@@ -144,6 +141,7 @@ export async function finishGatewayStartup(params: {
     gatewayRequestContext,
     gatewayInstanceRuntime,
     getPluginMetadataSnapshot,
+    getPluginNodeCapabilities,
   } = runtime;
   const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
   const unregisterGatewayLifetimeSidecar = (sidecar: GatewayPostReadySidecarHandle) => {
@@ -151,13 +149,9 @@ export async function finishGatewayStartup(params: {
       runtimeState.gatewayLifetimeSidecars.filter((registered) => registered !== sidecar),
     );
   };
-  const [{ attachGatewayWsHandlers }, { listPluginNodeCapabilities }] = await startupTrace.measure(
+  const { attachGatewayWsHandlers } = await startupTrace.measure(
     "gateway.ws-imports",
-    () =>
-      Promise.all([
-        import("./server-ws-runtime.js"),
-        import("./server/plugins-http/route-capability.js"),
-      ]),
+    () => import("./server-ws-runtime.js"),
   );
   await startupTrace.measure("gateway.ws-attach", () =>
     attachGatewayWsHandlers({
@@ -168,11 +162,7 @@ export async function finishGatewayStartup(params: {
       port,
       gatewayHost: bindHost ?? undefined,
       pluginSurfaceScheme: gatewayTls.enabled ? "https" : "http",
-      getPluginNodeCapabilities: () =>
-        withCoreCanvasNodeCapability(
-          listPluginNodeCapabilities(pluginRuntime.registry),
-          isCoreCanvasHostEnabled(getRuntimeConfig()),
-        ),
+      getPluginNodeCapabilities,
       getResolvedAuth,
       getRequiredSharedGatewaySessionGeneration: () =>
         getRequiredSharedGatewaySessionGeneration(sharedGatewaySessionGenerationState),
@@ -308,8 +298,7 @@ export async function finishGatewayStartup(params: {
           startupState.pendingReason = "startup-sidecars";
           await refreshAttachedGatewayDiscovery(loaded.pluginRegistry, startupPluginRuntimeClaim);
         },
-        getCronService: () =>
-          runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
+        getCronService: () => runtimeState.cronState.cron,
         onChannelsStarted: () => {
           releaseStartupAccountStarts();
         },
@@ -368,7 +357,7 @@ export async function finishGatewayStartup(params: {
   postAttachRuntimeReturned = true;
   activateScheduledServicesWhenReady();
 
-  const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
+  const { startManagedGatewayConfigReloader } = await import("./server-reload-managed.js");
   const assertRuntimeSecurityConfig = (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => {
     assertGatewayRuntimeSecurityConfig({
       cfg,

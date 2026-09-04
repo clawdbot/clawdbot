@@ -122,7 +122,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.session.steer", "talk", "operator.talk", "<=2026.7"],
   ["talk.session.close", "talk", "operator.talk", "<=2026.7"],
   ["talk.speak", "talk", "operator.talk", "<=2026.7"],
-  ["talk.mode", "talk", "operator.talk", "<=2026.7"],
+  ["talk.mode", "talk-mode", "operator.talk", "<=2026.7"],
   ["commands.list", "commands", "operator.read", "<=2026.7"],
   ["models.list", "models", "operator.read", "<=2026.7", { startup: true }],
   ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7"],
@@ -634,6 +634,17 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["transcripts.list", "transcripts", "operator.read", "2026.8"],
   ["transcripts.get", "transcripts", "operator.read", "2026.8"],
   ["models.authOrderSet", "models-auth-order", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
+  ["canvas.document.view", "canvas", "operator.read", "2026.8"],
+  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.8"],
+  [
+    "plugins.controlUi.reload",
+    "plugins-control-ui",
+    "operator.admin",
+    "2026.8",
+    CONTROL_PLANE_WRITE,
+  ],
+  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.8"],
+  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

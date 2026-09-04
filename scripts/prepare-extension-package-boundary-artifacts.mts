@@ -20,7 +20,12 @@ import {
   LOCAL_SDK_ROOT,
   BoundaryInputSnapshot,
 } from "./lib/extension-boundary-inputs.mts";
-import { ensureRepoNodeModulesLink, isLocalCheckEnabled } from "./lib/local-check-runtime.mts";
+import {
+  ensureRepoNodeModulesLink,
+  ensureRepoToolNodeModulesLink,
+  isLocalCheckEnabled,
+  resolveRepoToolBinPath,
+} from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mts";
@@ -236,6 +241,9 @@ async function runTsgoSteps(steps: NodeStep[]) {
 
 async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process.argv.slice(2)) {
   const mode = parseMode(argv);
+  // Settle dependency links before snapshots freeze the compiler's resolution topology.
+  const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
+  ensureRepoToolNodeModulesLink(tsgoPath, { cwd: repoRoot });
   const sdk = {
     id: "plugin-sdk",
     outDir: LOCAL_SDK_ROOT,

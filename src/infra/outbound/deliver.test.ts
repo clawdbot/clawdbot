@@ -947,6 +947,66 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]?.messageId).toBe("message-adapter-1");
   });
 
+  it.each(
+    ["text", "media", "payload", "formattedText", "formattedMedia"].flatMap((kind) =>
+      [false, true].map((skipQueue) => ({ kind, skipQueue })),
+    ),
+  )("forwards cancellation to $kind sends (skipQueue: $skipQueue)", async ({ kind, skipQueue }) => {
+    const abortController = new AbortController();
+    const observedSignals: Array<AbortSignal | undefined> = [];
+    const cancel = (signal: AbortSignal | undefined): never => {
+      observedSignals.push(signal);
+      abortController.abort();
+      throw new DOMException("operator canceled delivery", "AbortError");
+    };
+    if (kind === "formattedText" || kind === "formattedMedia") {
+      setTestOutbound({
+        deliveryCapabilities: { durableFinal: { text: true, media: true } },
+        [kind === "formattedText" ? "sendFormattedText" : "sendFormattedMedia"]: async (ctx: {
+          abortSignal?: AbortSignal;
+        }) => cancel(ctx.abortSignal),
+      });
+    } else {
+      setMatrixMessageAdapter({
+        durableFinal: { capabilities: { text: true, media: true, payload: true } },
+        send: {
+          text: vi.fn(),
+          lifecycle: {
+            beforeSendAttempt: (ctx) => {
+              observedSignals.push(ctx.signal);
+            },
+          },
+          [kind]: async (ctx: ChannelMessageSendTextContext) => cancel(ctx.signal),
+        },
+      });
+    }
+
+    await expect(
+      deliverMatrix({
+        payloads: [
+          {
+            text: "hello",
+            ...(kind === "media" || kind === "formattedMedia"
+              ? { mediaUrl: "https://example.com/image.png" }
+              : {}),
+            ...(kind === "payload" ? { channelData: { mode: "custom" } } : {}),
+          },
+        ],
+        abortSignal: abortController.signal,
+        queuePolicy: "required",
+        skipQueue,
+      }),
+    ).rejects.toThrow("operator canceled delivery");
+
+    expect(observedSignals).toHaveLength(kind.startsWith("formatted") ? 1 : 2);
+    for (const signal of observedSignals) {
+      expect(signal?.aborted).toBe(true);
+      if (skipQueue) {
+        expect(signal).toBe(abortController.signal);
+      }
+    }
+  });
+
   it("does not run successful delivery lifecycle hooks for an explicit no-send", async () => {
     const beforeSendAttempt = vi.fn(() => "pending-no-send");
     const afterSendSuccess = vi.fn();

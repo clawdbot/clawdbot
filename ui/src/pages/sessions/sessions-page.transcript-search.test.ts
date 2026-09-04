@@ -53,6 +53,39 @@ describe("Sessions transcript search scope", () => {
     );
   });
 
+  it("does not narrow or retire transcript search when the metadata query changes", async () => {
+    const request = vi.fn(async () => ({ results: [] }));
+    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const listed = {
+      count: 1,
+      sessions: [{ key: "agent:main:content-only", kind: "direct" }],
+    } as SessionsListResult;
+    const managed = createManagedSessions({ list: vi.fn(async () => listed) });
+    const page = await createRenderedPage(
+      createContext(mutableGateway.gateway, managed.sessions),
+      listed,
+    );
+    page.updateTranscriptSearchQuery("needle");
+    await page.runTranscriptSearch();
+    const completed = page.transcriptSearch;
+    const input = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+    input.value = "metadata-only";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.updateComplete;
+    expect(page.transcriptSearch).toBe(completed);
+    await page.runTranscriptSearch();
+    for (const [options] of vi.mocked(managed.sessions.list).mock.calls) {
+      expect(options?.search).toBeUndefined();
+    }
+    expect(request).toHaveBeenCalledWith(
+      "sessions.search",
+      expect.objectContaining({ sessionKeys: ["agent:main:content-only"] }),
+    );
+  });
+
   it.each(["completed", "pending"])(
     "retires %s active-session matches when the route changes to archived sessions",
     async (completion) => {

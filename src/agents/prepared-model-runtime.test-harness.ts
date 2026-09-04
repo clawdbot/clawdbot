@@ -53,19 +53,8 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
-  createPreparedModelCatalogWorkerInput: vi.fn(
-    ({
-      agentFacts,
-    }: {
-      agentFacts: { input: unknown; authStore: unknown; providerIds: unknown };
-    }) => ({
-      kind: "catalog",
-      generationFingerprint: "test-generation",
-      input: agentFacts.input,
-      authStore: agentFacts.authStore,
-      providerIds: agentFacts.providerIds,
-    }),
-  ),
+  createPreparedModelCatalogWorker:
+    vi.fn<typeof import("./prepared-model-catalog-worker.js").createPreparedModelCatalogWorker>(),
   configuredAgentIds: [] as string[],
   configuredAgentIdsError: undefined as Error | undefined,
   configuredAgentDirs: new Map<string, string>(),
@@ -121,28 +110,30 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({
-  createPreparedModelCatalogWorkerInput: (
-    ...args: Parameters<typeof preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput>
-  ) => preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput(...args),
-  createPreparedModelCatalogWorker: () => ({
-    loadCatalog: async (...args: unknown[]) => {
-      const catalog = await preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args);
-      // Real worker replies always pair inventory with the observed auth generation.
-      setPreparedModelFullCatalogAuth(
-        catalog,
-        getPreparedModelFullCatalogAuth(catalog) ?? {
+  createPreparedModelCatalogWorker: (
+    ...factoryArgs: Parameters<typeof preparedModelRuntimeMocks.createPreparedModelCatalogWorker>
+  ) => {
+    preparedModelRuntimeMocks.createPreparedModelCatalogWorker(...factoryArgs);
+    return {
+      loadCatalog: async (...args: unknown[]) => {
+        const catalog = await preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args);
+        // Real worker replies always pair inventory with the observed auth generation.
+        setPreparedModelFullCatalogAuth(
+          catalog,
+          getPreparedModelFullCatalogAuth(catalog) ?? {
+            authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
+            authModes: {},
+          },
+        );
+        return catalog;
+      },
+      loadAuth: () =>
+        Promise.resolve({
           authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
           authModes: {},
-        },
-      );
-      return catalog;
-    },
-    loadAuth: () =>
-      Promise.resolve({
-        authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
-        authModes: {},
-      }),
-  }),
+        }),
+    };
+  },
 }));
 
 vi.mock("./model-catalog.js", async () => ({
@@ -417,7 +408,7 @@ export function resetPreparedModelRuntimeHarness(state: OpenClawTestState): void
   preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot
     .mockReset()
     .mockResolvedValue({ entries: [], routeVariants: [] });
-  preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput.mockClear();
+  preparedModelRuntimeMocks.createPreparedModelCatalogWorker.mockClear();
   preparedModelRuntimeMocks.discoverAuthStorage
     .mockReset()
     .mockImplementation(() => preparedModelRuntimeMocks.authStorage);

@@ -773,7 +773,7 @@ run_plugin_fixture_phase fixture-phase true
       "seed-legacy-runtime-deps-symlink",
       "configure-plugin-registry",
       "assert-prepublish-requests",
-      "assert-legacy-plugin-dependency-debris-before-doctor",
+      "assert-package-local-dependency-cleanup",
       "assert-legacy-plugin-dependency-debris-cleaned",
       "assert-legacy-runtime-deps-symlink-repaired",
       "fixture-plugin-consent",

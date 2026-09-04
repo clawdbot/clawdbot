@@ -1,6 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
-import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +10,7 @@ import {
   getGlobalDispatcher,
   Headers,
   Pool,
+  ProxyAgent,
   setGlobalDispatcher,
 } from "undici";
 import { describe, expect, it, vi } from "vitest";
@@ -139,22 +139,11 @@ describe("SOCKS proxy protocol boundaries", () => {
         .mockReturnValue({ autoSelectFamily: false, autoSelectFamilyAttemptTimeout: 321 });
       const connect = vi.spyOn(net, "connect");
       const keepAlive = vi.spyOn(net.Socket.prototype, "setKeepAlive");
-      const runtime = createRequire(import.meta.url)("undici") as typeof import("undici");
-      const originalConnector = runtime.buildConnector;
-      const usedTimeouts: Array<{ port: number; timeout: number | undefined }> = [];
-      const connector = vi.spyOn(runtime, "buildConnector").mockImplementation((options) => {
-        const actual = originalConnector(options);
-        return (params, callback) => {
-          usedTimeouts.push({ port: Number(params.port), timeout: options?.timeout });
-          return actual(params, callback);
-        };
-      });
       try {
         await withProxyFixture(async ({ socksProxy, httpProxy, httpOrigin, certificate }) => {
           const options = {
             requestTls: { ca: certificate },
             connect: {
-              timeout: 4321,
               family: 4,
               keepAlive: mode !== "forward-http",
               keepAliveInitialDelay: 30_000,
@@ -212,15 +201,11 @@ describe("SOCKS proxy protocol boundaries", () => {
             keepAliveCalls:
               mode === "forward-http" ? [] : [[true, mode === "custom-http" ? 7_000 : 30_000]],
           });
-          if (mode === "explicit" || mode === "environment") {
-            expect(usedTimeouts).toContainEqual({ port: proxyPort, timeout: 4321 });
-          }
         });
       } finally {
         connect.mockRestore();
         keepAlive.mockRestore();
         family.mockRestore();
-        connector.mockRestore();
       }
     },
   );
@@ -254,9 +239,89 @@ describe("SOCKS proxy protocol boundaries", () => {
       proxy: 0,
       budget: 100,
     },
+    {
+      name: "wrapper over null proxy default",
+      mode: "fixed",
+      stall: "proxy",
+      target: 0,
+      proxy: null,
+      budget: 100,
+    },
+    {
+      name: "native null proxy default",
+      mode: "native",
+      stall: "proxy",
+      target: 0,
+      proxy: null,
+      defaultProxyTimeout: true,
+    },
+    {
+      name: "fixed null HTTPS proxy default",
+      mode: "fixed",
+      stall: "proxy",
+      target: 0,
+      proxy: null,
+      defaultProxyTimeout: true,
+    },
+    {
+      name: "environment undefined HTTPS proxy default",
+      mode: "environment",
+      stall: "proxy",
+      target: 0,
+      proxy: undefined,
+      defaultProxyTimeout: true,
+    },
+    {
+      name: "fixed null SOCKS TLS proxy default",
+      mode: "fixed",
+      stall: "proxy",
+      target: 0,
+      proxy: null,
+      protocol: "socks5",
+      defaultProxyTimeout: true,
+    },
+    {
+      name: "environment undefined SOCKS TLS proxy default",
+      mode: "environment",
+      stall: "proxy",
+      target: 0,
+      proxy: undefined,
+      protocol: "socks5",
+      defaultProxyTimeout: true,
+    },
+    {
+      name: "fixed direct-only connector timeout",
+      mode: "fixed",
+      stall: "proxy",
+      target: undefined,
+      generic: 0,
+      omitProxyTimeout: true,
+      defaultProxyTimeout: true,
+    },
+    {
+      name: "environment direct-only connector timeout",
+      mode: "environment",
+      stall: "proxy",
+      target: undefined,
+      generic: 0,
+      omitProxyTimeout: true,
+      protocol: "socks5",
+      defaultProxyTimeout: true,
+    },
   ])(
     "preserves the independent $name deadline",
-    async ({ mode, stall, target, proxy, request, budget }) => {
+    async ({
+      mode,
+      stall,
+      target,
+      proxy,
+      request,
+      budget,
+      protocol,
+      defaultProxyTimeout,
+      generic,
+      omitProxyTimeout,
+    }) => {
       const server = stall === "proxy" ? net.createServer() : http.createServer();
       const sockets = new Set<net.Socket>();
       let sawTlsHandshake = false;
@@ -286,22 +351,30 @@ describe("SOCKS proxy protocol boundaries", () => {
         if (!address || typeof address === "string") {
           throw new Error("expected a listening loopback proxy");
         }
-        const uri = `${stall === "proxy" ? "https" : "http"}://127.0.0.1:${address.port}`;
+        const uri = `${protocol ?? (stall === "proxy" ? "https" : "http")}://127.0.0.1:${address.port}`;
         const options = {
           connectTimeout: target,
-          proxyTls: { timeout: proxy },
+          proxyTls: omitProxyTimeout ? {} : { timeout: proxy },
+          ...(generic === undefined ? {} : { connect: { timeout: generic } }),
           ...(request === undefined ? {} : { requestTls: { timeout: request } }),
         };
-        dispatcher =
-          mode === "environment"
-            ? createHttp1EnvHttpProxyAgent(
-                { ...options, httpProxy: uri, httpsProxy: uri, noProxy: "" },
-                budget,
-              )
-            : createHttp1ProxyAgent({ ...options, uri }, budget);
+        if (mode === "environment") {
+          dispatcher = createHttp1EnvHttpProxyAgent(
+            // @ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.
+            { ...options, httpProxy: uri, httpsProxy: uri, noProxy: "" },
+            budget,
+          );
+        } else if (mode === "native") {
+          // @ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.
+          dispatcher = new ProxyAgent({ ...options, uri });
+        } else {
+          // @ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.
+          dispatcher = createHttp1ProxyAgent({ ...options, uri }, budget);
+        }
         const outcome = await undiciFetch(TARGET_URL, {
           dispatcher,
-          signal: AbortSignal.timeout(2_000),
+          // Undici's explicit null/undefined timeout contract uses its 10-second default.
+          signal: AbortSignal.timeout(defaultProxyTimeout ? 12_000 : 2_000),
         }).catch((error: unknown) => error);
         expect(sawTlsHandshake).toBe(true);
         expect(outcome).toMatchObject({ cause: { code: "UND_ERR_CONNECT_TIMEOUT" } });
@@ -315,6 +388,7 @@ describe("SOCKS proxy protocol boundaries", () => {
         });
       }
     },
+    15_000,
   );
 
   it.each(["object", "flat array", "Headers", "inherited object"])(

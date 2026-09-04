@@ -52,9 +52,9 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import {
@@ -3355,6 +3355,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {
+    const receipt: ReplyOperationRunState = {};
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
@@ -3365,7 +3366,10 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const { followupRun, run, sourceTurnId } = createMinimalRun({
-      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      opts: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        [REPLY_OPERATION_RUN_STATE]: receipt,
+      },
       sessionCtx: {
         Provider: "discord",
         OriginatingChannel: "discord",
@@ -3388,6 +3392,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     await expect(run()).resolves.toEqual(expect.objectContaining({ text: "private hook reply" }));
+    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
 
     expect(await readStoredMainSession(storePath)).toMatchObject({
       status: "done",

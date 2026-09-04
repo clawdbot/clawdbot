@@ -4942,6 +4942,28 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   ];
 
   const requesterSettleCases = [
+    ...["accepted", "in_flight"].map((status) => ({
+      name: `does not record ${status} handoff as a visible final`,
+      routes: requesterSettleRoutes,
+      response: { status },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    })),
+    {
+      name: "does not record a canceled partial answer as a visible final",
+      routes: requesterSettleRoutes.slice(1),
+      response: { status: "timeout", result: { payloads: [{ text: "partial answer" }] } },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "records a non-yielded visible final without requiring a reply",
+      routes: requesterSettleRoutes.slice(1),
+      response: { result: { payloads: [{ text: "The consolidated answer." }] } },
+      requireVisibleReply: false,
+      recordsVisibleFinal: true,
+      expected: deliveredRequesterFinal,
+    },
     {
       name: "preserves an ordinary non-yielded direct settle turn",
       response: {},
@@ -4956,6 +4978,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a yielded requester's visible final answer",
+      recordsVisibleFinal: true,
       routes: requesterSettleRoutes.slice(1),
       response: { result: { payloads: [{ text: "The consolidated answer." }] } },
       requireVisibleReply: true,
@@ -4963,6 +4986,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a yielded requester's delivered external final answer",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [{ text: "The consolidated answer." }],
@@ -4974,6 +4998,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a yielded requester final already committed by automatic delivery",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [],
@@ -5059,6 +5084,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "preserves a visible answer with malformed supplemental media metadata",
+      recordsVisibleFinal: true,
       response: {
         result: {
           deliveryStatus: sentDeliveryStatus,
@@ -5211,6 +5237,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts an explicit source-matched final messaging delivery",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [{ text: "NO_REPLY" }],
@@ -5223,6 +5250,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts an automatic source-matched final without legacy intent markers",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [{ text: "NO_REPLY" }],
@@ -5235,6 +5263,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a source final after source progress in the same turn",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [],
@@ -5250,6 +5279,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a committed source final when automatic delivery was suppressed",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [{ text: "NO_REPLY" }],
@@ -5313,7 +5343,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     ),
   )("$route.name: $testCase.name", async ({ testCase, route }) => {
     const { response, requireVisibleReply, expected } = testCase;
-    const callGateway = createGatewayMock(response);
+    const callGateway = createGatewayMock({ status: "ok", ...response });
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     const sendMessage = createSendMessageMock();
     const origin = route.origin;
@@ -5345,7 +5375,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expect(result).toMatchObject(expected);
-    expect(result.requesterVisibleFinalDelivered).toBeUndefined();
+    expect(result.requesterVisibleFinalDelivered).toBe(
+      "recordsVisibleFinal" in testCase &&
+        testCase.recordsVisibleFinal &&
+        !("requesterIsSubagent" in route && route.requesterIsSubagent)
+        ? true
+        : undefined,
+    );
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
     const agentParams = expectGatewayAgentParams(callGateway, route.agentParams);

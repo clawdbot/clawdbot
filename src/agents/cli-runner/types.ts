@@ -333,6 +333,7 @@ type CliPreparedBackend = {
     revokeProcessToken: () => void;
     activate: (captureKey: string) => void;
     deactivate: (captureKey: string) => void;
+    captureNativeTools?: (tools: unknown) => void;
   };
   mcpConfigHash?: string;
   mcpResumeHash?: string;

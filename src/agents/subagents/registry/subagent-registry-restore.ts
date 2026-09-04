@@ -57,11 +57,13 @@ export function createSubagentRegistryRestorer(config: {
   resumedRuns: Set<string>;
   deps: () => SubagentRegistryDeps;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
+  bindGatewayOwners: () => boolean;
   persist: (...runIds: string[]) => void;
   persistOrThrow: (...runIds: string[]) => void;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
   ensureListener: () => void;
   startSweeper: () => void;
+  scheduleSweep: () => void;
   resumeRun: (runId: string) => void;
   listSwarmRunsForGroup: (
     groupId: string,
@@ -93,11 +95,13 @@ export function createSubagentRegistryRestorer(config: {
     resumedRuns,
     deps,
     getGatewayContextResolver,
+    bindGatewayOwners,
     persist,
     persistOrThrow,
     settleRequesterTurn,
     ensureListener,
     startSweeper,
+    scheduleSweep,
     resumeRun,
     listSwarmRunsForGroup,
     startQueuedSubagentRun,
@@ -148,7 +152,14 @@ export function createSubagentRegistryRestorer(config: {
 
   function activateRestoredRuns() {
     activationRequested = true;
-    if (restoreState !== "succeeded" || activated) {
+    // Hydration retries can finish after Gateway activation or closure. Bind before
+    // resuming, including repeat activations, and leave closed-instance rows pending.
+    if (restoreState !== "succeeded" || !bindGatewayOwners()) {
+      return;
+    }
+    // Post-ready only: collector cleanup retains the canonical sessions.delete RPC owner.
+    scheduleSweep();
+    if (activated) {
       return;
     }
     const cfg = deps().getRuntimeConfig();
@@ -225,16 +236,19 @@ export function createSubagentRegistryRestorer(config: {
           );
           continue;
         }
+        const groupId = entry.groupId ?? "";
+        const requesterSessionKey = entry.swarmRequesterSessionKey ?? entry.requesterSessionKey;
         const groupRuns = listSwarmRunsForGroup(
-          entry.groupId ?? "",
-          entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
+          groupId,
+          requesterSessionKey,
           entry.requesterAgentId,
         );
         const currentSwarmConfig = resolveSwarmConfig(cfg, entry.requesterAgentId);
         let launchTerminationConfirmed = false;
         let launchLifecycleGeneration: string | undefined;
         enqueueSwarmRun({
-          groupId: launch.schedulerGroupKey,
+          // Global session keys repeat across agent stores, including restored queues.
+          groupId: JSON.stringify([entry.requesterAgentId, requesterSessionKey, groupId]),
           runId,
           maxConcurrent: currentSwarmConfig.maxConcurrent,
           activeRunIds: groupRuns
@@ -534,6 +548,10 @@ export function createSubagentRegistryRestorer(config: {
   return {
     restoreOnce: restoreSubagentRunsOnce,
     activate: activateRestoredRuns,
+    // Old sweepers and reopened admission must wait for restored inventory and its Gateway.
+    canResumeWakes: () =>
+      !activationRequested ||
+      (restoreState === "succeeded" && Boolean(getGatewayContextResolver()?.())),
     reset: () => {
       clearRestoreRetryTimer();
       restoreState = "idle";

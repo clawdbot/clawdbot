@@ -165,21 +165,21 @@ private final class CronGatewayFixture: @unchecked Sendable {
         let response = #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"entries":["# +
             #"{"ts":1700000000000,"jobId":"\#(jobId)","action":"finished","# +
             #""status":"ok","summary":"\#(summary)"}]}}"#
-        socket.emitReceiveSuccessOnce(.data(Data(response.utf8)))
+        socket.emitReceiveSuccess(.data(Data(response.utf8)))
     }
 
     func fail(_ request: CronGatewayRequest, message: String) async throws {
         let socket = try await self.readySocket()
         let response = #"{"type":"res","id":"\#(request.id)","ok":false,"# +
             #""error":{"code":"INVALID_REQUEST","message":"\#(message)"}}"#
-        socket.emitReceiveSuccessOnce(.data(Data(response.utf8)))
+        socket.emitReceiveSuccess(.data(Data(response.utf8)))
     }
 
     func respondWithJobs(to request: CronGatewayRequest) async throws {
         let socket = try await self.readySocket()
         let payload = await self.requests.jobsResponse()
         let response = #"{"type":"res","id":"\#(request.id)","ok":true,"payload":\#(payload)}"#
-        socket.emitReceiveSuccessOnce(.data(Data(response.utf8)))
+        socket.emitReceiveSuccess(.data(Data(response.utf8)))
     }
 
     func sendFinishedEvent(jobId: String) async throws {
@@ -187,7 +187,7 @@ private final class CronGatewayFixture: @unchecked Sendable {
         let sequence = await self.requests.eventSequence()
         let event = #"{"type":"event","event":"cron","seq":\#(sequence),"# +
             #""payload":{"jobId":"\#(jobId)","action":"finished"}}"#
-        socket.emitReceiveSuccessOnce(.data(Data(event.utf8)))
+        socket.emitReceiveSuccess(.data(Data(event.utf8)))
     }
 
     private func readySocket() async throws -> GatewayTestWebSocketTask {

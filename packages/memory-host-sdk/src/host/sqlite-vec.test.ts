@@ -1,7 +1,9 @@
 // Memory Host SDK tests cover sqlite vec behavior.
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 
 function mockMissingSqliteVecPackage(): void {
   vi.doMock("sqlite-vec", () => {
@@ -13,8 +15,7 @@ function mockMissingSqliteVecPackage(): void {
 
 function mockFailingSqliteVecPackage(): void {
   vi.doMock("sqlite-vec", () => ({
-    getLoadablePath: () => "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
-    load: () => {
+    getLoadablePath: () => {
       throw new Error("bundled sqlite-vec load failed");
     },
   }));
@@ -42,6 +43,7 @@ function createDbMock(params?: { readonly healthError?: Error }) {
   });
   return {
     db: {
+      isOpen: true,
       enableLoadExtension: vi.fn(),
       loadExtension: vi.fn(),
       prepare,
@@ -74,6 +76,32 @@ function isMissingModuleError(err: unknown): boolean {
 }
 
 describe("loadSqliteVecExtension", () => {
+  it("rejects a connection revoked while the native module imports", async () => {
+    const started = createDeferred();
+    const imported = createDeferred();
+    vi.doMock("sqlite-vec", async () => {
+      started.resolve();
+      await imported.promise;
+      return { getLoadablePath: () => "/fixture/vec0" };
+    });
+    mockPlatformVariantResolver(undefined);
+    const { loadSqliteVecExtension } = await importLoader();
+    const db = new DatabaseSync(":memory:", { allowExtension: true });
+    // Observe the unsafe call without crashing Node versions that dereference a closed handle.
+    const enable = vi.spyOn(db, "enableLoadExtension").mockImplementation(() => {});
+    const loading = loadSqliteVecExtension({ db });
+    await started.promise;
+    db.close();
+    imported.resolve();
+
+    const result = await loading;
+    expect(enable).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("database is closed"),
+    });
+  });
+
   it("loads explicit extensionPath without importing bundled sqlite-vec", async () => {
     mockMissingSqliteVecPackage();
     const { loadSqliteVecExtension } = await importLoader();
@@ -87,6 +115,7 @@ describe("loadSqliteVecExtension", () => {
     ).resolves.toEqual({ ok: true, extensionPath: "/opt/openclaw/sqlite-vec.so" });
     expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).toHaveBeenCalledWith("/opt/openclaw/sqlite-vec.so");
+    expect(db.enableLoadExtension).toHaveBeenLastCalledWith(false);
     expect(prepare).toHaveBeenCalledWith("SELECT vec_version() AS version");
   });
 
@@ -106,6 +135,7 @@ describe("loadSqliteVecExtension", () => {
         "sqlite-vec health check failed after loading /opt/openclaw/sqlite-vec.so | no such function: vec_version",
     });
     expect(db.loadExtension).toHaveBeenCalledWith("/opt/openclaw/sqlite-vec.so");
+    expect(db.enableLoadExtension).toHaveBeenLastCalledWith(false);
   });
 
   it("returns a valid memory.search extensionPath hint when sqlite-vec is absent", async () => {
@@ -123,7 +153,7 @@ describe("loadSqliteVecExtension", () => {
       ),
     });
     expect(result.error).not.toContain("memory.store.vector.extensionPath");
-    expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
+    expect(db.enableLoadExtension).not.toHaveBeenCalled();
     expect(db.loadExtension).not.toHaveBeenCalled();
   });
 

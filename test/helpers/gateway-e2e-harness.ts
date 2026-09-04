@@ -175,56 +175,45 @@ export async function waitForNodeStatus(
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
-    let client: GatewayClient | undefined;
-    while (Date.now() < deadline) {
-      try {
-        client = await connectGatewayStatusClient(
-          inst,
-          Math.min(2_000, GATEWAY_CONNECT_STATUS_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
-        );
-        break;
-      } catch (error) {
-        // Acquisition aggregates a stop failure with the original error. That
-        // owner cannot be released merely by retrying with another client.
-        if (error instanceof GatewayTestClientCleanupError) {
-          throw error;
-        }
-        lastError = error;
-        await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+    let client: GatewayClient;
+    try {
+      client = await connectGatewayStatusClient(
+        inst,
+        Math.min(2_000, GATEWAY_CONNECT_STATUS_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
+      );
+    } catch (error) {
+      if (error instanceof GatewayTestClientCleanupError) {
+        throw error;
       }
-    }
-    if (!client) {
-      break;
+      lastError = error;
+      await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+      continue;
     }
     let connected = false;
-    let pollingError: unknown;
-    const statusClient = client;
+    let cleanupJoined = false;
     try {
       await runQaGatewayFixture(
         async () => {
-          try {
-            while (Date.now() < deadline) {
-              const list = await statusClient.request<{
-                nodes?: Array<{ nodeId: string; connected?: boolean; paired?: boolean }>;
-              }>("node.list", {});
-              const match = list.nodes?.find((n) => n.nodeId === nodeId);
-              if (match?.connected && match?.paired) {
-                connected = true;
-                return;
-              }
-              await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+          while (Date.now() < deadline) {
+            const list = await client.request<{
+              nodes?: Array<{ nodeId: string; connected?: boolean; paired?: boolean }>;
+            }>("node.list", {});
+            const match = list.nodes?.find((n) => n.nodeId === nodeId);
+            if (match?.connected && match?.paired) {
+              connected = true;
+              return;
             }
-          } catch (error) {
-            pollingError = error;
-            throw error;
+            await sleep(GATEWAY_NODE_STATUS_POLL_MS);
           }
         },
-        () => statusClient.stopAndWait({ timeoutMs: 1_000 }),
+        async () => {
+          await client.stopAndWait({ timeoutMs: 1_000 });
+          cleanupJoined = true;
+        },
       );
     } catch (error) {
-      // Only the original polling failure is retryable; cleanup failure (alone
-      // or aggregated with it) must remain visible to the fixture owner.
-      if (error !== pollingError) {
+      // Only a joined owner can be replaced; preserve cleanup failure even when polling failed too.
+      if (!cleanupJoined) {
         throw error;
       }
       lastError = error;
