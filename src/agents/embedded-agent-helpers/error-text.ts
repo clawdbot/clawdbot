@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { diagnosticErrorFailureKind } from "../../infra/diagnostic-error-metadata.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -351,7 +352,7 @@ export function resolveAssistantErrorPresentation(
   if (msg.diagnostics?.some((diagnostic) => diagnostic.type === "synthesized_run_failure")) {
     const text =
       formatDiskSpaceErrorCopy(rawError ?? "") ??
-      (isTimeoutErrorMessage(rawError ?? "")
+      (diagnosticErrorFailureKind(rawError) === "timeout"
         ? SYNTHESIZED_TIMEOUT_ERROR_TEXT
         : GENERIC_ASSISTANT_ERROR_TEXT);
     return { text, attribution: "runtime" };

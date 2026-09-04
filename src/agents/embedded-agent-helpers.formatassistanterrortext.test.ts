@@ -948,6 +948,10 @@ describe("runtime failure presentation", () => {
     [errorText, GENERIC_ASSISTANT_ERROR_TEXT],
     ["HTTP 503 unavailable", GENERIC_ASSISTANT_ERROR_TEXT],
     ["context length exceeded", GENERIC_ASSISTANT_ERROR_TEXT],
+    ["fetch failed", GENERIC_ASSISTANT_ERROR_TEXT],
+    ["connection error", GENERIC_ASSISTANT_ERROR_TEXT],
+    ["connect ECONNREFUSED 127.0.0.1:443", GENERIC_ASSISTANT_ERROR_TEXT],
+    ["operation was aborted", GENERIC_ASSISTANT_ERROR_TEXT],
     ["runtime callback timed out", "LLM request timed out."],
     [
       "ENOSPC: no space left on device, write",
