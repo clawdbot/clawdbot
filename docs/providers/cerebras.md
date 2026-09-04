@@ -17,7 +17,7 @@ read_when:
 | Direct CLI flag | `--cerebras-api-key <key>`                                |
 | API             | OpenAI-compatible (`openai-completions`)                  |
 | Base URL        | `https://api.cerebras.ai/v1`                              |
-| Default model   | `cerebras/gemma-4-31b`                                    |
+| Default model   | `cerebras/qwen-3.8-27b`                                   |
 
 ## Install plugin
 
@@ -98,23 +98,26 @@ seed as explicit config instead.
 
 ## Built-in catalog
 
-The three offline fallback models have a 131,072-token context window and a
-40,960-token max output. Prices for models still present in the native
-[public feed](https://api.cerebras.ai/public/v1/models) were refreshed from its
-August 31, 2026 response; absent legacy references retain their seed snapshots.
+The offline fallback mirrors Cerebras's public feed for active models and retains
+the deprecated GLM reference for existing explicit configurations. Qwen's limits
+follow the feed's September 4, 2026 response; its prompt and completion prices
+follow Cerebras's [published developer pricing](https://inference-docs.cerebras.ai/models/qwen-3.8-27b)
+because the unauthenticated metadata feed currently reports zero prices.
 
 | Model ref               | Name         | Reasoning | Notes                                                     |
 | ----------------------- | ------------ | --------- | --------------------------------------------------------- |
 | `cerebras/zai-glm-4.7`  | Z.ai GLM 4.7 | yes       | Deprecated August 17, 2026; retained for explicit configs |
 | `cerebras/gpt-oss-120b` | GPT OSS 120B | yes       | Production reasoning model                                |
-| `cerebras/gemma-4-31b`  | Gemma 4 31B  | yes       | Default; preview; text-and-image input                    |
+| `cerebras/gemma-4-31b`  | Gemma 4 31B  | yes       | Text-and-image input                                      |
+| `cerebras/qwen-3.8-27b` | Qwen 3.8 27B | yes       | Default; text-and-image agentic model                     |
 
 Cerebras's [deprecation notice](https://inference-docs.cerebras.ai/support/deprecation)
 marks `zai-glm-4.7` deprecated without naming a replacement. OpenClaw keeps the
 shipped reference rather than deleting it or rewriting existing selections;
 retention does not guarantee upstream availability.
 
-Fresh onboarding follows Cerebras's current [Gemma 4 recommendation](https://www.cerebras.ai/blog/gemma-4-on-cerebras-the-fastest-inference-is-now-multimodal). Cerebras describes Gemma 4 31B as its reference medium-size model for equal-or-higher intelligence than GPT OSS, with multimodal agentic support. It is a public-preview model and may change or be discontinued on shorter notice than the production GPT OSS endpoint; existing OpenClaw configurations keep their selected model.
+Fresh onboarding selects Qwen 3.8 27B, the newest multimodal reasoning model in
+Cerebras's public feed. Existing OpenClaw configurations keep their selected model.
 
 ## Manual config
 
@@ -125,7 +128,7 @@ Most setups only need the API key. Use explicit `models.providers.cerebras` conf
   env: { vars: { CEREBRAS_API_KEY: "csk-..." } },
   agents: {
     defaults: {
-      model: { primary: "cerebras/gemma-4-31b" },
+      model: { primary: "cerebras/qwen-3.8-27b" },
     },
   },
   models: {

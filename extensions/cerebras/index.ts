@@ -20,7 +20,7 @@ export default defineSingleProviderPluginEntry({
       preserveExistingPrimary: true,
       applyConfig: applyCerebrasConfig,
       noteMessage: [
-        "Cerebras provides high-speed OpenAI-compatible inference for GPT OSS and GLM models.",
+        "Cerebras provides high-speed OpenAI-compatible inference for Qwen, Gemma, and GPT OSS models.",
         "Get your API key at: https://cloud.cerebras.ai",
       ].join("\n"),
       noteTitle: "Cerebras",

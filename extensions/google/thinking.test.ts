@@ -51,6 +51,11 @@ describe("google thinking policy", () => {
     ["gemini-3.7-flash", "low", "LOW"],
     ["gemini-3.7-flash", "medium", "MEDIUM"],
     ["gemini-3.7-flash", "high", "HIGH"],
+    ["gemini-3.8-flash", "off", "LOW"],
+    ["gemini-3.8-flash", "minimal", "LOW"],
+    ["gemini-3.8-flash", "low", "LOW"],
+    ["gemini-3.8-flash", "medium", "MEDIUM"],
+    ["gemini-3.8-flash", "high", "HIGH"],
   ] as const)("maps %s thinking level %s to %s", (modelId, thinkingLevel, expected) => {
     expect(
       resolveGoogleGemini3ThinkingLevel({
@@ -68,6 +73,7 @@ describe("google thinking policy", () => {
     ["gemini-3.1-flash-lite", 8193, "HIGH"],
     ["gemini-3.6-flash", 0, "MINIMAL"],
     ["gemini-3.7-flash", 0, "LOW"],
+    ["gemini-3.8-flash", 0, "LOW"],
   ] as const)("maps %s budget %s to %s", (modelId, thinkingBudget, expected) => {
     expect(
       resolveGoogleGemini3ThinkingLevel({

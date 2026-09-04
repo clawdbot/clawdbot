@@ -48,6 +48,7 @@ describe("buildGoogleSimpleThinking", () => {
     { id: "gemini-flash-latest", expectedLevel: "MINIMAL" },
     { id: "gemini-3.6-flash", expectedLevel: "MINIMAL" },
     { id: "gemini-3.7-flash", expectedLevel: "LOW" },
+    { id: "gemini-3.8-flash", expectedLevel: "LOW" },
   ])("uses the supported thinking floor for $id", ({ id, expectedLevel }) => {
     const flashModel = { ...model, id };
 

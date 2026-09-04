@@ -16,6 +16,6 @@ export const { applyConfig: applyCerebrasConfig } = createModelCatalogPresetAppl
     baseUrl: CEREBRAS_BASE_URL,
     // Replace mode skips discovery; merge mode must not persist generated pricing as authored pins.
     catalogModels: cfg.models?.mode === "replace" ? buildCerebrasCatalogModels() : [],
-    aliases: [{ modelRef: CEREBRAS_DEFAULT_MODEL_REF, alias: "Cerebras Gemma 4 31B" }],
+    aliases: [{ modelRef: CEREBRAS_DEFAULT_MODEL_REF, alias: "Cerebras Qwen 3.8 27B" }],
   }),
 });

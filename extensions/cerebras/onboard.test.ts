@@ -95,7 +95,7 @@ describe("Cerebras onboarding", () => {
         CEREBRAS_DEFAULT_MODEL_REF,
       );
       expect(config.agents?.defaults?.models).toEqual({
-        [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras Gemma 4 31B" },
+        [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras Qwen 3.8 27B" },
       });
     },
   );
@@ -131,37 +131,47 @@ describe("Cerebras onboarding", () => {
     },
   );
 
-  it("preserves an existing primary during non-interactive auth setup", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const method = provider.auth?.[0];
-    if (!method?.runNonInteractive) {
-      throw new Error("expected Cerebras non-interactive auth method");
-    }
+  it.each([
+    {
+      existingPrimary: "anthropic/claude-sonnet-4-6",
+      existingAlias: "Existing",
+    },
+    {
+      existingPrimary: "cerebras/gemma-4-31b",
+      existingAlias: "Cerebras Gemma 4 31B",
+    },
+  ])(
+    "preserves existing primary $existingPrimary during non-interactive auth setup",
+    async ({ existingPrimary, existingAlias }) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const method = provider.auth?.[0];
+      if (!method?.runNonInteractive) {
+        throw new Error("expected Cerebras non-interactive auth method");
+      }
 
-    const result = await method.runNonInteractive({
-      authChoice: "cerebras-api-key",
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-6" },
-            models: { "anthropic/claude-sonnet-4-6": { alias: "Existing" } },
+      const result = await method.runNonInteractive({
+        authChoice: "cerebras-api-key",
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: existingPrimary },
+              models: { [existingPrimary]: { alias: existingAlias } },
+            },
           },
         },
-      },
-      opts: {},
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-      resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" })),
-      toApiKeyCredential: vi.fn(() => null),
-    } as never);
+        opts: {},
+        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+        resolveApiKey: vi.fn(async () => ({ key: "fixture-value", source: "profile" })),
+        toApiKeyCredential: vi.fn(() => null),
+      } as never);
 
-    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
-      "anthropic/claude-sonnet-4-6",
-    );
-    expect(result?.agents?.defaults?.models).toEqual({
-      "anthropic/claude-sonnet-4-6": { alias: "Existing" },
-      [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras Gemma 4 31B" },
-    });
-  });
+      expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(existingPrimary);
+      expect(result?.agents?.defaults?.models).toEqual({
+        [existingPrimary]: { alias: existingAlias },
+        [CEREBRAS_DEFAULT_MODEL_REF]: { alias: "Cerebras Qwen 3.8 27B" },
+      });
+    },
+  );
 });
 
 describe("Cerebras native catalog", () => {
@@ -278,7 +288,7 @@ describe("Cerebras native catalog", () => {
     },
   );
 
-  it("keeps static discovery offline and retains the shipped GLM reference", async () => {
+  it("keeps static discovery offline with the current Qwen default and shipped GLM reference", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const result = await provider.staticCatalog?.run(createCatalogContext());
 
@@ -290,6 +300,16 @@ describe("Cerebras native catalog", () => {
       manifest.modelCatalog.providers.cerebras.models.map((model) => model.id),
     );
     expect(result.provider.models).toContainEqual(expect.objectContaining({ id: "zai-glm-4.7" }));
+    expect(CEREBRAS_DEFAULT_MODEL_REF).toBe("cerebras/qwen-3.8-27b");
+    expect(result.provider.models).toContainEqual(
+      expect.objectContaining({
+        id: "qwen-3.8-27b",
+        input: ["text", "image"],
+        contextWindow: 65536,
+        maxTokens: 32768,
+        cost: { input: 0.99, output: 1.49, cacheRead: 0, cacheWrite: 0 },
+      }),
+    );
     const glm = manifest.modelCatalog.providers.cerebras.models.find(
       (model) => model.id === "zai-glm-4.7",
     );

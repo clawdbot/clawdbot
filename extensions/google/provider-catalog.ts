@@ -32,6 +32,7 @@ const GOOGLE_GEMINI_TEXT_MODEL_ROWS: ReadonlyArray<
   ["gemini-3.5-flash", "Gemini 3.5 Flash", true],
   ["gemini-3.6-flash", "Gemini 3.6 Flash", true],
   ["gemini-3.7-flash", "Gemini 3.7 Flash", true, { minimal: null }],
+  ["gemini-3.8-flash", "Gemini 3.8 Flash", true, { minimal: null }],
   ["gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", true],
   ["gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", true],
   ["gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite", true],

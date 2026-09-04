@@ -28,7 +28,7 @@
       "cerebras": {
         "baseUrl": "https://api.cerebras.ai/v1",
         "api": "openai-completions",
-        "defaultModel": "gemma-4-31b",
+        "defaultModel": "qwen-3.8-27b",
         "models": [
           {
             "id": "zai-glm-4.7",
@@ -66,6 +66,20 @@
             "reasoning": true,
             "contextWindow": 131072,
             "maxTokens": 40960,
+            "cost": {
+              "input": 0.99,
+              "output": 1.49,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "qwen-3.8-27b",
+            "name": "Qwen 3.8 27B",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 65536,
+            "maxTokens": 32768,
             "cost": {
               "input": 0.99,
               "output": 1.49,
