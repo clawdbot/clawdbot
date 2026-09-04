@@ -194,6 +194,7 @@ function resolveMemoryFlushModelFallbackOptions(
   run: FollowupRun["run"],
   model?: string,
   configOverride: FollowupRun["run"]["config"] = run.config,
+  fallbacks?: string[],
 ) {
   const options = resolveModelFallbackOptions(run, configOverride);
   const override = normalizeOptionalString(model);
@@ -202,6 +203,11 @@ function resolveMemoryFlushModelFallbackOptions(
   }
   // A memory-flush maintenance model is an exact override: do not let a failed
   // local flush silently fall through to the paid active conversation fallback.
+  // memoryFlush.fallbacks waives that deliberately by naming the replacements,
+  // so the operator has stated in configuration what they accept paying for.
+  const fallbacksOverride = (fallbacks ?? [])
+    .map((ref) => ref.trim())
+    .filter((ref) => ref.length > 0);
   const slashIdx = override.indexOf("/");
   if (slashIdx > 0) {
     const overrideProvider = override.slice(0, slashIdx).trim();
@@ -212,7 +218,7 @@ function resolveMemoryFlushModelFallbackOptions(
         provider: overrideProvider,
         model: overrideModel,
         requestedRouteResolution: "raw" as const,
-        fallbacksOverride: [],
+        fallbacksOverride,
       };
     }
   }
@@ -220,7 +226,7 @@ function resolveMemoryFlushModelFallbackOptions(
     ...options,
     model: override,
     requestedRouteResolution: "raw" as const,
-    fallbacksOverride: [],
+    fallbacksOverride,
   };
 }
 
@@ -1537,6 +1543,7 @@ export async function runMemoryFlushIfNeeded(params: {
       params.followupRun.run,
       plan.model,
       params.cfg,
+      plan.fallbacks,
     );
     abortSignal?.throwIfAborted();
     const preparedRunAdmission = prepareSystemAgentRunAdmission(
