@@ -2549,7 +2549,7 @@ jobs:
       # Populate metadata and the executable before the 30-second MCP handshake.
       - name: Pre-warm Chrome MCP
         if: matrix.task == 'browser-extension' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
-        run: npx -y chrome-devtools-mcp@1.8.0 --version
+        run: npx -y --audit=false chrome-devtools-mcp@1.8.0 --version
 
       - name: Save Chrome MCP npm cache
         if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
