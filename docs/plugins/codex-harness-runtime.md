@@ -537,6 +537,12 @@ the next ordinary turn verifies configuration and refreshes generic policy throu
 the normal resume path. Warm compaction returns only the configuration ownership
 it actually acquired.
 
+If context-engine compaction rotates the OpenClaw session generation, the next
+Codex turn, compaction, or side question continues the same native thread even if the Gateway stopped
+immediately after committing the new generation. Only the recorded predecessor
+under that session key can be adopted. Native tool catalogs, connection ownership,
+and supervision checks still apply before the resumed thread executes.
+
 When OpenClaw projects an existing session's continuity into a fresh Codex
 thread, it includes saved compaction and branch summaries, even when no
 earlier user messages remain. Context-engine projections preserve those

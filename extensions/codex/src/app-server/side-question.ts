@@ -125,7 +125,11 @@ import {
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
+import {
+  sessionBindingIdentity,
+  resolveCodexSessionBinding,
+  type CodexAppServerBindingStore,
+} from "./session-binding.js";
 import {
   applyCodexSessionPermissionPolicy,
   CODEX_SESSION_PERMISSION_EXEC_MODES,
@@ -207,7 +211,15 @@ export async function runCodexAppServerSideQuestion(
     agentId: params.agentId,
     config: params.cfg,
   });
-  const binding = options.bindingStore.read(bindingIdentity);
+  const binding = await resolveCodexSessionBinding({
+    bindingStore: options.bindingStore,
+    identity: bindingIdentity,
+    config: params.cfg,
+    assertCurrent: () => {
+      params.hostCapabilities.assertActive();
+      params.opts?.abortSignal?.throwIfAborted();
+    },
+  });
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",

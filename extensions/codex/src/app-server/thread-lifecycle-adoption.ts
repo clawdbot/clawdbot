@@ -12,6 +12,7 @@ import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
   sessionBindingIdentity,
+  resolveCodexSessionBinding,
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
@@ -76,7 +77,21 @@ export async function withCodexThreadLifecycleBinding(
     agentId: params.agentId ?? params.params.agentId,
     config: params.params.config,
   });
-  const snapshot = params.bindingStore.read(identity);
+  const snapshot = await resolveCodexSessionBinding({
+    reclaimStale: true,
+    bindingStore: params.bindingStore,
+    identity,
+    config: params.params.config,
+    storePath: params.params.sessionTarget?.storePath,
+    assertCurrent: () => {
+      params.params.hostCapabilities.assertActive();
+      params.signal?.throwIfAborted();
+    },
+    assertBinding: params.params.expectedSessionRuntimeOwnership
+      ? (binding) =>
+          assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership)
+      : undefined,
+  });
   const runWithLease = () =>
     params.bindingStore.withLease(identity, async () => {
       const binding = params.bindingStore.read(identity);

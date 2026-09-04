@@ -13,9 +13,7 @@ import {
 } from "./plugin-thread-config.js";
 import {
   assertCodexBindingMayBeReplaced,
-  createCodexSessionGenerationSupersededError,
   normalizeCodexAppServerBindingModelProvider,
-  reclaimCurrentCodexSessionGeneration,
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
@@ -132,20 +130,6 @@ export async function startOrResumeThread(
         threadId,
         assertCurrent,
       });
-    if (!binding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-      // Reset may rotate the OpenClaw session while this plugin is unloaded. Only
-      // the authoritative session store may let its successor displace that stale owner.
-      const reclaimed = await lifecycleTiming.measure("reclaim-binding-generation", () =>
-        reclaimCurrentCodexSessionGeneration({
-          bindingStore: params.bindingStore,
-          identity: bindingIdentity,
-          config: params.params.config,
-        }),
-      );
-      if (!reclaimed) {
-        throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
-      }
-    }
     if (binding?.pendingSupervisionBranch) {
       await releaseRetainedThread(binding.threadId);
       const pendingBinding = binding as CodexAppServerThreadBinding & {

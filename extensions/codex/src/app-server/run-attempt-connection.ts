@@ -41,7 +41,7 @@ import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
 import {
   createCodexSessionGenerationSupersededError,
-  reclaimCurrentCodexSessionGeneration,
+  resolveCodexSessionBinding,
   resolveCodexRunSessionBindingAuthority,
   scopeCodexRunBindingStore,
   sessionBindingIdentity,
@@ -207,20 +207,21 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  let startupBinding = bindingStore.read(bindingIdentity);
-  assertCodexSessionRuntimeOwnership(startupBinding, params.expectedSessionRuntimeOwnership);
-  if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
-    const reclaimed = await reclaimCurrentCodexSessionGeneration({
-      bindingStore,
-      identity: bindingIdentity,
-      config: params.config,
-      storePath: params.sessionTarget?.storePath,
-    });
-    if (!reclaimed) {
-      throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
-    }
-    startupBinding = bindingStore.read(bindingIdentity);
-  }
+  let startupBinding = await resolveCodexSessionBinding({
+    reclaimStale: true,
+    bindingStore,
+    identity: bindingIdentity,
+    config: params.config,
+    storePath: params.sessionTarget?.storePath,
+    assertCurrent: () => {
+      params.hostCapabilities.assertActive();
+      params.abortSignal?.throwIfAborted();
+    },
+    assertBinding: params.expectedSessionRuntimeOwnership
+      ? (binding) =>
+          assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
+      : undefined,
+  });
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
   if (usesSupervisionConnection) {

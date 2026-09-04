@@ -444,6 +444,32 @@ describe("model chat and native model ownership", () => {
     });
   });
 
+  it("reads native ownership from the admitted store after a session rollover", async () => {
+    const fixture = await createFixture({}, ({ agentId, sessionKey, storePath }) => {
+      const entry = loadSessionEntryReadOnly({
+        agentId: agentId!,
+        sessionKey: sessionKey!,
+        storePath,
+      });
+      return entry?.previousSessionId === "model-chat"
+        ? { model: "native", auth: "native" }
+        : undefined;
+    });
+    const target = {
+      ...fixture.target,
+      storePath: `${fixture.state.workspaceDir}/alternate/sessions.json`,
+    };
+    await replaceSessionEntry(target, fixture.entry);
+    await patchSessionEntryCore(target, () => ({ sessionId: "successor" }));
+    fixture.runParams.sessionId = "successor";
+    fixture.runParams.sessionTarget = { ...target, sessionId: "successor" };
+
+    const setup = await fixture.resolve();
+    expect(setup.nativeModelOwned).toBe(true);
+    await expect(setup.nativeSessionRuntime?.assertCurrent()).resolves.toBeUndefined();
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
   it("does not replace a pinned session whose native ownership is unavailable", async () => {
     const fixture = await createFixture({}, () => undefined);
     await expect(fixture.resolve()).rejects.toMatchObject({

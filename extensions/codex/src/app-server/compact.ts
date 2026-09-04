@@ -39,6 +39,7 @@ import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
   sessionBindingIdentity,
+  resolveCodexSessionBinding,
   type CodexAppServerBindingIdentity,
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
@@ -457,7 +458,15 @@ async function compactCodexNativeThread(
     agentId: params.agentId,
     config: params.config,
   });
-  const initialBinding = options.bindingStore.read(bindingIdentity);
+  const initialBinding =
+    options.bindingStore.read(bindingIdentity) ??
+    (await resolveCodexSessionBinding({
+      bindingStore: options.bindingStore,
+      identity: bindingIdentity,
+      config: params.config,
+      storePath: params.sessionTarget?.storePath,
+      assertCurrent: () => params.abortSignal?.throwIfAborted(),
+    }));
   if (!initialBinding?.threadId) {
     return failedCodexThreadBindingCompactionResult(params, {
       reason: "no codex app-server thread binding",
