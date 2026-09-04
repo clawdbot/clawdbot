@@ -61,8 +61,3 @@ export async function acquireBuzzQueryLease(
     next?.();
   };
 }
-
-/** Active transient queries on `relay`. Exposed for assertions in tests. */
-export function countBuzzQueryLeases(relay: Relay): number {
-  return stateFor(relay).active;
-}

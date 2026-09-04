@@ -20,6 +20,7 @@ import {
   type BuzzInboundMessage,
 } from "./message-event.js";
 import { recordBuzzPendingHistory, snapshotBuzzPendingHistory } from "./pending-history.js";
+import { BuzzQueryLeaseUnavailableError } from "./relay-subscription.js";
 import { getBuzzRuntime } from "./runtime.js";
 import { buildBuzzTarget, parseBuzzTarget } from "./target.js";
 import type { ResolvedBuzzAccount } from "./types.js";
@@ -55,10 +56,14 @@ async function resolveBuzzReplyQuote(params: {
   try {
     parent = await bus.fetchMessageById({ eventId: replyToId, signal });
   } catch (error) {
+    // A spent query allowance is normal back-pressure, not a relay fault; say so
+    // rather than logging it as an unreachable parent.
     log.debug?.(
-      `Buzz reply target ${replyToId} unavailable: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      error instanceof BuzzQueryLeaseUnavailableError
+        ? `Buzz reply target ${replyToId} skipped: relay query capacity is busy`
+        : `Buzz reply target ${replyToId} unavailable: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
     );
     return undefined;
   }

@@ -1,40 +1,43 @@
 import type { Relay } from "nostr-tools";
 import { describe, expect, it } from "vitest";
-import {
-  BUZZ_MAX_CONCURRENT_RELAY_QUERIES,
-  acquireBuzzQueryLease,
-  countBuzzQueryLeases,
-} from "./query-lease.js";
+import { BUZZ_MAX_CONCURRENT_RELAY_QUERIES, acquireBuzzQueryLease } from "./query-lease.js";
 
 function createRelay(): Relay {
   return {} as unknown as Relay;
 }
 
+/** Take every remaining slot, so the next no-wait acquire has to be refused. */
+async function saturate(relay: Relay, alreadyHeld = 0) {
+  const held: Array<(() => void) | null> = [];
+  for (let index = alreadyHeld; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES; index += 1) {
+    const release = await acquireBuzzQueryLease(relay, { wait: false });
+    expect(release).not.toBeNull();
+    held.push(release);
+  }
+  return held;
+}
+
 describe("Buzz relay query lease", () => {
   it("never lets concurrent holders exceed the allowance", async () => {
     const relay = createRelay();
-    const releases = [];
-    for (let index = 0; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES; index += 1) {
-      const release = await acquireBuzzQueryLease(relay);
-      expect(release).not.toBeNull();
-      releases.push(release);
-    }
+    const held = await saturate(relay);
 
-    expect(countBuzzQueryLeases(relay)).toBe(BUZZ_MAX_CONCURRENT_RELAY_QUERIES);
     await expect(acquireBuzzQueryLease(relay, { wait: false })).resolves.toBeNull();
 
-    for (const release of releases) {
+    held[0]?.();
+    const reclaimed = await acquireBuzzQueryLease(relay, { wait: false });
+    expect(reclaimed).not.toBeNull();
+    await expect(acquireBuzzQueryLease(relay, { wait: false })).resolves.toBeNull();
+
+    reclaimed?.();
+    for (const release of held.slice(1)) {
       release?.();
     }
-    expect(countBuzzQueryLeases(relay)).toBe(0);
   });
 
   it("hands a waiting caller the next freed slot", async () => {
     const relay = createRelay();
-    const held = [];
-    for (let index = 0; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES; index += 1) {
-      held.push(await acquireBuzzQueryLease(relay));
-    }
+    const held = await saturate(relay);
 
     let waiterGotSlot = false;
     const waiting = acquireBuzzQueryLease(relay).then((release) => {
@@ -47,33 +50,35 @@ describe("Buzz relay query lease", () => {
     held[0]?.();
     const release = await waiting;
     expect(waiterGotSlot).toBe(true);
-    expect(countBuzzQueryLeases(relay)).toBe(BUZZ_MAX_CONCURRENT_RELAY_QUERIES);
+    // The woken caller took that slot, so the allowance is spent again.
+    await expect(acquireBuzzQueryLease(relay, { wait: false })).resolves.toBeNull();
 
     release?.();
     for (const entry of held.slice(1)) {
       entry?.();
     }
-    expect(countBuzzQueryLeases(relay)).toBe(0);
   });
 
   it("counts a double release only once", async () => {
     const relay = createRelay();
     const release = await acquireBuzzQueryLease(relay);
-    expect(countBuzzQueryLeases(relay)).toBe(1);
 
     release?.();
     release?.();
 
-    expect(countBuzzQueryLeases(relay)).toBe(0);
+    // A second decrement would leave room for one extra concurrent query.
+    const held = await saturate(relay);
+    await expect(acquireBuzzQueryLease(relay, { wait: false })).resolves.toBeNull();
+
+    for (const entry of held) {
+      entry?.();
+    }
   });
 
   it("keeps allowances separate per relay", async () => {
     const first = createRelay();
     const second = createRelay();
-    const held = [];
-    for (let index = 0; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES; index += 1) {
-      held.push(await acquireBuzzQueryLease(first));
-    }
+    const held = await saturate(first);
 
     await expect(acquireBuzzQueryLease(first, { wait: false })).resolves.toBeNull();
     const other = await acquireBuzzQueryLease(second, { wait: false });

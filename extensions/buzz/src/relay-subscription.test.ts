@@ -1,10 +1,6 @@
 import type { Filter, Relay } from "nostr-tools";
 import { describe, expect, it, vi } from "vitest";
-import {
-  BUZZ_MAX_CONCURRENT_RELAY_QUERIES,
-  acquireBuzzQueryLease,
-  countBuzzQueryLeases,
-} from "./query-lease.js";
+import { BUZZ_MAX_CONCURRENT_RELAY_QUERIES, acquireBuzzQueryLease } from "./query-lease.js";
 import {
   BuzzQueryLeaseUnavailableError,
   openBuzzRelaySubscription,
@@ -197,22 +193,27 @@ describe("queryBuzzRelaySnapshot query capacity", () => {
     // slot must stay taken: admitting a replacement now would put the relay
     // over the reserve.
     expect(close).not.toHaveBeenCalled();
-    expect(countBuzzQueryLeases(relay)).toBe(1);
-    await expect(acquireBuzzQueryLease(relay, { wait: false })).resolves.not.toBeNull();
+
+    // Fill the rest of the allowance; the timed-out query must still own one
+    // slot, so the next no-wait acquire has to be refused.
     const saturating: Array<(() => void) | null> = [];
-    for (let index = 0; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES - 2; index += 1) {
-      saturating.push(await acquireBuzzQueryLease(relay, { wait: false }));
+    for (let index = 1; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES; index += 1) {
+      const release = await acquireBuzzQueryLease(relay, { wait: false });
+      expect(release).not.toBeNull();
+      saturating.push(release);
     }
-    expect(countBuzzQueryLeases(relay)).toBe(BUZZ_MAX_CONCURRENT_RELAY_QUERIES);
     await expect(acquireBuzzQueryLease(relay, { wait: false })).resolves.toBeNull();
 
     // Once the frame lands the close runs and only then is the slot returned.
     releaseSend?.();
     await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() =>
-      expect(countBuzzQueryLeases(relay)).toBe(BUZZ_MAX_CONCURRENT_RELAY_QUERIES - 1),
-    );
+    const returned = await vi.waitFor(async () => {
+      const release = await acquireBuzzQueryLease(relay, { wait: false });
+      expect(release).not.toBeNull();
+      return release;
+    });
 
+    returned?.();
     for (const release of saturating) {
       release?.();
     }
