@@ -5,16 +5,22 @@ describe("renderAssistantRequestFailureCopy", () => {
   const target = { provider: "openai", model: "test-model" };
   const runFailure = "⚠️ Agent run failed (model: openai/test-model).";
 
-  it.each([
-    undefined,
-    null,
-    "unclassified",
-    "unknown",
-    "empty_response",
-    "no_error_details",
-  ] as const)("keeps the model as context when reason is %s", (reason) => {
-    expect(renderAssistantRequestFailureCopy({ ...target, reason })).toBe(runFailure);
-  });
+  it.each([undefined, null, "unclassified", "unknown"] as const)(
+    "keeps the model as context when reason is %s",
+    (reason) => {
+      expect(renderAssistantRequestFailureCopy({ ...target, reason })).toBe(runFailure);
+    },
+  );
+
+  it.each(["empty_response", "no_error_details"] as const)(
+    "retains provider attribution for the recognized %s terminal",
+    (reason) => {
+      expect(renderAssistantRequestFailureCopy({ ...target, reason })).toBe(
+        "⚠️ openai/test-model request failed.",
+      );
+      expect(renderAssistantRequestFailureCopy({ reason })).toBeUndefined();
+    },
+  );
 
   it.each([
     [{ provider: "openai" }, "⚠️ Agent run failed (provider: openai)."],

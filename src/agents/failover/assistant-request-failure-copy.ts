@@ -46,7 +46,10 @@ export function renderAssistantRequestFailureCopy(
     httpStatus <= 599
       ? `HTTP ${httpStatus}`
       : undefined;
-  if (!reason && !status) {
+  // A recognized provider terminal can have no displayable reason.
+  const unclassified =
+    !facts.reason || facts.reason === "unclassified" || facts.reason === "unknown";
+  if (!reason && !status && (!target || unclassified)) {
     return target ? `⚠️ Agent run failed (${model ? "model" : "provider"}: ${target}).` : undefined;
   }
   const details = [reason, status].filter(Boolean);
