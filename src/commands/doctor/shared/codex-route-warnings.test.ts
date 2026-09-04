@@ -921,7 +921,11 @@ describe("collectCodexRouteWarnings", () => {
           compaction: {
             model: "openai-codex/gpt-5.4",
             provider: "lossless-claw",
-            memoryFlush: { model: "openai-codex/gpt-5.4-mini" },
+            memoryFlush: {
+              model: "openai-codex/gpt-5.4-mini",
+              // Dispatchable too, so a retired route here must be repaired.
+              fallbacks: ["openai-codex/gpt-5.4"],
+            },
           },
         },
       },
@@ -932,13 +936,14 @@ describe("collectCodexRouteWarnings", () => {
         "Repaired Codex model routes:",
         "- agents.defaults.compaction.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
         "- agents.defaults.compaction.memoryFlush.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
+        "- agents.defaults.compaction.memoryFlush.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
       ].join("\n"),
       'Set agents.defaults.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
     ]);
     expect(result.cfg.agents?.defaults?.compaction).toEqual({
       model: "openai/gpt-5.4",
       provider: "lossless-claw",
-      memoryFlush: { model: "openai/gpt-5.4-mini" },
+      memoryFlush: { model: "openai/gpt-5.4-mini", fallbacks: ["openai/gpt-5.4"] },
     });
     expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
       id: "codex",

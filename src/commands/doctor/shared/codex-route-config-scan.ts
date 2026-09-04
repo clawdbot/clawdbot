@@ -119,12 +119,25 @@ function collectAgentModelRefs(params: {
     value: compaction?.model,
     blockedModelIdentities: params.blockedModelIdentities,
   });
+  const memoryFlush = asMutableRecord(compaction?.memoryFlush);
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.compaction.memoryFlush.model`,
-    value: asMutableRecord(compaction?.memoryFlush)?.model,
+    value: memoryFlush?.model,
     blockedModelIdentities: params.blockedModelIdentities,
   });
+  // These refs are dispatchable too, so a retired route hiding in the fallback
+  // list has to be scanned and repaired like the override itself.
+  if (Array.isArray(memoryFlush?.fallbacks)) {
+    for (const [index, entry] of memoryFlush.fallbacks.entries()) {
+      collectStringModelSlot({
+        hits: params.hits,
+        path: `${params.path}.compaction.memoryFlush.fallbacks.${index}`,
+        value: entry,
+        blockedModelIdentities: params.blockedModelIdentities,
+      });
+    }
+  }
   collectModelsMapRefs({
     hits: params.hits,
     path: `${params.path}.models`,

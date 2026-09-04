@@ -401,6 +401,8 @@ export function rewriteConfigModelRefs(params: {
 function isCompactionOnlyRouteHit(hit: CodexRouteHit): boolean {
   return (
     hit.path.startsWith("agents.") &&
-    (hit.path.endsWith(".compaction.model") || hit.path.endsWith(".compaction.memoryFlush.model"))
+    (hit.path.endsWith(".compaction.model") ||
+      hit.path.endsWith(".compaction.memoryFlush.model") ||
+      hit.path.includes(".compaction.memoryFlush.fallbacks."))
   );
 }

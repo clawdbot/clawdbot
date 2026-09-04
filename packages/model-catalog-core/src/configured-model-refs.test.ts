@@ -285,4 +285,17 @@ describe("configured model refs", () => {
       }),
     ).toEqual([]);
   });
+
+  it("ignores memory-flush fallbacks without a flush-model override", () => {
+    // The setting is ignored at runtime without `model`, so it must not reach
+    // validation, provider auto-enable, or catalog preparation either.
+    const refs = collectConfiguredModelRefs({
+      agents: {
+        defaults: {
+          compaction: { memoryFlush: { fallbacks: ["anthropic/claude-haiku-4-5"] } },
+        },
+      },
+    } as never);
+    expect(refs.some((ref) => ref.path.includes("memoryFlush.fallbacks"))).toBe(false);
+  });
 });

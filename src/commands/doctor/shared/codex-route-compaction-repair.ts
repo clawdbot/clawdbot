@@ -20,6 +20,7 @@ import { rewriteStringModelSlot } from "./codex-route-model-slots.js";
 import {
   agentIdFromAgentPath,
   ensureCodexRuntimePolicy,
+  rewriteModelRefArrayIfCanonicalCodexRuntime,
   rewriteStringModelSlotIfCanonicalCodexRuntime,
 } from "./codex-route-runtime-policy.js";
 import type {
@@ -179,13 +180,25 @@ function rewriteCompactionMemoryFlushModel(
   params: Parameters<typeof rewriteAgentCompactionRefs>[0],
   compaction: MutableRecord | undefined,
 ): void {
+  const memoryFlush = asMutableRecord(compaction?.memoryFlush);
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
     hits: params.hits,
-    container: asMutableRecord(compaction?.memoryFlush),
+    container: memoryFlush,
     key: "model",
     path: `${params.path}.compaction.memoryFlush.model`,
+    blockedModelIdentities: params.blockedModelIdentities,
+    env: params.env,
+  });
+  // The fallback list is dispatchable too, so a retired route hiding in it has
+  // to be repaired, not just reported.
+  rewriteModelRefArrayIfCanonicalCodexRuntime({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    hits: params.hits,
+    refs: Array.isArray(memoryFlush?.fallbacks) ? memoryFlush.fallbacks : undefined,
+    path: `${params.path}.compaction.memoryFlush.fallbacks`,
     blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });
