@@ -5042,9 +5042,7 @@ export const en: TranslationMap & {
       label: "Account for this chat",
       automatic: "Automatic (new-chat default)",
       manage: "Manage saved accounts…",
-      hint: "This is the chat's saved account choice, not a billing receipt. Gateway fallback rules still apply.",
-      draftHint:
-        "Applies only to this session. Your new-chat default is unchanged; Gateway fallback rules still apply.",
+      draftHint: "Applies only to this session. Your new-chat default is unchanged.",
     },
     mentions: {
       menu: "Mention a person",
