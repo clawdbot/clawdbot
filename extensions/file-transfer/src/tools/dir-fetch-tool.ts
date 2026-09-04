@@ -20,9 +20,8 @@ import {
 } from "./descriptors.js";
 import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
 
-// Cap how many local file paths we surface in details.media.mediaUrls.
-// Larger trees still land on disk but we don't spam the channel adapter
-// with hundreds of attachments.
+// Cap how many local file paths we surface in details.files.
+// Larger trees still land on disk but we keep the details payload bounded.
 const MEDIA_URL_CAP = 25;
 
 // Hard timeout for gateway-side archive extraction.
@@ -232,10 +231,11 @@ export function createDirFetchTool(): AnyAgentTool {
       const mediaUrls = allOrdered.slice(0, MEDIA_URL_CAP).map((f) => f.localPath);
 
       const shortHash = sha256.slice(0, 12);
-      const mediaNote = droppedFromMedia
-        ? ` (channel attaches first ${MEDIA_URL_CAP}; ${droppedFromMedia} more in details.files)`
+      const listedCount = Math.min(allOrdered.length, MEDIA_URL_CAP);
+      const fileNote = droppedFromMedia
+        ? ` (${listedCount} of ${allOrdered.length} paths listed in details.files; ask me to send them to share them)`
         : "";
-      const summaryText = `Fetched ${fileCount} files from ${canonicalPath} (${humanSize(tarBytes)} compressed, sha256:${shortHash}) — saved on the gateway under ${rootDir}/${mediaNote}`;
+      const summaryText = `Fetched ${fileCount} files from ${canonicalPath} (${humanSize(tarBytes)} compressed, sha256:${shortHash}) — saved on the gateway under ${rootDir}/${fileNote}`;
 
       await appendFileTransferAudit({
         op: "dir.fetch",
