@@ -604,8 +604,7 @@ describe("agentLoop streaming updates", () => {
   });
 
   it("still emits confirming text_delta when text_start partial already carried the prefix", async () => {
-    // Mimics mutable partial snapshots: text_start's shared `partial` already
-    // contains later stream text before text_delta is processed.
+    // text_start's shared mutable partial can already include later stream text.
     const streamFn: StreamFn = async () => {
       const stream = createAssistantMessageEventStream();
       const startMessage: AssistantMessage = {
@@ -614,14 +613,7 @@ describe("agentLoop streaming updates", () => {
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: TEST_USAGE,
         stopReason: "stop",
         timestamp: 1,
       };
@@ -629,7 +621,6 @@ describe("agentLoop streaming updates", () => {
         ...startMessage,
         content: [{ type: "text", text: "FANOUT_ALPHA first second" }],
       };
-      const finalMessage = polluted;
 
       queueMicrotask(() => {
         stream.push({ type: "start", partial: startMessage });
@@ -640,9 +631,9 @@ describe("agentLoop streaming updates", () => {
           type: "text_end",
           contentIndex: 0,
           content: "FANOUT_ALPHA first second",
-          partial: finalMessage,
+          partial: polluted,
         });
-        stream.push({ type: "done", reason: "stop", message: finalMessage });
+        stream.push({ type: "done", reason: "stop", message: polluted });
       });
 
       return stream;
@@ -660,11 +651,13 @@ describe("agentLoop streaming updates", () => {
       (event): event is Extract<AgentEvent, { type: "message_update" }> =>
         event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
     );
-    expect(
-      deltaUpdates.map((event) =>
-        event.assistantMessageEvent.type === "text_delta" ? event.assistantMessageEvent.delta : "",
-      ),
-    ).toEqual(["FANOUT_ALPHA ", "first second"]);
+    const deltas: string[] = [];
+    for (const event of deltaUpdates) {
+      if (event.assistantMessageEvent.type === "text_delta") {
+        deltas.push(event.assistantMessageEvent.delta);
+      }
+    }
+    expect(deltas).toEqual(["FANOUT_ALPHA ", "first second"]);
     expect(deltaUpdates.at(-1)?.message).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "FANOUT_ALPHA first second" }],
