@@ -304,7 +304,9 @@ export class SessionManagerCore {
         opaqueIndex += 1;
       }
       const entry = this.fileEntries[index];
-      if (!isIndexedSessionEntry(entry)) {
+      // Current entries were validated by partition/append. Legacy imports retain readable rows
+      // through migration, so only those need the final shape check before indexing.
+      if (!entry || entry.type === "session" || (this.migrated && !isIndexedSessionEntry(entry))) {
         continue;
       }
       if (entry.type === "label" && !this.byId.has(entry.targetId)) {

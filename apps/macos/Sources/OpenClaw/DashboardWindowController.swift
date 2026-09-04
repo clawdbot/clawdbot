@@ -18,6 +18,7 @@ private final class DashboardWindowContentView: NSView {
 private final class DashboardWindow: NSWindow {
     /// User intent belongs to the native window, not the privileged document it hosts.
     var userIntentGeneration: UInt64 = 0
+    var lifetimeRevision: UInt64 = 0
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent?
 
     override func toggleToolbarShown(_: Any?) {}
@@ -80,10 +81,20 @@ private final class DashboardUpdateMessageHandler: NSObject, WKScriptMessageHand
 }
 
 @MainActor
+private final class DashboardCommandsMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var owner: DashboardWindowController?
+
+    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        self.owner?.receiveCommandsMessage(message)
+    }
+}
+
+@MainActor
 final class DashboardWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     private static let linkMessageHandlerName = "openclawLink"
     private static let windowDragMessageHandlerName = "openclawWindowDrag"
     private static let updateMessageHandlerName = "openclawUpdate"
+    private static let commandsMessageHandlerName = "openclawCommands"
 
     let webView: DashboardWebView
     private let linkBrowser: DashboardLinkBrowserView
@@ -110,6 +121,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var browserProfileImportOfferRequestIsInFlight = false
     private var browserProfileImportOfferRetryPending = false
     private var hasLiveContent = false
+    private var nativeCommandsReady = false
     private var isShowingFailurePage = false
     private var navigationGeneration: UInt64 = 0
     private var pendingNativeCommands: [DashboardNativeCommand] = []
@@ -155,6 +167,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.userContentController.add(notificationsMessageHandler, name: Self.notificationsMessageHandlerName)
         let gatewaysMessageHandler = DashboardGatewaysMessageHandler()
         config.userContentController.add(gatewaysMessageHandler, name: Self.gatewaysMessageHandlerName)
+        let commandsMessageHandler = DashboardCommandsMessageHandler()
+        config.userContentController.add(commandsMessageHandler, name: Self.commandsMessageHandlerName)
         let updateMessageHandler = DashboardUpdateMessageHandler()
         self.updateMessageHandler = updateMessageHandler
         if shouldEnableUpdateBridge {
@@ -162,8 +176,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             // and remote dashboards must not advertise a local app update.
             config.userContentController.add(updateMessageHandler, name: Self.updateMessageHandlerName)
         }
-        Self.installNativeChromeScript(into: config.userContentController)
-        Self.installNativeGatewaysScript(into: config.userContentController, snapshot: gatewaySnapshot)
+        Self.installNativeChromeScript(into: config.userContentController, url: url)
+        Self.installNativeGatewaysScript(into: config.userContentController, url: url, snapshot: gatewaySnapshot)
         Self.installNativeAuthScript(into: config.userContentController, url: url, auth: auth)
 
         self.webView = DashboardWebView(
@@ -229,6 +243,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         windowDragMessageHandler.owner = self
         notificationsMessageHandler.owner = self
         gatewaysMessageHandler.owner = self
+        commandsMessageHandler.owner = self
         updateMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
@@ -257,8 +272,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
         // The handler is the dashboard's ownership probe. Notify the live page so
         // its update target stays correct when connection mode or ownership changes.
-        self.webView.evaluateJavaScript(
-            "window.dispatchEvent(new CustomEvent('openclaw:native-update-availability-changed'))")
+        self.webView.evaluateJavaScript(Self.scopedDashboardScript(
+            "window.dispatchEvent(new CustomEvent('openclaw:native-update-availability-changed'))",
+            url: self.currentURL))
     }
 
     // MARK: - WKUIDelegate
@@ -429,6 +445,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private func load(_ url: URL) {
         // Endpoint swaps must queue commands for the replacement document.
         self.hasLiveContent = false
+        self.nativeCommandsReady = false
         self.isShowingFailurePage = false
         dashboardWindowLogger
             .debug("dashboard load \(GatewayEndpointStore.diagnosticURLString(for: url), privacy: .public)")
@@ -597,8 +614,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             self.setUpdateBridgeEnabled(false)
             // JS treated its posted message as handled; return this click to
             // the gateway updater after withdrawing the native bridge.
-            self.webView.evaluateJavaScript(
-                "window.dispatchEvent(new CustomEvent('openclaw:native-update-declined'))")
+            self.webView.evaluateJavaScript(Self.scopedDashboardScript(
+                "window.dispatchEvent(new CustomEvent('openclaw:native-update-declined'))",
+                url: self.currentURL))
             return
         }
         updater.checkForUpdates(nil)
@@ -673,8 +691,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private func refreshNativeAuthScript(url: URL, auth: DashboardWindowAuth) {
         let controller = self.webView.configuration.userContentController
         controller.removeAllUserScripts()
-        Self.installNativeChromeScript(into: controller)
-        Self.installNativeGatewaysScript(into: controller, snapshot: self.gatewaySnapshot)
+        Self.installNativeChromeScript(into: controller, url: url)
+        Self.installNativeGatewaysScript(into: controller, url: url, snapshot: self.gatewaySnapshot)
         Self.installNativeAuthScript(into: controller, url: url, auth: auth)
     }
 
@@ -700,12 +718,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private func publishNativeHistoryState() {
         let canGoBack = self.webView.canGoBack ? "true" : "false"
         let canGoForward = self.webView.canGoForward ? "true" : "false"
-        self.webView.evaluateJavaScript(
+        self.webView.evaluateJavaScript(Self.scopedDashboardScript(
             """
             window.__OPENCLAW_NATIVE_HISTORY__ = {canGoBack:\(canGoBack),canGoForward:\(canGoForward)};
             window.dispatchEvent(new CustomEvent('openclaw:native-history-state', \
             {detail:window.__OPENCLAW_NATIVE_HISTORY__}));
-            """)
+            """, url: self.currentURL))
     }
 
     private var activeNavigationWebView: WKWebView {
@@ -791,112 +809,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return window
     }
 
-    static func installNativeChromeScript(into userContentController: WKUserContentController) {
-        // Deliberately no native fallback for pages that ignore this flag
-        // (older gateway bundles, failure pages): they keep their own in-page
-        // toggles plus back/forward gestures and the Cmd-[/] menu items.
-        let capabilityScript = "window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;"
-        userContentController.addUserScript(
-            WKUserScript(source: capabilityScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        // Narrow widths need no rules here: the Control UI's own
-        // `html.openclaw-native-macos` styles fold the titlebar clearance into
-        // the drawer topbar row (layout.mobile.css); their body-qualified
-        // !important selectors also outrank the rules older app builds inject.
-        let css = """
-        html.openclaw-native-macos {
-          /* Matches the 52pt unified-toolbar titlebar so the web buttons and the
-             traffic lights share one vertical center. */
-          --openclaw-native-titlebar-height: 52px;
-        }
-        @media (min-width: 700px) {
-          /* Both desktop navigation surfaces must clear AppKit's window controls
-             and drag regions or their first interactive row becomes unreachable. */
-          html.openclaw-native-macos .sidebar-shell,
-          html.openclaw-native-macos .settings-sidebar__header {
-            padding-top: max(14px, var(--openclaw-native-titlebar-height)) !important;
-          }
-        }
-        """
-        let script = """
-        (() => {
-          try {
-            if (document.getElementById("openclaw-native-macos-chrome")) return;
-            const style = document.createElement("style");
-            style.id = "openclaw-native-macos-chrome";
-            style.textContent = \(Self.jsStringLiteral(css));
-            document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-web-chrome");
-            document.head.appendChild(style);
-          } catch {}
-        })();
-        """
-        userContentController.addUserScript(
-            WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-    }
-
-    static func installNativeAuthScript(
-        into userContentController: WKUserContentController,
-        url: URL,
-        auth: DashboardWindowAuth)
-    {
-        guard auth.hasCredential else { return }
-        let allowedOrigin = self.originString(for: url)
-        let allowedPath = self.allowedPath(for: url)
-        let payload: [String: Any?] = [
-            "gatewayUrl": auth.gatewayUrl,
-            "token": auth.token,
-            "password": auth.password,
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload.compactMapValues { $0 }),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            return
-        }
-        let script = """
-        (() => {
-          try {
-            const allowedOrigin = \(Self.jsStringLiteral(allowedOrigin));
-            const allowedPath = \(Self.jsStringLiteral(allowedPath));
-            if (location.origin !== allowedOrigin) return;
-            if (allowedPath !== "/" && !location.pathname.startsWith(allowedPath)) return;
-            Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
-              value: \(json),
-              configurable: true,
-            });
-          } catch {}
-        })();
-        """
-        userContentController.addUserScript(
-            WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-    }
-
-    static func originString(for url: URL) -> String {
-        guard let scheme = url.scheme, let host = url.host else { return "" }
-        let hostPart = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
-        var out = "\(scheme)://\(hostPart)"
-        if let port = url.port {
-            out += ":\(port)"
-        }
-        return out
-    }
-
-    static func allowedPath(for url: URL) -> String {
-        // Match location.pathname; URL.path decodes escapes and removes the mount's trailing slash.
-        let path = url.path(percentEncoded: true).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty else { return "/" }
-        return path.hasSuffix("/") ? path : path + "/"
-    }
-
-    private static func jsStringLiteral(_ value: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: [value]),
-              let raw = String(data: data, encoding: .utf8),
-              raw.hasPrefix("["),
-              raw.hasSuffix("]")
-        else {
-            return "\"\""
-        }
-        return String(raw.dropFirst().dropLast())
-    }
-
     static func shouldAllowNavigation(
         to url: URL,
         dashboardURL: URL,
@@ -907,11 +819,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         if scheme == "about" || scheme == "blob" || scheme == "data" {
             return true
         }
-        guard scheme == "http" || scheme == "https" else { return false }
-        let dashboardScheme = dashboardURL.scheme?.lowercased()
-        let dashboardHost = dashboardURL.host?.lowercased()
+        guard scheme == "http" || scheme == "https", url.user == nil, url.password == nil else { return false }
         let host = url.host?.lowercased()
-        if scheme == dashboardScheme, host == dashboardHost, url.port == dashboardURL.port {
+        if self.sameOrigin(url, dashboardURL) {
             return true
         }
         guard !isMainFrame,
@@ -934,6 +844,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
         guard let scheme = url.scheme?.lowercased() else { return false }
         return scheme == "about" || scheme == "blob" || scheme == "data" || self.isHTTPURL(url)
+    }
+
+    static func shouldAllowIdentityNavigation(
+        to url: URL,
+        auth: DashboardWindowAuth,
+        isMainFrame: Bool,
+        sourceIsDashboard: Bool,
+        navigationType: WKNavigationType) -> Bool
+    {
+        guard auth.usesBrowserIdentity, url.scheme?.lowercased() == "https",
+              url.host?.isEmpty == false, url.user == nil, url.password == nil else { return false }
+        // Dashboard links keep their browser handoff. Redirects and the identity
+        // provider's links/forms stay here so its cookies authenticate the returning page.
+        return sourceIsDashboard ? isMainFrame && navigationType != .linkActivated : true
     }
 
     static func shouldOpenExternalDashboardNavigation(
@@ -981,16 +905,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // document survives and stays command-capable; clearing live state
         // here would queue native commands forever with no reload to flush.
         if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+            self.refreshNativeCommandReadiness()
             return
         }
-        self.hasLiveContent = false
-        self.isShowingFailurePage = true
-        self.advanceNavigationGeneration()
-        // A failed document retires its actions. A pending picker already owns its successor's commands.
-        if self.pendingGatewaySwitch == nil {
-            self.pendingNativeCommands = []
-            self.pendingNativeNavigation = nil
-        }
+        self.prepareForFailure()
         let urlDescription = GatewayEndpointStore.diagnosticURLString(for: self.currentURL)
         dashboardWindowLogger.error(
             """
@@ -1007,6 +925,155 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 }
 
 extension DashboardWindowController {
+    static func installNativeChromeScript(into userContentController: WKUserContentController, url: URL) {
+        // Deliberately no native fallback for pages that ignore this flag
+        // (older gateway bundles, failure pages): they keep their own in-page
+        // toggles plus back/forward gestures and the Cmd-[/] menu items.
+        let capabilityScript = """
+        window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;
+        window.addEventListener('openclaw:native-commands-state', () => {
+          window.webkit.messageHandlers.openclawCommands.postMessage({type: 'commands-state'});
+        });
+        """
+        userContentController.addUserScript(
+            WKUserScript(
+                source: Self.scopedDashboardScript(capabilityScript, url: url),
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
+        // Narrow widths need no rules here: the Control UI's own
+        // `html.openclaw-native-macos` styles fold the titlebar clearance into
+        // the drawer topbar row (layout.mobile.css); their body-qualified
+        // !important selectors also outrank the rules older app builds inject.
+        let css = """
+        html.openclaw-native-macos {
+          /* Matches the 52pt unified-toolbar titlebar so the web buttons and the
+             traffic lights share one vertical center. */
+          --openclaw-native-titlebar-height: 52px;
+        }
+        @media (min-width: 700px) {
+          /* Both desktop navigation surfaces must clear AppKit's window controls
+             and drag regions or their first interactive row becomes unreachable. */
+          html.openclaw-native-macos .sidebar-shell,
+          html.openclaw-native-macos .settings-sidebar__header {
+            padding-top: max(14px, var(--openclaw-native-titlebar-height)) !important;
+          }
+        }
+        """
+        let script = """
+        (() => {
+          try {
+            if (document.getElementById("openclaw-native-macos-chrome")) return;
+            const style = document.createElement("style");
+            style.id = "openclaw-native-macos-chrome";
+            style.textContent = \(Self.jsStringLiteral(css));
+            document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-web-chrome");
+            document.head.appendChild(style);
+          } catch {}
+        })();
+        """
+        userContentController.addUserScript(
+            WKUserScript(
+                source: Self.scopedDashboardScript(script, url: url),
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true))
+    }
+
+    static func installNativeAuthScript(
+        into userContentController: WKUserContentController,
+        url: URL,
+        auth: DashboardWindowAuth)
+    {
+        guard auth.hasCredential || auth.usesBrowserIdentity else { return }
+        let credentials: [String: Any?] = [
+            "gatewayUrl": auth.gatewayUrl,
+            "token": auth.token,
+            "password": auth.password,
+        ]
+        var payload = credentials.compactMapValues { $0 }
+        if auth.usesBrowserIdentity {
+            // Explicit absence retires an earlier shared login at this browser origin.
+            payload["token"] = NSNull()
+            payload["password"] = NSNull()
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return
+        }
+        let script = """
+        (() => {
+          try {
+            Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
+              value: \(json),
+              configurable: true,
+            });
+          } catch {}
+        })();
+        """
+        userContentController.addUserScript(
+            WKUserScript(
+                source: Self.scopedDashboardScript(script, url: url),
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
+    }
+
+    /// The dashboard can visit its identity provider. Recheck in JavaScript,
+    /// where execution occurs, so queued evaluations cannot disclose native data after a redirect.
+    static func scopedDashboardScript(_ script: String, url: URL) -> String {
+        """
+        (() => {
+          if (location.protocol !== "http:" && location.protocol !== "https:") return;
+          if (location.origin !== \(self.jsStringLiteral(self.originString(for: url)))) return;
+          const allowedPath = \(self.jsStringLiteral(self.allowedPath(for: url)));
+          if (allowedPath !== "/" && !location.pathname.startsWith(allowedPath)) return;
+          \(script)
+        })();
+        """
+    }
+
+    static func originString(for url: URL) -> String {
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else { return "" }
+        let hostPart = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+        var out = "\(scheme)://\(hostPart)"
+        // Browsers omit default ports even when a saved native profile makes them explicit.
+        if let port = url.port, port != self.defaultPort(for: scheme) {
+            out += ":\(port)"
+        }
+        return out
+    }
+
+    static func allowedPath(for url: URL) -> String {
+        // Match location.pathname; URL.path decodes escapes and removes the mount's trailing slash.
+        let path = url.path(percentEncoded: true).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return "/" }
+        return path.hasSuffix("/") ? path : path + "/"
+    }
+
+    private static func jsStringLiteral(_ value: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: [value]),
+              let raw = String(data: data, encoding: .utf8),
+              raw.hasPrefix("["),
+              raw.hasSuffix("]")
+        else {
+            return "\"\""
+        }
+        return String(raw.dropFirst().dropLast())
+    }
+}
+
+extension DashboardWindowController {
+    private func prepareForFailure(preservingPendingCommands: Bool = false) {
+        self.hasLiveContent = false
+        self.nativeCommandsReady = false
+        self.isShowingFailurePage = true
+        self.advanceNavigationGeneration()
+        // A pending picker owns its successor's actions, independent of the failing document.
+        guard self.pendingGatewaySwitch == nil else { return }
+        // Transient reconnects retain generic commands; route-specific navigation expires.
+        if !preservingPendingCommands { self.pendingNativeCommands = [] }
+        self.pendingNativeNavigation = nil
+    }
+
     func showFailure(
         title: String,
         message: String,
@@ -1014,13 +1081,7 @@ extension DashboardWindowController {
         present: Bool = true,
         preservingPendingCommands: Bool = false)
     {
-        self.hasLiveContent = false
-        self.isShowingFailurePage = true
-        self.advanceNavigationGeneration()
-        // Terminal failure drops moment-bound actions. A transient reconnect keeps generic commands
-        // for its successor document; route-specific session navigation always expires here.
-        if !preservingPendingCommands { self.pendingNativeCommands = [] }
-        self.pendingNativeNavigation = nil
+        self.prepareForFailure(preservingPendingCommands: preservingPendingCommands)
         self.currentURL = URL(string: "about:blank")!
         self.auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
         self.setUpdateBridgeEnabled(false)
@@ -1069,9 +1130,8 @@ extension DashboardWindowController {
     }
 
     private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
-        lhs.scheme?.lowercased() == rhs.scheme?.lowercased() &&
-            lhs.host?.lowercased() == rhs.host?.lowercased() &&
-            lhs.port == rhs.port
+        self.isHTTPURL(lhs) && self.isHTTPURL(rhs) &&
+            self.originString(for: lhs) == self.originString(for: rhs)
     }
 
     private static func makeJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
@@ -1102,6 +1162,48 @@ extension DashboardWindowController {
         !self.isShowingFailurePage && (self.hasLiveContent || self.webView.isLoading)
     }
 
+    private var isTrustedDashboardDocument: Bool {
+        Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+    }
+
+    private var canDispatchNativeCommands: Bool {
+        // Older shared-credential Gateways predate the shell-ready signal.
+        // Personal browser sign-in requires the current Control UI's listener-owned fact.
+        self.hasLiveContent && self.pendingGatewaySwitch == nil && self.isTrustedDashboardDocument &&
+            (!self.auth.usesBrowserIdentity || self.nativeCommandsReady)
+    }
+
+    fileprivate func receiveCommandsMessage(_ message: WKScriptMessage) {
+        guard message.name == Self.commandsMessageHandlerName,
+              message.webView === self.webView, message.frameInfo.isMainFrame,
+              Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
+        else { return }
+        self.refreshNativeCommandReadiness()
+    }
+
+    private func refreshNativeCommandReadiness() {
+        guard self.auth.usesBrowserIdentity else { return }
+        let sourceID = self.notificationSourceID
+        let sourceURL = self.currentURL
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Messages only wake the read. A previous same-URL document cannot
+            // attest that the currently displayed sign-in page has command listeners.
+            let ready = try? await self.webView.evaluateJavaScript(Self.scopedDashboardScript(
+                "return window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true;", url: sourceURL))
+            guard self.notificationSourceID == sourceID, self.currentURL == sourceURL,
+                  !self.webView.isLoading else { return }
+            self.nativeCommandsReady = ready as? Bool == true
+            self.flushReadyNativeActions()
+        }
+    }
+
+    private func flushReadyNativeActions() {
+        guard self.canDispatchNativeCommands else { return }
+        self.flushPendingNativeCommands()
+        self.flushPendingNativeNavigation()
+    }
+
     /// The canonical Dashboard mount URL supplied by the manager. WebKit route
     /// loads and SPA history do not mutate it, so native fallbacks stay rooted.
     var dashboardBaseURL: URL {
@@ -1109,9 +1211,11 @@ extension DashboardWindowController {
     }
 
     func windowWillClose(_: Notification) {
+        (self.window as? DashboardWindow)?.lifetimeRevision &+= 1
         self.advanceWindowIntent()
         self.advanceNavigationGeneration()
         self.hasLiveContent = false
+        self.nativeCommandsReady = false
         self.pendingNativeCommands = []
         self.pendingNativeNavigation = nil
         self.pendingGatewaySwitch = nil
@@ -1202,7 +1306,8 @@ extension DashboardWindowController {
             self.advanceWindowIntent()
             self.advanceNavigationGeneration()
         }
-        guard self.hasLiveContent, self.isWindowOpen, self.pendingGatewaySwitch == nil else {
+        guard self.canDispatchNativeCommands, self.isWindowOpen
+        else {
             // Ordered queue, duplicates included: two ⌘K presses while loading
             // must toggle twice, and ⌘N followed by ⌘K must deliver both.
             if command.supersedesPendingNavigation {
@@ -1216,15 +1321,16 @@ extension DashboardWindowController {
 
     private func evaluateNativeCommand(_ command: DashboardNativeCommand) {
         guard let fallback = command.legacyFallbackEventName else {
-            self.webView.evaluateJavaScript(
-                "window.dispatchEvent(new CustomEvent(\(Self.jsStringLiteral(command.rawValue))))")
+            self.webView.evaluateJavaScript(Self.scopedDashboardScript(
+                "window.dispatchEvent(new CustomEvent(\(Self.jsStringLiteral(command.rawValue))))",
+                url: self.currentURL))
             return
         }
         // Older gateway-served bundles predate the toggle event but handled ⌘K
         // via page keydown, which the menu item now intercepts. A handler that
         // knows the new event calls preventDefault; otherwise fall back to the
         // legacy open-only event so ⌘K keeps working against old bundles.
-        self.webView.evaluateJavaScript(
+        self.webView.evaluateJavaScript(Self.scopedDashboardScript(
             """
             (() => {
               const handled = !window.dispatchEvent(
@@ -1233,7 +1339,7 @@ extension DashboardWindowController {
                 window.dispatchEvent(new CustomEvent(\(Self.jsStringLiteral(fallback))));
               }
             })();
-            """)
+            """, url: self.currentURL))
     }
 
     private func flushPendingNativeCommands() {
@@ -1247,7 +1353,7 @@ extension DashboardWindowController {
     func dispatchNativeNavigation(_ navigation: DashboardNativeNavigation) {
         self.advanceWindowIntent()
         self.advanceNavigationGeneration()
-        guard self.hasLiveContent else {
+        guard self.canDispatchNativeCommands else {
             // Navigation is state selection, so only the newest destination matters while loading.
             self.pendingNativeNavigation = navigation
             return
@@ -1261,18 +1367,18 @@ extension DashboardWindowController {
         let searchLiteral = navigation.search.map(Self.jsStringLiteral) ?? "undefined"
         let script =
             """
-            (() => !window.dispatchEvent(new CustomEvent('openclaw:native-navigate', {
+            return !window.dispatchEvent(new CustomEvent('openclaw:native-navigate', {
               cancelable: true,
               detail: {path: \(Self.jsStringLiteral(navigation.path)), search: \(searchLiteral)}
-            })))()
+            }));
             """
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let result = try? await self.webView.evaluateJavaScript(script)
+            let result = try? await self.webView.evaluateJavaScript(Self.scopedDashboardScript(script, url: sourceURL))
             let handled = result as? Bool
             // Async completions may return after another route or New Session intent.
             // Only the newest navigation intent may load its fallback URL.
-            guard handled != true,
+            guard handled != true, self.isTrustedDashboardDocument,
                   self.navigationFallbackIsCurrent(generation: generation, sourceURL: sourceURL)
             else { return }
             self.load(navigation.fallbackURL)
@@ -1281,6 +1387,10 @@ extension DashboardWindowController {
 
     var windowIntentGeneration: UInt64? {
         (self.window as? DashboardWindow)?.userIntentGeneration
+    }
+
+    var windowLifetimeRevision: UInt64? {
+        (self.window as? DashboardWindow)?.lifetimeRevision
     }
 
     private func advanceWindowIntent() {
@@ -1369,6 +1479,17 @@ extension DashboardWindowController {
                 decisionHandler: decisionHandler)
             return
         }
+        if Self.shouldAllowIdentityNavigation(
+            to: url,
+            auth: self.auth,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
+            sourceIsDashboard: self.isTrustedDashboardDocument &&
+                (!self.auth.usesBrowserIdentity || self.nativeCommandsReady),
+            navigationType: navigationAction.navigationType)
+        {
+            decisionHandler(.allow)
+            return
+        }
         if Self.shouldAllowNavigation(
             to: url,
             dashboardURL: self.currentURL,
@@ -1402,6 +1523,8 @@ extension DashboardWindowController {
         if self.linkBrowser.owns(webView) {
             self.linkBrowser.navigationDidStart(navigation, in: webView)
             self.linkBrowser.updateChrome()
+        } else if webView === self.webView {
+            self.nativeCommandsReady = false
         }
     }
 
@@ -1412,6 +1535,7 @@ extension DashboardWindowController {
         guard webView === self.webView else { return }
         self.notificationSourceID = UUID().uuidString
         self.hasLiveContent = false
+        self.nativeCommandsReady = false
         // Swipe-back/⌘[ can leave the failure page through WKWebView history
         // without a `load(_:)`; a committed http(s) document is a real
         // dashboard again (the failure page itself commits as about:blank).
@@ -1425,13 +1549,13 @@ extension DashboardWindowController {
             self.linkBrowser.navigationDidFinish(navigation, for: webView)
         } else if webView === self.webView {
             guard !self.isShowingFailurePage else { return }
+            // A finished sign-in document is usable but never receives native
+            // commands. Keep pending intent until the verified dashboard returns.
             self.hasLiveContent = true
+            guard self.isTrustedDashboardDocument else { return }
             self.publishNativeHistoryState()
-            // Commands admitted after picker selection belong to its successor document.
-            guard self.pendingGatewaySwitch == nil else { return }
-            // History state must reach the shell before a queued command can navigate it.
-            self.flushPendingNativeCommands()
-            self.flushPendingNativeNavigation()
+            self.refreshNativeCommandReadiness()
+            self.flushReadyNativeActions()
         }
     }
 

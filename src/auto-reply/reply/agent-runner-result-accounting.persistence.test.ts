@@ -300,6 +300,47 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
 });
 
+it.each(["NO_REPLY", "hook_block", "empty"] as const)(
+  "finalizes a %s fallback without confusing deliberate silence with failure",
+  async (completion) => {
+    const fixture = await createFixture();
+    const { context } = fixture;
+    const onAgentRunTerminalOutcome = vi.fn();
+    context.opts = { onAgentRunTerminalOutcome };
+    context.execution.resolved = { provider: "fallback-provider", model: "fallback-model" };
+    context.execution.fallback.attempts = [
+      { provider: diagnostic.provider, model: diagnostic.model, reason: "auth", error: "No login" },
+    ];
+    context.execution.result.payloads = [];
+    if (completion === "NO_REPLY") {
+      context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
+    } else if (completion === "hook_block") {
+      context.execution.result.meta.error = { kind: "hook_block", message: "Reply suppressed" };
+    }
+
+    const result = await finalizeReplyAgentRun(context);
+    context.replyOperation.complete();
+
+    if (completion === "empty") {
+      expect(result).toMatchObject({
+        isError: true,
+        text: expect.stringContaining("produced no visible reply"),
+      });
+      expect(context.replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledWith("failed");
+    } else {
+      expect(result).toBeUndefined();
+      expect(context.replyOperation.result).toEqual({ kind: "completed" });
+      expect(onAgentRunTerminalOutcome).not.toHaveBeenCalledWith("failed");
+    }
+    expect(fixture.read()?.fallbackNotice).toMatchObject({
+      kind: "active",
+      activeModel: "fallback-provider/fallback-model",
+    });
+    expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+  },
+);
+
 describe("cancelled followup compaction accounting", () => {
   it.each(["user", "restart"] as const)(
     "retains committed compaction facts after %s abort without success bookkeeping",

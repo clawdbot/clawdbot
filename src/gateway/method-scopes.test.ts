@@ -61,6 +61,7 @@ describe("method scope resolution", () => {
   });
 
   it.each([
+    ["canvas.document.view", ["operator.read"]],
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
     ["audit.activity.list", ["operator.read"]],
@@ -978,19 +979,14 @@ describe("operator scope authorization", () => {
 });
 
 describe("plugin approval method registration", () => {
-  it("lists all plugin approval methods", () => {
-    const methods = listGatewayMethods();
-    expect(methods).toContain("plugin.approval.list");
-    expect(methods).toContain("plugin.approval.request");
-    expect(methods).toContain("plugin.approval.waitDecision");
-    expect(methods).toContain("plugin.approval.resolve");
-  });
-
-  it("classifies plugin approval methods", () => {
-    expect(isGatewayMethodClassified("plugin.approval.list")).toBe(true);
-    expect(isGatewayMethodClassified("plugin.approval.request")).toBe(true);
-    expect(isGatewayMethodClassified("plugin.approval.waitDecision")).toBe(true);
-    expect(isGatewayMethodClassified("plugin.approval.resolve")).toBe(true);
+  it.each([
+    "plugin.approval.list",
+    "plugin.approval.request",
+    "plugin.approval.waitDecision",
+    "plugin.approval.resolve",
+  ])("lists and classifies %s", (method) => {
+    expect(listGatewayMethods()).toContain(method);
+    expect(isGatewayMethodClassified(method)).toBe(true);
   });
 });
 

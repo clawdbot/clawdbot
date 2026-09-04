@@ -2,6 +2,8 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { resolveStateDir } from "../config/paths.js";
+import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -129,7 +131,7 @@ type AgentDatabaseLifecycle = {
   incognito: WeakSet<OpenClawAgentDatabase>;
   generation: number;
   failures: Map<string, unknown>;
-  leases: Map<string, { leaseId: string; env: NodeJS.ProcessEnv | undefined }>;
+  leases: Map<string, { leaseId: string; env: NodeJS.ProcessEnv }>;
   validatedPaths: Map<string, string>;
   terminal: ReturnType<typeof createSqliteTerminalOpenLatch>;
   unregisterExitClose: (() => void) | null;
@@ -318,10 +320,17 @@ export function openOpenClawAgentDatabase(
     cache.databases.delete(pathname);
     cache.failures.delete(pathname);
   }
+  // Lease release must retain its original state owner after ambient env changes.
+  const leaseEnvironment = {
+    OPENCLAW_STATE_DIR: resolveStateDir(options.env ?? process.env),
+    ...(isGatewayExternallySupervised(options.env ?? process.env)
+      ? { OPENCLAW_SUPERVISOR_MODE: "external" }
+      : {}),
+  };
   const leaseId = claimOpenClawAgentDatabaseLease({
     agentId,
     path: pathname,
-    ...(options.env ? { env: options.env } : {}),
+    env: leaseEnvironment,
   });
   const openStartedAt = Date.now();
   let openedDb: DatabaseSync | undefined;
@@ -405,7 +414,7 @@ export function openOpenClawAgentDatabase(
       elapsedMs: Date.now() - openStartedAt,
       path: pathname,
     });
-    cache.leases.set(pathname, { leaseId, env: options.env });
+    cache.leases.set(pathname, { leaseId, env: leaseEnvironment });
     cache.databases.set(pathname, database);
     return database;
   } catch (error) {
@@ -432,11 +441,11 @@ export function openOpenClawAgentDatabase(
         } satisfies OpenClawAgentDatabase);
       // Failed opens remain disposal-owned but cannot become successful cache hits.
       cache.databases.set(pathname, retainedDatabase);
-      cache.leases.set(pathname, { leaseId, env: options.env });
+      cache.leases.set(pathname, { leaseId, env: leaseEnvironment });
       cache.failures.set(pathname, closeError ?? error);
       cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     } else {
-      releaseOpenClawAgentDatabaseLease(leaseId, { env: options.env });
+      releaseOpenClawAgentDatabaseLease(leaseId, { env: leaseEnvironment });
     }
     throw closeError ?? error;
   }

@@ -14,6 +14,7 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
+import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { proveHotReloadBrowserSettings } from "./gateway-config-hot-reload-browser.js";
 import { proveHotReloadChannels } from "./gateway-config-hot-reload-channels.js";
@@ -26,7 +27,11 @@ import {
 import { proveHotReloadBrowserLaunch } from "./gateway-config-hot-reload-launch.js";
 import { proveHotReloadNodePolicies } from "./gateway-config-hot-reload-nodes.js";
 import { prepareGatewayPairingFixture } from "./gateway-config-hot-reload-pairing.js";
+import { proveHotReloadPluginPolicy } from "./gateway-config-hot-reload-plugin-policy.js";
+import { proveHotReloadPolicyAdmission } from "./gateway-config-hot-reload-policy-admission.js";
+import { proveHotReloadPolicy } from "./gateway-config-hot-reload-policy.js";
 import { proveHotReloadRequests } from "./gateway-config-hot-reload-requests.js";
+import { startHotReloadAttachmentRetention } from "./gateway-config-hot-reload-retention.js";
 import { proveHotReloadSecurity } from "./gateway-config-hot-reload-security.js";
 import { proveHotReloadServicePolicy } from "./gateway-config-hot-reload-service-policy.js";
 import { proveHotReloadTerminalDeferredRestart } from "./gateway-config-hot-reload-terminal-deferred.js";
@@ -63,6 +68,9 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
   let passedChecks = 0;
   let channels: Awaited<ReturnType<typeof proveHotReloadChannels>> | undefined;
   let security: Awaited<ReturnType<typeof proveHotReloadSecurity>> | undefined;
+  let retention: Awaited<ReturnType<typeof startHotReloadAttachmentRetention>> | undefined;
+  const pluginPolicyAbort = new AbortController();
+  let pluginPolicy: Promise<void> | undefined;
   await runQaGatewayFixture(
     async () => {
       await fs.access(path.join(repoRoot, "dist/control-ui/index.html"));
@@ -88,11 +96,12 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         primaryModel: MODEL,
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
         controlUiEnabled: true,
-        enabledPluginIds: ["browser"],
+        enabledPluginIds: ["browser", "canvas", "diffs", "openai"],
         transportBaseUrl: fixture.baseUrl,
         runtimeEnvPatch: {
           ...pairingFixture.runtimeEnvPatch,
           OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: undefined,
           OPENCLAW_APNS_RELAY_ALLOW_HTTP: "true",
           OPENCLAW_APNS_RELAY_BASE_URL: undefined,
           OPENCLAW_APNS_RELAY_TIMEOUT_MS: undefined,
@@ -103,6 +112,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         },
         mutateConfig: (cfg) => ({
           ...cfg,
+          attachments: { ...cfg.attachments, ttlHours: 24 },
           agents: {
             ...cfg.agents,
             defaults: { ...cfg.agents?.defaults, utilityModel: MODEL },
@@ -110,7 +120,10 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
               ...cfg.agents?.entries,
               qa: {
                 ...cfg.agents?.entries?.qa,
-                tools: { ...cfg.agents?.entries?.qa?.tools, alsoAllow: ["agents_list"] },
+                tools: {
+                  ...cfg.agents?.entries?.qa?.tools,
+                  alsoAllow: ["agents_list", "browser", "diffs"],
+                },
               },
             },
           },
@@ -121,6 +134,8 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
             noSandbox: true,
             executablePath: browserExecutable,
             defaultProfile: "openclaw",
+            ssrfPolicy: { allowedHostnames: [new URL(fixture.baseUrl).hostname] },
+            tabCleanup: { enabled: false },
           },
           plugins: {
             ...cfg.plugins,
@@ -149,6 +164,11 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         }),
       });
       const activeGateway = gateway;
+      assert.equal(
+        activeGateway.runtimeEnv.OPENCLAW_SKIP_CANVAS_HOST,
+        undefined,
+        "Canvas hot reload proof requires the Canvas host",
+      );
       const primary = await connectHotReloadClient(activeGateway);
       connections.push(primary);
       const pid = activeGateway.pid;
@@ -283,6 +303,13 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         verifyContinuity,
         proveGroup,
       };
+      retention = await startHotReloadAttachmentRetention({
+        gateway: activeGateway,
+        patch,
+        verifyContinuity,
+        appendLog,
+      });
+      void retention.completion.catch(() => {});
       await proveHotReloadTerminalStartup(terminalProof);
 
       await proveHotReloadRequests({
@@ -578,6 +605,42 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       });
 
       await checkContinuity();
+      await proveHotReloadPolicy({
+        gateway: activeGateway,
+        temporaryRoot,
+        outputDir,
+        rpc,
+        patch,
+        http,
+        proveGroup,
+        verifyContinuity,
+      });
+      await proveHotReloadPolicyAdmission({
+        gateway: activeGateway,
+        temporaryRoot,
+        outputDir,
+        turn,
+        rpc,
+        patch,
+        proveGroup,
+        verifyContinuity,
+      });
+      pluginPolicy = proveHotReloadPluginPolicy({
+        gateway: activeGateway,
+        unaffectedNode: node,
+        temporaryRoot,
+        outputDir,
+        fixtureBaseUrl: fixture.baseUrl,
+        rpc,
+        patch,
+        http,
+        proveGroup,
+        verifyContinuity,
+        appendLog,
+        signal: pluginPolicyAbort.signal,
+      });
+      // Join this owner below; real cleanup intervals overlap independent Gateway fixtures.
+      void pluginPolicy.catch(() => {});
       channels = await proveHotReloadChannels({ repoRoot, outputDir, appendLog });
       failures.push(...channels.failures);
       security = await proveHotReloadSecurity({ repoRoot, outputDir, appendLog });
@@ -590,6 +653,8 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       failures.push(...terminalDeferred.failures);
       const servicePolicy = await proveHotReloadServicePolicy({ repoRoot, outputDir, appendLog });
       failures.push(...servicePolicy.failures);
+      await pluginPolicy;
+      await proveGroup("attachments.ttlHours", () => retention!.completion);
       await checkContinuity();
       passedChecks =
         evidence.length +
@@ -640,14 +705,20 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         },
         simulatedUpstreams: [
           "OpenAI provider",
+          "OpenAI speech API (synthetic WAV)",
           "GitHub API transport",
           "favicon HTTPS transport",
           "APNs relay (no Apple delivery)",
           "CLI session catalog",
-          "browser node",
+          "browser and Canvas nodes",
           "SSH remote identity command with real isolated sshd",
         ],
       };
+    },
+    async () => {
+      pluginPolicyAbort.abort();
+      await pluginPolicy?.catch(() => {});
+      await retention?.stop();
     },
     () => {
       if (gateway) {
@@ -664,7 +735,11 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
     () => pairingFixture?.close(),
     () => fixture.close(),
     () => mock.stop(),
-    () => fs.rm(temporaryRoot, { recursive: true, force: true }),
+    async () => {
+      // Child cleanup does not own this parent identity store or its live WAL.
+      closeOpenClawStateDatabaseByPath(path.join(temporaryRoot, "state", "openclaw.sqlite"));
+      await fs.rm(temporaryRoot, { recursive: true, force: true });
+    },
   );
   return { summary, passedChecks, failures };
 }
@@ -705,10 +780,18 @@ async function main() {
     await writer.write({
       status: passed ? "pass" : "fail",
       durationMs: Date.now() - started,
-      details: `${passedChecks} settings checks passed across the primary, channel, security, deferred-restart, and service-policy Gateway fixtures; startup-only positive controls restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
+      details: `${passedChecks} operation and config-admission checks passed across the primary, channel, security, deferred-restart, and service-policy Gateway fixtures; startup-only positive controls restarted${passed ? "" : `; failures: ${failures.map(({ prefix }) => prefix).join(", ")}`}`,
       artifacts: [
         { kind: "summary", filePath: summaryPath },
-        ...["security", "channels", "terminal-deferred", "service-policy"].map((name) => ({
+        ...[
+          "security",
+          "channels",
+          "terminal-deferred",
+          "service-policy",
+          "policy",
+          "policy-admission",
+          "plugin-policy",
+        ].map((name) => ({
           kind: "summary",
           filePath: path.join(outputDir, `gateway-config-hot-reload-${name}.json`),
         })),

@@ -353,6 +353,7 @@ export async function writeConfigFile(
     skipPluginValidation: options.skipPluginValidation,
     preservedLegacyRootKeys: options.preservedLegacyRootKeys,
     lastTouchedVersionOverride: options.lastTouchedVersionOverride,
+    beforeCommit: options.beforeCommit,
     preCommitRuntimePreflight: async (sourceConfig) => {
       // A failed canonical reread must retain the actual resolved write payload,
       // including writer metadata, rather than the caller's runtime-shaped input.

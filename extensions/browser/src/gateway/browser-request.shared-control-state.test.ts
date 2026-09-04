@@ -55,7 +55,9 @@ vi.mock("../browser/chrome.js", () => ({
 
 const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
   await import("../server.js");
-const { stopBrowserControlService } = await import("../control-service.js");
+const { getBrowserControlState, startBrowserControlServiceFromConfig, stopBrowserControlService } =
+  await import("../control-service.js");
+const { runBrowserProxyCommand } = await import("../node-host/invoke-browser.js");
 const { getBridgeAuthForPort } = await import("../browser/bridge-auth-registry.js");
 const { browserHandlers } = await import("./browser-request.js");
 
@@ -189,5 +191,57 @@ describe("browser.request local control state", () => {
     await expect(starting).resolves.toBeTruthy();
     await expect(stopping).resolves.toBeUndefined();
     expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
+  });
+
+  it("restarts node proxy control after the shared service stops", async () => {
+    const setEnabled = (enabled: boolean) => {
+      const cfg = browserConfig({ gatewayPort: controlPort - 2 });
+      mocks.runtimeConfig = { ...cfg, browser: { ...cfg.browser, enabled } };
+      mocks.runtimeSourceConfig = mocks.runtimeConfig;
+    };
+    const request = JSON.stringify({ method: "GET", path: "/", profile: "openclaw" });
+    setEnabled(false);
+    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
+    setEnabled(true);
+    await startBrowserControlServiceFromConfig();
+    setEnabled(false);
+    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
+
+    setEnabled(true);
+    const first = JSON.parse(await runBrowserProxyCommand(request));
+    expect(first.result).toMatchObject({ enabled: true, profile: "openclaw" });
+    const previous = getBrowserControlState();
+    expect(previous).not.toBeNull();
+    setEnabled(false);
+    expect(JSON.parse(await runBrowserProxyCommand(request)).result).toMatchObject({
+      enabled: true,
+      profile: "openclaw",
+    });
+    expect(getBrowserControlState()).toBe(previous);
+
+    await stopBrowserControlService();
+    expect(getBrowserControlState()).toBeNull();
+
+    setEnabled(true);
+    const restarted = JSON.parse(await runBrowserProxyCommand(request));
+    expect(restarted.result).toMatchObject({ enabled: true, profile: "openclaw" });
+    expect(getBrowserControlState()).not.toBe(previous);
+    expect(getBrowserControlState()).not.toBeNull();
+
+    const stopStarted = createDeferred<void>();
+    const stopGate = createDeferred<void>();
+    mocks.stopKnownBrowserProfiles.mockImplementationOnce(async () => {
+      stopStarted.resolve();
+      await stopGate.promise;
+    });
+    const stopping = stopBrowserControlService();
+    await stopStarted.promise;
+    const duringStop = expect(runBrowserProxyCommand(request)).rejects.toThrow("stopping");
+    stopGate.resolve();
+    await stopping;
+    await duringStop;
+    expect(getBrowserControlState()).toBeNull();
+    setEnabled(false);
+    await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
   });
 });
