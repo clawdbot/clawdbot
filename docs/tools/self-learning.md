@@ -74,12 +74,12 @@ retain separate candidates. Experience, history, and collection reviews share
 one Workshop slot within the [shared background work budget](/concepts/queue#background-work).
 The foreground answer never waits for the model's review.
 
-OpenClaw captures the completed turn's full model context before another turn can
-change it. The reviewer uses that captured context under a private detached
-session identity. Later messages cannot change what it reviews. This keeps the
-foreground session available. The review message and tool
-results never enter the foreground transcript or session record. Reviews retain
-the foreground session's sandbox policy, including during compaction.
+OpenClaw records where the completed turn ends, then reads its full model context
+asynchronously after the quiet period. Later messages are excluded. If the saved
+turn was rewritten or removed, the review records a failure instead of using
+different evidence. The review runs under a private detached session identity;
+its messages never enter the foreground transcript or session record. Reviews
+retain the foreground session's sandbox policy.
 
 The reviewer is detached and biased toward small, well-evidenced captures. It
 receives an authoritative receipt of the skills the foreground run actually

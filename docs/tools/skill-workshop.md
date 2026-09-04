@@ -430,8 +430,9 @@ are stored in the shared OpenClaw state database; transcript content is not copi
 into scan state.
 
 In `propose` and `auto` modes, OpenClaw can review one finished substantial turn
-after the agent system becomes idle. The review uses the finished turn's model
-context with the same provider and model. It omits the general skill catalog
+after the agent system becomes idle. It records the finished turn's boundary and
+reads that turn's model context asynchronously with the same provider and model.
+It omits the general skill catalog
 whose read prerequisite cannot execute in this restricted run. Review transcript
 and session metadata changes stay detached. It can draft one pending create, patch, or update.
 In `auto` mode, creates and Workshop-generated updates use the scanner-gated
