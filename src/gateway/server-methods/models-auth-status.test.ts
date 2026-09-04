@@ -255,14 +255,16 @@ function createOrderOptions(
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 let preparedAuthStore: AuthProfileStore = { version: 1, profiles: {} };
-let preparedMetadataSnapshot: unknown;
+let preparedMetadataSnapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>;
 
 function setPreparedAuthStore(store: RuntimeAuthProfileStore): void {
   preparedAuthStore = store;
   replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: "/tmp/agent", store }]);
 }
 
-function setPreparedMetadataSnapshot(snapshot: unknown): void {
+function setPreparedMetadataSnapshot(
+  snapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>,
+): void {
   preparedMetadataSnapshot = snapshot;
 }
 
@@ -281,7 +283,7 @@ function createPreparedOwnerSnapshot(agentId: string) {
     authModes: {},
     authStore: preparedAuthStore,
     authMaterializations: [],
-    metadataSnapshot: preparedMetadataSnapshot as never,
+    metadataSnapshot: preparedMetadataSnapshot,
   };
 }
 
@@ -1609,14 +1611,10 @@ describe("models.authStatus", () => {
     });
     const plugin = {
       id: "openai",
-      origin: "bundled",
+      origin: "bundled" as const,
       contracts: { usageProviders: ["openai"] },
     };
-    setPreparedMetadataSnapshot({
-      index: { plugins: [] },
-      manifestRegistry: { plugins: [plugin] },
-      plugins: [plugin],
-    });
+    setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture({ plugins: [plugin] }));
     mocks.listProviderUsagePluginDescriptors.mockReturnValueOnce([]);
     mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
 
@@ -1642,14 +1640,10 @@ describe("models.authStatus", () => {
     });
     const plugin = {
       id: "openrouter",
-      origin: "bundled",
+      origin: "bundled" as const,
       contracts: { usageProviders: ["openrouter"] },
     };
-    setPreparedMetadataSnapshot({
-      index: { plugins: [] },
-      manifestRegistry: { plugins: [plugin] },
-      plugins: [plugin],
-    });
+    setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture({ plugins: [plugin] }));
     mocks.listProviderUsagePluginDescriptors.mockReturnValueOnce([
       { provider: "openrouter", displayName: "OpenRouter" },
     ]);
@@ -1812,15 +1806,11 @@ describe("models.authStatus", () => {
       });
       const plugin = {
         id: provider,
-        origin: "bundled",
+        origin: "bundled" as const,
         providers: [provider],
         providerUsageAuthEnvVars: { [provider]: [envVar] },
       };
-      setPreparedMetadataSnapshot({
-        index: { plugins: [] },
-        manifestRegistry: { plugins: [plugin] },
-        plugins: [plugin],
-      });
+      setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture({ plugins: [plugin] }));
       mocks.loadProviderUsageSummary.mockResolvedValue({
         updatedAt: 0,
         providers: [

@@ -155,7 +155,7 @@ function mapAuthStatusProfile(params: {
       ? { displayName: metadata.displayName }
       : {}),
     ...(params.includeProfileDetails && metadata.email ? { email: metadata.email } : {}),
-    ...(lastUsedAt ? { lastUsedAt } : {}),
+    ...(params.includeProfileDetails && lastUsedAt ? { lastUsedAt } : {}),
     ...(usage ? { usage: mapUsageStatus(usage, params.includeProfileDetails) } : {}),
     ...(params.pendingUsageProfileIds.has(profile.profileId) ? { usageRefreshPending: true } : {}),
     ...((profile.type === "oauth" || profile.type === "token") &&
