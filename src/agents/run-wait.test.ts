@@ -708,4 +708,63 @@ describe("waitForAgentRunsToDrain", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps the drain bound when the wall clock moves backwards", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    let calls = 0;
+    try {
+      const result = await waitForAgentRunsToDrain({
+        timeoutMs: 1,
+        initialPendingRunIds: ["run-1"],
+        getPendingRunIds: () => (calls >= 4 ? [] : ["run-1"]),
+        callGateway: async <T = Record<string, unknown>>() => {
+          calls += 1;
+          if (calls === 1) {
+            dateNow.mockReturnValue(-100_000);
+          }
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 5);
+          });
+          return { status: "timeout" } as T;
+        },
+      });
+
+      expect(result).toEqual({
+        timedOut: true,
+        pendingRunIds: ["run-1"],
+        deadlineAtMs: 1_001,
+      });
+      expect(calls).toBe(1);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("samples the wall clock once when creating the drain deadline", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValue(-100_000);
+    let calls = 0;
+    try {
+      const result = await waitForAgentRunsToDrain({
+        timeoutMs: 1,
+        initialPendingRunIds: ["run-1"],
+        getPendingRunIds: () => (calls >= 2 ? [] : ["run-1"]),
+        callGateway: async <T = Record<string, unknown>>() => {
+          calls += 1;
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 5);
+          });
+          return { status: "timeout" } as T;
+        },
+      });
+
+      expect(result).toEqual({
+        timedOut: true,
+        pendingRunIds: ["run-1"],
+        deadlineAtMs: 1_001,
+      });
+      expect(calls).toBe(1);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
 });

@@ -40,13 +40,16 @@ function resolveRunWaitTimeoutMs(value: number | undefined): number {
   return clampTimerTimeoutMs(parseFiniteNumber(value) ?? 1) ?? 1;
 }
 
-function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?: number }): number {
+function resolveRunWaitDeadlineAtMs(
+  params: { deadlineAtMs?: number; timeoutMs?: number },
+  nowMs = Date.now(),
+): number {
   if (params.deadlineAtMs !== undefined) {
-    return asDateTimestampMs(params.deadlineAtMs) ?? resolveDateTimestampMs(Date.now());
+    return asDateTimestampMs(params.deadlineAtMs) ?? resolveDateTimestampMs(nowMs);
   }
   return (
-    resolveExpiresAtMsFromDurationMs(resolveRunWaitTimeoutMs(params.timeoutMs)) ??
-    resolveDateTimestampMs(Date.now())
+    resolveExpiresAtMsFromDurationMs(resolveRunWaitTimeoutMs(params.timeoutMs), { nowMs }) ??
+    resolveDateTimestampMs(nowMs)
   );
 }
 
@@ -259,15 +262,17 @@ export async function waitForAgentRunsToDrain(params: {
   deadlineAtMs?: number;
   callGateway?: GatewayCaller;
 }): Promise<AgentRunsDrainResult> {
-  const deadlineAtMs = resolveRunWaitDeadlineAtMs(params);
+  const nowMs = Date.now();
+  const deadlineAtMs = resolveRunWaitDeadlineAtMs(params, nowMs);
+  const monotonicDeadlineMs = performance.now() + Math.max(0, deadlineAtMs - nowMs);
 
   // Runs may finish and spawn more runs, so refresh until no pending IDs remain.
   let pendingRunIds = new Set<string>(
     normalizePendingRunIds(params.initialPendingRunIds ?? params.getPendingRunIds()),
   );
 
-  while (pendingRunIds.size > 0 && Date.now() < deadlineAtMs) {
-    const remainingMs = Math.max(1, deadlineAtMs - Date.now());
+  while (pendingRunIds.size > 0 && performance.now() < monotonicDeadlineMs) {
+    const remainingMs = Math.max(1, monotonicDeadlineMs - performance.now());
     await Promise.allSettled(
       [...pendingRunIds].map((runId) =>
         waitForAgentRun({
