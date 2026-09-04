@@ -271,6 +271,41 @@ describe("executePreparedCliRun supervisor output capture", () => {
     }
   });
 
+  it("publishes the quiet allowance for a non-Claude CLI backend too", async () => {
+    setDiagnosticsEnabledForProcess(true);
+    startDiagnosticRunActivityTracking();
+    try {
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        input.onStdout?.("done");
+        return createManagedRun({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      });
+      // The Claude-only model-call diagnostics never arm for this backend, so
+      // the deadline has to reach recovery through the shared stream path.
+      const context = buildPreparedCliRunContext({ output: "text", provider: "local-cli" });
+
+      await executePreparedCliRun(context);
+
+      const snapshot = getDiagnosticSessionActivitySnapshot({
+        sessionId: context.params.sessionId,
+        sessionKey: context.params.sessionKey,
+      });
+      expect(snapshot.activeBackendLivenessTimeoutMs).toBeGreaterThan(0);
+    } finally {
+      resetDiagnosticRunActivityForTest();
+      setDiagnosticsEnabledForProcess(false);
+    }
+  });
+
   it("does not refresh the progress clock from stdout while a parsed tool owns the turn", async () => {
     setDiagnosticsEnabledForProcess(true);
     startDiagnosticRunActivityTracking();
