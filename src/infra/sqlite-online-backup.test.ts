@@ -28,13 +28,14 @@ function createDatabasePaths(): { destinationPath: string; sourcePath: string } 
   return { destinationPath, sourcePath };
 }
 
-// The bound is wall-clock, so the elapsed time each shape needs is simulated;
-// only Date is faked, because the unmocked cases still drive the real
-// node:sqlite backup and need live timers.
+// The bound is elapsed monotonic time, so the time each shape needs is
+// simulated. Date is faked next to performance so a test can move wall time
+// without moving the deadline; timers stay live because the unmocked cases
+// still drive the real node:sqlite backup.
 function useSimulatedBackupClock(): (elapsedMs: number) => void {
-  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.useFakeTimers({ toFake: ["Date", "performance"] });
   return (elapsedMs: number) => {
-    vi.setSystemTime(new Date(Date.now() + elapsedMs));
+    vi.advanceTimersByTime(elapsedMs);
   };
 }
 
@@ -102,6 +103,37 @@ describe("backupSqliteOnline", () => {
       (cause: unknown) => cause,
     );
     expectContentionGuidance(error, paths.sourcePath);
+  });
+
+  it("holds the no-progress deadline when the wall clock is corrected backward", async () => {
+    const sqlite = requireNodeSqlite();
+    const paths = createDatabasePaths();
+    const advance = useSimulatedBackupClock();
+    let cyclesBeforeAbort = 0;
+    vi.spyOn(sqlite, "backup").mockImplementation(async (_source, _destination, options) => {
+      options?.progress?.({ remainingPages: 100, totalPages: 120 });
+      // One backward correction of ten minutes right after the deadline is
+      // armed. A deadline read from Date waits those ten minutes on top of
+      // its budget; a monotonic one does not notice.
+      vi.setSystemTime(Date.now() - 10 * 60_000);
+      for (let cycle = 1; cycle <= MOCK_BACKUP_STEP_CEILING; cycle += 1) {
+        cyclesBeforeAbort = cycle;
+        advance(60_000);
+        for (let remainingPages = 101; remainingPages <= 120; remainingPages += 1) {
+          options?.progress?.({ remainingPages, totalPages: 120 });
+        }
+      }
+      throw new Error(`backup progress was not bounded in ${MOCK_BACKUP_STEP_CEILING} cycles`);
+    });
+
+    const error = await backupSqliteOnline(paths).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expectContentionGuidance(error, paths.sourcePath);
+    // Thirty one-minute cycles exhaust the budget, so the abort lands on the
+    // first step of the next cycle whatever wall time says.
+    expect(cyclesBeforeAbort).toBe(31);
   });
 
   it("rejects a flat progress stream", async () => {

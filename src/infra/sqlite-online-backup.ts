@@ -11,8 +11,10 @@ import {
 // commits, so a continuously written source never converges on its own. The
 // budget is elapsed time since the copy last reached a new all-time low
 // remaining page count, because only a new low means the copy is closer to
-// done than it has ever been. Counting restarts or discarded pages cannot do
-// this job: measured against real WAL sources under a concurrent writer,
+// done than it has ever been. That time comes from the monotonic clock, as
+// the restart health wait reads its deadline, so a backward wall-clock
+// correction cannot postpone it. Counting restarts or discarded pages cannot
+// do this job: measured against real WAL sources under a concurrent writer,
 // backups that completed peaked at 2 to 38 restarts and 9.7 to 107 full copies
 // of discarded work, while stalled runs reached 803 to 2,001 restarts and
 // 1,148 copies, and both quantities grow with database size, so neither
@@ -72,19 +74,19 @@ export async function backupSqliteOnline(options: SqliteOnlineBackupOptions): Pr
       let minimumRemainingPages = Number.POSITIVE_INFINITY;
       let previousRemainingPages = Number.POSITIVE_INFINITY;
       let stepsSinceCopyAdvanced = 0;
-      let netProgressAt = Date.now();
+      let netProgressAt = performance.now();
       await sqlite.backup(source, resolveSqliteFilesystemPath(options.destinationPath), {
         progress: ({ remainingPages }) => {
-          const idleMs = Date.now() - netProgressAt;
+          const idleMs = performance.now() - netProgressAt;
           if (idleMs > MAX_MS_WITHOUT_NET_PROGRESS) {
             throw createSqliteBackupContentionError(
               options.sourcePath,
-              `no net page progress was observed for ${idleMs}ms`,
+              `no net page progress was observed for ${Math.round(idleMs)}ms`,
             );
           }
           if (remainingPages < minimumRemainingPages) {
             minimumRemainingPages = remainingPages;
-            netProgressAt = Date.now();
+            netProgressAt = performance.now();
           }
           if (remainingPages < previousRemainingPages) {
             stepsSinceCopyAdvanced = 0;
