@@ -76,9 +76,7 @@ type SessionTabParams = {
   aliases?: Array<string | undefined>;
 };
 
-type DurableRecord = BrowserSessionTabRecord;
-
-type DurableTab = DurableRecord & {
+type DurableTab = BrowserSessionTabRecord & {
   kind: "durable";
   storageKey: string;
 };
@@ -594,18 +592,18 @@ async function performVolatileCleanup(
 ): Promise<number> {
   const inFlight = volatileTabCleanupByTarget();
   const targetKey = volatileSessionTabTargetKey(candidate);
-  let closeTab = params.closeTab;
-  let tab = candidate;
-  while (true) {
+  const resolveCurrent = () => {
     const current = resolveVolatile(candidate)?.tab;
-    if (
-      !current ||
-      current.registration !== candidate.registration ||
-      (cleanupKind === "sweep" && !sameVolatileSessionTab(current, candidate))
-    ) {
+    return current?.registration === candidate.registration &&
+      (cleanupKind !== "sweep" || sameVolatileSessionTab(current, candidate))
+      ? current
+      : undefined;
+  };
+  while (true) {
+    const current = resolveCurrent();
+    if (!current) {
       return 0;
     }
-    tab = current;
     const existing = inFlight.get(targetKey);
     if (existing) {
       await existing.promise;
@@ -614,35 +612,30 @@ async function performVolatileCleanup(
       }
       continue;
     }
-    if (closeTab || tab.route.kind === "node-proxy") {
-      break;
-    }
-    try {
-      // Join before loading so an overlapping request cannot retry a failed close.
-      // Revalidate after loading before this request acquires a new operation.
-      const { browserCloseTabByRawTargetId } = await import("./client.js");
-      closeTab = ({ baseUrl, targetId, profile }) =>
-        browserCloseTabByRawTargetId(baseUrl, targetId, { profile });
-    } catch (error) {
-      params.onWarn?.(
-        `failed to close tracked browser tab ${candidate.targetId}: ${String(error)}`,
-      );
-      return 0;
-    }
-  }
 
-  const closingTabs = volatileRegistrationsForTarget(targetKey);
-  let complete!: (operation: Promise<number>) => void;
-  const cleanup = new Promise<number>((resolve) => {
-    complete = resolve;
-  });
-  // Publish before invoking a reentrant closer, with no queued dispatch that can
-  // adopt a new registration. Completion retires only the acquired registrations.
-  const owner = { registrations: closingTabs, promise: cleanup };
-  inFlight.set(targetKey, owner);
-  complete(
-    (async () => {
+    let complete!: (operation: Promise<number>) => void;
+    const cleanup = new Promise<number>((resolve) => {
+      complete = resolve;
+    });
+    // Preparation and dispatch share one reservation, including reentrant closers.
+    // Completion retires only the acquired registrations.
+    const owner = { registrations: volatileRegistrationsForTarget(targetKey), promise: cleanup };
+    const performClose = async () => {
+      let tab = current;
+      let closeTab = params.closeTab;
       try {
+        if (!closeTab && tab.route.kind === "browser-control") {
+          const { browserCloseTabByRawTargetId } = await import("./client.js");
+          const latest = resolveCurrent();
+          if (!latest) {
+            // No dispatch occurred: a lifecycle joiner may retry a touched sweep.
+            owner.registrations = [];
+            return 0;
+          }
+          tab = latest;
+          closeTab = ({ baseUrl, targetId, profile }) =>
+            browserCloseTabByRawTargetId(baseUrl, targetId, { profile });
+        }
         if (closeTab) {
           await closeTab({
             targetId: tab.targetId,
@@ -667,27 +660,31 @@ async function performVolatileCleanup(
           if (outcome.status === "ownership-mismatch") {
             params.onWarn?.(`retired tracked browser tab ${tab.targetId}: ownership mismatch`);
           }
-          deleteVolatileRegistrations(closingTabs);
+          deleteVolatileRegistrations(owner.registrations);
           return outcome.status === "closed" ? 1 : 0;
         }
       } catch (error) {
-        if (tab.route.kind === "browser-control" && isIgnorableTabCloseError(error)) {
-          deleteVolatileRegistrations(closingTabs);
+        if (closeTab && tab.route.kind === "browser-control" && isIgnorableTabCloseError(error)) {
+          deleteVolatileRegistrations(owner.registrations);
           return 0;
         }
         params.onWarn?.(`failed to close tracked browser tab ${tab.targetId}: ${String(error)}`);
         return 0;
-      } finally {
-        // Release before publishing completion so a replacement can acquire the target.
-        if (inFlight.get(targetKey) === owner) {
-          inFlight.delete(targetKey);
-        }
       }
-      deleteVolatileRegistrations(closingTabs);
+      deleteVolatileRegistrations(owner.registrations);
       return 1;
-    })(),
-  );
-  return await cleanup;
+    };
+    inFlight.set(targetKey, owner);
+    try {
+      complete(performClose());
+      return await cleanup;
+    } finally {
+      // Queued handoff callers must see the reservation until its completion settles.
+      if (inFlight.get(targetKey) === owner) {
+        inFlight.delete(targetKey);
+      }
+    }
+  }
 }
 
 async function closeTrackedTabs(

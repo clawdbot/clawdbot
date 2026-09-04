@@ -4,9 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const clientMocks = vi.hoisted(() => ({
   browserCloseTabByRawTargetId: vi.fn(async () => {}),
+  onLoad: undefined as (() => Promise<void>) | undefined,
 }));
 
-vi.mock("./client.js", () => clientMocks);
+vi.mock("./client.js", async () => {
+  await clientMocks.onLoad?.();
+  return clientMocks;
+});
 
 import {
   closeTrackedBrowserTabsForSessions,
@@ -38,6 +42,35 @@ describe("session tab registry", () => {
       closeTab: async () => {},
     });
     vi.useRealTimers();
+  });
+
+  it("reserves cleanup while its client loads before an overlapping closer can fail", async () => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    clientMocks.onLoad = () => {
+      entered.resolve();
+      return release.promise;
+    };
+    const sessionKey = "agent:main:main";
+    trackSessionBrowserTab({ sessionKey, targetId: "loading-client" });
+    const onWarn = vi.fn();
+    const closeTab = vi.fn<() => Promise<void>>(() => {
+      throw new Error("close failed");
+    });
+    const pending = [closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], onWarn })];
+    try {
+      await entered.promise;
+      pending.push(
+        closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], closeTab, onWarn }),
+      );
+    } finally {
+      release.resolve();
+      clientMocks.onLoad = undefined;
+    }
+    await expect(Promise.all(pending)).resolves.toEqual([1, 0]);
+    expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledOnce();
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(onWarn).not.toHaveBeenCalled();
   });
 
   it("tracks and closes tabs for normalized session keys", async () => {
@@ -207,6 +240,37 @@ describe("session tab registry", () => {
     },
   );
 
+  it.each([false, true])(
+    "shares lifecycle cleanup after a preparing sweep is revoked (closeFails=%s)",
+    async (closeFails) => {
+      const tab = { sessionKey: "agent:main:main", targetId: "touched-sweep" };
+      trackSessionBrowserTab({ ...tab, now: 1_000 });
+      const sweep = sweepTrackedBrowserTabs({ now: 10_000, idleMs: 1 });
+      const closeTab = vi.fn(() => {
+        if (closeFails) {
+          throw new Error("close failed");
+        }
+        return Promise.resolve();
+      });
+      const lifecycle = () =>
+        closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab });
+      const pending = [sweep, lifecycle(), lifecycle()];
+      touchSessionBrowserTab({ ...tab, now: 11_000 });
+
+      await expect(Promise.all(pending)).resolves.toEqual([0, closeFails ? 0 : 1, 0]);
+      expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
+      expect(closeTab).toHaveBeenCalledOnce();
+      const retryClose = vi.fn(async () => {});
+      await expect(
+        closeTrackedBrowserTabsForSessions({
+          sessionKeys: [tab.sessionKey],
+          closeTab: retryClose,
+        }),
+      ).resolves.toBe(closeFails ? 1 : 0);
+      expect(retryClose).toHaveBeenCalledTimes(closeFails ? 1 : 0);
+    },
+  );
+
   it("does not adopt a new registration while an earlier selected tab closes", async () => {
     const sessionKey = "agent:main:main";
     const next = { sessionKey, targetId: "next-tab" };
@@ -236,7 +300,7 @@ describe("session tab registry", () => {
     expect(closeTab).toHaveBeenLastCalledWith(expect.objectContaining({ targetId: "next-tab" }));
   });
 
-  it.each(["before-dispatch", "during-close"] as const)(
+  it.each(["during-prepare", "before-dispatch", "during-close"] as const)(
     "preserves a registration replaced %s without dispatching against it",
     async (replacementPhase) => {
       const tab = { sessionKey: "agent:main:main", targetId: "replaced-tab" };
@@ -251,7 +315,7 @@ describe("session tab registry", () => {
       });
       const cleanup = closeTrackedBrowserTabsForSessions({
         sessionKeys: [tab.sessionKey],
-        closeTab,
+        closeTab: replacementPhase === "during-prepare" ? undefined : closeTab,
       });
       try {
         if (replacementPhase === "during-close") {
@@ -263,7 +327,8 @@ describe("session tab registry", () => {
       } finally {
         release.resolve();
       }
-      await cleanup;
+      await expect(cleanup).resolves.toBe(replacementPhase === "during-prepare" ? 0 : 1);
+      expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
       const freshClose = vi.fn(async () => {});
       await expect(
         closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab: freshClose }),
@@ -348,7 +413,7 @@ describe("session tab registry", () => {
   );
 
   it.each(["published", "during-prepare"] as const)(
-    "joins a failed owner %s without retrying the registration",
+    "shares the first owner's outcome %s without retrying the registration",
     async (ownerTiming) => {
       const tab = { sessionKey: "agent:main:main", targetId: "failed-owner" };
       trackSessionBrowserTab({ ...tab, now: 1_000 });
@@ -368,14 +433,18 @@ describe("session tab registry", () => {
         if (ownerTiming === "during-prepare") {
           await vi.dynamicImportSettled();
         }
-        expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
+        expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledTimes(
+          ownerTiming === "during-prepare" ? 1 : 0,
+        );
       } finally {
         release.resolve();
       }
-      await expect(Promise.all([first, second])).resolves.toEqual([0, 0]);
-      expect(closeTab).toHaveBeenCalledOnce();
-      expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
-      expect(onWarn).toHaveBeenCalledOnce();
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        ownerTiming === "during-prepare" ? 1 : 0,
+        0,
+      ]);
+      expect(closeTab).toHaveBeenCalledTimes(ownerTiming === "published" ? 1 : 0);
+      expect(onWarn).toHaveBeenCalledTimes(ownerTiming === "published" ? 1 : 0);
     },
   );
 
