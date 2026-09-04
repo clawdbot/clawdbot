@@ -31,28 +31,15 @@ internal class NetworkMonitor(
 
   private val restoreState = NetworkRestoreState<Network>()
 
-  // registerNetworkCallback() replays every already-matching network's current state right after
-  // registration, and that replay is indistinguishable from a later genuine change: there is no
-  // non-deprecated synchronous "list every current network" call to seed all of them up front
-  // (only the single active one, below), so any other network that was already validated before
-  // this monitor existed looks like a fresh restore the moment its replay arrives. The replay
-  // delivers cached state ConnectivityService already holds, not a fresh validation check, so it
-  // resolves within milliseconds of registration; the window only needs to be short enough to
-  // cover that, not long enough to risk absorbing a genuine restore that happens to land in the
-  // same instant. A missed genuine restore in this narrow window is not unbounded: the affected
-  // session still falls back to the bounded retry ceiling owned by GatewaySession.
-  private val registeredAtNanos = System.nanoTime()
-
   private val callback =
     object : ConnectivityManager.NetworkCallback() {
       override fun onAvailable(network: Network) {
         // Fires once per network attach, before validation resolves, so it also covers a
-        // restored private LAN/VPN route that never reaches NET_CAPABILITY_VALIDATED. Same
-        // registration-replay hazard as onCapabilitiesChanged below: registerNetworkCallback()
-        // replays onAvailable for every network already connected at registration time, so the
-        // same bootstrap grace absorbs it.
+        // restored private LAN/VPN route that never reaches NET_CAPABILITY_VALIDATED.
+        // Registration can replay an existing route, but session guards make that wake harmless;
+        // dropping it here would also drop an indistinguishable genuine restore.
         val newlyAvailable = restoreState.onAvailable(network)
-        if (newlyAvailable && !isWithinNetworkMonitorBootstrapGrace(registeredAtNanos, System.nanoTime())) {
+        if (newlyAvailable) {
           notifyNetworkAvailable()
         }
       }
@@ -66,7 +53,7 @@ internal class NetworkMonitor(
             network,
             isTransportValidated(capabilities),
           )
-        if (justValidated && !isWithinNetworkMonitorBootstrapGrace(registeredAtNanos, System.nanoTime())) {
+        if (justValidated) {
           notifyNetworkAvailable()
         }
       }
@@ -173,20 +160,3 @@ internal class NetworkRestoreState<T>(
  * predicate can be unit-tested without a Robolectric ConnectivityManager shadow.
  */
 internal fun isTransportValidated(capabilities: NetworkCapabilities): Boolean = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-
-/**
- * How long after registration a just-validated network is treated as registration replay, not a
- * restore. Short by design: the replay carries cached state, not a fresh validation check, so it
- * resolves in milliseconds; this only needs to outlast that, not cover any real elapsed time.
- */
-internal const val NETWORK_MONITOR_BOOTSTRAP_GRACE_NANOS = 500_000_000L
-
-/**
- * Whether a just-validated network observed at [nowNanos] is still inside the registration replay
- * window that started at [registeredAtNanos]. Exposed internal so the boundary can be unit-tested
- * without a Robolectric ConnectivityManager shadow.
- */
-internal fun isWithinNetworkMonitorBootstrapGrace(
-  registeredAtNanos: Long,
-  nowNanos: Long,
-): Boolean = nowNanos - registeredAtNanos < NETWORK_MONITOR_BOOTSTRAP_GRACE_NANOS
