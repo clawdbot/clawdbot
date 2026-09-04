@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasUnjoinedWork,
+  inspectManagedProcessGroup,
   runManagedCommand,
   terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mts";
@@ -282,8 +283,8 @@ if (kind === "late-refuse") {
   spawnInheritedWriter("stderr", refusal + " delayed fixture\\n");
   process.exit(1);
 }
-if (kind === "resist-after-exit") {
-  const resistant = spawn(process.execPath, ["-e", 'const fs = require("node:fs");fs.writeFileSync(process.argv[1], String(process.pid));process.on("SIGTERM", () => { fs.appendFileSync(process.argv[2], "SIGTERM"); process.stderr.write("SIGTERM"); });process.send("ready");setInterval(() => {}, 1_000);', tracePath + ".resistant-pid", tracePath + ".signals"], { stdio: ["ignore", "ignore", "inherit", "ipc"] });
+if (kind === "resist-after-exit" || kind === "resist-ignored-after-exit") {
+  const resistant = spawn(process.execPath, ["-e", 'const fs = require("node:fs");fs.writeFileSync(process.argv[1], String(process.pid));process.on("SIGTERM", () => { fs.appendFileSync(process.argv[2], "SIGTERM"); process.stderr.write("SIGTERM"); });process.send("ready");setInterval(() => {}, 1_000);', tracePath + ".resistant-pid", tracePath + ".signals"], { stdio: ["ignore", "ignore", kind === "resist-after-exit" ? "inherit" : "ignore", "ipc"] });
   await new Promise((resolve) => resistant.once("message", resolve));
   recordFixtureProcess(resistant.pid);
   await (await fetch(controlUrl + "/wait")).text();
@@ -981,9 +982,14 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it.each([true, false])(
-    "bounds TERM/KILL cleanup and waits for inherited pipes (close=%s)",
-    async (closePipes) => {
+  it.each([
+    { closePipes: true, groupError: "ESRCH", initiallyClosed: false, stopped: true },
+    { closePipes: false, groupError: "ESRCH", initiallyClosed: false, stopped: false },
+    { closePipes: true, groupError: "EPERM", initiallyClosed: false, stopped: false },
+    { closePipes: true, groupError: "EPERM", initiallyClosed: true, stopped: false },
+  ])(
+    "bounds TERM/KILL cleanup (close=$closePipes, group=$groupError, initiallyClosed=$initiallyClosed)",
+    async ({ closePipes, groupError, initiallyClosed, stopped: expectedStopped }) => {
       const stdout = new PassThrough();
       const stderr = new PassThrough();
       const directKill = vi.fn(() => true);
@@ -995,12 +1001,21 @@ describe("openclaw test instance", () => {
         stderr,
         stdout,
       } as unknown as Parameters<typeof testing.stopGatewayProcess>[0];
+      if (initiallyClosed) {
+        const closed = Promise.all([once(stdout, "close"), once(stderr, "close")]);
+        stdout.destroy();
+        stderr.destroy();
+        await closed;
+      }
       const originalKill = process.kill.bind(process);
       const signalTimes: number[] = [];
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
         if (pid !== -12345) {
           return originalKill(pid, signal);
+        }
+        if (signal === 0) {
+          throw Object.assign(new Error("group lookup"), { code: groupError });
         }
         signalTimes.push(Date.now());
         if (signal === "SIGKILL" && closePipes) {
@@ -1021,10 +1036,10 @@ describe("openclaw test instance", () => {
             elapsedMs: Date.now() - startedAt,
           }));
         const [result] = await Promise.all([completion, vi.runAllTimersAsync()]);
-        expect(result.stopped).toBe(closePipes);
+        expect(result.stopped).toBe(expectedStopped);
         expect(result.pipesClosed).toBe(closePipes);
         expect(result.elapsedMs).toBeLessThanOrEqual(80);
-        expect(kill.mock.calls.filter(([pid]) => pid === -12345)).toEqual([
+        expect(kill.mock.calls.filter(([pid, signal]) => pid === -12345 && signal !== 0)).toEqual([
           [-12345, "SIGTERM"],
           [-12345, "SIGKILL"],
         ]);
@@ -1042,12 +1057,12 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "SIGKILLs a TERM-resistant group with inherited stderr after leader exit",
-    async ({ signal }) => {
+  it.runIf(process.platform !== "win32").for(["inherit", "ignore"] as const)(
+    "certifies completion of a TERM-resistant group with %s stderr after leader exit",
+    async (stderrMode, { signal }) => {
       const control = await createGatewayControl();
       const { instance, tracePath } = await createFakeGateway(
-        "resist-after-exit",
+        stderrMode === "inherit" ? "resist-after-exit" : "resist-ignored-after-exit",
         500,
         40,
         control,
@@ -1074,6 +1089,7 @@ describe("openclaw test instance", () => {
           abortGroup();
         }
         let resistantPid: number | undefined;
+        let stopped: boolean | undefined;
         const verifySignals = async () => {
           await Promise.race([
             control.reached,
@@ -1084,24 +1100,37 @@ describe("openclaw test instance", () => {
           resistantPid = Number(await fs.readFile(`${tracePath}.resistant-pid`, "utf8"));
           await control.release();
           await exited;
+          if (stderrMode === "ignore") {
+            await closed;
+          }
           expect(leader.exitCode).toBe(1);
           expect(leader.signalCode).toBeNull();
-          expect(leader.stderr.closed).toBe(false);
+          expect(leader.stderr.closed).toBe(stderrMode === "ignore");
           expect(isProcessAlive(resistantPid)).toBe(true);
 
-          const termReceipt = once(leader.stderr, "data");
           terminateManagedChild(leader, "SIGTERM");
-          const [receipt] = await withTestTimeout(termReceipt, 500, "fixture did not receive TERM");
-          expect(String(receipt)).toBe("SIGTERM");
-          expect(await fs.readFile(`${tracePath}.signals`, "utf8")).toBe("SIGTERM");
+          await expect
+            .poll(() => fs.readFile(`${tracePath}.signals`, "utf8"), { timeout: 500 })
+            .toBe("SIGTERM");
           expect(isProcessAlive(resistantPid)).toBe(true);
-          expect(leader.stderr.closed).toBe(false);
+          expect(leader.stderr.closed).toBe(stderrMode === "ignore");
 
-          terminateManagedChild(leader, "SIGKILL");
-          await withTestTimeout(closed, 500, "fixture pipes did not close after SIGKILL");
-          expect(leader.stdout.closed).toBe(true);
-          expect(leader.stderr.closed).toBe(true);
-          await waitForDead(resistantPid, 500);
+          stopped = await testing.stopGatewayProcess(leader, Date.now() + 80, 40);
+          // An incomplete stop may exhaust its deadline before KILL. Only success
+          // certifies closure; the owned rescue below verifies extinction unconditionally.
+          if (stopped) {
+            expect(leader.stdout.closed).toBe(true);
+            expect(leader.stderr.closed).toBe(true);
+            expect(isProcessAlive(resistantPid)).toBe(false);
+            expect(inspectManagedProcessGroup(leader, { errorPolicy: "indeterminate" })).toBe(
+              "dead",
+            );
+            await withTestTimeout(closed, 500, "fixture pipes did not close after SIGKILL");
+            await waitForDead(resistantPid, 500);
+            expect(inspectManagedProcessGroup(leader, { errorPolicy: "indeterminate" })).toBe(
+              "dead",
+            );
+          }
         };
         const reapGroup = async () => {
           terminateManagedChild(leader, "SIGKILL");
@@ -1119,10 +1148,18 @@ describe("openclaw test instance", () => {
           if (resistantPid) {
             await waitForDead(resistantPid, 500);
           }
+          expect(inspectManagedProcessGroup(leader, { errorPolicy: "indeterminate" })).toBe("dead");
         };
         const [proof] = await Promise.allSettled([verifySignals()]);
         const [cleanup] = await Promise.allSettled([reapGroup()]);
         signal.removeEventListener("abort", abortGroup);
+        const registry = process.env.OPENCLAW_HELPER_PROOF_PID_REGISTRY;
+        if (registry) {
+          await fs.appendFile(
+            `${registry}.stops`,
+            `${JSON.stringify({ stderrMode, stopped, leaderPid: leader.pid, resistantPid })}\n`,
+          );
+        }
         // Join before afterEach removes either root, and preserve both failures
         // rather than letting last-resort cleanup hide the original regression.
         if (cleanup.status === "rejected") {
