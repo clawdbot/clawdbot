@@ -306,25 +306,23 @@ export function sidebarPanelDefinitions(
     definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
       available: params?.dashboard !== nothing,
     }),
-    ...[...pluginPanels].map(
-      ([slot, entry]): SidebarPanelDefinition => ({
-        slot,
-        label: entry?.value.label ?? slot.slice("plugin:".length),
-        icon: icons.puzzle,
-        available: entry !== undefined,
-        content: entry
-          ? renderPluginContribution(
-              "panels",
-              entry.key,
-              { sessionKey: state?.sessionKey ?? "", agentId: params?.agentId ?? undefined },
-              nothing,
-              params?.isPluginPanelPresented(slot),
-            )
-          : null,
-        loading: renderPanelLoadingSkeleton("files", t("common.loading")),
-        empty: { description: entry?.value.label ?? t("pluginTabs.unavailableSubtitle") },
-      }),
-    ),
+    ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
+      slot,
+      label: entry?.value.label ?? slot.slice("plugin:".length),
+      icon: icons.puzzle,
+      available: entry !== undefined,
+      content: entry
+        ? renderPluginContribution(
+            "panels",
+            entry.key,
+            { sessionKey: state?.sessionKey ?? "", agentId: params?.agentId ?? undefined },
+            nothing,
+            params?.isPluginPanelPresented(slot),
+          )
+        : null,
+      loading: renderPanelLoadingSkeleton("files", t("common.loading")),
+      empty: { description: entry?.value.label ?? t("pluginTabs.unavailableSubtitle") },
+    })),
   ];
 }
 
