@@ -1,3 +1,4 @@
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { ClickClackDiscussionService } from "./service.js";
 
@@ -11,6 +12,7 @@ export function createClickClackDiscussionTool(params: {
   return {
     name: "discussion",
     label: "Discussion",
+    resultContentSource: "network" as const,
     description: "Read the latest messages from the ClickClack discussion bound to this session.",
     parameters: {
       type: "object",
@@ -36,7 +38,10 @@ export function createClickClackDiscussionTool(params: {
         ? Math.max(1, Math.min(MAX_MESSAGE_LIMIT, requested))
         : DEFAULT_MESSAGE_LIMIT;
       const result = await params.service.readLatestMessages(params.sessionKey, limit);
-      return textResult(result.text, {
+      const text = result.binding
+        ? wrapExternalContent(result.text, { source: "api" })
+        : result.text;
+      return textResult(text, {
         bound: Boolean(result.binding),
         limit,
         ...(result.binding ? { channelId: result.binding.channelId } : {}),
