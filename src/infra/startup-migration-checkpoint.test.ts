@@ -228,6 +228,8 @@ describe("startup migration checkpoint", () => {
         identity: migrationIdentity,
       }),
     ).toBe(true);
+    const { DatabaseSync } = requireNodeSqlite();
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     expect(
       needsStateMigrationCheckpoint({
         env,
@@ -236,6 +238,8 @@ describe("startup migration checkpoint", () => {
         identity: migrationIdentity,
       }),
     ).toBe(true);
+    expect(prepare.mock.calls.filter(([sql]) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    prepare.mockRestore();
 
     recordSuccessfulStartupMigrations({
       env,
@@ -310,6 +314,24 @@ describe("startup migration checkpoint", () => {
     expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
     expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(true);
     expect(readStartupMigrationVersion(env)).toBeNull();
+
+    // Older gateways recorded only startup completion, which also certifies state migrations.
+    withOpenClawStateStartupMigrationCheckpointDatabase(
+      (db) => {
+        const kysely = getNodeSqliteKysely<StartupMigrationLeaseTestDatabase>(db);
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("schema_meta")
+            .set({ meta_key: "startup-migrations" })
+            .where("meta_key", "=", "state-migrations"),
+        );
+      },
+      { env },
+    );
+    expect(needsStateMigrationCheckpoint(checkpoint)).toBe(false);
+    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(false);
+    expect(readStartupMigrationVersion(env)).toBe(checkpoint.version);
   });
 
   it("keeps the fast path disabled without immutable build provenance", () => {
