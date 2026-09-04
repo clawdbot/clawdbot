@@ -436,6 +436,8 @@ method scope (`operator.pairing`), based on the pending request's declared
 In this table, `fs.listDir` is the node command relayed through `node.invoke`.
 The top-level Gateway `fs.listDir` RPC needs `operator.write` for
 workspace-contained host browsing and `operator.admin` when `nodeId` is present.
+Pass directory paths exactly as returned by `fs.listDir`: whitespace in directory
+names, including trailing spaces, is significant.
 
 ### Caps/commands/permissions (node)
 
