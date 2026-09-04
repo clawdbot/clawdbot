@@ -337,6 +337,12 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
     typographer: false,
   });
   md.linkify.set({ fuzzyLink: true });
+  // The IR layer should faithfully construct link spans for every scheme
+  // except script-execution hazards (javascript:/vbscript:/data:). Letting
+  // file:/// and other non-executable schemes through means the render-layer
+  // allowlist can collapse them to label text instead of leaking
+  // `[label](file:///...)` verbatim into `ir.text`. Mirrors image-spans.ts.
+  md.validateLink = (rawHref: string) => !/^(?:javascript|vbscript|data):/i.test(rawHref.trim());
   md.use(markdownItCjkFriendly);
   md.use(markdownItAssistantTranscriptRoles);
   if (options.preserveDunderIdentifiers) {

@@ -51,3 +51,21 @@ describe("markdownToIR link provenance", () => {
     });
   });
 });
+
+it("file:// scheme constructs a link span instead of leaking raw markdown", () => {
+  // Before the fix, markdown-it's default `validateLink` rejected file:/// and
+  // the raw `[label](file:///...)` syntax survived verbatim in `ir.text`, so
+  // every downstream renderer leaked it. The IR layer now constructs the span;
+  // the render-layer allowlist collapses the non-allowlist href to label text.
+  const ir = markdownToIR("see [Nova_Core.md](file:///home/x/Nova_Core.md) ok");
+  expect(ir.links).toEqual([{ start: 4, end: 16, href: "file:///home/x/Nova_Core.md" }]);
+  expect(ir.text).toBe("see Nova_Core.md ok");
+});
+
+it("javascript: scheme stays rejected at the IR layer to prevent XSS", () => {
+  // Script-execution schemes stay rejected even though we now allow file://
+  // and other non-executable schemes. Letting javascript: through would risk
+  // a channel renderer emitting a clickable `<a href="javascript:...">`.
+  const ir = markdownToIR("see [a](javascript:alert(1)) ok");
+  expect(ir.links).toEqual([]);
+});

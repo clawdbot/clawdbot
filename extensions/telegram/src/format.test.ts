@@ -69,6 +69,23 @@ describe("markdownToTelegramHtml", () => {
     }
   });
 
+  it("collapses non-allowlist scheme links to label text without leaking raw markdown", () => {
+    // file:/// is a non-allowlist scheme; the link must collapse to its label
+    // rather than leaking `[label](file:///...)` verbatim to the reader.
+    expect(markdownToTelegramHtml("See [the report](file:///home/x/report.txt) for details.")).toBe(
+      "See the report for details.",
+    );
+    // Relative hrefs collapse the same way.
+    expect(markdownToTelegramHtml("see [report](./report) ok")).toBe("see report ok");
+  });
+
+  it("does not emit a clickable anchor for javascript: scheme links", () => {
+    // javascript: is rejected at the IR layer (no link span constructed), so no
+    // clickable `<a href="javascript:...">` can ever be emitted — the raw
+    // Markdown syntax stays inert text rather than an executable anchor.
+    expect(markdownToTelegramHtml("see [click](javascript:alert(1)) ok")).not.toContain("<a");
+  });
+
   it("preserves supported Telegram HTML in stream markdown rendering", () => {
     const input = [
       "✉️ <b>Morning Email Rollup</b>",
