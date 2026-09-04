@@ -13,13 +13,13 @@ import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/tr
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
-import { renderInboundDocumentContext } from "../../media-understanding/apply.js";
 import {
   recordSessionCreated,
   recordSessionGoalChanged,
 } from "../../sessions/session-state-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
@@ -65,6 +65,13 @@ type ChatSendInternalOptions = {
   toolsAllow?: string[];
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
+
+// Document rendering is only needed for a steered attachment; loading it
+// eagerly would pull the media provider registry and its plugin graph into
+// every chat.send handler load. The .runtime facade is the lazy boundary.
+const mediaDocumentContextLoader = createLazyImportLoader(
+  () => import("../../media-understanding/apply.runtime.js"),
+);
 
 async function handleChatSendWithOptions(
   {
@@ -389,7 +396,11 @@ async function handleChatSendWithOptions(
     // dispatch and extracts exactly once through the full pipeline.
     const steerDocumentContextText =
       messageInjectionTarget && !isInternalTextSlashCommandTurn
-        ? await renderInboundDocumentContext({ ctx, cfg: preparedSession.value.cfg })
+        ? await mediaDocumentContextLoader
+            .load()
+            .then((runtime) =>
+              runtime.renderInboundDocumentContext({ ctx, cfg: preparedSession.value.cfg }),
+            )
         : undefined;
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,

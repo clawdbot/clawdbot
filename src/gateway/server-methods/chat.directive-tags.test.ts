@@ -2241,7 +2241,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("hands steered document attachments to the active run as extracted file context", async () => {
     const { send } = await createSqliteChatRequest("openclaw-chat-send-steer-document-");
     mockState.hasMessageReceivedHooks = true;
-    const documentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-steer-doc-"));
+    // Under the suite fixture root so the suite cleanup removes it; a bare
+    // tmpdir entry would leak on every run.
+    const documentDir = fs.mkdtempSync(path.join(suiteFixtureRoot, "openclaw-steer-doc-"));
     const documentPath = path.join(documentDir, "notes.txt");
     fs.writeFileSync(documentPath, "steered document body");
     setSavedMediaResults([documentPath, "text/plain"]);
@@ -2287,7 +2289,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
 
     expect(queueMessage).toHaveBeenCalledOnce();
-    const [injectedText] = vi.mocked(queueMessage).mock.calls[0];
+    const queueCall = vi.mocked(queueMessage).mock.calls[0];
+    if (!queueCall) {
+      throw new Error("expected queueMessage to receive the injected text");
+    }
+    const [injectedText] = queueCall;
     // The active run never reaches reply dispatch, so the injection text must
     // already carry the extracted document context.
     expect(injectedText).toContain('<file name="notes.txt" mime="text/plain">');
