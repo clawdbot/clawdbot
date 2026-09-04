@@ -2,20 +2,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  AgentHarnessPreflightError,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startCodexAttemptThread } from "./attempt-startup.js";
+import type { startCodexAttemptThread } from "./attempt-startup.js";
 import {
-  bundleMcpThreadConfig,
   answerInitialize,
   answerPreparedApiKeyLogin,
   captureExpectedRuntimeArtifact,
   createPairedAttemptRuntime,
   createAttemptPaths,
   createAttemptClientHarness,
+  createAttemptThreadStarter,
   createAttemptParams,
   type AttemptPaths,
   HARNESS_REQUEST_TIMEOUT_MS,
@@ -32,17 +29,13 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   type CodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
-  resolveCodexComputerUseConfig,
 } from "./config.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
-import {
-  resetCodexTestBindingStore,
-  testCodexAppServerBindingStore,
-} from "./session-binding.test-helpers.js";
+import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import {
   clearSharedCodexAppServerClient,
   clearSharedCodexAppServerClientAndWait,
@@ -50,7 +43,6 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
-  type CodexAppServerPreparedAuth,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
@@ -90,75 +82,7 @@ const tempRoots = new Set<string>();
 
 const pluginConfig: CodexPluginConfig = { appServer: { command: "codex" } };
 
-function startThreadWithHarness(
-  startupTimeoutMs: number,
-  signal = new AbortController().signal,
-  overrides?: {
-    pluginConfig?: CodexPluginConfig;
-    startupPreparedAuth?: CodexAppServerPreparedAuth;
-    attemptClientFactory?: (harness: ClientHarness) => CodexAppServerClientFactory;
-    buildAttemptParams?: () => EmbeddedRunAttemptParams;
-    harness?: ClientHarness;
-    paths?: AttemptPaths;
-    skipStartSpy?: boolean;
-    runtimeArtifactRequest?: Parameters<
-      typeof startCodexAttemptThread
-    >[0]["runtimeArtifactRequest"];
-    sandbox?: Parameters<typeof startCodexAttemptThread>[0]["sandbox"];
-    sandboxExecServerEnabled?: boolean;
-    runtime?: Parameters<typeof startCodexAttemptThread>[0]["runtime"];
-    appServer?: Parameters<typeof startCodexAttemptThread>[0]["appServer"];
-  },
-) {
-  const harness = overrides?.harness ?? createAttemptClientHarness();
-  const paths = overrides?.paths ?? createAttemptPaths(tempRoots);
-  const startSpy = overrides?.skipStartSpy
-    ? undefined
-    : vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-  const effectivePluginConfig = overrides?.pluginConfig ?? pluginConfig;
-
-  const run = startCodexAttemptThread({
-    bindingStore: testCodexAppServerBindingStore,
-    runtime: overrides?.runtime,
-    attemptClientFactory:
-      overrides?.attemptClientFactory?.(harness) ?? getLeasedSharedCodexAppServerClient,
-    appServer:
-      overrides?.appServer ??
-      resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
-    pluginConfig: effectivePluginConfig,
-    computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: effectivePluginConfig }),
-    startupAuthProfileId: undefined,
-    startupAuthBindingFingerprint: undefined,
-    ...(overrides?.runtimeArtifactRequest
-      ? { runtimeArtifactRequest: overrides.runtimeArtifactRequest }
-      : {}),
-    startupPreparedAuth: overrides?.startupPreparedAuth,
-    startupAuthAccountCacheKey: undefined,
-    startupEnvApiKeyCacheKey: undefined,
-    agentDir: paths.agentDir,
-    config: undefined,
-    buildAttemptParams: overrides?.buildAttemptParams ?? (() => createAttemptParams(paths)),
-    sessionAgentId: "agent-1",
-    effectiveWorkspace: paths.workspaceDir,
-    effectiveCwd: paths.cwd,
-    dynamicTools: [],
-    webSearchAllowed: false,
-    developerInstructions: undefined,
-    finalConfigPatch: undefined,
-    bundleMcpThreadConfig,
-    nativeToolSurfaceEnabled: true,
-    nativeProviderWebSearchSupport: "supported",
-    sandboxExecServerEnabled: overrides?.sandboxExecServerEnabled ?? false,
-    sandbox: overrides?.sandbox ?? null,
-    contextEngineProjection: undefined,
-    startupTimeoutMs,
-    signal,
-    onStartupTimeout: vi.fn(),
-    spawnedBy: undefined,
-  });
-
-  return { harness, run, startSpy };
-}
+const startThreadWithHarness = createAttemptThreadStarter(tempRoots, pluginConfig);
 
 async function startIsolatedPairedAttempt(params: {
   harness: ClientHarness;

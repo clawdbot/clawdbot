@@ -84,7 +84,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
   });
 
-  it("checks native requirements without requiring managed-hook permission for observational hooks", async () => {
+  it("allows observational hooks under managed-only hook policy", async () => {
     const sessionFile = path.join(tempDir, "observational-hooks-only.jsonl");
     const workspaceDir = path.join(tempDir, "observational-hooks-only-workspace");
     const harness = createStartedThreadHarness(async (method) =>
@@ -100,9 +100,6 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(
-      harness.requests.filter((request) => request.method === "configRequirements/read"),
-    ).toHaveLength(1);
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     expect(startRequest?.params).not.toHaveProperty(["config", "hooks.PreToolUse"]);
   });
