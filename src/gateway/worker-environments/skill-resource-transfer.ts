@@ -13,6 +13,11 @@ import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspa
 import { cleanupSkillResourceAllocation } from "./skill-resource-allocation-cleanup.js";
 import type { SkillResourceAllocationCoordinator } from "./skill-resource-allocation-coordinator.js";
 import {
+  createSkillResourceLeaseRenewal,
+  RESOURCE_LEASE_MS,
+  RESOURCE_SWEEP_MS,
+} from "./skill-resource-lease-renewal.js";
+import {
   skillResourceAllocationAttestation,
   skillResourceAllocationDirectoryName,
   type SkillResourceLeaseLocation,
@@ -22,9 +27,6 @@ import {
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 type ResourceOperation = SkillResourceRuntimeOperation;
 
-const RESOURCE_LEASE_MS = 60_000;
-const RESOURCE_LEASE_RENEW_MS = 20_000;
-const RESOURCE_SWEEP_MS = 1_000;
 const RESOURCE_ROOT_PREFIX = "openclaw-inbound-";
 const RESOURCE_REGISTRY_PREFIX = ".openclaw-skill-resource-lease-";
 const RESOURCE_PERMIT_PREFIX = ".openclaw-skill-resource-permit-";
@@ -522,119 +524,14 @@ export async function transferSkillResources(params: {
       .catch(() => undefined);
     throw error;
   }
-  let renewalStopped = false;
-  let renewalFailure: Error | undefined;
-  let leaseDeadline = commitDispatchedAt + RESOURCE_LEASE_MS;
-  let nextRenewAt = commitDispatchedAt + RESOURCE_LEASE_RENEW_MS;
-  let renewalRunning = false;
-  let renewalAbort: AbortController | undefined;
-  let renewalInFlight = Promise.resolve();
-  const failRenewal = (error: unknown) => {
-    renewalFailure =
-      error instanceof Error
-        ? error
-        : new Error("Skill resource lease authority was lost.", { cause: error });
-    renewalStopped = true;
-    clearInterval(renewalTimer);
-  };
-  const runRenewal = () => {
-    const dispatchedAt = Date.now();
-    const controller = new AbortController();
-    renewalAbort = controller;
-    const signal = params.signal
-      ? AbortSignal.any([params.signal, controller.signal])
-      : controller.signal;
-    const deadlineError = new DOMException("Skill resource lease renewal expired", "TimeoutError");
-    const timeout = setTimeout(
-      () => controller.abort(deadlineError),
-      Math.max(0, leaseDeadline - Date.now()),
-    );
-    timeout.unref?.();
-    const operation = execute({ op: "renew", ...leaseLocation }, signal);
-    void operation.catch(() => undefined);
-    const abortReason = () =>
-      signal.reason instanceof Error
-        ? signal.reason
-        : new DOMException("Skill resource renewal aborted", "AbortError");
-    const aborted = new Promise<never>((_resolve, reject) => {
-      if (signal.aborted) {
-        reject(abortReason());
-        return;
-      }
-      signal.addEventListener("abort", () => reject(abortReason()), { once: true });
-    });
-    return Promise.race([operation, aborted])
-      .then(() => dispatchedAt)
-      .finally(() => {
-        clearTimeout(timeout);
-        if (renewalAbort === controller) {
-          renewalAbort = undefined;
-        }
-      });
-  };
-  const renewalTimer = setInterval(() => {
-    if (renewalStopped || renewalRunning || Date.now() < nextRenewAt) {
-      return;
-    }
-    renewalRunning = true;
-    renewalInFlight = runRenewal()
-      .then((dispatchedAt) => {
-        leaseDeadline = dispatchedAt + RESOURCE_LEASE_MS;
-        nextRenewAt = dispatchedAt + RESOURCE_LEASE_RENEW_MS;
-      })
-      .catch((error: unknown) => {
-        try {
-          assertAllocationCurrent();
-        } catch (authorityError) {
-          failRenewal(authorityError);
-          return;
-        }
-        if (Date.now() + RESOURCE_SWEEP_MS >= leaseDeadline) {
-          failRenewal(
-            new Error("Skill resource lease could not be renewed before expiry.", {
-              cause: error,
-            }),
-          );
-        } else {
-          nextRenewAt = Date.now() + RESOURCE_SWEEP_MS;
-        }
-      })
-      .finally(() => {
-        renewalRunning = false;
-      });
-  }, RESOURCE_SWEEP_MS);
-  renewalTimer.unref?.();
-  const assertResourcesCurrent = () => {
-    assertAllocationCurrent();
-    if (!renewalFailure && !renewalStopped && Date.now() >= leaseDeadline) {
-      const error = new Error("Skill resource lease expired before renewal completed.");
-      renewalAbort?.abort(error);
-      failRenewal(error);
-    }
-    if (renewalFailure) {
-      throw renewalFailure;
-    }
-  };
-  let cleanupInFlight: Promise<void> | undefined;
-  const cleanup = () => {
-    if (cleanupInFlight) {
-      return cleanupInFlight;
-    }
-    const current = (async () => {
-      renewalStopped = true;
-      clearInterval(renewalTimer);
-      renewalAbort?.abort(new DOMException("Skill resource cleanup started", "AbortError"));
-      await renewalInFlight.catch(() => undefined);
-      await allocationOwner.coordinator.retire(ledgerRecord, params.tunnel, params.assertCurrent);
-    })();
-    cleanupInFlight = current;
-    void current.catch(() => {
-      if (cleanupInFlight === current) {
-        cleanupInFlight = undefined;
-      }
-    });
-    return current;
-  };
+  const leaseRenewal = createSkillResourceLeaseRenewal({
+    assertAllocationCurrent,
+    commitDispatchedAt,
+    executeRenewal: (signal) => execute({ op: "renew", ...leaseLocation }, signal),
+    retire: () =>
+      allocationOwner.coordinator.retire(ledgerRecord, params.tunnel, params.assertCurrent),
+    ...(params.signal ? { callerSignal: params.signal } : {}),
+  });
   try {
     check();
     const deliveredSourcePaths = new Set(
@@ -710,11 +607,11 @@ export async function transferSkillResources(params: {
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       },
       mounts,
-      assertCurrent: assertResourcesCurrent,
-      cleanup,
+      assertCurrent: leaseRenewal.assertCurrent,
+      cleanup: leaseRenewal.cleanup,
     };
   } catch (error) {
-    await cleanup().catch(() => undefined);
+    await leaseRenewal.cleanup().catch(() => undefined);
     throw error;
   }
 }

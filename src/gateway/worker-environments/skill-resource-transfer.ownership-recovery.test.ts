@@ -241,8 +241,8 @@ describe("remote-exec skill resource ownership recovery", () => {
         leaseToken: "c".repeat(64),
       });
       current.coordinator.abandon(allocationId);
-      const recoveryStarted = createDeferred<void>();
-      const finishRecovery = createDeferred<void>();
+      const recoveryStarted = createDeferred();
+      const finishRecovery = createDeferred();
       const deferred = vi.fn();
       const warn = vi.fn();
       const reconnectStart = vi.fn(async () => {
