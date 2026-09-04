@@ -280,6 +280,21 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}custodian`);
         const skip = page.getByRole("button", { name: "Skip for now" });
         await skip.waitFor();
+        const assistantGroup = page.locator(".chat-group.assistant", { hasText: "Choose one." });
+        const footerMeta = assistantGroup.locator(
+          ":scope > .chat-group-footer > .chat-group-footer__meta",
+        );
+        const questionCard = page.locator(".custodian__option-card");
+        expect(await footerMeta.count()).toBe(1);
+        const [footerBox, cardBox] = await Promise.all([
+          footerMeta.boundingBox(),
+          questionCard.boundingBox(),
+        ]);
+        expect(footerBox).not.toBeNull();
+        expect(cardBox).not.toBeNull();
+        const clearance = cardBox!.y - (footerBox!.y + footerBox!.height);
+        expect(clearance).toBeGreaterThanOrEqual(4);
+        expect(clearance).toBeLessThanOrEqual(12);
         await gateway.emitGatewayEvent("health", {
           channelLabels: { discord: "Discord" },
           channels: { discord: { configured: true, connected: false, running: true } },
@@ -352,9 +367,28 @@ suite.define(() => {
         expect(await page.locator("openclaw-option-card").count()).toBe(0);
         expect(await page.locator(".agent-chat__composer-shell").count()).toBe(0);
 
+        const assistantGroup = page.locator(".chat-group.assistant", {
+          hasText: "Choose a channel.",
+        });
+        const footerMeta = assistantGroup.locator(
+          ":scope > .chat-group-footer > .chat-group-footer__meta",
+        );
+        const wizardStep = page.locator(".custodian__wizard-step");
+        expect(await footerMeta.count()).toBe(1);
+        const [footerBox, wizardBox] = await Promise.all([
+          footerMeta.boundingBox(),
+          wizardStep.boundingBox(),
+        ]);
+        expect(footerBox).not.toBeNull();
+        expect(wizardBox).not.toBeNull();
+        const clearance = wizardBox!.y - (footerBox!.y + footerBox!.height);
+        expect(clearance).toBeGreaterThanOrEqual(4);
+        expect(clearance).toBeLessThanOrEqual(12);
+
         const twitchOption = page.locator(".wizard-step__option", { hasText: "Twitch" });
-        const continueButton = page.getByRole("button", { name: "Continue" });
-        const cancelButton = page.getByRole("button", { name: "Cancel" });
+        const actionRow = wizardStep.locator(".wizard-step__actions--split");
+        const continueButton = actionRow.getByRole("button", { name: "Continue", exact: true });
+        const cancelButton = actionRow.getByRole("button", { name: "Cancel", exact: true });
         const readInteractionStyle = (element: Element) => {
           const style = getComputedStyle(element);
           return {
