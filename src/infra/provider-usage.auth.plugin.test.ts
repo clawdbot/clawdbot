@@ -257,6 +257,40 @@ describe("resolveProviderAuths plugin boundary", () => {
     });
   });
 
+  it("preserves an unavailable secret error for an exact account", async () => {
+    const profileId = "openrouter:account";
+    const secretError = new Error("Saved account secret is unavailable");
+    resolveApiKeyForProfileMock.mockRejectedValueOnce(secretError);
+    resolveProviderUsageAuthWithPluginMock.mockImplementationOnce(async (rawParams) => {
+      const { context } = rawParams as {
+        context: {
+          resolveApiKeyCandidatesFromConfigAndStore: () => Promise<string[]>;
+        };
+      };
+      const [token] = await context.resolveApiKeyCandidatesFromConfigAndStore();
+      return token ? { token } : null;
+    });
+
+    await expect(
+      resolveProviderProfileUsageAuth({
+        provider: "openrouter",
+        profileId,
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: "openrouter",
+              keyRef: { source: "env", provider: "default", id: "ACCOUNT_KEY" },
+            },
+          },
+        },
+        config: {},
+        env: {},
+      }),
+    ).rejects.toBe(secretError);
+  });
+
   it("optionally reports the saved profile selected by unscoped auth", async () => {
     const profileId = "openai:first";
     const store = {

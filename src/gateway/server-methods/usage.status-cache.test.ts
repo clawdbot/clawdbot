@@ -407,29 +407,39 @@ describe("usage.status provider usage cache", () => {
     await vi.waitFor(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2));
   });
 
-  it("shares the raw snapshot with models.authStatus and invalidates on credential rotation", async () => {
-    await runUsageStatus();
-    const agentId = resolveDefaultAgentId(config);
-    const agentDir = resolveAgentDir(config, agentId);
-    const usage = readProviderUsageStaleWhileRevalidate({
-      agentId,
-      agentDir,
-      configRef: config,
-      credentialKey: getProviderUsageRuntimeSnapshot({ config }).credentialKey,
-      providerIds: ["openai"],
-      now,
-    });
-    expect(usage.get("openai")?.windows[0]?.usedPercent).toBe(10);
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
-
-    store = createStore("access-two");
-    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
-    const rotated = (await runUsageStatus()) as {
-      providers: Array<{ windows: Array<{ usedPercent: number }> }>;
-    };
-    expect(rotated.providers[0]?.windows[0]?.usedPercent).toBe(20);
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
-  });
+  it.each([false, true])(
+    "isolates provider-only misses from general usage (general first: %s)",
+    async (generalFirst) => {
+      mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
+        updatedAt: now,
+        providers: options.providerOnly
+          ? []
+          : [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                windows: [{ label: "week", usedPercent: 10 }],
+              },
+            ],
+      }));
+      if (generalFirst) await runUsageStatus();
+      const params = {
+        agentId: resolveDefaultAgentId(config),
+        agentDir: resolveAgentDir(config, resolveDefaultAgentId(config)),
+        configRef: config,
+        credentialKey: getProviderUsageRuntimeSnapshot({ config }).credentialKey,
+        providerIds: ["openai"],
+        now,
+      };
+      expect(readProviderUsageStaleWhileRevalidate(params).size).toBe(0);
+      await Promise.all(mocks.loadProviderUsageSummary.mock.results.map((result) => result.value));
+      expect(readProviderUsageStaleWhileRevalidate(params).size).toBe(0);
+      expect(await runUsageStatus()).toMatchObject({
+        providers: [{ windows: [{ usedPercent: 10 }] }],
+      });
+      expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("keeps account usage isolated while sharing the cache machinery", async () => {
     store = {

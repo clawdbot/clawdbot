@@ -66,8 +66,8 @@ function scopeProviderUsageCredentialKey(
   credentialKey: string,
   providerIds: readonly UsageProviderId[],
 ): string {
-  // models.authStatus fingerprints every direct provider. Scope that evidence to
-  // this fetch set so usage.status can share the same credential-bound snapshot.
+  // Scope the prepared credential evidence to this fetch set so unrelated
+  // provider credentials do not invalidate its snapshot.
   try {
     // Produced only by fingerprintProviderUsageCredentials below, which always
     // stringifies an object with a `direct` array; a parse failure returns the input.
@@ -146,6 +146,7 @@ function scheduleProviderUsageRefresh(params: {
   workspaceDir?: string;
   authStore?: AuthProfileStore;
   authProfile?: { provider: UsageProviderId; profileId: string };
+  providerOnly?: boolean;
   configRef: OpenClawConfig;
   credentialKey: string;
   providerIds: UsageProviderId[];
@@ -166,6 +167,7 @@ function scheduleProviderUsageRefresh(params: {
   const load = () =>
     loadProviderUsageSummary({
       providers: params.providerIds,
+      ...(params.providerOnly ? { providerOnly: true } : {}),
       ...(params.authProfile ? { authProfile: params.authProfile } : {}),
       ...(params.authProfile
         ? {
@@ -231,6 +233,7 @@ type ProviderUsageCacheParams = {
   workspaceDir?: string;
   authStore?: AuthProfileStore;
   authProfile?: { provider: UsageProviderId; profileId: string };
+  providerOnly?: boolean;
   cacheOwnerKey?: string;
   configRef: OpenClawConfig;
   credentialKey: string;
@@ -277,6 +280,7 @@ function readUsageCacheStaleWhileRevalidate(params: ProviderUsageCacheParams): U
       workspaceDir: params.workspaceDir,
       authStore: params.authStore,
       authProfile: params.authProfile,
+      providerOnly: params.providerOnly,
       configRef: params.configRef,
       credentialKey,
       providerIds,
@@ -293,7 +297,12 @@ function readUsageCacheStaleWhileRevalidate(params: ProviderUsageCacheParams): U
 export function readProviderUsageStaleWhileRevalidate(
   params: ProviderUsageCacheParams,
 ): Map<string, ProviderUsageStatus> {
-  return readUsageCacheStaleWhileRevalidate(params).usageByProvider;
+  // A provider-only miss must not hide account usage from the general usage page.
+  return readUsageCacheStaleWhileRevalidate({
+    ...params,
+    providerOnly: true,
+    cacheOwnerKey: `${params.agentId}\0provider`,
+  }).usageByProvider;
 }
 
 export function readProfileUsageStaleWhileRevalidate(params: {
@@ -388,7 +397,7 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
   return { updatedAt: params.now, providers: [], refreshing: true };
 }
 
-/** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */
+/** Uses the shared cache machinery for the unscoped usage.status RPC. */
 export async function loadUsageStatusStaleWhileRevalidate(params: {
   config: OpenClawConfig;
   coldRead?: "refresh-marker";

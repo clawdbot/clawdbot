@@ -249,8 +249,12 @@ async function resolveProviderApiKeyCandidatesFromConfigAndStore(params: {
         profileId,
         agentDir: params.state.agentDir,
       });
-    } catch {
-      // Preserve the remaining credential candidates when one SecretRef fails.
+    } catch (error) {
+      // Unscoped discovery can try another credential. A pinned account must
+      // report its own failure instead of completing with no usage or diagnostic.
+      if (params.profileIds) {
+        throw error;
+      }
       continue;
     }
     const value = normalizeSecretInput(resolved?.apiKey);

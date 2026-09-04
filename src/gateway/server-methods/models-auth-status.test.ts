@@ -1842,6 +1842,7 @@ describe("models.authStatus", () => {
 
       expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
         providers: [provider],
+        providerOnly: true,
         agentDir: "/tmp/agent",
         authStore: preparedAuthStore,
         config: expect.any(Object),
@@ -1860,7 +1861,7 @@ describe("models.authStatus", () => {
     },
   );
 
-  it("keeps stored static-key auth resolution off the status RPC", async () => {
+  it("loads saved billing separately from account quota without blocking status", async () => {
     const oauthProfileId = "anthropic:account";
     const adminProfileId = "anthropic:billing";
     const profiles = [
@@ -1904,17 +1905,28 @@ describe("models.authStatus", () => {
         },
       },
     });
-    await readAuthStatus();
-    await waitForFast(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
-      providers: ["anthropic"],
-      authProfile: { provider: "anthropic", profileId: oauthProfileId },
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-      authStore: preparedAuthStore,
-      config: expect.any(Object),
-      isAuthProfileCurrent: expect.any(Function),
-      timeoutMs: 5_000,
+    const pending = Promise.withResolvers<void>();
+    mocks.loadProviderUsageSummary.mockImplementation(async (options) => {
+      await pending.promise;
+      return {
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            windows: [],
+            summary: options.providerOnly ? "Organization billing" : "Account quota",
+          },
+        ],
+      };
+    });
+    expect((await readAuthStatus()).usageRefreshPending).toBe(true);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    pending.resolve();
+    await waitForFast(async () => {
+      const result = (await readAuthStatus()).providers[0];
+      expect(result?.usage?.summary).toBe("Organization billing");
+      expect(result?.profiles[0]?.usage?.summary).toBe("Account quota");
     });
   });
 
@@ -2059,22 +2071,36 @@ describe("models.authStatus", () => {
     ).toBe(10);
   });
 
-  it("adds DeepSeek API-key balance summaries to auth status usage", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
-      models: { providers: { deepseek: { apiKey: "direct-value" } } },
-    });
+  it.each([
+    ["deepseek", "direct"],
+    ["deepseek", "stored"],
+    ["clawrouter", "stored"],
+  ])("adds %s %s API-key balances to auth status", async (provider, source) => {
+    mocks.listProviderUsagePluginDescriptors.mockReturnValue([{ provider, displayName: provider }]);
+    if (source === "direct") {
+      mocks.getRuntimeConfig.mockReturnValue({
+        models: { providers: { [provider]: { apiKey: "key" } } },
+      });
+    } else {
+      setPreparedAuthStore({
+        version: 1,
+        profiles: {
+          [`${provider}:default`]: { type: "api_key", provider, key: "key" },
+        },
+      });
+    }
     mocks.buildAuthHealthSummary.mockReturnValue({
       now: 0,
       warnAfterMs: 0,
-      profiles: [createApiKeyProfile("deepseek")],
-      providers: [createStaticApiKeyProvider("deepseek")],
+      profiles: [createApiKeyProfile(provider)],
+      providers: [createStaticApiKeyProvider(provider)],
     });
     mocks.loadProviderUsageSummary.mockResolvedValue({
       updatedAt: 0,
       providers: [
         {
-          provider: "deepseek",
-          displayName: "DeepSeek",
+          provider,
+          displayName: provider,
           windows: [],
           summary: "Balance ¥42.50",
         },
@@ -2085,7 +2111,8 @@ describe("models.authStatus", () => {
     expect(first.providers[0]?.usage).toBeUndefined();
 
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
-      providers: ["deepseek"],
+      providers: [provider],
+      providerOnly: true,
       agentDir: "/tmp/agent",
       authStore: preparedAuthStore,
       config: expect.any(Object),
@@ -2098,7 +2125,7 @@ describe("models.authStatus", () => {
     });
     const refreshed = expectDefined(result, "refreshed auth status");
     expect(refreshed.providers[0]?.usage).toEqual({
-      providerId: "deepseek",
+      providerId: provider,
       refreshedAt: 0,
       windows: [],
       summary: "Balance ¥42.50",

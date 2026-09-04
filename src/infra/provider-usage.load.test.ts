@@ -113,6 +113,54 @@ describe("provider-usage.load", () => {
     expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
   });
 
+  it("does not fetch an account fallback for provider-only billing", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
+      token: "account-token",
+      authProfileId: "anthropic:account",
+    });
+    const summary = await loadProviderUsageSummary({
+      providers: ["anthropic"],
+      providerOnly: true,
+      config: {},
+      env: {},
+      authStore: {
+        version: 1,
+        profiles: {
+          "anthropic:account": {
+            type: "token",
+            provider: "anthropic",
+            token: "account-token",
+          },
+        },
+      },
+    });
+    expect(summary.providers).toEqual([]);
+    expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("reports exact-account auth failures without contacting the provider", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockRejectedValueOnce(
+      new Error("Saved account secret is unavailable"),
+    );
+    const summary = await loadProviderUsageSummary({
+      now: usageNow,
+      authProfile: { provider: "openrouter", profileId: "openrouter:account" },
+      authStore: { version: 1, profiles: {} },
+      config: {},
+      env: {},
+    });
+
+    expect(summary.providers).toEqual([
+      {
+        provider: "openrouter",
+        displayName: "OpenRouter",
+        windows: [],
+        error: "Saved account secret is unavailable",
+      },
+    ]);
+    expect(resolveProviderUsageSnapshotWithPluginMock).not.toHaveBeenCalled();
+  });
+
   it("does not enter the provider hook after profile refresh authority is revoked", async () => {
     let resolveAuth: ((value: { token: string; authProfileId: string }) => void) | undefined;
     const authPending = new Promise<{ token: string; authProfileId: string }>((resolve) => {

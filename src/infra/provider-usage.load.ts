@@ -51,6 +51,7 @@ type UsageSummaryOptions = {
   timeoutMs?: number;
   providers?: UsageProviderId[];
   auth?: ProviderAuth[];
+  providerOnly?: boolean;
   authProfile?: { provider: UsageProviderId; profileId: string };
   /** Closure-bound cache ownership check, evaluated immediately before provider I/O. */
   isAuthProfileCurrent?: () => boolean;
@@ -179,6 +180,7 @@ export async function loadProviderUsageSummary(
           (
             await resolveProviderAuths({
               providers: [provider],
+              preserveAuthProfileId: opts.providerOnly,
               agentDir: opts.agentDir,
               config,
               env,
@@ -193,7 +195,9 @@ export async function loadProviderUsageSummary(
         const message = formatErrorMessage(authError);
         return failureSnapshot(provider, message.trim() || "Auth failed");
       }
-      if (!auth) {
+      // Provider billing must not fall back to an account quota already fetched
+      // by its exact-profile owner. Plugins classify credentials before any HTTP.
+      if (!auth || (opts.providerOnly && auth.authProfileId)) {
         return undefined;
       }
       // Auth resolution may await secret refresh. Recheck the owning cache generation
