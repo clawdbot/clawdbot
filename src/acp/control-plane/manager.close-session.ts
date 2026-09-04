@@ -102,7 +102,7 @@ export async function runManagerCloseSession(params: {
           (input.discardPersistentState && acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
           isRecoverableManagerAcpxExitError(acpError.message))
       ) {
-        if (input.discardPersistentState) {
+        if (input.discardPersistentState || input.clearMeta) {
           await tryPrepareFreshManagerRuntimeSession({
             deps: params.deps,
             cfg: input.cfg,
