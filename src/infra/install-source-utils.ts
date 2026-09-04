@@ -381,7 +381,16 @@ export async function packNpmSpecToArchive(params: {
     }
 > {
   const res = await runCommandWithTimeout(
-    ["npm", "pack", params.spec, "--ignore-scripts", "--json"],
+    [
+      "npm",
+      "pack",
+      params.spec,
+      "--ignore-scripts",
+      "--json",
+      "--pack-destination",
+      params.cwd,
+      "--dry-run=false",
+    ],
     {
       timeoutMs: Math.max(params.timeoutMs, 300_000),
       signal: params.signal,
