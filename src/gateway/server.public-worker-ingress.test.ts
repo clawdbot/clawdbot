@@ -1,6 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -337,7 +338,8 @@ describe("public worker ingress", () => {
     ["receiver", (receiver: PayloadLimited) => receiver],
     [
       "negotiated deflate",
-      (receiver: PayloadLimited) => receiver["_extensions"]["permessage-deflate"],
+      (receiver: PayloadLimited) =>
+        expectDefined(receiver["_extensions"]["permessage-deflate"], "negotiated deflate"),
     ],
   ])(
     "rejects an admitted worker before hello when the %s payload limit is unusable",
