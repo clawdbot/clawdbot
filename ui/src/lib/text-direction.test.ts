@@ -30,10 +30,50 @@ const CASES: [name: string, text: string | null, expected: "rtl" | "ltr"][] = [
   ["BOM before hebrew", "\uFEFF\u05E9\u05DC\u05D5\u05DD", "rtl"],
   ["BOM before latin", "\uFEFFHello", "ltr"],
   ["format characters only", "\uFEFF\u200D", "ltr"],
+  // U+0600-U+0604, U+070F, U+0890 and U+0891 are both Cf and an RTL script, so the skip class
+  // steps over them and the strong letter behind them decides. Pinned per code point because a
+  // narrower skip class would resolve them on sight and mask the letter.
+  ["ARABIC NUMBER SIGN before arabic", "\u0600\u0628", "rtl"],
+  ["ARABIC SIGN SANAH before arabic", "\u0601\u0628", "rtl"],
+  ["ARABIC FOOTNOTE MARKER before arabic", "\u0602\u0628", "rtl"],
+  ["ARABIC SIGN SAFHA before arabic", "\u0603\u0628", "rtl"],
+  ["ARABIC SIGN SAMVAT before arabic", "\u0604\u0628", "rtl"],
+  ["SYRIAC ABBREVIATION MARK before arabic", "\u070F\u0628", "rtl"],
+  ["ARABIC POUND MARK ABOVE before arabic", "\u0890\u0628", "rtl"],
+  ["ARABIC PIASTRE MARK ABOVE before arabic", "\u0891\u0628", "rtl"],
+  ["ARABIC NUMBER SIGN before arabic-indic digit", "\u0600\u0663", "rtl"],
+  // No strong character anywhere: an Arabic number sign and an ASCII digit are both weak types,
+  // so first-strong finds nothing and the ltr default stands. Pinned so a future skip-class
+  // change has to be deliberate about it.
+  ["ARABIC NUMBER SIGN before ascii digit", "\u06003", "ltr"],
 ];
 
 describe("detectTextDirection", () => {
   it.each(CASES)("resolves %s", (_name, text, expected) => {
     expect(detectTextDirection(text)).toBe(expected);
+  });
+
+  // Enumerated cases can only pin the characters someone thought of. This sweeps the whole
+  // Cf family so a skip class that silently stops covering part of it fails here.
+  it("steps over every direction-neutral format character to reach the strong letter", () => {
+    const HEBREW_LETTER = "\u05E9";
+    const EXPLICIT_LTR = new Set(["\u200E", "\u202A", "\u202D", "\u2066"]);
+    const offenders: string[] = [];
+    for (let codePoint = 0; codePoint <= 0x10ffff; codePoint++) {
+      if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+        continue;
+      }
+      const char = String.fromCodePoint(codePoint);
+      if (!/\p{Cf}/u.test(char)) {
+        continue;
+      }
+      // A leading left-to-right override is meant to win; everything else must fall through.
+      const expected = EXPLICIT_LTR.has(char) ? "ltr" : "rtl";
+      const actual = detectTextDirection(char + HEBREW_LETTER);
+      if (actual !== expected) {
+        offenders.push(`U+${codePoint.toString(16).toUpperCase().padStart(4, "0")} -> ${actual}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
