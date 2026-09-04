@@ -12,7 +12,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
 
     override private init() {
         super.init()
-        setupObservers()
+        self.setupObservers()
         Task { @MainActor in
             self.updateDockVisibility()
         }
@@ -45,8 +45,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
             let policy = Self.activationPolicy(
                 launchPlan: .current,
                 userWantsDockHidden: userWantsDockHidden,
-                hasVisibleWindows: hasVisibleWindows
-            )
+                hasVisibleWindows: hasVisibleWindows)
             guard NSApp.activationPolicy() != policy else { return }
             NSApp.setActivationPolicy(policy)
         }
@@ -67,8 +66,8 @@ final class DockIconManager: NSObject, @unchecked Sendable {
     static func activationPolicy(
         launchPlan: AppLaunchRuntimePlan,
         userWantsDockHidden: Bool,
-        hasVisibleWindows: Bool
-    ) -> NSApplication.ActivationPolicy {
+        hasVisibleWindows: Bool) -> NSApplication.ActivationPolicy
+    {
         guard launchPlan.allowsDockIcon else { return .accessory }
         return !userWantsDockHidden || hasVisibleWindows ? .regular : .accessory
     }
@@ -102,26 +101,22 @@ final class DockIconManager: NSObject, @unchecked Sendable {
                 self,
                 selector: #selector(self.windowVisibilityChanged),
                 name: NSWindow.didBecomeKeyNotification,
-                object: nil
-            )
+                object: nil)
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(self.windowVisibilityChanged),
                 name: NSWindow.didResignKeyNotification,
-                object: nil
-            )
+                object: nil)
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(self.windowVisibilityChanged),
                 name: NSWindow.willCloseNotification,
-                object: nil
-            )
+                object: nil)
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(self.dockPreferenceChanged),
                 name: UserDefaults.didChangeNotification,
-                object: nil
-            )
+                object: nil)
         }
     }
 
@@ -150,10 +145,10 @@ final class DockIconManager: NSObject, @unchecked Sendable {
         let style = AppIconStyle(rawValue: AppDefaults.standard.string(forKey: appIconStyleKey) ?? "") ?? .paper
         let appearance = AppIconAppearance(NSApp.effectiveAppearance)
         let resourceName = style.usesSystemIcon ? nil : style.resourceName(for: appearance)
-        guard resourceName != appliedIconResourceName else { return }
+        guard resourceName != self.appliedIconResourceName else { return }
         if resourceName != nil {
             guard let image = AppIconArtwork.image(for: style, appearance: appearance) else {
-                logger.error("Bundled Dock icon is missing: \(style.resourceName(for: appearance))")
+                self.logger.error("Bundled Dock icon is missing: \(style.resourceName(for: appearance))")
                 return
             }
             NSApp.applicationIconImage = image
@@ -162,6 +157,6 @@ final class DockIconManager: NSObject, @unchecked Sendable {
             // and tinted appearances, which have their own macOS style setting.
             NSApp.applicationIconImage = nil
         }
-        appliedIconResourceName = resourceName
+        self.appliedIconResourceName = resourceName
     }
 }
