@@ -356,6 +356,7 @@ export default defineSingleProviderPluginEntry({
       fetchUsageSnapshot: async (ctx) =>
         await fetchOpenRouterUsage({
           token: ctx.token,
+          authProfileId: ctx.authProfileId,
           baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
           request: ctx.config.models?.providers?.openrouter?.request,
           timeoutMs: ctx.timeoutMs,

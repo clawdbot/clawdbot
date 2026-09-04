@@ -1,5 +1,5 @@
 import { CLAUDE_CLI_PROFILE_ID as SDK_CLAUDE_CLI_PROFILE_ID } from "openclaw/plugin-sdk/provider-auth";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
@@ -12,6 +12,8 @@ function oauthFixtureToken(): string {
 }
 
 describe("Anthropic provider usage", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("aggregates provider-reported costs, cache tokens, models, and categories", async () => {
     const fetchFn = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const url = requestUrl(input);
@@ -78,6 +80,7 @@ describe("Anthropic provider usage", () => {
     expect(result).toEqual({
       provider: "anthropic",
       displayName: "Anthropic",
+      usageScope: "provider",
       windows: [],
       plan: "Admin API",
       billing: [
@@ -125,6 +128,30 @@ describe("Anthropic provider usage", () => {
         "x-api-key": "sk-ant-admin-test",
       });
     }
+  });
+
+  it("keeps rejected organization reports provider-scoped", async () => {
+    const auth = await resolveAnthropicUsageAuth({
+      config: {},
+      env: { ANTHROPIC_ADMIN_API_KEY: "synthetic-admin-key" },
+      provider: "anthropic",
+      resolveApiKeyFromConfigAndStore: () => undefined,
+      resolveOAuthToken: async () => null,
+    });
+    if (!("token" in auth) || !auth.token) throw new Error("expected synthetic admin credential");
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: auth.token,
+      timeoutMs: 5_000,
+      fetchFn: vi.fn(async () => new Response("", { status: 403 })),
+    });
+    expect(snapshot).toMatchObject({
+      usageScope: "provider",
+      error: "Admin API key required",
+      windows: [],
+    });
   });
 
   it("uses explicit Admin API credentials before Claude OAuth", async () => {
@@ -277,6 +304,41 @@ describe("Anthropic provider usage", () => {
       fetchFn,
     });
     expect(snapshot.accountEmail).toBeUndefined();
+    expect(snapshot.usageScope).toBe("account");
+  });
+
+  it("does not attribute ambient browser usage to a selected OAuth account", async () => {
+    vi.stubEnv("CLAUDE_AI_SESSION_KEY", "sk-ant-synthetic-other-account");
+    const fetchFn = vi.fn<typeof fetch>(async (input) => {
+      const url = requestUrl(input);
+      if (url.pathname.endsWith("/api/oauth/usage")) {
+        return Response.json(
+          { error: { message: "missing scope requirement user:profile" } },
+          { status: 403 },
+        );
+      }
+      if (url.pathname.endsWith("/api/organizations")) {
+        return Response.json([{ uuid: "other-account" }]);
+      }
+      return Response.json({ five_hour: { utilization: 90 } });
+    });
+    const snapshot = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: oauthFixtureToken(),
+      authProfileId: "anthropic:selected",
+      email: "selected@example.invalid",
+      timeoutMs: 5000,
+      fetchFn,
+    });
+    expect(snapshot.error).toBe("HTTP 403: missing scope requirement user:profile");
+    expect(snapshot.usageScope).toBe("account");
+    expect(snapshot.windows).toEqual([]);
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(new Headers(fetchFn.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+      `Bearer ${oauthFixtureToken()}`,
+    );
   });
 
   it("does not attach a plan label when usage has no windows", async () => {

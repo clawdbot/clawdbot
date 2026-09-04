@@ -100,6 +100,7 @@ describe("GitHub Copilot usage credential routing", () => {
     expect(fetchFn).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       provider: "github-copilot",
+      usageScope: "account",
       plan: "business",
       windows: [{ label: "Premium", usedPercent: 25 }],
     });

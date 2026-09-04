@@ -303,13 +303,17 @@ export async function fetchAnthropicUsage(
 ): Promise<ProviderUsageSnapshot> {
   const adminKey = decodeAdminToken(ctx.token);
   if (adminKey) {
-    return await fetchAnthropicAdminUsage({
+    const snapshot = await fetchAnthropicAdminUsage({
       apiKey: adminKey,
       timeoutMs: ctx.timeoutMs,
       fetchFn: ctx.fetchFn,
     });
+    return { ...snapshot, usageScope: "provider" };
   }
-  const snapshot = await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
+  const snapshot = await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, {
+    authProfileId: ctx.authProfileId,
+  });
+  snapshot.usageScope = "account";
   if (snapshot.error) {
     return snapshot;
   }

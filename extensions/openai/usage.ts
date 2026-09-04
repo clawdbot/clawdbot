@@ -245,6 +245,7 @@ export async function fetchOpenAIUsage(
   const adminKey = decodeAdminToken(ctx.token);
   if (!adminKey) {
     const snapshot = await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn);
+    snapshot.usageScope = "account";
     if (snapshot.error) {
       return snapshot;
     }
@@ -256,10 +257,11 @@ export async function fetchOpenAIUsage(
       profileEmail;
     return accountEmail ? { ...snapshot, accountEmail } : snapshot;
   }
-  return await fetchOpenAIAdminUsage({
+  const snapshot = await fetchOpenAIAdminUsage({
     apiKey: adminKey,
     projectId: cleanProviderUsageCredential(ctx.env.OPENAI_PROJECT_ID),
     timeoutMs: ctx.timeoutMs,
     fetchFn: ctx.fetchFn,
   });
+  return { ...snapshot, usageScope: "provider" };
 }

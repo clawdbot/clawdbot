@@ -155,12 +155,14 @@ async function fetchEndpoint(params: {
 
 export async function fetchOpenRouterUsage(params: {
   token: string;
+  authProfileId?: string;
   baseUrl?: string;
   request?: ModelProviderConfig["request"];
   timeoutMs: number;
   fetchFn: typeof fetch;
   isAuthProfileCurrent?: () => boolean;
 }): Promise<ProviderUsageSnapshot> {
+  const configuredRequest = sanitizeConfiguredModelProviderRequest(params.request);
   const requestConfig = resolveProviderHttpRequestConfig({
     provider: "openrouter",
     capability: "other",
@@ -170,8 +172,15 @@ export async function fetchOpenRouterUsage(params: {
       Accept: "application/json",
       Authorization: `Bearer ${params.token}`,
     },
-    request: sanitizeConfiguredModelProviderRequest(params.request),
+    request: configuredRequest,
   });
+  // Account usage must keep the selected credential; provider-wide overrides can name another account.
+  if (params.authProfileId) {
+    if (configuredRequest?.auth?.mode === "header") {
+      requestConfig.headers.delete(configuredRequest.auth.headerName);
+    }
+    requestConfig.headers.set("Authorization", `Bearer ${params.token}`);
+  }
   const request = {
     baseUrl: requestConfig.baseUrl,
     headers: requestConfig.headers,

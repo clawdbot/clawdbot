@@ -750,6 +750,11 @@ catalog, API-key auth, and dynamic model resolution.
         plugins. No core allowlist update is required.
         `fetchUsageSnapshot` returns the shared provider-neutral shape:
 
+        - `usageScope`: optional `"account"` for account quota or `"provider"` for
+          organization/provider billing, declared by the endpoint owner on both
+          success and error snapshots. Omit it when unknown; consumers must not
+          infer scope from email, credential format, profile id, or billing shape.
+          Account scope alone does not establish ownership by a saved profile.
         - `plan`: provider-reported subscription or key label
         - `windows`: resettable quota windows as used percentages
         - `billing`: typed `balance`, `spend`, or `budget` entries; `unit` can be

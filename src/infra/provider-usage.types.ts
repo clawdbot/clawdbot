@@ -77,6 +77,8 @@ export type ProviderUsageCostHistory = {
 export type ProviderUsageSnapshot = {
   provider: UsageProviderId;
   displayName: string;
+  /** Endpoint-owned scope; absent means unknown. Does not identify a saved auth profile. */
+  usageScope?: "account" | "provider";
   windows: UsageWindow[];
   billing?: ProviderUsageBilling[];
   costHistory?: ProviderUsageCostHistory;

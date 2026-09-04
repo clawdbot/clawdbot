@@ -19,7 +19,7 @@ function usageContext(
 }
 
 describe("Codex app-server provider usage", () => {
-  it("contributes OpenAI usage windows for the synthetic app-server credential", async () => {
+  it.each(["codex-account@example.com", undefined])("account scope: email %s", async (email) => {
     const readUsage = vi.fn(async () => ({
       rateLimits: {
         rateLimitsByLimitId: {
@@ -33,15 +33,16 @@ describe("Codex app-server provider usage", () => {
           },
         },
       },
-      accountEmail: "codex-account@example.com",
+      accountEmail: email,
     }));
 
     await expect(fetchCodexAppServerUsageSnapshot(usageContext(), { readUsage })).resolves.toEqual({
       provider: "openai",
       displayName: "OpenAI",
+      usageScope: "account",
       windows: [{ label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 }],
       plan: undefined,
-      accountEmail: "codex-account@example.com",
+      ...(email ? { accountEmail: email } : {}),
     });
     expect(readUsage).toHaveBeenCalledWith({
       timeoutMs: 3_500,
@@ -51,6 +52,20 @@ describe("Codex app-server provider usage", () => {
         command: "codex",
         commandSource: "managed",
       }),
+    });
+  });
+
+  it("keeps an empty account result scoped without inferring from its windows", async () => {
+    const readUsage = vi.fn(async () => ({
+      rateLimits: { rateLimits: { limitId: "codex", primary: null, secondary: null } },
+    }));
+    await expect(
+      fetchCodexAppServerUsageSnapshot(usageContext(), { readUsage }),
+    ).resolves.toMatchObject({
+      provider: "openai",
+      displayName: "OpenAI",
+      usageScope: "account",
+      windows: [],
     });
   });
 
