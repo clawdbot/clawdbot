@@ -241,6 +241,10 @@ export async function executePreparedCliRun(
     modelId: context.modelId,
     authProfileId: context.effectiveAuthProfileId,
     thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
+    // Same fast-mode value the embedded runner already resolves for this run
+    // (session `/fast`, agent `fastModeDefault`, model `fastMode`); CLI
+    // backends pick the native fast model/flag at spawn time.
+    fastMode: params.fastMode,
     executionMode: params.executionMode ?? "agent",
     // Node runs project the native subset only: gateway-loopback MCP tools do
     // not exist on the node, and auto-approval must not cross that boundary.
