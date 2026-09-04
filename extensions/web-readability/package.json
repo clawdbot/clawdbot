@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "@mozilla/readability": "0.6.0",
+    "htmlparser2": "10.1.0",
     "linkedom": "0.18.13"
   },
   "devDependencies": {

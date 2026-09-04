@@ -2218,6 +2218,9 @@ importers:
       '@mozilla/readability':
         specifier: 0.6.0
         version: 0.6.0
+      htmlparser2:
+        specifier: 10.1.0
+        version: 10.1.0
       linkedom:
         specifier: 0.18.13
         version: 0.18.13
