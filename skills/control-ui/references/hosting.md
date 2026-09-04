@@ -88,7 +88,9 @@ documentation when a proxy owns identity.
 2. **Board state:** `dashboard read` returns the expected widget and revision.
 3. **Sandbox route:** configured sandbox origin reaches only the sandbox
    listener.
-4. **Ticket:** the current frame URL is fresh after restart or republish.
+4. **Ticket:** inspect the browser's frame requests and confirm the current
+   ticketed widget document loads. The sandbox shell and widget document are
+   separate requests; a 200 from one does not prove the other works.
 5. **Rendering:** the browser loads the frame and its controls work.
 
 A working Control UI shell with a blank widget usually points to layers 3–5,

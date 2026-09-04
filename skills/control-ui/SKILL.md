@@ -28,6 +28,12 @@ typed tool exists.
 
 1. Identify the target session and whether the Control UI is local/direct or
    published through Tailscale or another HTTPS proxy.
+   - If the user wants a dedicated sidebar dashboard, choose or create its
+     visible session before authoring any widget. A tab is only a partition
+     inside one session's board; it never creates a sidebar row.
+   - If the current turn is running in a temporary or parent session, hand the
+     dashboard task to the intended visible session first. Board widgets are
+     keyed by session and cannot be moved to another session afterward.
 2. Read current state before changing it:
    - use `sessions_list` to resolve the session;
    - use `dashboard` with `action: "read"` for the current session;
@@ -64,10 +70,15 @@ Control UI tab when possible.
 2. Create or rename tabs with `tab_create` / `tab_update`; use short lowercase
    slug IDs.
 3. Add content with the correct owner:
-   - custom HTML/SVG or registered-source content: `show_widget` with
-     `pin: true`;
+   - self-contained custom HTML/SVG or registered-source content:
+     `show_widget` with `pin: true`;
    - trusted plugin widgets: `dashboard widget_put` with an advertised
      `pluginKind`.
+     Do not embed Grafana or another external application in an `<iframe>` inside
+     `show_widget`; widget sandboxes reject child-frame URLs and navigation. Use
+     an ordinary user-clicked link to open the application, fetch an exact HTTPS
+     API through declared `capabilities.netOrigins`, use a Gateway data binding,
+     or install/use a trusted plugin widget instead.
 4. Use a stable `name` when calling `show_widget`. Reusing the same name with
    new `widget_code` updates the widget in place.
 5. Arrange with `widget_move`, `widget_resize`, tab reordering, and
@@ -105,6 +116,8 @@ Use two layers of proof:
 
 An HTTP 200 for the shell or widget route is transport proof, not visual proof.
 Do not claim the dashboard works until the sandboxed frame renders.
+If no browser-control or connected-client inspection is available, report the
+dashboard as published but visually unverified instead of claiming success.
 
 ## Recovery order
 
