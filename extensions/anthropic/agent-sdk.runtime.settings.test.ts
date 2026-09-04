@@ -82,6 +82,21 @@ describe("Anthropic Agent SDK prompt and settings ownership", () => {
     );
   });
 
+  it("pins the memory surfaces on an ordinary run that loads user settings", async () => {
+    useSdkMessages();
+
+    // The ordinary path: user setting sources stay on, and the memory defaults
+    // still apply because the run carries no --settings of its own.
+    await collect(createContext({ args: ["-p", "--setting-sources", "user"] }));
+
+    const options = sdkOptions();
+    expect(options.settingSources).toEqual(["user"]);
+    expect(options.settings).toEqual({
+      autoMemoryEnabled: false,
+      claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
+    });
+  });
+
   it("leaves a restricted run's own --settings payload in place", async () => {
     useSdkMessages();
 

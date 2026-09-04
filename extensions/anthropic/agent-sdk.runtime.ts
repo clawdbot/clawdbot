@@ -418,10 +418,12 @@ function resolveClaudeAgentSdkOptions(
   // host's auto-memory index and any CLAUDE.md reachable from cwd on top of
   // its own AGENTS.md / MEMORY.md.
   //
-  // A restricted run already carries a stricter `--settings` payload, which
-  // this parser leaves in extraArgs. Do not replace it: that payload also
-  // pins `disableAllHooks` and `enabledPlugins`, and a two-key object here
-  // would drop them.
+  // The boundary is explicit: these defaults apply to a run that carries no
+  // `--settings` of its own. A run that does — a restricted run, whose payload
+  // also pins `disableAllHooks` and `enabledPlugins` — keeps it verbatim, and a
+  // two-key object here would drop those. They are not merged: `--settings`
+  // accepts a path as well as inline JSON (`settings?: string | Settings` in
+  // the SDK), so parsing it to merge would have to guess which it received.
   if (extraArgs.settings === undefined) {
     options.settings = {
       autoMemoryEnabled: false,

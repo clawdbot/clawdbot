@@ -133,7 +133,10 @@ instead of appending to it, so a turn runs with one system prompt rather than
 two. Those runs also pin Claude Code's own memory surfaces off
 (`autoMemoryEnabled: false`, plus `claudeMdExcludes` covering `CLAUDE.md`,
 `CLAUDE.local.md`, and `.claude/rules/`), so an agent sees its own `AGENTS.md`
-and `MEMORY.md` rather than the gateway host's. The `systemPromptFileArg` and
+and `MEMORY.md` rather than the gateway host's. That applies to runs which carry
+no settings payload of their own; a restricted run keeps the stricter
+`--settings` it already passes, which pins the same two surfaces plus hooks and
+plugins. The `systemPromptFileArg` and
 `systemPromptMode` entries below describe the paired-node direct CLI transport,
 which still passes the prompt as a file argument to append; they do not apply to
 Agent SDK runs.
