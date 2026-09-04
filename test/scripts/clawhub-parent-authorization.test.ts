@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -8,6 +10,7 @@ import {
   validateClawHubParentAuthorization,
   validateClawHubTransactions,
   validateClawHubWorkflowRun,
+  resolvePackedClawHubArtifactDir,
 } from "../../scripts/clawhub-parent-authorization.mjs";
 
 const sha = "a".repeat(40);
@@ -182,5 +185,38 @@ describe("ClawHub parent publication authorization", () => {
         terminal: true,
       }),
     ).toThrow(/state/u);
+  });
+});
+
+describe("packed ClawHub artifact directories", () => {
+  it("reads a lone pattern match from the flat download path", () => {
+    const directory = mkdtempSync(join(tmpdir(), "clawhub-packed-"));
+    expect(
+      resolvePackedClawHubArtifactDir({
+        directory,
+        artifactName: "clawhub-package-openclaw-arcee-provider-2026.9.1",
+        matrixSize: 1,
+      }),
+    ).toBe(directory);
+  });
+
+  it("keeps per-artifact directories for multi-package matrices and nested singles", () => {
+    const directory = mkdtempSync(join(tmpdir(), "clawhub-packed-"));
+    const nested = join(directory, "clawhub-package-openclaw-arcee-provider-2026.9.1");
+    expect(
+      resolvePackedClawHubArtifactDir({
+        directory,
+        artifactName: "clawhub-package-openclaw-arcee-provider-2026.9.1",
+        matrixSize: 2,
+      }),
+    ).toBe(nested);
+    mkdirSync(nested);
+    expect(
+      resolvePackedClawHubArtifactDir({
+        directory,
+        artifactName: "clawhub-package-openclaw-arcee-provider-2026.9.1",
+        matrixSize: 1,
+      }),
+    ).toBe(nested);
   });
 });

@@ -19,7 +19,7 @@ import {
 import { mergeUserGitHubConnection } from "./user-github-connections.js";
 import { mergeUserModelAccounts } from "./user-model-accounts.js";
 import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.js";
-import { emitUserProfilesChanged } from "./user-profile-events.js";
+import { emitUserProfilesChanged, publishUserProfileAliasChange } from "./user-profile-events.js";
 import {
   applyVerifiedGitHubIdentity,
   githubAuthenticationSubject,
@@ -405,6 +405,7 @@ function mergeUserProfiles(
     db,
     kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", targetProfileId),
   );
+  deferSqlitePostCommitPublication(db, publishUserProfileAliasChange);
 }
 
 function adoptDisplayNameIfEmpty(

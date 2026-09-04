@@ -61,7 +61,6 @@ describe("Gateway node exec approvals", () => {
         transportBaseUrl: "http://127.0.0.1",
         controlUiEnabled: false,
         runtimeEnvPatch: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
           OPENCLAW_SKIP_PROVIDERS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",

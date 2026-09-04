@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../components/resizable-divider.ts";
 import {
   openSlot,
+  closeSlot,
   setSidebarOpen,
   setSidebarDock,
   setSidebarExpanded,
@@ -168,7 +169,7 @@ describe("chat sidebar region", () => {
       Array.from(root(region).querySelectorAll(".side-panel-type-option__shortcut"), (node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Ctrl+`", "Ctrl+Shift+B"]);
+    ).toEqual(["Ctrl+`", "Ctrl+Shift+B", "Ctrl+Shift+S"]);
     const reviewItem = Array.from(
       root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
     ).find((item) => Reflect.get(item, "value") === "detail");
@@ -215,7 +216,7 @@ describe("chat sidebar region", () => {
       Array.from(selector?.querySelectorAll(".side-panel-empty__type") ?? [], (item) =>
         item.textContent?.replace(/\s+/gu, " ").trim(),
       ),
-    ).toEqual(["Review", "Terminal Ctrl+`", "Files Ctrl+Shift+B", "Side chat"]);
+    ).toEqual(["Review", "Terminal Ctrl+`", "Files Ctrl+Shift+B", "Side chat Ctrl+Shift+S"]);
     root(region).querySelector<HTMLButtonElement>(".side-panel-empty__type")?.click();
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("detail");
   });
@@ -269,7 +270,7 @@ describe("chat sidebar region", () => {
       "Terminal Ctrl+`",
       "Browser",
       "Files Ctrl+Shift+B",
-      "Side chat",
+      "Side chat Ctrl+Shift+S",
       "Tasks",
       "Desktop",
       "Discussion",
@@ -362,5 +363,43 @@ describe("chat sidebar region", () => {
     const region = await createRegion({ ...openSlot({ columns: [] }, "detail"), open: false });
     expect(root(region).querySelector(".side-panel")).toBeNull();
     expect(root(region).querySelector("[data-primary]")).not.toBeNull();
+  });
+
+  it("retains opted-in app input while minimizing and releases other panel content", async () => {
+    const region = await createRegion(
+      setSidebarOpen(openSlot(openSlot({ columns: [] }, "terminal"), "dashboard"), false),
+    );
+    region.panelTemplates = {
+      ...region.panelTemplates,
+      dashboard: html`<input aria-label="Unsaved app input" />`,
+    };
+    await region.updateComplete;
+    expect(root(region).querySelector(".side-panel")).toBeNull();
+    region.layout = setSidebarOpen(region.layout, true);
+    await region.updateComplete;
+    const input = root(region).querySelector<HTMLInputElement>("input")!;
+    input.value = "Unsaved note";
+    const terminal = root(region).querySelector('[data-panel="terminal"]')!;
+
+    region.layout = setSidebarOpen(region.layout, false);
+    await region.updateComplete;
+    const panel = root(region).querySelector<HTMLElement>(".side-panel")!;
+    expect(panel.hidden).toBe(true);
+    expect(panel.hasAttribute("inert")).toBe(true);
+    expect(root(region).querySelector("resizable-divider")).toBeNull();
+    expect(input.isConnected).toBe(true);
+    expect(terminal.isConnected).toBe(false);
+
+    region.layout = setSidebarOpen(region.layout, true);
+    await region.updateComplete;
+    expect(root(region).querySelector("input")).toBe(input);
+    expect(input.value).toBe("Unsaved note");
+    expect(panel.hidden).toBe(false);
+    expect(panel.hasAttribute("inert")).toBe(false);
+    expect(root(region).querySelector('[data-panel="terminal"]')).not.toBeNull();
+
+    region.layout = closeSlot(region.layout, "dashboard");
+    await region.updateComplete;
+    expect(input.isConnected).toBe(false);
   });
 });

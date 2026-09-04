@@ -1,8 +1,4 @@
-import {
-  asOptionalRecord,
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   extractActiveMemorySearchDebugFromSessionRecord,
   extractToolResultNameFromSessionRecord,
@@ -224,64 +220,8 @@ function watchTerminalMemorySearchResult(params: {
   };
 }
 
-function normalizeSearchDebug(value: unknown): ActiveMemorySearchDebug | undefined {
-  const debug = asOptionalRecord(value);
-  if (!debug) {
-    return undefined;
-  }
-  const normalized: ActiveMemorySearchDebug = {
-    backend: normalizeOptionalString(debug.backend),
-    configuredMode: normalizeOptionalString(debug.configuredMode),
-    effectiveMode: normalizeOptionalString(debug.effectiveMode),
-    fallback: normalizeOptionalString(debug.fallback),
-    searchMs:
-      typeof debug.searchMs === "number" && Number.isFinite(debug.searchMs)
-        ? debug.searchMs
-        : undefined,
-    hits: typeof debug.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
-    warning: normalizeOptionalString(debug.warning) ?? normalizeOptionalString(debug.reason),
-    action: normalizeOptionalString(debug.action),
-    error: normalizeOptionalString(debug.error),
-  };
-  return normalized.backend ||
-    normalized.configuredMode ||
-    normalized.effectiveMode ||
-    normalized.fallback ||
-    typeof normalized.searchMs === "number" ||
-    typeof normalized.hits === "number" ||
-    normalized.warning ||
-    normalized.action ||
-    normalized.error
-    ? normalized
-    : undefined;
-}
-
-function readActiveMemorySearchDebugFromRunResult(
-  result: unknown,
-): ActiveMemorySearchDebug | undefined {
-  const record = asOptionalRecord(result);
-  const meta = asOptionalRecord(record?.meta);
-  return (
-    normalizeSearchDebug(meta?.activeMemorySearchDebug) ??
-    normalizeSearchDebug(meta?.memorySearchDebug) ??
-    normalizeSearchDebug(record?.activeMemorySearchDebug) ??
-    normalizeSearchDebug(record?.memorySearchDebug)
-  );
-}
-
-function readActiveMemorySessionFileFromRunResult(result: unknown): string | undefined {
-  const record = asOptionalRecord(result);
-  const meta = asOptionalRecord(record?.meta);
-  const agentMeta = asOptionalRecord(meta?.agentMeta);
-  return (
-    normalizeOptionalString(agentMeta?.sessionFile) ?? normalizeOptionalString(meta?.sessionFile)
-  );
-}
-
 export {
   readActiveMemorySearchDebug,
-  readActiveMemorySearchDebugFromRunResult,
-  readActiveMemorySessionFileFromRunResult,
   readMergedActiveMemoryTranscriptState,
   watchTerminalMemorySearchResult,
 };

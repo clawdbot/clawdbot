@@ -2529,6 +2529,32 @@ jobs:
       - *cache_playwright_chromium
       - *install_playwright_chromium
 
+      - name: Restore Chrome MCP npm cache
+        id: chrome-mcp-cache
+        if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: &chrome_mcp_npm_cache
+          path: |
+            ~/.npm/_cacache
+            ~/.npm/_npx
+          key: ${{ runner.os }}-${{ runner.arch }}-chrome-devtools-mcp@1.8.0-node24-v1
+
+      # Populate metadata and the executable before the 30-second MCP handshake.
+      - name: Pre-warm Chrome MCP
+        if: matrix.task == 'browser-extension' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
+        run: npx -y --audit=false chrome-devtools-mcp@1.8.0 --version
+
+      - name: Save Chrome MCP npm cache
+        if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: *chrome_mcp_npm_cache
+
+      - name: Configure offline Chrome MCP
+        if: matrix.task == 'browser-extension'
+        # npx revalidates cached pins; MCP filters npm_config_* and Vitest changes
+        # HOME. Project config keeps the warmed cache reachable without the registry.
+        run: npm config set cache="$HOME/.npm" offline=true --location=project
+
       - name: Test Control UI end-to-end
         if: matrix.task == 'control-ui'
         env:
@@ -2604,6 +2630,7 @@ jobs:
           extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
           extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
+          extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
@@ -3674,8 +3701,8 @@ jobs:
               ;;
           esac
 
-  # The github/hybrid planner profile aggregates core targets into five Programs
-  # across five hosted jobs. All-Blacksmith mode keeps one lint job.
+  # Keep five core Programs; ordinary hybrid runs pair them across three hosted jobs.
+  # GitHub, frozen and manual runs retain five jobs. All-Blacksmith keeps one lint job.
   check-lint-hosted-core-shard:
     permissions:
       contents: read
@@ -3688,7 +3715,7 @@ jobs:
       fail-fast: false
       max-parallel: 5
       matrix:
-        stripe: [1, 2, 3, 4, 5]
+        stripe: ${{ fromJSON(needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && !inputs.release_gate && (github.event_name == 'push' || github.event_name == 'pull_request') && '[1,2,3]' || '[1,2,3,4,5]') }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -3729,6 +3756,7 @@ jobs:
 
       - name: Run hosted core lint stripe
         env:
+          CORE_STRIPE: ${{ matrix.stripe }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_LOCAL_CHECK: "0"
           RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
@@ -3745,13 +3773,22 @@ jobs:
             echo "[skip] target does not support core lint stripes"
             exit 0
           fi
-          node --import tsx scripts/run-oxlint-shards.mts \
-            --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
-          if [ "$RUNNER_PROFILE" = "github" ] && [ "$RELEASE_GATE" != "true" ] &&
-            grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
-            node --import tsx scripts/run-oxlint-shards.mts \
-              --only=extensions --extension-stripe=${{ matrix.stripe }}/6 --threads=1
+          stripes=("$CORE_STRIPE")
+          if ${{ needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && !inputs.release_gate && (github.event_name == 'push' || github.event_name == 'pull_request') }}; then
+            stripes=("$((2 * CORE_STRIPE - 1))" "$((2 * CORE_STRIPE))")
           fi
+          for stripe in "${stripes[@]}"; do
+            if [ "$stripe" -gt 5 ]; then
+              continue
+            fi
+            node --import tsx scripts/run-oxlint-shards.mts \
+              --only=core --split-core --core-stripe="$stripe/5" --threads=1
+            if [ "$RUNNER_PROFILE" = "github" ] && [ "$RELEASE_GATE" != "true" ] &&
+              grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
+              node --import tsx scripts/run-oxlint-shards.mts \
+                --only=extensions --extension-stripe="$stripe/6" --threads=1
+            fi
+          done
 
   # Pair four original core stripes; check-test-types owns the fifth and its tail.
   # Each stripe retains fresh compiler processes and its two-child limit;

@@ -2640,18 +2640,26 @@ describe("active-memory plugin", () => {
     const sessionKey = "agent:main:debug";
     seedSession(sessionKey, "s-main", 0);
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-      await writeUsableMemoryTranscript(params.sessionFile, "lemon pepper wings");
-      return {
-        meta: {
-          activeMemorySearchDebug: {
-            backend: "builtin",
-            configuredMode: "search",
-            effectiveMode: "query",
-            fallback: "unsupported-search-flags",
-            searchMs: 2590,
-            hits: 3,
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              results: [{ text: "lemon pepper wings" }],
+              debug: {
+                backend: "builtin",
+                configuredMode: "search",
+                effectiveMode: "query",
+                fallback: "unsupported-search-flags",
+                searchMs: 2590,
+                hits: 3,
+              },
+            },
           },
         },
+      ]);
+      return {
         payloads: [{ text: "User prefers lemon pepper wings, and blue cheese still wins." }],
       };
     });
@@ -3187,7 +3195,7 @@ describe("active-memory plugin", () => {
           expect.stringContaining("failed to clean up recall session"),
         );
       }
-      if (!failed && persistTranscripts && !cleanupFails) {
+      if (!failed && !cleanupFails) {
         expectPrependContextContains(result, summary);
         expectLinesToContain(getActiveMemoryLines(sessionKey), "status=timeout_partial");
       } else {
@@ -3258,12 +3266,14 @@ describe("active-memory plugin", () => {
   });
 
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     testing.setTimeoutPartialDataGraceMsForTests(50);
     registerPluginConfig({ timeoutMs: 100, maxSummaryChars: 80, logging: true });
     const sessionKey = "agent:main:timeout-partial-temp-transcript";
     seedSession(sessionKey, "s-timeout-partial-temp-transcript", 0);
+    const transcriptWritten = createDeferred<void>();
     let tempSessionFile = "";
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
@@ -3275,19 +3285,21 @@ describe("active-memory plugin", () => {
             message: { role: "assistant", content: "temporary partial recall summary" },
           },
         ]);
+        transcriptWritten.resolve();
         await waitForAbort(params.abortSignal);
       },
     );
 
-    const result = await runPromptBuild(
+    const resultPromise = runPromptBuild(
       { prompt: "what wings should i order? timeout partial temp" },
       { sessionKey },
     );
+    await transcriptWritten.promise;
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await resultPromise;
 
     expectPrependContextContains(result, "temporary partial recall summary");
-    await vi.waitFor(async () => {
-      await expectPathMissing(tempSessionFile);
-    });
+    await expectPathMissing(tempSessionFile);
     const lines = getActiveMemoryLines(sessionKey);
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
     expectLinesToContain(
@@ -5351,16 +5363,22 @@ describe("active-memory plugin", () => {
   it("surfaces memory embedding quota warnings in plugin trace lines", async () => {
     const sessionKey = "agent:main:memory-rate-limit";
     seedSession(sessionKey, "s-rate-limit", 0);
-    runEmbeddedAgent.mockImplementationOnce(async () => {
-      return {
-        meta: {
-          activeMemorySearchDebug: {
-            warning:
-              "Memory search is unavailable because the embedding provider quota is exhausted.",
-            action: "Top up or switch embedding provider, then retry memory_search.",
-            error: "gemini embeddings failed: 429 rate limited",
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              warning:
+                "Memory search is unavailable because the embedding provider quota is exhausted.",
+              action: "Top up or switch embedding provider, then retry memory_search.",
+              error: "gemini embeddings failed: 429 rate limited",
+            },
           },
         },
+      ]);
+      return {
         payloads: [{ text: "NONE" }],
       };
     });
@@ -5945,8 +5963,9 @@ describe("active-memory plugin", () => {
   it("sanitizes control characters out of debug lines", async () => {
     const sessionKey = "agent:main:debug-sanitize";
     seedSession(sessionKey, "s-main", 0);
-    runEmbeddedAgent.mockResolvedValueOnce({
-      payloads: [{ text: "- spicy ramen\u001b[31m\n- fries\r\n- blue cheese\t" }],
+    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeUsableMemoryTranscript(params.sessionFile, "spicy ramen");
+      return { payloads: [{ text: "- spicy ramen\u001b[31m\n- fries\r\n- blue cheese\t" }] };
     });
 
     await runPromptBuild({ prompt: "what should i order?" }, { sessionKey });
@@ -5962,6 +5981,7 @@ describe("active-memory plugin", () => {
     const lines =
       (store[sessionKey]?.pluginDebugEntries as Array<{ lines?: string[] }> | undefined)?.[0]
         ?.lines ?? [];
+    expectLinesToContain(lines, "🔎 Active Memory Debug: - spicy ramen[31m");
     expectLinesNotToContain(lines, "\u001b");
     expectLinesNotToContain(lines, "\r");
   });

@@ -69,19 +69,23 @@ function untrustedSchemaFingerprint(schema: unknown): string {
 }
 
 function rebindCatalogExecutors(
-  existingEntries: readonly ToolSearchCatalogEntry[],
+  existingEntries: ToolSearchCatalogEntry[],
   currentEntries: readonly ToolSearchCatalogEntry[],
 ): ToolSearchCatalogEntry[] | undefined {
   const currentTools = new Map(currentEntries.map((entry) => [entry.id, entry.tool]));
   if (currentTools.size !== currentEntries.length || currentTools.size !== existingEntries.length) {
     return undefined;
   }
-  const rebound = existingEntries.map((entry) => {
-    // Catalog ids are the callable identity. Every hit binds that exact entry to
-    // this run's closure; a missing id must miss instead of retaining stale authority.
-    const tool = currentTools.get(entry.id);
-    return tool ? { ...entry, tool } : undefined;
-  });
+  // Keep identical same-run entries; changed executors need a detached descriptor snapshot.
+  // Every exact ID must still resolve, so missing entries fail the reuse check below.
+  const rebound = existingEntries.every(
+    (entry) => entry.tool && currentTools.get(entry.id) === entry.tool,
+  )
+    ? existingEntries
+    : existingEntries.map((entry) => {
+        const tool = currentTools.get(entry.id);
+        return tool ? { ...entry, tool } : undefined;
+      });
   return rebound.every((entry): entry is ToolSearchCatalogEntry => entry !== undefined)
     ? rebound
     : undefined;
@@ -436,11 +440,7 @@ export function applyToolCatalogCompaction(
   if (existingCatalog && catalogFingerprints.get(existingCatalog) === incomingFingerprint) {
     const reboundEntries = rebindCatalogExecutors(existingCatalog.entries, catalog);
     if (reboundEntries) {
-      if (
-        existingCatalog.entries.some((entry, index) => entry.tool !== reboundEntries[index]?.tool)
-      ) {
-        existingCatalog.entries = reboundEntries;
-      }
+      existingCatalog.entries = reboundEntries;
       return {
         tools: visible,
         compacted: catalog.length > 0,

@@ -363,16 +363,22 @@ Widget bytes are served over the authenticated HTTP surface, not the socket.
 
 ## Agent tools
 
-Three tools total (core; `show_widget` is exposed only for an `inline-widgets`
-client or one unambiguous matching current-channel presenter):
+Three tools total (core; `show_widget` is exposed for an `inline-widgets`
+client, one unambiguous matching current-channel presenter, or a persistent-session
+automation whose server-authored tool policy explicitly allows pinned-only authoring):
 
 - `show_widget { title, widget_code, kind?, name?, pin?, size?, tab?, after?,
 presentation?, capabilities? }` — create/update by name; `kind` defaults to `html` and its enum
   includes active registered kinds; `pin` places it on the board.
   Without `name`/`pin` it behaves exactly like today (inline, ephemeral).
+  Headless scheduled authoring requires `pin: true`, cannot select a presentation
+  target, and is unavailable to detached cron-run sessions.
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
-  `tab_update`, `tab_delete`, `tabs_reorder`, `widget_move`, `widget_remove`,
-  `unpin`, `focus_tab`, `set_chat_dock`.
+  `tab_update`, `tab_delete`, `tabs_reorder`, `widget_put`, `widget_move`,
+  `widget_resize`, `widget_remove`, `focus_tab`, `set_presentation`.
+  Presentation is `split` or `expanded`; the Control UI owns the panel's dock
+  position. The tool maps presentation onto the existing `set_chat_dock` wire
+  command without changing the Gateway protocol.
 - The existing `automations` tool covers the automation tier; no new tool needed.
 
 Tool descriptions teach the size/anchor vocabulary and the tier model. The

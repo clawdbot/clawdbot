@@ -50,18 +50,23 @@ export function startOpenClawStateLeaseHeartbeat(
     ready.reject(error);
     params.onLost(error);
   };
+  const settleStartup = () => {
+    clearTimeout(startTimer);
+    // Readiness precedes notification delivery. A delayed parent must not
+    // overwrite ready; callback entry still requires a fresh acknowledgement.
+    if (Atomics.compareExchange(shared, state.status, state.starting, state.lost) === state.ready) {
+      ready.resolve();
+    } else {
+      fail(new Error("state lease heartbeat did not become ready"));
+    }
+  };
   const startTimer = setTimeout(
-    () => fail(new Error("state lease heartbeat did not become ready")),
+    settleStartup,
     Math.max(1, Math.min(WORKER_START_TIMEOUT_MS, params.expiresAt - Date.now())),
   );
   worker.once("error", fail);
   worker.once("exit", () => fail(new Error("state lease heartbeat exited")));
-  worker.once("message", () => {
-    if (Atomics.load(shared, state.status) === state.ready) {
-      clearTimeout(startTimer);
-      ready.resolve();
-    }
-  });
+  worker.once("message", settleStartup);
   let stopping: Promise<number> | undefined;
   const close = () => {
     Atomics.store(shared, state.status, state.closed);

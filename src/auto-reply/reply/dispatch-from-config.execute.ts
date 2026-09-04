@@ -119,7 +119,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   onSessionPrepared: state.notePreparedSession,
                 } satisfies InternalReplyResolverOptions),
                 onObservedReplyDelivery: state.markObservedReplyDelivery,
-                suppressToolErrorWarnings: state.suppressToolErrorWarnings,
                 typingPolicy: typing.typingPolicy,
                 suppressTyping: typing.suppressTyping,
                 onPartialReply: deferFinalTtsText
@@ -192,13 +191,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     markInboundDedupeReplayUnsafe();
                     // Buffered commentary preceded this tool; land it before the summary.
                     await flushPendingCommentaryProgress();
-                    // Tool-error suppression covers visible progress and warnings regardless of source delivery mode.
-                    if (
-                      payload.isError === true &&
-                      replyConfig.messages?.suppressToolErrors === true
-                    ) {
-                      return;
-                    }
                     const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
                     const isFastModeAutoProgressDelivery =
                       isFastModeAutoProgress &&

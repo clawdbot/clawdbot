@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import {
@@ -13,12 +14,18 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import {
+  createOrResumeClientVoiceSession,
+  registerClientVoiceConsultRun,
+  resolveClientVoiceRunBinding,
+} from "../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../talk/client-voice-session.test-support.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "../../talk/provider-internal.js";
 import type {
@@ -79,7 +86,8 @@ let state: OpenClawTestState;
 let config: OpenClawConfig;
 let client: ReturnType<typeof sharingPolicyClient> & { connId: string };
 let callback: RealtimeVoiceAgentConsultRunner | undefined;
-let browserVoiceSessionId: string | undefined;
+let providerInstructions: string | undefined;
+const browserVoiceSessionIds = new Set<string>();
 let browserControl: RealtimeVoiceGatewayControl | undefined;
 const submitProviderResult = vi.fn();
 const context = {
@@ -104,6 +112,14 @@ async function dispatch(
     respond,
     extraHandlers: { ...talkClientHandlers, ...talkSessionHandlers, ...handlers },
   });
+  const payload = respond.mock.calls.at(-1)?.[1];
+  if (
+    method === "talk.client.create" &&
+    isRecord(payload) &&
+    typeof payload.voiceSessionId === "string"
+  ) {
+    browserVoiceSessionIds.add(payload.voiceSessionId);
+  }
   return respond;
 }
 
@@ -121,7 +137,8 @@ beforeEach(async () => {
     connId: "native-consult-client",
   };
   callback = undefined;
-  browserVoiceSessionId = undefined;
+  providerInstructions = undefined;
+  browserVoiceSessionIds.clear();
   browserControl = undefined;
   vi.clearAllMocks();
   mocks.runEmbeddedAgent.mockReset().mockResolvedValue({
@@ -136,6 +153,7 @@ beforeEach(async () => {
     capabilities: mocks.capabilities,
     isConfigured: () => true,
     createBrowserSession: async (request) => {
+      providerInstructions = request.instructions;
       callback = request.runAgentConsult;
       browserControl = request.gatewayControl;
       browserControl?.bindBridge({
@@ -156,6 +174,7 @@ beforeEach(async () => {
       };
     },
     createBridge: (request) => {
+      providerInstructions = request.instructions;
       callback = request.runAgentConsult;
       return {
         connect: async () => undefined,
@@ -177,7 +196,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   try {
-    if (browserVoiceSessionId) {
+    for (const browserVoiceSessionId of browserVoiceSessionIds) {
       await closeTalkClientGatewayControlSession({
         voiceSessionId: browserVoiceSessionId,
         sessionKey: "main",
@@ -365,6 +384,7 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
     context,
     clientConnId: client.connId,
     sessionTarget: target,
+    scope: { kind: "session" },
     assertCurrent: authorization.authorization!.assertCurrent,
   });
   const pending = controlRealtimeVoiceAgentRun({
@@ -400,10 +420,15 @@ it.each([
   "signal",
   "generation",
   "cleanup",
+  "voice binding removed",
+  "voice binding replaced",
 ] as const)("fences %s Gateway registration while exact control loads", async (change) => {
   config.session = { scope: "global" };
   const target = prepareTalkSessionTarget(config, "main");
   const runId = "captured-run";
+  const voiceScope = { agentId: target.agentId, sessionKey: target.sessionKey };
+  const voiceSessionId = createOrResumeClientVoiceSession({ ...voiceScope, origin: "client" });
+  registerClientVoiceConsultRun({ ...voiceScope, voiceSessionId, runId });
   const registration = registerChatAbortController({
     chatAbortControllers: context.chatAbortControllers,
     runId,
@@ -430,6 +455,7 @@ it.each([
     context,
     clientConnId: client.connId,
     sessionTarget: target,
+    scope: { kind: "voice-session", voiceSessionId },
   });
   expect(runTarget?.isCurrent()).toBe(true);
   const control = controlRealtimeVoiceAgentRun({
@@ -453,6 +479,24 @@ it.each([
     entry.lifecycleGeneration = "retired";
   } else if (change === "cleanup") {
     entry.registrationCleanupRequested = true;
+  } else if (change === "voice binding removed") {
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      runId,
+      durationMs: 0,
+      outcome: "completed",
+    });
+    expect(resolveClientVoiceRunBinding(runId)).toBeUndefined();
+  } else if (change === "voice binding replaced") {
+    const replacementVoiceSessionId = createOrResumeClientVoiceSession({
+      ...voiceScope,
+      origin: "client",
+    });
+    registerClientVoiceConsultRun({
+      ...voiceScope,
+      voiceSessionId: replacementVoiceSessionId,
+      runId,
+    });
   } else {
     entry.controller = new AbortController();
   }
@@ -474,7 +518,6 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
     capabilities: ["gateway-control-v1"],
   });
   expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-  browserVoiceSessionId = (respond.mock.calls[0]![1] as { voiceSessionId: string }).voiceSessionId;
   const sessionId = loadSessionEntry({ agentId: "voice", sessionKey: "global" })!.sessionId;
   const registration = registerChatAbortController({
     chatAbortControllers: context.chatAbortControllers,
@@ -496,11 +539,33 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
     context,
     clientConnId: client.connId,
     sessionTarget: prepareTalkSessionTarget(config, "main"),
+    scope: { kind: "session" },
   });
   const resolvedSessionId = "materialized-reply-session";
   context.chatAbortControllers.get("queued-talk")!.sessionId = resolvedSessionId;
   operation.updateSessionId(resolvedSessionId);
+  const voiceSessionId = (respond.mock.calls[0]![1] as { voiceSessionId: string }).voiceSessionId;
+  registerClientVoiceConsultRun({
+    agentId: "voice",
+    sessionKey: "main",
+    voiceSessionId,
+    runId: "queued-talk",
+  });
+  const voiceTarget = resolveOwnedActiveTalkRunTarget({
+    context,
+    clientConnId: client.connId,
+    sessionTarget: prepareTalkSessionTarget(config, "main"),
+    scope: { kind: "voice-session", voiceSessionId },
+  });
   try {
+    expect(voiceTarget?.isCurrent()).toBe(true);
+    expect(
+      await controlRealtimeVoiceAgentRun({
+        sessionKey: "global",
+        runTarget: voiceTarget,
+        text: "status",
+      }),
+    ).toMatchObject({ active: false });
     expect(
       await controlRealtimeVoiceAgentRun({
         sessionKey: "global",
@@ -516,6 +581,23 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
       expect.objectContaining({ active: true, sessionId: resolvedSessionId }),
       undefined,
     );
+    const abortUnrelated = vi.fn();
+    const unrelated = {
+      runId: "queued-talk",
+      queueMessage: async () => undefined,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: abortUnrelated,
+    };
+    setActiveEmbeddedRun(resolvedSessionId, unrelated, "global");
+    try {
+      expect(
+        await controlRealtimeVoiceAgentRun({ sessionKey: "global", runTarget, text: "cancel" }),
+      ).toMatchObject({ active: false, aborted: false });
+      expect(abortUnrelated).not.toHaveBeenCalled();
+    } finally {
+      clearActiveEmbeddedRun(resolvedSessionId, unrelated, "global");
+    }
     expect(
       await dispatch("talk.client.steer", { sessionKey: "main", text: "cancel", mode: "cancel" }),
     ).toHaveBeenCalledWith(
@@ -525,6 +607,22 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
     );
     expect(operation.abortSignal.aborted).toBe(true);
     expect(mocks.runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(runTarget?.isCurrent()).toBe(false);
+    operation.complete();
+    const successor = replyRunRegistry.begin({
+      sessionKey: "global",
+      sessionId: resolvedSessionId,
+      resetTriggered: false,
+      upstreamAbortSignal: registration.controller.signal,
+    });
+    try {
+      expect(
+        await controlRealtimeVoiceAgentRun({ sessionKey: "global", runTarget, text: "cancel" }),
+      ).toMatchObject({ active: false, aborted: false });
+      expect(successor.abortSignal.aborted).toBe(false);
+    } finally {
+      successor.complete();
+    }
   } finally {
     operation.complete();
     registration.cleanup();
@@ -537,6 +635,7 @@ describe.each(["browser", "relay"] as const)("native %s Talk consultation", (tra
     { name: "global", scope: "global" as const, canonicalKey: "global" },
   ])("uses the created $name session in the provider callback", async ({ scope, canonicalKey }) => {
     config.session = { mainKey: "home", scope };
+    config.talk = { ...config.talk, realtime: { instructions: "Keep native answers brief." } };
     const target = prepareTalkSessionTarget(config, "main");
     const method = transport === "browser" ? "talk.client.create" : "talk.session.create";
     const respond = await dispatch(method, {
@@ -547,8 +646,8 @@ describe.each(["browser", "relay"] as const)("native %s Talk consultation", (tra
       ...(transport === "browser" ? { capabilities: ["gateway-control-v1"] } : {}),
     });
     expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expect(providerInstructions).toBe("Keep native answers brief.");
     const result = respond.mock.calls[0]?.[1] as { voiceSessionId?: string; sessionId?: string };
-    browserVoiceSessionId = result.voiceSessionId;
     const storage = { agentId: "voice", sessionKey: canonicalKey, storePath: target.storePath };
     const created = loadSessionEntry(storage);
     expect(created?.sessionId).toBeTruthy();
@@ -579,55 +678,84 @@ describe.each(["browser", "relay"] as const)("native %s Talk consultation", (tra
 describe.each(["browser-rpc", "browser-provider", "relay"] as const)(
   "native %s exact control",
   (surface) => {
-    it.each(["foreign global", "replaced run", "reused run ID"] as const)(
-      "never cancels the %s owner",
-      async (replacement) => {
-        config.session = { scope: "global" };
-        const started = createDeferredCore<RunEmbeddedAgentParams>();
-        const finish = createDeferredCore();
-        const abortOwned = vi.fn(() => finish.resolve());
-        const abortOther = vi.fn();
-        mocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-          const handle = {
-            runId: params.runId,
-            queueMessage: async () => undefined,
-            isStreaming: () => true,
-            isCompacting: () => false,
-            abort: abortOwned,
-          };
-          setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
-          started.resolve(params);
-          try {
-            await finish.promise;
-            return { payloads: [{ text: "Synthetic consult answer" }], meta: { durationMs: 0 } };
-          } finally {
-            clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
-          }
-        });
-        const browser = surface !== "relay";
-        const respond = await dispatch(browser ? "talk.client.create" : "talk.session.create", {
-          sessionKey: "main",
-          mode: "realtime",
-          brain: "agent-consult",
-          transport: browser ? "webrtc" : "gateway-relay",
-          ...(browser ? { capabilities: ["gateway-control-v1"] } : {}),
-        });
-        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-        const result = respond.mock.calls[0]![1] as { voiceSessionId?: string; sessionId?: string };
-        browserVoiceSessionId = result.voiceSessionId;
-        const consult = callback!({ prompt: "Keep working" });
+    it.each([
+      "foreign global",
+      "replaced run",
+      "reused run ID",
+      "other call",
+      ...(surface === "relay" ? [] : ["same call"]),
+    ])("keeps %s control within its declared scope", async (replacement) => {
+      config.session = { scope: "global" };
+      const started = createDeferredCore<RunEmbeddedAgentParams>();
+      const finish = createDeferredCore();
+      let aborted = false;
+      const abortOwned = vi.fn(() => {
+        aborted = true;
+        finish.resolve();
+      });
+      const abortOther = vi.fn();
+      mocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
+        const handle = {
+          runId: params.runId,
+          queueMessage: async () => undefined,
+          isStreaming: () => true,
+          isCompacting: () => false,
+          abort: abortOwned,
+        };
+        setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+        started.resolve(params);
         try {
-          const active = await Promise.race([
-            started.promise,
-            consult.then(() => {
-              throw new Error("consult ended before model dispatch");
-            }),
-          ]);
-          expect(context.chatAbortControllers.get(active.runId)).toMatchObject({
-            agentId: "voice",
-            sessionKey: "global",
-            sessionId: active.sessionId,
+          await finish.promise;
+          return {
+            payloads: [{ text: "Synthetic consult answer" }],
+            meta: { durationMs: 0, aborted },
+          };
+        } finally {
+          clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+        }
+      });
+      const browser = surface !== "relay";
+      const createMethod = browser ? "talk.client.create" : "talk.session.create";
+      const createParams = {
+        sessionKey: "main",
+        mode: "realtime",
+        brain: "agent-consult",
+        transport: browser ? "webrtc" : "gateway-relay",
+        ...(browser ? { capabilities: ["gateway-control-v1"] } : {}),
+      };
+      const respond = await dispatch(createMethod, createParams);
+      expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      const result = respond.mock.calls[0]![1] as { voiceSessionId?: string; sessionId?: string };
+      let controlSessionId = result.sessionId;
+      const cancelsOriginal =
+        replacement === "foreign global" ||
+        replacement === "same call" ||
+        (replacement === "other call" && surface === "browser-rpc");
+      const consult = callback!({ prompt: "Keep working" });
+      try {
+        const active = await Promise.race([
+          started.promise,
+          consult.then(() => {
+            throw new Error("consult ended before model dispatch");
+          }),
+        ]);
+        expect(context.chatAbortControllers.get(active.runId)).toMatchObject({
+          agentId: "voice",
+          sessionKey: "global",
+          sessionId: active.sessionId,
+        });
+        if (replacement === "other call" || replacement === "same call") {
+          const next = await dispatch(createMethod, {
+            ...createParams,
+            ...(replacement === "same call" ? { voiceSessionId: result.voiceSessionId } : {}),
           });
+          expect(next).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+          const call = next.mock.calls[0]![1] as { voiceSessionId?: string; sessionId?: string };
+          expect(
+            (call.voiceSessionId ?? call.sessionId) === (result.voiceSessionId ?? result.sessionId),
+          ).toBe(replacement === "same call");
+          controlSessionId = call.sessionId;
+        } else {
           setActiveEmbeddedRun(
             replacement === "replaced run" ? active.sessionId : "other-agent-session",
             {
@@ -639,56 +767,60 @@ describe.each(["browser-rpc", "browser-provider", "relay"] as const)(
             },
             "global",
           );
-          expect(
-            await dispatch("talk.client.steer", {
-              sessionKey: "agent:primary:main",
-              text: "cancel",
-              mode: "cancel",
-            }),
-          ).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({ code: "INVALID_REQUEST" }),
-          );
-          if (surface === "browser-provider") {
-            browserControl!.onToolCall?.({
-              callId: "control",
-              itemId: "control",
-              name: "openclaw_agent_control",
-              args: { text: "cancel", mode: "cancel" },
-            });
-            await vi.waitFor(() =>
-              expect(submitProviderResult).toHaveBeenCalledWith(
-                "control",
-                expect.objectContaining({ ok: replacement === "foreign global", mode: "cancel" }),
-              ),
-            );
-          } else {
-            const control = await dispatch(browser ? "talk.client.steer" : "talk.session.steer", {
-              ...(browser ? {} : { sessionId: result.sessionId }),
-              sessionKey: "main",
-              text: "cancel",
-              mode: "cancel",
-            });
-            expect(control).toHaveBeenCalledWith(
-              true,
-              expect.objectContaining({ ok: replacement === "foreign global", mode: "cancel" }),
-              undefined,
-            );
-          }
-          expect(abortOwned).toHaveBeenCalledTimes(replacement === "foreign global" ? 1 : 0);
-          expect(abortOther).not.toHaveBeenCalled();
-          expect(
-            clientVoiceSessionTesting.readRecord(
-              "voice",
-              result.voiceSessionId ?? result.sessionId!,
-            )?.sessionKey,
-          ).toBe("main");
-        } finally {
-          finish.resolve();
-          await consult;
         }
-      },
-    );
+        expect(
+          await dispatch("talk.client.steer", {
+            sessionKey: "agent:primary:main",
+            text: "cancel",
+            mode: "cancel",
+          }),
+        ).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "INVALID_REQUEST" }),
+        );
+        if (surface === "browser-provider") {
+          browserControl!.onToolCall?.({
+            callId: "control",
+            itemId: "control",
+            name: "openclaw_agent_control",
+            args: { text: "cancel", mode: "cancel" },
+          });
+          await vi.waitFor(() =>
+            expect(submitProviderResult).toHaveBeenCalledWith(
+              "control",
+              expect.objectContaining({ ok: cancelsOriginal, mode: "cancel" }),
+            ),
+          );
+        } else {
+          const control = await dispatch(browser ? "talk.client.steer" : "talk.session.steer", {
+            ...(browser ? {} : { sessionId: controlSessionId }),
+            sessionKey: "main",
+            text: "cancel",
+            mode: "cancel",
+          });
+          expect(control).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ ok: cancelsOriginal, mode: "cancel" }),
+            undefined,
+          );
+        }
+        expect(abortOwned).toHaveBeenCalledTimes(cancelsOriginal ? 1 : 0);
+        expect(abortOther).not.toHaveBeenCalled();
+        expect(
+          clientVoiceSessionTesting.readRecord("voice", result.voiceSessionId ?? result.sessionId!)
+            ?.sessionKey,
+        ).toBe("main");
+        finish.resolve();
+        if (cancelsOriginal) {
+          await expect(consult).rejects.toMatchObject({ name: "AbortError" });
+        } else {
+          await expect(consult).resolves.toEqual({ text: "Synthetic consult answer" });
+        }
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([consult]);
+      }
+    });
   },
 );

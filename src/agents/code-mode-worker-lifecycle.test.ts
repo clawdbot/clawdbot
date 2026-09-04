@@ -3,10 +3,9 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { BroadcastChannel, Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeWorkerActivity } from "../../test/helpers/worker-activity.js";
 import * as workerUrls from "../infra/runtime-worker-url.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CodeModeOutputState, EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
@@ -192,10 +191,7 @@ describe("Code Mode worker lifecycle", () => {
       const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
       const dir = tempDirs.make("code-mode-catalog-cpu-");
       const channelName = `catalog-cpu-${phase}-${crypto.randomUUID()}`;
-      const channel = new BroadcastChannel(channelName);
-      onTestFinished(() => channel.close());
-      const executing = createDeferred();
-      channel.addEventListener("message", () => executing.resolve(), { once: true });
+      const executing = observeWorkerActivity(channelName);
       const h = createCodeModeHarness();
       onTestFinished(() => clearToolSearchCatalog(h.ctx));
       applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
@@ -221,7 +217,7 @@ describe("Code Mode worker lifecycle", () => {
       await writeFile(
         workerPath,
         `
-        import { BroadcastChannel } from "node:worker_threads";
+        import { BroadcastChannel, threadId } from "node:worker_threads";
         const channel = new BroadcastChannel(${JSON.stringify(channelName)});
         const { QuickJS } = await import(${JSON.stringify(quickJsUrl.href)});
         for (const method of ["create", "restore"]) {
@@ -232,7 +228,7 @@ describe("Code Mode worker lifecycle", () => {
             const interrupt = options.interruptHandler;
             let observed = false;
             args[index] = { ...options, interruptHandler: () => {
-              if (!observed) { observed = true; channel.postMessage("executing"); }
+              if (!observed) { observed = true; channel.postMessage(threadId); }
               return interrupt();
             } };
             return original.apply(this, args);
@@ -245,8 +241,6 @@ describe("Code Mode worker lifecycle", () => {
         .spyOn(workerUrls, "resolveRuntimeWorkerUrl")
         .mockReturnValue(pathToFileURL(workerPath));
       onTestFinished(() => resolveWorker.mockRestore());
-      const terminate = vi.spyOn(Worker.prototype, "terminate");
-      onTestFinished(() => terminate.mockRestore());
       const execution =
         phase === "exec"
           ? exec.execute("cpu", { code: "while (true) {}" })
@@ -255,16 +249,10 @@ describe("Code Mode worker lifecycle", () => {
         clearToolSearchCatalog(h.ctx);
         await execution;
       });
-      await executing.promise;
+      const worker = await executing;
       clearToolSearchCatalog(h.ctx);
       expect(resultDetails(await execution)).toMatchObject({ status: "failed", code: "aborted" });
-      // Changing the runtime entry also retires idle warm workers. The active
-      // CPU worker is the last termination, and must stop before abort settles.
-      expect(terminate).toHaveBeenCalled();
-      const worker = terminate.mock.contexts.at(-1);
-      if (!(worker instanceof Worker)) {
-        throw new Error("Expected a terminated real worker");
-      }
+      // The worker that reported CPU activity must stop before abort settles.
       expect(worker.threadId).toBe(-1);
       expect(activeRuns.size).toBe(0);
       expect(h.catalogRef.onDispose).toBeUndefined();
