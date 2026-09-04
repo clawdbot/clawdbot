@@ -138,6 +138,8 @@ running sessions keep their existing skill snapshot.
 To undo the last completed cleanup, ask the agent to restore the skill
 collection. It uses `skill_workshop` action `restore_collection` under the same
 workspace lock. Restore refuses if any affected skill changed after cleanup.
+For an older backup that cannot be verified, follow the
+[manual recovery guidance](#when-an-older-backup-cannot-be-restored-automatically).
 
 Each attempt is persisted per workspace before the model starts. Review is admitted only for collections of at most
 200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged.
@@ -150,6 +152,32 @@ the latest 90 outcomes per workspace.
 Collection rewrites and merges produce `SKILL.md` files at or below 10,000
 characters. A skill already above the cap can only become shorter. User-authored
 skills stay untouched.
+
+### When an older backup cannot be restored automatically
+
+Restore also refuses when it cannot read the complete current result tree, including
+content beyond sixteen path components. This check leaves the current skill files
+and the retained backup intact. Older backups may contain result hashes that
+omitted deeper files, so those hashes cannot establish whether the files changed.
+Do not edit backup hashes or delete or flatten live files merely to make restore pass.
+
+For operator-led recovery:
+
+1. Pause writes to the workspace, including collection review. A later cleanup can
+   replace the retained backup.
+2. Locate the backup under
+   `<state-dir>/skill-workshop/collection-backups/<workspace-hash>/<backup-id>/`.
+   Its `manifest.json` identifies the workspace and affected directories in
+   `skillDirs` and `resultSkillDirs`.
+3. Create a new private inspection directory outside the workspace and state
+   directory. Copy the entire backup directory, including `manifest.json` and
+   `workspace/`, into it. Separately copy each existing affected current directory
+   into a `current/` subtree, preserving its workspace-relative path. Include hidden
+   files and all nested content. If any file cannot be copied, stop rather than use
+   a partial copy.
+4. Compare the inspection copies to select the intended content. Keep the live
+   tree and original backup unchanged during review, and retain unedited copies
+   of both versions before carrying out any operator-approved recovery.
 
 ## Chat
 
@@ -331,6 +359,9 @@ components, including the filename. Evaluator bundles require a completely
 readable target skill tree within sixteen path components. Unreadable directories or
 deeper content produce an error; they are not silently omitted from the proposal
 or evaluation. Fix the reported directory or reduce its nesting, then retry.
+For a collection restore failure, follow the
+[manual recovery guidance](#when-an-older-backup-cannot-be-restored-automatically)
+instead of restructuring the live tree.
 
 ## Agent tool
 
