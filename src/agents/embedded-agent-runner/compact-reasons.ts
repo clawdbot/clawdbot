@@ -62,10 +62,12 @@ export function classifyCompactionReason(reason?: string): string {
     return "already_compacted";
   }
   // The Codex plugin intentionally declines native compaction for host-isolated or
-  // policy-restricted bindings; the startup-binding rotation owns their byte fuse.
+  // policy-restricted bindings with these exact reasons; the startup-binding rotation
+  // owns their byte fuse. Policy blocks reuse similar wording with ok:false results
+  // and must stay failures, so match the documented declines exactly (lowercase text).
   if (
-    text.includes("native compaction is unavailable") ||
-    text.includes("codex app-server owns automatic compaction")
+    text === "native compaction is unavailable for a host-isolated codex session" ||
+    text === "codex app-server owns automatic compaction"
   ) {
     return "native_compaction_declined";
   }
@@ -115,6 +117,11 @@ export function isBenignCompactionSkipResult(result: {
 }): boolean {
   if (result.compacted) {
     return false;
+  }
+  // A failed native compaction must stay a failure: policy blocks reuse the decline
+  // wording with ok:false, so only successful intentional declines may skip.
+  if (classifyCompactionReason(result.reason) === "native_compaction_declined") {
+    return result.ok;
   }
   return (
     isBenignCompactionSkipReason(result.reason) ||

@@ -106,6 +106,22 @@ describe("classifyCompactionReason", () => {
     expect(classifyCompactionReason(reason)).toBe("native_compaction_declined");
   });
 
+  it("keeps ok-false policy blocks out of the intentional-decline class", () => {
+    const sandboxBlock =
+      "Codex-native native compaction is unavailable because OpenClaw sandboxing is active for this session.";
+    expect(classifyCompactionReason(sandboxBlock)).not.toBe("native_compaction_declined");
+    expect(isBenignCompactionSkipReason(sandboxBlock)).toBe(false);
+    expect(
+      isBenignCompactionSkipResult({ ok: false, compacted: false, reason: sandboxBlock }),
+    ).toBe(false);
+  });
+
+  it("requires a successful result for the intentional Codex decline skip", () => {
+    const reason = "native compaction is unavailable for a host-isolated Codex session";
+    expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(true);
+    expect(isBenignCompactionSkipResult({ ok: false, compacted: false, reason })).toBe(false);
+  });
+
   it("classifies safeguard messages as guard-blocked", () => {
     expect(
       classifyCompactionReason(

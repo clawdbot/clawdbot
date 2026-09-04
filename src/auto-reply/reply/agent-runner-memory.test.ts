@@ -3852,6 +3852,61 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(loadMainSessionEntry(storePath).transcriptByteCompactionLatch).toBeUndefined();
   });
 
+  it("still fails required byte preflight when native compaction fails", async () => {
+    const storePath = path.join(rootDir, "sqlite-codex-sandbox-block-byte-guard.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+    ]);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
+    };
+    // Sandbox and node-host policy blocks reuse decline-like wording with ok:false;
+    // they are genuine failures and must keep failing required preflight.
+    const sandboxBlock =
+      "Codex-native native compaction is unavailable because OpenClaw sandboxing is active for this session.";
+    compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: sandboxBlock,
+    });
+
+    await expect(
+      runSessionCompactionIfNeeded({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: { maxActiveTranscriptBytes: "10b" },
+            },
+          },
+        },
+        followupRun: createTestFollowupRun({
+          provider: "openai",
+          model: "gpt-5.5",
+          sessionId: "session",
+          sessionKey,
+        }),
+        defaultModel: "gpt-5.5",
+        modelContextTokens: 1_000_000,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        isHeartbeat: false,
+        ...createCompactionLifecycle(createReplyOperation()),
+      }),
+    ).rejects.toThrow(`Preflight compaction required but failed: ${sandboxBlock}`);
+  });
+
   it("leaves a reset SQLite Codex session below the byte fuse for native compaction", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
     const sessionKey = "agent:main:main";
