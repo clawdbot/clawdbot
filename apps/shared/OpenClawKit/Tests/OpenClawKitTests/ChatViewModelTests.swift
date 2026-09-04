@@ -2179,6 +2179,29 @@ struct ChatViewModelTests {
         }
     }
 
+    @Test @MainActor func `older Swarm capability completion cannot undo a newer disable`() async throws {
+        let calls = AsyncCounter()
+        let olderGate = AsyncGate()
+        let transport = TestChatTransport(
+            historyResponses: [],
+            swarmEnabledHook: { _ in
+                if await calls.increment() == 1 {
+                    await olderGate.wait()
+                    return true
+                }
+                return false
+            })
+        let viewModel = OpenClawChatViewModel(sessionKey: "global", transport: transport, activeAgentId: "research")
+        let older = Task { await viewModel.refreshSwarmCapability() }
+        try await waitUntil("older Swarm capability request starts") { await calls.current() == 1 }
+
+        await viewModel.refreshSwarmCapability()
+        #expect(!viewModel.swarmEnabled)
+        await olderGate.open()
+        await older.value
+        #expect(!viewModel.swarmEnabled)
+    }
+
     @Test @MainActor func `fresh Swarm lease rechecks capability before paging`() async {
         let script = SwarmCapabilityScript([.value(true), .value(false)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
@@ -2196,7 +2219,7 @@ struct ChatViewModelTests {
         #expect(viewModel.swarmEnabled)
         #expect(!viewModel.swarmSessions.isEmpty)
 
-        await viewModel.refreshSwarmSessions()
+        await viewModel.refreshSwarmCapability()
         #expect(!viewModel.swarmEnabled)
         #expect(viewModel.swarmSessions.isEmpty)
     }
