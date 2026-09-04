@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { LegacyConfigIssue } from "../config/types.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   listActiveDegradedPlugins,
   setActiveDegradedPlugins,
@@ -125,21 +127,23 @@ const pluginMigrationFingerprint = vi.hoisted(() =>
 );
 type ConfigSnapshotWithPluginMetadataFixture = {
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  pluginMetadataSnapshot?: {
-    configFingerprint?: string;
-  };
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "configFingerprint" | "policyHash">;
 };
 const readConfigFileSnapshotWithPluginMetadata = vi.hoisted(() =>
   vi.fn<
     (options?: {
       allowCurrentPluginMetadata?: boolean;
     }) => Promise<ConfigSnapshotWithPluginMetadataFixture>
-  >(async (options) => ({
-    snapshot: await readConfigFileSnapshot(),
-    pluginMetadataSnapshot: {
-      configFingerprint: pluginMigrationFingerprint(options?.allowCurrentPluginMetadata),
-    },
-  })),
+  >(async (options) => {
+    const snapshot = await readConfigFileSnapshot();
+    return {
+      snapshot,
+      pluginMetadataSnapshot: {
+        configFingerprint: pluginMigrationFingerprint(options?.allowCurrentPluginMetadata),
+        policyHash: resolveInstalledPluginIndexPolicyHash(snapshot.sourceConfig),
+      },
+    };
+  }),
 );
 const findDoctorLegacyConfigIssues = vi.hoisted(() => vi.fn((): LegacyConfigIssue[] => []));
 const addDoctorLegacyIssues = vi.hoisted(() => vi.fn(<T>(snapshot: T): T => snapshot));

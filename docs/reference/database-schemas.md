@@ -203,6 +203,77 @@ Unlink records an explicit disconnected selection and retains credentials used b
 
 See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for connection, cancellation, session billing, and unlink behavior.
 
+## Apple companion delivery journals
+
+Companion Watch chat has separate app-local storage. It does not change the
+Gateway control-plane or per-agent database schema, and `openclaw doctor`
+does not migrate it. Open the updated iPhone and Watch apps to use the new
+delivery protocol. See [Watch voice and chat](/platforms/ios#apple-watch-voice-and-chat)
+for delivery statuses and recovery.
+
+The iPhone's existing `client-state.sqlite` owns `watch_message_journal`.
+The named GRDB migration `client-state-watch-message-journal-v9` adds that table
+and a nullable `watch_route_generation TEXT` column to
+`gateway_routing_identity`. The generation changes after Forget and re-pairing;
+a late callback or queued command from the old pairing cannot become new work.
+Admission, accepted run identity and terminal receipt state share one journal
+owner, separate from the general chat outbox.
+The journal's nullable `command_fingerprint BLOB` stores SHA-256 of each
+admitted command's canonical bytes. Dismiss preserves this hash, so reusing an
+ID with changed content or submission time cannot return the original result
+after its command text is cleared. The hash expires with the row or is removed
+by Forget; legacy imports have no command fingerprint.
+The migration is registered by shared Apple client storage, so the Mac client
+also sees the additive schema; it does not process companion Watch delivery.
+
+The additive `client-state-watch-message-legacy-receipts-v1` migration creates
+`watch_message_legacy_imports`. It stores SHA-256 hashes of exact legacy command
+IDs and imported content, never the text or Gateway ID. A nullable content hash
+records the older app's ID-only recent-message suppression policy; it is not
+proof of a matching body or successful execution.
+
+Old Watch UserDefaults are decoded and reconciled in one SQLite transaction
+whenever the phone prepares its journal. Imported rows and their hash receipts
+commit together before cleanup checks that both source blobs are unchanged.
+This also recovers messages written by an older app after downgrade. Unprovable
+queued text becomes **Needs review**, never an automatic send. Conflicting IDs
+or unseen messages associated with a previously forgotten Gateway preserve the
+source and surface a recovery error instead of discarding or retargeting text.
+
+Imported text remains until explicit discard or Gateway Forget. Its hash-only
+receipt has no timed expiry and survives both actions, so an identical old
+snapshot cannot resurrect deleted text. This storage grows per legacy ID and is
+removed only by a full onboarding reset, which clears the old UserDefaults
+before deleting client state. New commands and their reply replay instead have
+an immutable 48-hour deadline. Dismiss hides a completed card without changing
+its receipt, acknowledgment state or deadline; active deliveries cannot be
+discarded or dismissed.
+Expired copies are pruned when delivery state is next used, including opening
+the phone's delivery list. An idle or suspended app does not promise immediate
+wall-clock erasure.
+
+The Watch owns its outbound commands and received results in its own SQLite
+journal. A 90-second speech timeout does not remove this delivery state or
+cancel the remote run. Both apps commit before issuing their application-level
+admission or terminal receipt. A permanent rejection is explicitly not an
+admission and creates no phone journal row. If dispatch became ambiguous before an accepted run was recorded,
+recovery reports uncertainty rather than automatically executing the message
+again. The phone retains its current WAL policy: this is app-termination
+recovery, not a claim of power-loss durability.
+
+Forget removes phone journal rows in the existing irreversible removal
+transaction, including rows imported without a routing parent. The phone first
+accounts for retained legacy source and refuses removal if that cannot be done
+safely. The additive
+schema leaves the old reader's explicit routing updates intact, and a deletion
+trigger keeps its Forget path effective after downgrade. An older app cannot
+offer the new receipt protocol. Do not remove migration markers or reset
+`client-state.sqlite` to downgrade: that file also contains other user-owned
+client state.
+
+The [accepted design](https://github.com/openclaw/openclaw/issues/136617) records
+the schema, migration, ownership, retention and validation boundaries.
+
 ## Review checkpoint for material changes
 
 Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.

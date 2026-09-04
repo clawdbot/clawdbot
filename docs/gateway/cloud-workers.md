@@ -407,7 +407,12 @@ data-loss confirmation, it abandons the exact offline device owner and resumes
 from the last Gateway-synced workspace without replay. Unsynced device files
 and in-flight work may be lost. This explicit abandonment also fences an active
 local Codex turn claim without waiting for an acknowledgment from the offline
-node. If the device is already available, use the
+node. The Gateway revokes the abandoned worker's credentials, tools, and result
+authority before returning the session to local ownership. It retains the exact
+old device cleanup scope until reconnection confirms physical worker shutdown;
+this cleanup cannot stop or revoke a later session owner, including after a
+Gateway restart. Continue on Gateway does not claim that the offline process has
+already stopped. If the device is already available, use the
 ordinary reconcile-first move instead.
 
 To stop a running turn in the Control UI, use chat **Stop** or `/stop` first. Once no turn is running, choose **Stop cloud worker…** from the placement chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. An environment in `draining` or `destroying` has not yet confirmed release: teardown errors remain visible, and Stop can be retried. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.

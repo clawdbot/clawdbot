@@ -1,8 +1,10 @@
 import Foundation
 import OpenClawKit
 
-enum WatchMessagingInboundEvent {
-    case reply(WatchQuickReplyEvent)
+enum WatchMessagingInboundEvent: Sendable {
+    case chatDeliveryCommand(OpenClawWatchChatDeliveryCommand)
+    case chatDeliveryReceiptAck(OpenClawWatchChatDeliveryReceiptAck)
+    case legacyChat
     case execApprovalResolve(WatchExecApprovalResolveEvent)
     case execApprovalSnapshotRequest(WatchExecApprovalSnapshotRequestEvent)
     case appSnapshotRequest(WatchAppSnapshotRequestEvent)
@@ -14,8 +16,6 @@ enum WatchMessagingPayloadCodec {
         OpenClawWatchPayloadType.appSnapshot.rawValue,
         OpenClawWatchPayloadType.execApprovalSnapshot.rawValue,
     ]
-
-    static let completedChatReplyTextLimit = 4000
 
     static func nowMs() -> Int64 {
         Int64(Date().timeIntervalSince1970 * 1000)
@@ -34,7 +34,8 @@ enum WatchMessagingPayloadCodec {
     static func encodeNotificationPayload(
         id: String,
         params: OpenClawWatchNotifyParams,
-        gatewayStableID: String?) -> [String: Any]
+        gatewayStableID: String?,
+        chatDeliveryContext: OpenClawWatchChatDeliveryContext? = nil) -> [String: Any]
     {
         var payload: [String: Any] = [
             "type": OpenClawWatchPayloadType.notify.rawValue,
@@ -52,6 +53,13 @@ enum WatchMessagingPayloadCodec {
         }
         if let gatewayStableID = GatewayStableIdentifier.exact(gatewayStableID) {
             payload["gatewayStableID"] = gatewayStableID
+        }
+        if let chatDeliveryContext,
+           let context = try? OpenClawWatchChatDeliveryCodec.encode(chatDeliveryContext)
+        {
+            payload["sessionKey"] = chatDeliveryContext.sessionKey
+            payload["gatewayStableID"] = chatDeliveryContext.gatewayStableID
+            payload["chatDeliveryContext"] = context
         }
         if let kind = nonEmpty(params.kind) {
             payload["kind"] = kind
@@ -258,6 +266,11 @@ enum WatchMessagingPayloadCodec {
         if let snapshotId = nonEmpty(message.snapshotId) {
             payload["snapshotId"] = snapshotId
         }
+        if let context = message.chatDeliveryContext,
+           let encoded = try? OpenClawWatchChatDeliveryCodec.encode(context)
+        {
+            payload["chatDeliveryContext"] = encoded
+        }
         return payload
     }
 
@@ -300,30 +313,17 @@ enum WatchMessagingPayloadCodec {
         return context
     }
 
-    static func encodeChatCompletionPayload(
-        _ message: OpenClawWatchChatCompletionMessage) -> [String: Any]
-    {
-        [
-            "type": message.type.rawValue,
-            "commandId": message.commandId,
-            "replyText": self.truncatedCompletedChatReplyText(message.replyText),
-            "sentAtMs": message.sentAtMs ?? self.nowMs(),
-        ]
-    }
-
-    private static func truncatedCompletedChatReplyText(_ text: String) -> String {
-        guard text.count > self.completedChatReplyTextLimit else { return text }
-        return "\(text.prefix(self.completedChatReplyTextLimit - 3))..."
-    }
-
     static func parseInboundPayload(
         _ payload: [String: Any],
-        transport: String) -> WatchMessagingInboundEvent?
+        transport: String) throws -> WatchMessagingInboundEvent?
     {
         switch payload["type"] as? String {
+        case OpenClawWatchPayloadType.chatDeliveryCommand.rawValue:
+            try .chatDeliveryCommand(OpenClawWatchChatDeliveryCodec.decodeCommandStructure(payload))
+        case OpenClawWatchPayloadType.chatDeliveryReceiptAck.rawValue:
+            try .chatDeliveryReceiptAck(OpenClawWatchChatDeliveryCodec.decodeReceiptAck(payload))
         case OpenClawWatchPayloadType.reply.rawValue:
-            self.parseQuickReplyPayload(payload, transport: transport)
-                .map(WatchMessagingInboundEvent.reply)
+            .legacyChat
         case OpenClawWatchPayloadType.execApprovalResolve.rawValue:
             self.parseExecApprovalResolvePayload(payload, transport: transport)
                 .map(WatchMessagingInboundEvent.execApprovalResolve)
@@ -334,41 +334,15 @@ enum WatchMessagingPayloadCodec {
             self.parseAppSnapshotRequestPayload(payload, transport: transport)
                 .map(WatchMessagingInboundEvent.appSnapshotRequest)
         case OpenClawWatchPayloadType.appCommand.rawValue:
-            self.parseAppCommandPayload(payload, transport: transport)
-                .map(WatchMessagingInboundEvent.appCommand)
+            if self.nonEmpty(payload["command"] as? String) == OpenClawWatchAppCommand.sendChat.rawValue {
+                .legacyChat
+            } else {
+                self.parseAppCommandPayload(payload, transport: transport)
+                    .map(WatchMessagingInboundEvent.appCommand)
+            }
         default:
             nil
         }
-    }
-
-    static func parseQuickReplyPayload(
-        _ payload: [String: Any],
-        transport: String) -> WatchQuickReplyEvent?
-    {
-        guard (payload["type"] as? String) == OpenClawWatchPayloadType.reply.rawValue else {
-            return nil
-        }
-        guard let actionId = nonEmpty(payload["actionId"] as? String) else {
-            return nil
-        }
-        let promptId = self.nonEmpty(payload["promptId"] as? String) ?? "unknown"
-        let replyId = self.nonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
-        let actionLabel = self.nonEmpty(payload["actionLabel"] as? String)
-        let sessionKey = self.nonEmpty(payload["sessionKey"] as? String)
-        let gatewayStableID = GatewayStableIdentifier.exact(payload["gatewayStableID"] as? String)
-        let note = self.nonEmpty(payload["note"] as? String)
-        let sentAtMs = (payload["sentAtMs"] as? NSNumber)?.int64Value
-
-        return WatchQuickReplyEvent(
-            replyId: replyId,
-            promptId: promptId,
-            actionId: actionId,
-            actionLabel: actionLabel,
-            sessionKey: sessionKey,
-            gatewayStableID: gatewayStableID,
-            note: note,
-            sentAtMs: sentAtMs,
-            transport: transport)
     }
 
     static func parseExecApprovalResolvePayload(
