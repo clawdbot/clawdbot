@@ -3,6 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
@@ -63,17 +64,6 @@ afterEach(async () => {
   }
 });
 
-function writeResponsesEvents(response: ServerResponse, events: unknown[]): void {
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
-}
-
 function writeAssistantResponse(response: ServerResponse): void {
   const message = {
     type: "message",
@@ -82,7 +72,7 @@ function writeAssistantResponse(response: ServerResponse): void {
     status: "completed",
     content: [{ type: "output_text", text: RESPONSE_MARKER, annotations: [] }],
   };
-  writeResponsesEvents(response, [
+  writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
       output_index: 0,

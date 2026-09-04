@@ -911,6 +911,11 @@ enum class GatewayMethod(
   TranscriptsList("transcripts.list"),
   TranscriptsGet("transcripts.get"),
   ModelsAuthOrderSet("models.authOrderSet"),
+  CanvasDocumentView("canvas.document.view"),
+  PluginsControlUiList("plugins.controlUi.list"),
+  PluginsControlUiReload("plugins.controlUi.reload"),
+  PluginsControlUiReport("plugins.controlUi.report"),
+  PluginsControlUiStatus("plugins.controlUi.status"),
 }
 
 enum class GatewayEvent(
@@ -932,6 +937,7 @@ enum class GatewayEvent(
   SessionTool("session.tool"),
   SessionsChanged("sessions.changed"),
   ControlUiSessionPullRequestsChanged("controlUi.sessionPullRequests.changed"),
+  PluginsControlUiChanged("plugins.controlUi.changed"),
   Presence("presence"),
   Tick("tick"),
   TalkMode("talk.mode"),

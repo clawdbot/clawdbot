@@ -93,11 +93,25 @@ an explicit boolean.
 
 ### Quiet progress presentation
 
-`createChannelProgressDraftCompositor({ presentation: "summary", ... })` keeps
-routine tool activity out of the visible draft while retaining authored status,
-reasoning, commentary, milestones, and actionable approval/failure lines. Pass
-`approvalId` on requested and resolved approval events so the compositor can
-clear the matching attention line. The default presentation remains unchanged.
+Native progress renderers must retain approval and failure lines when ordinary
+tool rows are disabled. The shared progress compositor retains those lines in
+its snapshots; native renderers must preserve them alongside plan rows and
+ordinary activity.
+
+`resolveChannelStreamingPreviewToolProgress(entry, defaultValue?, mode?)` keeps
+its shipped default of `true` when the second argument is omitted or
+`undefined`. Bundled channels pass `mode !== "progress"` as the second argument
+and their resolved streaming mode as the third argument, so unconfigured
+`progress` drafts hide ordinary tool rows while `partial` and `block` previews
+show them.
+
+The compositor and formatter's `presentation: "summary"` option and the
+checklist formatter's `plain: true` option are deprecated but retain their
+explicit output until the next breaking SDK release. New callers should omit
+them and use `streaming.progress.toolProgress` to control tool rows with the
+standard progress markers.
+
+### Quiet acknowledgement and coalesced progress
 
 `createStatusReactionController({ presentation: "acknowledgement", ... })`
 keeps the initial reaction through work and success, skips inactivity warnings,
@@ -1139,12 +1153,13 @@ unrelated inbound runtime helpers.
     `openclaw/plugin-sdk/plugin-command-runtime`. Create one runtime while
     planning the catalog, merge its candidates with built-in and skill entries,
     and retain the winning candidate object in the registered handler closure.
-    Once the provider catalog is finalized, call
-    `retainNativeCatalog(provider)` when at least one plugin candidate remains;
-    if listener registration can fail synchronously, call it after those
-    listeners are installed. This records the current channel-account lifecycle
-    so a registry reload restarts only accounts whose handlers retain that
-    registry generation.
+    A plugin registry replacement drains and restarts loaded channel accounts
+    so their handlers, command catalogs, and routes use the new generation.
+    Manually stopped accounts stay stopped. Ordinary channel config changes
+    still restart only the affected channel or accounts.
+    `retainNativeCatalog(provider)` is deprecated and will be removed in the
+    next breaking SDK release; existing calls only assert that the captured
+    registry generation is still active.
     Call `prepareDispatch(rawArgs)` only on that winner and execute the returned
     dispatch with `dispatch.execute(context)`. Carry an explicit
     `{ kind: "non-plugin" }` decision for retained built-in and skill winners.

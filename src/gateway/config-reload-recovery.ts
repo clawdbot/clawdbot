@@ -17,8 +17,8 @@ export function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolea
   );
 }
 
-/** Skip broad auth scans unless a reload can change provider availability. */
-export function shouldRewarmProviderAuthState(plan: GatewayReloadPlan): boolean {
+/** Auth changes must replace prepared owners instead of advancing their config in place. */
+export function doesReloadAffectProviderAuth(plan: GatewayReloadPlan): boolean {
   return plan.reloadPlugins || plan.changedPaths.some(isProviderAuthRelevantReloadPath);
 }
 

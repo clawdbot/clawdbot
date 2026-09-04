@@ -15,7 +15,6 @@ import { createAppliedConfigHashPublisher } from "./applied-config-hash-publishe
 import type { GatewayReloadPlan } from "./config-reload.js";
 import {
   GatewayConfigReloadSupersededError,
-  isCurrentGatewayReloadGeneration,
   type AcceptedRestartTarget,
   type AcceptedRestartTargetOwnership,
   type GatewayReloadHandlerParams,
@@ -23,6 +22,7 @@ import {
   type GatewayRestartTransactionResult,
   type GatewayRestartTransactionState,
 } from "./server-reload-contracts.js";
+import { isCurrentGatewayReloadGeneration } from "./server-reload-generation.js";
 
 const RESTART_EMISSION_RETRY_MS = 1_000;
 

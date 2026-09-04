@@ -227,6 +227,7 @@ export function classifyRollup(
   rollup: RollupPayload | null | undefined,
   runs: RunListItem[] = [],
   reconciledChecks: ReadonlyMap<number, string> = new Map(),
+  attachedRun?: RunListItem,
 ) {
   const rawNodes = rollup?.contexts?.nodes ?? [];
   const hiddenContextCount = Math.max(
@@ -267,11 +268,22 @@ export function classifyRollup(
   // counts them. A check is superseded when a newer same-workflow check shares its name
   // (GitHub's latest-name-wins semantics), or when its cancelled workflow has a newer run.
   // Actions run metadata also proves target-run supersession before a newer run posts jobs.
-  // Older-run checks with unique names stay visible so distinct invocations are not dropped.
+  // Other invocations retain unique names; attached PR CI replaces its entire prior graph.
   const nodes = rawNodes.filter((check) => {
     const identity = checkRunIdentity(check);
     if (!identity) {
       return true;
+    }
+    // PR CI runs replace one another even before new matrix job names appear.
+    // Require event and workflow identity so manual or unrelated checks remain visible.
+    if (
+      attachedRun &&
+      identity.workflowId === attachedRun.workflow_id &&
+      identity.runId < attachedRun.id &&
+      check.checkSuite?.workflowRun?.event === "pull_request"
+    ) {
+      supersededCount += 1;
+      return false;
     }
     // Proof covers the queued observation, not a later name or outcome of the same ID.
     if (isReconciledPlaceholder(check)) {
@@ -414,10 +426,11 @@ function classifyPrRollup(
   pr: RollupPage,
   repo: string,
   headSha: string,
+  attachedRun: RunListItem,
   reconciledChecks?: ReadonlyMap<number, string>,
   deadline?: number,
 ) {
-  const result = classifyRollup(pr.statusCheckRollup, [], reconciledChecks);
+  const result = classifyRollup(pr.statusCheckRollup, [], reconciledChecks, attachedRun);
   if (
     result.verdict !== "FAILING" ||
     !pr.statusCheckRollup?.contexts?.nodes?.some(
@@ -433,6 +446,7 @@ function classifyPrRollup(
     pr.statusCheckRollup,
     findTargetRuns(repo, headSha, deadline),
     reconciledChecks,
+    attachedRun,
   );
 }
 
@@ -790,7 +804,7 @@ async function main(argv = process.argv.slice(2)) {
         if (blocked !== null) {
           return blocked;
         }
-        let result = classifyPrRollup(pr, args.repo, args.headSha);
+        let result = classifyPrRollup(pr, args.repo, args.headSha, attached);
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
         let run = result.verdict === "FAILING" ? undefined : readRun(args.repo, runId);
@@ -816,7 +830,14 @@ async function main(argv = process.argv.slice(2)) {
             if (currentBlocked !== null) {
               return currentBlocked;
             }
-            result = classifyPrRollup(pr, args.repo, args.headSha, reconciled, watchDeadline);
+            result = classifyPrRollup(
+              pr,
+              args.repo,
+              args.headSha,
+              attached,
+              reconciled,
+              watchDeadline,
+            );
             run =
               result.verdict === "FAILING" ? undefined : readRun(args.repo, runId, watchDeadline);
           }
