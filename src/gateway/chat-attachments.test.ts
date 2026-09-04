@@ -670,12 +670,14 @@ describe("parseMessageWithAttachments validation errors", () => {
     {
       kind: "audio",
       mimeType: "audio/mpeg",
+      expectedMimeType: "audio/mpeg",
       fileName: "voice.mp3",
       content: Buffer.from([0xff, 0xfb, 0x90, 0x00]).toString("base64"),
     },
     {
       kind: "video",
       mimeType: "video/mp4",
+      expectedMimeType: "video/mp4",
       fileName: "clip.mp4",
       content: GENERIC_MP4,
     },
@@ -699,6 +701,7 @@ describe("parseMessageWithAttachments validation errors", () => {
     {
       kind: "audio",
       mimeType: "audio/webm",
+      expectedMimeType: "audio/webm",
       fileName: "voice.webm",
       content: Buffer.from("1a45dfa3874282847765626d", "hex").toString("base64"),
     },
@@ -711,7 +714,7 @@ describe("parseMessageWithAttachments validation errors", () => {
     },
   ])(
     "surfaces structured inbound $kind facts %#",
-    async ({ kind, mimeType, expectedMimeType = mimeType, fileName, content }) => {
+    async ({ kind, mimeType, expectedMimeType, fileName, content }) => {
       const parsed = await parseMessageWithAttachments(
         "play this",
         [{ type: kind, mimeType, fileName, content, durationMs: 1_500 }],
