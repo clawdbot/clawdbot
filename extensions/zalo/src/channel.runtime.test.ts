@@ -52,4 +52,26 @@ describe("notifyZaloPairingApproval", () => {
   ])("reports actionable token paths for $name", async ({ cfg, expected }) => {
     await expect(notifyZaloPairingApproval({ cfg, id: "sender-id" })).rejects.toThrow(expected);
   });
+
+  it("uses the account supplied by the pairing approval event", async () => {
+    await expect(
+      notifyZaloPairingApproval({
+        cfg: {
+          channels: {
+            zalo: {
+              defaultAccount: "default",
+              accounts: {
+                default: { botToken: "blocked-default-token" },
+                work: {},
+              },
+            },
+          },
+        },
+        id: "sender-id",
+        accountId: "work",
+      }),
+    ).rejects.toThrow(
+      "Zalo token not configured for account work (set channels.zalo.accounts.work.botToken or channels.zalo.accounts.work.tokenFile)",
+    );
+  });
 });
