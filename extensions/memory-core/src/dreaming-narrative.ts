@@ -235,6 +235,8 @@ export type DreamNarrativeRequest = {
   nowMs?: number;
   timezone?: string;
   model?: string;
+  /** Caller-specified completion timeout (e.g., dreaming execution config). */
+  timeoutMs?: number;
   logger: Logger;
 };
 
@@ -248,6 +250,14 @@ async function generateAndAppendDreamNarrative(
   const nowMs =
     typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   const message = buildNarrativePrompt(params.data);
+  // Caller-provided timeouts (e.g., dreaming execution config) override the default so slow
+  // local models can be given enough room without touching the built-in bound.
+  const timeoutMs =
+    typeof params.timeoutMs === "number" &&
+    Number.isInteger(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? params.timeoutMs
+      : NARRATIVE_TIMEOUT_MS;
   try {
     const attemptModels = params.model ? [params.model, undefined] : [undefined];
     let narrative = "";
@@ -258,7 +268,7 @@ async function generateAndAppendDreamNarrative(
           message,
           extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
           ...(model ? { model } : {}),
-          timeoutMs: NARRATIVE_TIMEOUT_MS,
+          timeoutMs,
         });
         narrative = result.text.trim();
         break;

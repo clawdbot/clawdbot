@@ -130,6 +130,11 @@
                 "properties": {
                   "model": {
                     "type": "string"
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Completion timeout in milliseconds for phase runs and dream diary narrative generation."
                   }
                 }
               }
@@ -165,6 +170,11 @@
                     "properties": {
                       "model": {
                         "type": "string"
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Completion timeout in milliseconds for phase runs and dream diary narrative generation."
                       }
                     }
                   }
@@ -222,6 +232,11 @@
                     "properties": {
                       "model": {
                         "type": "string"
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Completion timeout in milliseconds for phase runs and dream diary narrative generation."
                       }
                     }
                   }
@@ -253,6 +268,11 @@
                     "properties": {
                       "model": {
                         "type": "string"
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Completion timeout in milliseconds for phase runs and dream diary narrative generation."
                       }
                     }
                   }

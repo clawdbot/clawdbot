@@ -58,6 +58,40 @@ describe("runDreamNarrative", () => {
     );
   });
 
+  it("uses the caller-specified narrative timeout when provided", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-timeout-");
+    const subagent = createCompletion();
+    const outcome = await runDreamNarrative({
+      agentId: "main",
+      subagent,
+      workspaceDir,
+      data: { phase: "deep", snippets: ["Slow local models need extra room."] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      timeoutMs: 600_000,
+      logger: createLogger(),
+    });
+
+    expect(subagent.complete).toHaveBeenCalledOnce();
+    expect(subagent.complete.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 600_000 });
+    expect(outcome).toEqual({ status: "completed" });
+  });
+
+  it("falls back to the default narrative timeout for invalid caller values", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-timeout-invalid-");
+    const subagent = createCompletion();
+    await runDreamNarrative({
+      agentId: "main",
+      subagent,
+      workspaceDir,
+      data: { phase: "rem", snippets: ["A malformed timeout must not break the sweep."] },
+      timeoutMs: -1,
+      logger: createLogger(),
+    });
+
+    expect(subagent.complete.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 60_000 });
+  });
+
   it.each([
     new Error("model unavailable"),
     new Error("Completion failed", { cause: new Error("unknown model: ollama/missing-model") }),
