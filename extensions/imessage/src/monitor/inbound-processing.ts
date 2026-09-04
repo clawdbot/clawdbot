@@ -600,7 +600,10 @@ export async function resolveIMessageInboundDecision(params: {
       params.logVerbose?.(
         describeIMessageEchoDropLog({ messageText: bodyText, messageId: inboundMessageId }),
       );
-      return { kind: "drop", reason: "echo" };
+      // Use "self-chat echo" for self-chat paired mirrors so the loop rate
+      // limiter exempts them — counting benign mirror drops would suppress
+      // legitimate conversation after a short burst of paired mirrors.
+      return { kind: "drop", reason: isSelfChat ? "self-chat echo" : "echo" };
     }
   }
 
