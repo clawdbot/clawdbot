@@ -184,6 +184,8 @@ type ExecApprovalCronExecutionSource = {
 
 export type ExecApprovalRequestPayload = {
   command: string;
+  /** Brief reviewer-facing explanation of why the command is being run. */
+  purpose?: string | null;
   commandPreview?: string | null;
   commandArgv?: string[];
   // Optional UI-safe env key preview for approval prompts.

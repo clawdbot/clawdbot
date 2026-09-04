@@ -24,6 +24,13 @@ const PROCESS_TOOL_ACTIONS = [
 /** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command." }),
+  purpose: Type.Optional(
+    Type.String({
+      description:
+        "Always set this. One short plain-English sentence naming what the command accomplishes, written for a non-technical reader who cannot read shell (e.g. 'Checks whether the project builds.'). Shown as 'What this does' on approval prompts. Describe the outcome, never restate the command text, and never include secrets.",
+      maxLength: 240,
+    }),
+  ),
   workdir: Type.Optional(
     Type.String({
       description: "Omit/empty string: default; whitespace-only invalid.",
@@ -77,6 +84,7 @@ export const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "backgroun
 /** Parameters exposed by node-only exec surfaces. */
 export const nodeExecSchema = Type.Object({
   command: execSchema.properties.command,
+  purpose: execSchema.properties.purpose,
   workdir: execSchema.properties.workdir,
   env: execSchema.properties.env,
   timeoutSeconds: execSchema.properties.timeoutSeconds,

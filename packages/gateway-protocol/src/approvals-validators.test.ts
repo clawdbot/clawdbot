@@ -14,6 +14,7 @@ import {
 const execPresentation = {
   kind: "exec",
   commandText: "git status --short",
+  purpose: "Checks which repository files have changed.",
   commandPreview: "git status",
   warningText: null,
   host: "gateway",
@@ -61,6 +62,9 @@ const pluginRecord = {
 describe("unified approval protocol validators", () => {
   it("accepts only reviewer-safe approval presentations", () => {
     expect(validateApprovalPresentation(execPresentation)).toBe(true);
+    expect(validateApprovalPresentation({ ...execPresentation, purpose: "x".repeat(241) })).toBe(
+      false,
+    );
     expect(validateApprovalPresentation(pluginPresentation)).toBe(true);
     expect(validateApprovalPresentation(systemAgentPresentation)).toBe(true);
     expect(

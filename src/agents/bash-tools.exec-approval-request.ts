@@ -41,6 +41,7 @@ const loadExecApprovalCommandSpansRuntime = createLazyPromise(
 type RequestExecApprovalDecisionParams = {
   id: string;
   command?: string;
+  purpose?: string;
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
@@ -79,6 +80,7 @@ function buildExecApprovalRequestToolParams(
   return {
     id: params.id,
     ...(params.command ? { command: params.command } : {}),
+    ...(params.purpose ? { purpose: params.purpose } : {}),
     ...(params.commandArgv ? { commandArgv: params.commandArgv } : {}),
     systemRunPlan: params.systemRunPlan,
     env: params.env,
@@ -209,6 +211,7 @@ export async function resolveRegisteredExecApprovalDecision(params: {
 type HostExecApprovalParams = {
   approvalId: string;
   command?: string;
+  purpose?: string;
   commandArgv?: string[];
   systemRunPlan?: SystemRunApprovalPlan;
   env?: Record<string, string>;
@@ -323,6 +326,7 @@ async function buildHostApprovalDecisionParams(
   return {
     id: params.approvalId,
     command: params.command,
+    purpose: params.purpose,
     commandArgv: params.commandArgv,
     systemRunPlan: params.systemRunPlan,
     env: params.env,

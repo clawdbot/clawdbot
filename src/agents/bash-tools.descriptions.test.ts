@@ -30,6 +30,14 @@ describe("tool descriptions", () => {
     expect(processTool.description).toContain("write, send-keys, submit, paste, kill");
   });
 
+  it("asks for an approval-facing purpose regardless of scheduler availability", () => {
+    const nudge =
+      "Always set purpose: one plain-English sentence on what the command achieves, shown to the human when approval is requested.";
+    expect(execTool.description).toContain(nudge);
+    expect(createExecTool({ ...execDefaults, hasCronTool: true }).description).toContain(nudge);
+    expect(processTool.description).not.toContain(nudge);
+  });
+
   it.each(["darwin", "linux", "win32"] as const)(
     "limits shell-quoting guidance to Unix hosts: %s",
     (platform) => {

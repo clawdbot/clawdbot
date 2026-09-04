@@ -19,6 +19,7 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
+import { addWhatsAppExecPurpose } from "./approval-copy.js";
 import {
   registerWhatsAppApprovalReactionTarget,
   unregisterWhatsAppApprovalReactionTarget,
@@ -50,7 +51,26 @@ function buildPendingPayload(params: {
   view: PendingApprovalView;
   nowMs: number;
 }): WhatsAppPendingDelivery {
-  return buildApprovalReactionPendingContent(params);
+  const pending = buildApprovalReactionPendingContent(params);
+  return {
+    ...pending,
+    reactionPayload: {
+      ...pending.reactionPayload,
+      text: addWhatsAppExecPurpose({
+        text: pending.reactionPayload.text,
+        approvalKind: params.view.approvalKind,
+        purpose: params.view.approvalKind === "exec" ? params.view.purpose : null,
+      }),
+    },
+    manualFallbackPayload: {
+      ...pending.manualFallbackPayload,
+      text: addWhatsAppExecPurpose({
+        text: pending.manualFallbackPayload.text,
+        approvalKind: params.view.approvalKind,
+        purpose: params.view.approvalKind === "exec" ? params.view.purpose : null,
+      }),
+    },
+  };
 }
 
 export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<

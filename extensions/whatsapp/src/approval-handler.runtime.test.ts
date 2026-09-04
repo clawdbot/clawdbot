@@ -22,6 +22,7 @@ describe("whatsappApprovalNativeRuntime", () => {
         approvalKind: "exec",
         approvalId: "exec-1",
         commandText: "echo hi",
+        purpose: "Checks that command execution is working.",
         actions: [
           {
             decision: "allow-once",
@@ -39,12 +40,47 @@ describe("whatsappApprovalNativeRuntime", () => {
       } as never,
     });
 
+    expect(payload.reactionPayload.text).toContain(
+      "**What this does:** Checks that command execution is working.",
+    );
+    expect(payload.reactionPayload.text?.indexOf("**What this does:**")).toBeLessThan(
+      payload.reactionPayload.text?.indexOf("**Pending command:**") ?? -1,
+    );
+    expect(payload.manualFallbackPayload.text).toContain(
+      "**What this does:** Checks that command execution is working.",
+    );
     expect(payload.reactionPayload.text).toContain("👍 Allow Once");
     expect(payload.reactionPayload.text).toContain("👎 Deny");
     expect(payload.reactionPayload.text).not.toContain("1️⃣ Allow Once");
     expect(payload.reactionPayload.text).not.toContain("2️⃣ Allow Always");
     expect(payload.reactionPayload.text).not.toContain("3️⃣ Deny");
     expect(payload.reactionPayload.allowedDecisions).toEqual(["allow-once", "deny"]);
+  });
+
+  it("uses a short fallback explanation when an older exec request has no purpose", async () => {
+    const payload = await whatsappApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: { accountId: "default" },
+      request: {
+        id: "exec-legacy",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId: "exec-legacy",
+        commandText: "echo hi",
+        actions: [],
+      } as never,
+    });
+
+    expect(payload.reactionPayload.text).toContain(
+      "**What this does:** Runs the command shown below.",
+    );
   });
 
   it("renders allowed thumbs-only reactions in pending plugin approvals", async () => {

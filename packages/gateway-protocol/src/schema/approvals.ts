@@ -150,6 +150,7 @@ export const ExecApprovalPresentationSchema = Type.Object(
   {
     kind: Type.Literal("exec"),
     commandText: NonEmptyString,
+    purpose: Type.Optional(Type.Union([Type.String({ maxLength: 240 }), Type.Null()])),
     commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     warningText: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),

@@ -3949,6 +3949,15 @@ describe("exec approval handlers", () => {
     expect(request["warningText"]).not.toContain("\\u{A}");
   });
 
+  it("stores a short single-line purpose for approval cards", async (testContext) => {
+    const { request } = await requestExecApprovalForTest(testContext, {
+      timeoutMs: 10,
+      command: "printf safe",
+      purpose: "Inspect the project\nwithout changing files\u0000",
+    });
+    expect(request["purpose"]).toBe("Inspect the project without changing files\\u{0}");
+  });
+
   it("preserves command analysis and normalizes command spans", async (testContext) => {
     const { request } = await requestExecApprovalForTest(
       testContext,

@@ -209,6 +209,7 @@ export async function executeNodeHostCommand(
     await registerExecApprovalRequestForHostOrThrow({
       approvalId,
       systemRunPlan: prepared.plan,
+      purpose: params.purpose,
       env: target.env,
       workdir: prepared.cwd,
       host: "node",

@@ -66,6 +66,13 @@ function normalizePluginExternalResolution(
   return { label, decisions: [...decisions] };
 }
 
+function sanitizeExecPurpose(value: unknown): string | null {
+  const normalized = normalizeOptionalString(value);
+  return normalized
+    ? truncateUtf16Safe(sanitizeExecApprovalDisplayText(normalized.replace(/\s+/g, " ")), 240)
+    : null;
+}
+
 function buildExecApprovalPresentation(params: {
   request: unknown;
   allowedDecisions: readonly ApprovalDecision[];
@@ -86,6 +93,7 @@ function buildExecApprovalPresentation(params: {
   return {
     kind: "exec",
     commandText,
+    purpose: sanitizeExecPurpose(request.purpose),
     commandPreview,
     warningText,
     host: sanitizeOptionalSingleLine(request.host),

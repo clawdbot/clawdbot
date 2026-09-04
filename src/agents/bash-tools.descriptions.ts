@@ -35,6 +35,7 @@ export function describeExecTool(params?: {
   const base = [
     ...continuation,
     params?.hasCronTool ? "No sleep loops for reminders/follow-ups; use automations." : undefined,
+    "Always set purpose: one plain-English sentence on what the command achieves, shown to the human when approval is requested.",
     "TTY CLI/UI/coding agent: pty=true.",
   ]
     .filter(Boolean)

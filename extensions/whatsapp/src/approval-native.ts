@@ -19,6 +19,7 @@ import {
   resolveWhatsAppAccount,
 } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
+import { addWhatsAppExecPurpose } from "./approval-copy.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normalize.js";
 
 function isWhatsAppApprovalTransportEnabled(params: {
@@ -87,6 +88,14 @@ function buildWhatsAppPendingPayload(
   const payload = buildApprovalReactionPromptPayloadForRequest(params);
   return {
     ...payload,
+    text: addWhatsAppExecPurpose({
+      text: payload.text,
+      approvalKind,
+      purpose:
+        approvalKind === "exec" && "command" in params.request.request
+          ? params.request.request.purpose
+          : null,
+    }),
     presentation: buildTypedApprovalPresentation({
       approvalId: params.request.id,
       approvalKind,

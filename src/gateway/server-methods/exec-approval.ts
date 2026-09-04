@@ -1,6 +1,7 @@
 // Exec approval gateway methods create, list, inspect, and resolve command
 // approval requests, including iOS push delivery and requester visibility.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -170,6 +171,7 @@ export function createExecApprovalHandlers(
       const p = params as {
         id?: string;
         command: string;
+        purpose?: string;
         commandArgv?: string[];
         env?: Record<string, string>;
         cwd?: string;
@@ -285,6 +287,7 @@ export function createExecApprovalHandlers(
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const warningText = normalizeOptionalString(p.warningText);
+      const purpose = normalizeOptionalString(p.purpose);
       const runtimeConfig =
         typeof context.getRuntimeConfig === "function" ? context.getRuntimeConfig() : {};
       const commandHighlighting = resolveExecCommandHighlighting({
@@ -369,6 +372,9 @@ export function createExecApprovalHandlers(
           : null;
       const request = {
         command: sanitizedCommandText,
+        purpose: purpose
+          ? truncateUtf16Safe(sanitizeExecApprovalDisplayText(purpose.replace(/\s+/g, " ")), 240)
+          : null,
         commandPreview:
           host === "node" || !approvalContext.commandPreview
             ? undefined
