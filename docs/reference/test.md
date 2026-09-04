@@ -155,6 +155,20 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
   a substitute for the delegated Testbox workflow.
 
+When remote sync uses a temporary checkout, the wrapper preserves native
+`.crabbox/runs` and `.crabbox/captures` outputs together beneath a fresh
+`.crabbox/wrapper-artifacts/run-*` directory before removing that checkout.
+Repeated runs retain separate evidence even when native filenames match. The
+wrapper prints the old-to-new root mapping; native logs and generated proof may
+still reference the old paths. A preservation error fails the wrapper and retains
+the temporary checkout at the reported path for manual recovery.
+
+These are local artifacts, not published or fully sanitized proof. Blacksmith's
+native failure bundle contains captured stdout/stderr and diagnostic metadata;
+it does not automatically include remote UI screenshots or reports. Retrieve
+those separately before stopping the owned Testbox, and inspect all artifacts
+for secrets and private data before sharing.
+
 The native Windows Testbox idle monitor uses the running `sshd` service's local
 listener ports, not Blacksmith's externally forwarded SSH port. Established SSH
 connections keep the job alive; the `~/.testbox-last-activity` modification time
@@ -511,7 +525,12 @@ do not describe a replay as recovery of lost files.
 
 Timeout diagnostics allocate fresh children beneath the existing
 `OPENCLAW_UI_E2E_DIAGNOSTIC_DIR` or default timeout directory, keeping each PNG and
-JSON report together. Mantis allocates an invocation directory for setup logs,
+JSON report together. Their `ci.shardIndex` and `ci.vitestShardCount` fields record
+`VITEST_SHARD_INDEX` and `VITEST_SHARD_COUNT`, respectively, as supplied by normal
+CI. Missing values remain `null`; manual and separate release E2E invocations do
+not infer this metadata from Vitest's `--shard` argument.
+
+Mantis allocates an invocation directory for setup logs,
 capture attempts, and its report; the builder preserves each attempt's relative
 paths and refuses to overwrite an existing report.
 

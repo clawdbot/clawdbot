@@ -14,7 +14,6 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -153,7 +152,10 @@ async function main() {
     process.exit(ready ? 0 : 1);
   }
   if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }
-  const runStatus = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10); if (args[0] === "run" && runStatus !== 0) { process.stderr.write("fake run failure\n"); process.exit(runStatus); }
+  if (args[0] === "run" && process.env.OPENCLAW_FAKE_CRABBOX_ARTIFACTS) {
+    for (const [file, bytes] of Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_CRABBOX_ARTIFACTS))) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, Buffer.from(bytes, "base64")); }
+  }
+  const runStatus = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10); if (args[0] === "run" && runStatus !== 0) { process.stdout.write(JSON.stringify({ args, cwd: process.cwd() }) + "\n"); process.stderr.write("fake run failure\n"); process.exit(runStatus); }
   if (args[0] === "config" && args[1] === "show" && args.includes("--json")) {
     const status = Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS || "0", 10);
     if (status !== 0) { process.stderr.write("config unavailable\n"); process.exit(status); }
@@ -166,7 +168,6 @@ async function main() {
     if (status !== 0) { process.stderr.write('coordinator GET /v1/whoami: http 401: {"error":"unauthorized"}\n'); process.exit(status); }
     process.stdout.write("fake-crabbox-user\n"); return;
   }
-  if (args.includes("--artifact-glob") || args.includes("-artifact-glob")) { fs.mkdirSync(".crabbox/runs/run_fake", { recursive: true }); fs.writeFileSync(".crabbox/runs/run_fake/fake-artifacts.tgz", "fake artifact\n"); }
   const scriptIndex = args.findIndex((arg) => arg === "--script" || arg === "-script"); const scriptPath = scriptIndex >= 0 ? args[scriptIndex + 1] : "";
   const scriptContent = scriptPath ? fs.readFileSync(scriptPath, "utf8") : "";
   if (process.env.OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT === "1") {
@@ -4832,31 +4833,144 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain(`/tmp/proof=${path.join(repoRoot, ".artifacts/proof")}`);
   });
 
-  it("preserves artifact-glob downloads from temporary sparse-sync checkouts", () => {
-    const preservedDir = path.join(repoRoot, ".crabbox", "runs", "run_fake");
-    rmSync(preservedDir, { recursive: true, force: true });
-
-    const { output, result } = runSuccessfulDefaultWrapper(
-      [
-        "run",
-        "--provider",
-        "blacksmith-testbox",
-        "--blacksmith-ref",
-        "main",
-        "--artifact-glob",
-        ".artifacts/proof/**",
-        "--",
-        "echo ok",
-      ],
-      cleanSparseSyncOptions,
-    );
-
-    expect(output.cwd).toContain("openclaw-crabbox-sync-");
-    expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(result.stderr).toContain("preserved");
-    expect(statSync(path.join(preservedDir, "fake-artifacts.tgz")).isFile()).toBe(true);
-    rmSync(preservedDir, { recursive: true, force: true });
-  });
+  it.each([
+    { mode: "capsule", artifacts: "captures", exitCode: 23 },
+    { mode: "capsule", artifacts: "both", exitCode: 23 },
+    { mode: "sparse", artifacts: "both", exitCode: 23 },
+    { mode: "capsule", artifacts: "runs", exitCode: 0 },
+    { mode: "capsule", artifacts: "none", exitCode: 0 },
+    { mode: "direct", artifacts: "captures", exitCode: 23 },
+    { mode: "capsule", artifacts: "both", exitCode: 0, blocked: true },
+  ])(
+    "retains native artifacts through the wrapper ($mode, $artifacts, exit=$exitCode, blocked=$blocked)",
+    ({ mode, artifacts, exitCode, blocked }) => {
+      const root = realpathSync(makeTempDir(tempDirs, "openclaw-wrapper-artifacts-"));
+      const producer = path.join(root, "repo");
+      const syncRoot = path.join(root, "sync");
+      const fixtureWrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
+      mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
+      copyFileSync(realBundledWrapperPath, fixtureWrapper);
+      const env = {
+        ...process.env,
+        ...testHomeEnv(path.join(root, "home")),
+        PATH: [makeFakeCrabbox(defaultProviderHelp), process.env.PATH ?? ""].join(path.delimiter),
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_AUTHOR_NAME: "Artifact fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "Artifact fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+        CRABBOX_PROVIDER: "",
+        CRABBOX_TARGET: "",
+        CRABBOX_TARGET_OS: "",
+        CRABBOX_WINDOWS_MODE: "",
+        OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
+        OPENCLAW_CRABBOX_SYNC_TMPDIR: syncRoot,
+        OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
+        OPENCLAW_FAKE_CRABBOX_RUN_STATUS: String(exitCode),
+      };
+      const git = (...args: string[]) => {
+        const result = spawnSync("git", args, { cwd: producer, env, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(0);
+        return result.stdout.trim();
+      };
+      git("init", "-q", "-b", "main");
+      writeFileSync(path.join(producer, ".gitignore"), ".tmp/\n.crabbox/\n");
+      writeFileSync(path.join(producer, "fixture.txt"), "source fixture\n");
+      git("add", ".gitignore", "fixture.txt");
+      git("commit", "-qm", "fixture");
+      git("remote", "add", "origin", producer);
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      if (mode === "sparse") {
+        git("sparse-checkout", "set", "--no-cone", "/fixture.txt");
+      }
+      const capturePath = ".crabbox/captures/tbx_fixture-20260904T190427Z.tar.gz";
+      const runPath = ".crabbox/runs/run_fixture/proof/nested.json";
+      const bytes = Buffer.from([0x1f, 0x8b, 0, 255, 13, 10, 128]);
+      const files = [
+        ...(artifacts === "captures" || artifacts === "both" ? [capturePath] : []),
+        ...(artifacts === "runs" || artifacts === "both" ? [runPath] : []),
+      ];
+      const previousFile = path.join(
+        producer,
+        mode === "direct" ? ".crabbox/captures/older.tgz" : capturePath,
+      );
+      mkdirSync(path.dirname(previousFile), { recursive: true });
+      writeFileSync(previousFile, "prior evidence\n");
+      const retainedRoot = path.join(producer, ".crabbox", "wrapper-artifacts");
+      if (blocked) {
+        writeFileSync(retainedRoot, "not a directory\n");
+      }
+      const retainedDirectories: string[] = [];
+      const attempts = mode === "capsule" && artifacts === "both" && !blocked ? 2 : 1;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const result = spawnSync(
+          process.execPath,
+          [
+            fixtureWrapper,
+            "run",
+            "--provider",
+            mode === "capsule" ? "blacksmith-testbox" : "local-container",
+            "--",
+            "false",
+          ],
+          {
+            cwd: producer,
+            env: {
+              ...env,
+              OPENCLAW_FAKE_CRABBOX_ARTIFACTS: JSON.stringify(
+                Object.fromEntries(files.map((file) => [file, bytes.toString("base64")])),
+              ),
+            },
+            encoding: "utf8",
+            timeout: 10_000,
+          },
+        );
+        expect(result.error, result.stderr).toBeUndefined();
+        const output = parseFakeCrabboxOutput(result);
+        expect(readFileSync(previousFile, "utf8")).toBe("prior evidence\n");
+        if (blocked) {
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain("temporary checkout retained");
+          expect(result.stderr).toContain(output.cwd);
+          for (const file of files) {
+            expect(readFileSync(path.join(output.cwd, file))).toEqual(bytes);
+          }
+          expect(readFileSync(retainedRoot, "utf8")).toBe("not a directory\n");
+          continue;
+        }
+        expect(result.status, result.stderr).toBe(exitCode);
+        if (mode === "direct") {
+          expect(output.cwd).toBe(producer);
+          expect(existsSync(retainedRoot)).toBe(false);
+          for (const file of files) {
+            expect(readFileSync(path.join(producer, file))).toEqual(bytes);
+          }
+        } else {
+          expect(output.cwd).not.toBe(producer);
+          expect(existsSync(output.cwd)).toBe(false);
+          expect(readdirSync(syncRoot)).toEqual([]);
+          if (files.length === 0) {
+            expect(existsSync(retainedRoot)).toBe(false);
+          } else {
+            const relocated = result.stderr.match(/preserved temporary artifacts: (.+) -> (.+)/u);
+            expect(relocated?.[1]).toBe(path.join(output.cwd, ".crabbox"));
+            const retained = path.resolve(producer, relocated![2]!);
+            expect(retainedDirectories).not.toContain(retained);
+            retainedDirectories.push(retained);
+            for (const directory of retainedDirectories) {
+              for (const file of files) {
+                expect(readFileSync(path.join(directory, path.relative(".crabbox", file)))).toEqual(
+                  bytes,
+                );
+              }
+            }
+          }
+        }
+      }
+      expect(git("status", "--porcelain")).toBe("");
+    },
+  );
 
   it("uses the temporary full checkout for sparse sync-only runs", () => {
     const { output, result } = runSuccessfulDefaultWrapper(
