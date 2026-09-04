@@ -1,6 +1,6 @@
 // Command startup policy tests cover which CLI commands require startup side effects.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { cliCommandCatalog } from "./command-catalog.js";
 import { resolveCliExecutionStartupContext } from "./command-execution-startup.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
@@ -18,24 +18,22 @@ function resolvePolicy(params: {
 }
 
 describe("command-startup-policy", () => {
-  afterEach(() => {
-    vi.doUnmock("./command-path-policy.js");
-    vi.resetModules();
-  });
-
   it("resolves config guard policy for Commander and invocation-aware commands", () => {
     for (const commandPath of [
       ["backup", "create"],
+      ["database"],
       ["config"],
       ["config", "file"],
       ["config", "validate"],
       ["config", "schema"],
       ["docs"],
+      ["reset"],
+      ["uninstall"],
       ["agent", "exec"],
       ["status"],
+      ["triage"],
       ["agents", "bindings"],
       ["approvals", "pending"],
-      ["commitments"],
       ["skills"],
       ["skills", "list"],
       ["skills", "check"],
@@ -47,6 +45,8 @@ describe("command-startup-policy", () => {
       ["hooks", "check"],
       ["memory", "search"],
       ["memory", "status"],
+      ["gateway", "stop"],
+      ["gateway", "diagnostics", "export"],
       ["gateway", "stability"],
       ["gateway", "usage-cost"],
     ]) {
@@ -75,66 +75,65 @@ describe("command-startup-policy", () => {
     }
   });
 
-  it("skips the config guard for exact root update dry-runs", () => {
-    for (const argv of [
-      ["node", "openclaw", "update", "--dry-run"],
-      ["node", "openclaw", "--profile", "work", "update", "--dry-run"],
-      ["node", "openclaw", "--update", "--dry-run"],
+  it("keeps gateway-owned mutations on non-observing config validation", () => {
+    for (const commandPath of [
+      ["nodes", "approve"],
+      ["nodes", "remove"],
+      ["devices", "approve"],
+      ["devices", "remove"],
+      ["gateway", "call"],
+      ["gateway", "restart"],
+      ["gateway", "suspend"],
+      ["gateway", "resume"],
     ]) {
-      expect(
-        resolvePolicy({
-          argv,
-          commandPath: ["update"],
-        }).skipConfigGuard,
-        argv.join(" "),
-      ).toBe(true);
+      expect(resolvePolicy({ commandPath })).toMatchObject({
+        skipConfigGuard: false,
+        validateConfigOnly: true,
+      });
     }
   });
 
-  it("keeps the config guard for non-dry-run and descendant update invocations", () => {
+  it("skips operator-state startup for local Claw authoring commands only", () => {
+    for (const subcommand of ["create", "validate", "build", "dev"]) {
+      const commandPath = ["claws", subcommand];
+      expect(resolvePolicy({ commandPath }).skipConfigGuard, commandPath.join(" ")).toBe(true);
+    }
+    for (const subcommand of ["add", "update", "remove"]) {
+      const commandPath = ["claws", subcommand];
+      expect(resolvePolicy({ commandPath }).skipConfigGuard, commandPath.join(" ")).toBe(false);
+    }
+  });
+
+  it("defers startup migrations for every update invocation", () => {
     for (const testCase of [
+      { argv: ["node", "openclaw", "update"], commandPath: ["update"] },
+      { argv: ["node", "openclaw", "--update"], commandPath: ["update"] },
       {
-        argv: ["node", "openclaw", "update"],
+        argv: ["node", "openclaw", "--profile", "work", "update"],
         commandPath: ["update"],
       },
       {
-        argv: ["node", "openclaw", "update", "--tag", "--dry-run"],
+        argv: ["node", "openclaw", "update", "--dry-run"],
         commandPath: ["update"],
       },
       {
-        argv: ["node", "openclaw", "update", "--channel", "--dry-run"],
-        commandPath: ["update"],
-      },
-      {
-        argv: ["node", "openclaw", "update", "--timeout", "--dry-run"],
-        commandPath: ["update"],
-      },
-      {
-        argv: ["node", "openclaw", "update", "--tag=--dry-run"],
-        commandPath: ["update"],
-      },
-      {
-        argv: ["node", "openclaw", "update", "--", "--dry-run"],
-        commandPath: ["update"],
-      },
-      {
-        argv: ["node", "openclaw", "update", "status", "--dry-run"],
+        argv: ["node", "openclaw", "update", "status"],
         commandPath: ["update", "status"],
       },
       {
-        argv: ["node", "openclaw", "update", "repair", "--dry-run"],
+        argv: ["node", "openclaw", "update", "repair"],
         commandPath: ["update", "repair"],
       },
       {
-        argv: ["node", "openclaw", "update", "finalize", "--dry-run"],
+        argv: ["node", "openclaw", "update", "finalize"],
         commandPath: ["update", "finalize"],
       },
       {
-        argv: ["node", "openclaw", "update", "wizard", "--dry-run"],
+        argv: ["node", "openclaw", "update", "wizard"],
         commandPath: ["update", "wizard"],
       },
     ]) {
-      expect(resolvePolicy(testCase).skipConfigGuard, testCase.argv.join(" ")).toBe(false);
+      expect(resolvePolicy(testCase).skipConfigGuard, testCase.argv.join(" ")).toBe(true);
     }
   });
 
@@ -161,27 +160,34 @@ describe("command-startup-policy", () => {
   });
 
   it("skips when-suppressed guards only for suppressed output", async () => {
-    vi.doMock("./command-path-policy.js", () => ({
-      resolveCliCommandPathPolicy: () => ({
-        configGuard: "when-suppressed",
-        loadPlugins: "never",
-        pluginRegistry: { scope: "all" },
-        ownsProtocolStdout: false,
-        hideBanner: false,
-        ensureCliPath: true,
-        networkProxy: "default",
-      }),
-    }));
-    const { resolveCliStartupPolicy: resolveWithSuppressedGuard } = await importFreshModule<
-      typeof import("./command-startup-policy.js")
-    >(import.meta.url, "./command-startup-policy.js?when-suppressed");
+    vi.resetModules();
+    try {
+      vi.doMock("./command-path-policy.js", () => ({
+        resolveCliCommandPathPolicy: () => ({
+          configGuard: "when-suppressed",
+          loadPlugins: "never",
+          pluginRegistry: { scope: "all" },
+          ownsProtocolStdout: false,
+          hideBanner: false,
+          ensureCliPath: true,
+          networkProxy: "default",
+        }),
+      }));
+      const { resolveCliStartupPolicy: resolveWithSuppressedGuard } = await importFreshModule<
+        typeof import("./command-startup-policy.js")
+      >(import.meta.url, "./command-startup-policy.js?when-suppressed");
 
-    expect(
-      resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: false }).skipConfigGuard,
-    ).toBe(false);
-    expect(
-      resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: true }).skipConfigGuard,
-    ).toBe(true);
+      expect(
+        resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: false })
+          .skipConfigGuard,
+      ).toBe(false);
+      expect(
+        resolveWithSuppressedGuard({ commandPath: ["test"], jsonOutputMode: true }).skipConfigGuard,
+      ).toBe(true);
+    } finally {
+      vi.doUnmock("./command-path-policy.js");
+      vi.resetModules();
+    }
   });
 
   it("matches plugin preload policy", () => {
@@ -325,6 +331,9 @@ describe("command-startup-policy", () => {
       }).hideBanner,
     ).toBe(true);
     expect(resolvePolicy({ commandPath: ["status"], env: {} }).hideBanner).toBe(false);
+    expect(
+      resolvePolicy({ commandPath: ["status"], jsonOutputMode: true, env: {} }).hideBanner,
+    ).toBe(true);
   });
 
   it("uses process env banner suppression when startup env is omitted", () => {
@@ -363,7 +372,7 @@ describe("command-startup-policy", () => {
       }),
     ).toEqual({
       suppressDoctorStdout: true,
-      hideBanner: false,
+      hideBanner: true,
       skipConfigGuard: true,
       loadPlugins: false,
       pluginRegistry: { scope: "channels" },
@@ -374,12 +383,22 @@ describe("command-startup-policy", () => {
     expect(resolvePolicy({ commandPath: ["mcp", "serve"] }).suppressDoctorStdout).toBe(true);
   });
 
+  it("reserves stdout for the browser native-host protocol", () => {
+    const policy = resolvePolicy({ commandPath: ["browser", "extension", "native-host"] });
+
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
   it("reserves stdout for the node worker protocol", () => {
     const policy = resolvePolicy({ commandPath: ["node", "worker"] });
 
     expect(policy.hideBanner).toBe(true);
     expect(policy.loadPlugins).toBe(false);
     expect(policy.suppressDoctorStdout).toBe(true);
+    expect(policy.validateConfigOnly).toBe(true);
+    expect(policy.skipConfigGuard).toBe(false);
+    expect(resolvePolicy({ commandPath: ["node", "run"] }).validateConfigOnly).toBeUndefined();
   });
 
   it("isolates cloud worker startup", () => {

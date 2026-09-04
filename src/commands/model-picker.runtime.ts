@@ -5,17 +5,17 @@ import {
 } from "../flows/provider-flow.runtime.js";
 import { runProviderPluginAuthMethod } from "../plugins/provider-auth-choice.js";
 import {
-  resolveProviderPluginChoice,
-  runProviderModelSelectedHook,
+  resolveProviderPluginChoiceCore,
+  runProviderModelSelectedHookCore,
 } from "../plugins/provider-wizard.js";
-import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 
 /** Lazy runtime methods consumed by model picker command flows. */
 export const modelPickerRuntime = {
   resolveProviderModelPickerContributions: resolveProviderModelPickerFlowContributions,
   resolveProviderModelPickerEntries: resolveProviderModelPickerFlowEntries,
-  resolveProviderPluginChoice,
-  runProviderModelSelectedHook,
-  resolvePluginProviders,
+  resolveProviderPluginChoice: resolveProviderPluginChoiceCore,
+  runProviderModelSelectedHook: runProviderModelSelectedHookCore,
+  resolvePluginProviders: resolvePluginProvidersCore,
   runProviderPluginAuthMethod,
 };

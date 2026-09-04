@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Low-level CLI argv helpers for root options, help/version detection, and command paths.
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
@@ -7,7 +8,6 @@ import {
   getRootOptionAwareCommandPath,
   isValueToken,
 } from "../infra/cli-root-options.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
 import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 
@@ -76,10 +76,6 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
     return false;
   }
   return false;
-}
-
-function parsePositiveInt(value: string): number | undefined {
-  return parseStrictPositiveInteger(value);
 }
 
 export function hasFlag(argv: string[], name: string): boolean {
@@ -497,7 +493,7 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
   }
   // Keep absent distinct from present-but-invalid so route-first callers can
   // defer invalid input to Commander instead of silently applying defaults.
-  return parsePositiveInt(raw) ?? null;
+  return parseStrictPositiveInteger(raw) ?? null;
 }
 
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
@@ -509,90 +505,7 @@ export function getPrimaryCommand(argv: string[]): string | null {
   return primary ?? null;
 }
 
-type CommandPositionalsParseOptions = {
-  commandPath: ReadonlyArray<string>;
-  booleanFlags?: ReadonlyArray<string>;
-  valueFlags?: ReadonlyArray<string>;
-};
-
-function consumeKnownOptionToken(
-  args: ReadonlyArray<string>,
-  index: number,
-  booleanFlags: ReadonlySet<string>,
-  valueFlags: ReadonlySet<string>,
-): number {
-  const arg = args[index];
-  if (!arg || arg === FLAG_TERMINATOR || !arg.startsWith("-")) {
-    return 0;
-  }
-
-  const equalsIndex = arg.indexOf("=");
-  const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
-
-  if (booleanFlags.has(flag)) {
-    return equalsIndex === -1 ? 1 : 0;
-  }
-
-  if (!valueFlags.has(flag)) {
-    return 0;
-  }
-
-  if (equalsIndex !== -1) {
-    const value = arg.slice(equalsIndex + 1).trim();
-    return value ? 1 : 0;
-  }
-
-  return isValueToken(args[index + 1]) ? 2 : 0;
-}
-
-export function getCommandPositionalsWithRootOptions(
-  argv: string[],
-  options: CommandPositionalsParseOptions,
-): string[] | null {
-  const args = argv.slice(2);
-  const commandPath = options.commandPath;
-  const booleanFlags = new Set(options.booleanFlags ?? []);
-  const valueFlags = new Set(options.valueFlags ?? []);
-  const positionals: string[] = [];
-  let commandIndex = 0;
-
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      break;
-    }
-
-    const rootConsumed = consumeRootOptionToken(args, i);
-    if (rootConsumed > 0) {
-      i += rootConsumed - 1;
-      continue;
-    }
-
-    if (arg.startsWith("-")) {
-      const optionConsumed = consumeKnownOptionToken(args, i, booleanFlags, valueFlags);
-      if (optionConsumed === 0) {
-        return null;
-      }
-      i += optionConsumed - 1;
-      continue;
-    }
-
-    if (commandIndex < commandPath.length) {
-      if (arg !== commandPath[commandIndex]) {
-        return null;
-      }
-      commandIndex += 1;
-      continue;
-    }
-
-    positionals.push(arg);
-  }
-
-  if (commandIndex < commandPath.length) {
-    return null;
-  }
-  return positionals;
-}
+export { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.js";
 
 export function buildParseArgv(rawArgs: string[], programName = "openclaw"): string[] {
   const normalizedArgv =
@@ -608,25 +521,4 @@ export function buildParseArgv(rawArgs: string[], programName = "openclaw"): str
     return normalizedArgv;
   }
   return ["node", programName, ...normalizedArgv];
-}
-
-export function shouldMigrateStateFromPath(path: string[]): boolean {
-  if (path.length === 0) {
-    return true;
-  }
-  const [primary, secondary] = path;
-  if (primary === "health" || primary === "logs" || primary === "sessions") {
-    return false;
-  }
-  // Remote RPC clients must not migrate state owned by the running gateway.
-  if (primary === "gateway" && secondary === "call") {
-    return false;
-  }
-  if (primary === "update" && secondary === "status") {
-    return false;
-  }
-  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
-    return false;
-  }
-  return true;
 }

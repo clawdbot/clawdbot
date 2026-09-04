@@ -62,30 +62,53 @@ To reduce that, OpenClaw treats the auth profile store as a **token sink**:
 
 ## Storage (where tokens live)
 
-Secrets and auth-routing state live in each agent's canonical SQLite database:
+Credentials use a shared read-through base, while each agent owns its local
+credential overrides and auth-routing state:
 
-- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
-- Credential rows: `auth_profile_store`
-- Order, last-good, cooldown, and usage rows: `auth_profile_state`
+- Shared credentials: `~/.openclaw/state/openclaw.sqlite`
+- Agent-local credentials and state:
+  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Agent credential rows: `auth_profile_store`
+- Agent order, last-good, cooldown, and usage rows: `auth_profile_state`
+
+Personal accounts added from Profile or `models accounts login` use private
+identity-scoped records in the selected Gateway's shared state database:
+`model-accounts` owns the selected links, and each
+credential has its own `model-account:<profile-id>` record containing its secret
+and usage state. Only a selected personal profile is loaded for a run; ordinary
+shared-account reads never enumerate these records. Personal OAuth refresh
+writes back to that person's account record rather than a shared or agent-local
+credential.
 
 Older installations may still contain `auth-profiles.json`, `auth-state.json`,
 per-agent `auth.json`, or shared `credentials/oauth.json`. Run
 `openclaw doctor --fix` once after upgrading. Doctor imports verified values,
 records a migration receipt, and renames the original file to a timestamped
-archive. Runtime never reads these retired files and reports
-`AUTH_PROFILE_MIGRATION_REQUIRED` when a legacy credential source has not been
-migrated.
+archive.
+
+Runtime never reads these retired files. What happens when one is still present
+depends on whether the SQLite store can already serve credentials for that
+agent:
+
+- The store holds profiles: the retired file is leftover bytes. Runtime logs a
+  one-time warning naming the file and keeps working; Doctor archives it on the
+  next `--fix`. Doctor never overwrites a usable stored credential with imported
+  values, so the file cannot resurrect a stale token.
+- The store is empty: the credentials still live only in that file, so runtime
+  fails closed for that agent with `AUTH_PROFILE_MIGRATION_REQUIRED` rather than
+  falling through to environment auth. Gateway startup degrades this owner to
+  configured-unavailable instead of refusing to start.
 
 The database and migration sources respect `$OPENCLAW_STATE_DIR`. Full reference: [/gateway/configuration-reference#auth-storage](/gateway/configuration-reference#auth-storage)
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
-When a secondary agent has no local auth profile, OpenClaw uses read-through
-inheritance from the default/main agent store; it does not clone the main
-agent's store on read. OAuth refresh tokens are especially sensitive: normal
-copy flows skip them by default because some providers rotate or invalidate
-refresh tokens after use. Configure a separate OAuth login for an agent when
-it needs an independent account.
+When an agent has no local auth profile, OpenClaw reads the shared auth store;
+it does not clone shared credentials into the agent database. OAuth refresh
+tokens are especially sensitive: normal copy flows skip them by default
+because some providers rotate or invalidate refresh tokens after use.
+Configure a separate OAuth login for an agent when it needs an independent
+account.
 
 ## Anthropic Claude CLI reuse
 
@@ -116,7 +139,7 @@ and [Z.AI / GLM Coding Plan](/providers/zai).
 
 ## OAuth exchange (how login works)
 
-OpenClaw's interactive login flows are implemented in `openclaw/plugin-sdk/llm.ts` and wired into the wizards/commands.
+OpenClaw's OAuth registry and adapters live in `src/llm/utils/oauth/`. Shared provider helpers live in `src/plugin-sdk/provider-oauth-runtime.ts` and `src/plugin-sdk/provider-auth-runtime.ts`. The auth commands in `src/commands/models/auth.ts` run the selected provider method and persist the returned profiles.
 
 ### Anthropic setup-token
 
@@ -165,10 +188,11 @@ Wizard path is `openclaw onboard` → auth choice `openai`.
 Profiles store an `expires` timestamp. At runtime:
 
 - if `expires` is in the future, use the stored access token
-- if expired, refresh (under a file lock) and overwrite the stored credentials
-- if a secondary agent reads an inherited main-agent OAuth profile, the
-  refresh writes back to the main agent store instead of copying the refresh
-  token into the secondary agent store
+- if expired, refresh and save the new credentials back to the owning SQLite
+  store
+- if an agent reads an OAuth profile from the shared store, the refresh writes
+  back to that shared owner instead of copying the refresh token into the
+  agent store
 - externally managed CLI credentials (Claude CLI, narrow Codex CLI bootstrap;
   see [The token sink](#the-token-sink-why-it-exists)) are re-read instead of
   spending a copied refresh token. If a managed refresh fails, OpenClaw
@@ -179,7 +203,7 @@ The refresh flow is automatic; you generally do not need to manage tokens manual
 
 ## Multiple accounts (profiles) + routing
 
-Two patterns:
+Three patterns:
 
 ### 1) Preferred: separate agents
 
@@ -204,7 +228,32 @@ Example (session override):
 
 - `/model Opus@anthropic:work -s`
 
-List existing profile IDs with:
+### 3) Multi-user: personal accounts
+
+On a shared gateway, each verified person can save several accounts per provider
+in **Settings → Profile → Connected accounts** and choose one as their new-chat
+default. **Add account** and `openclaw models accounts login` use the same
+Gateway-owned provider and sign-in method catalog. Anthropic personal setup
+accepts an API key, not a Claude subscription token; system/agent auth remains
+a separate flow.
+Both sign-in surfaces show the Gateway, verified person, and Personal
+scope before requesting provider credentials. Gateway identity and provider
+sign-in are separate; a shared Gateway token does not identify a person. See
+[personal-account CLI setup](/cli/models#personal-model-accounts).
+
+The model picker in New session or an existing chat can select an
+account for that chat without changing the default. Ordered shared accounts
+remain same-provider failover candidates; the selection is not a billing
+guarantee. Personal credentials stay outside the shared profile list. See
+[Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
+
+List your saved personal accounts with:
+
+```bash
+openclaw models accounts list
+```
+
+For shared or agent-local profile IDs, use:
 
 ```bash
 openclaw models auth list --provider <id>

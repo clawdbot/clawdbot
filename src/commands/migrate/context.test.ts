@@ -36,4 +36,8 @@ describe("migration context helpers", () => {
   it("keeps the configured default when no migration target is supplied", () => {
     expect(resolveMigrationTargetAgentId({}, undefined)).toBeUndefined();
   });
+
+  it("rejects an explicitly blank migration target", () => {
+    expect(() => resolveMigrationTargetAgentId({}, "")).toThrow("--agent must not be blank");
+  });
 });

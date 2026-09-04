@@ -254,4 +254,19 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     expect(harness.delayMonitor["disable"]).toHaveBeenCalledTimes(1);
     expect(harness.monitor.snapshot()).toBeUndefined();
   });
+
+  it("resets delay and rate baselines after a host thaw", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    harness.setDelay({ maxMs: 90_000 });
+    harness.setNow(90_000);
+
+    harness.monitor.reset();
+    harness.setNow(91_000);
+
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: false,
+      intervalMs: 1_000,
+      delayMaxMs: 0,
+    });
+  });
 });

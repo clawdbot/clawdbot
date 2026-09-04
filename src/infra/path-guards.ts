@@ -1,15 +1,21 @@
 // Exposes generic path guard helpers with fs-safe defaults.
 import path from "node:path";
+import { isPathInside } from "@openclaw/fs-safe/path";
 import "./fs-safe-defaults.js";
 
 // Generic path guard facade for containment checks and safe relative paths.
 export {
   hasNodeErrorCode,
   isNotFoundPathError,
-  isPathInside,
   normalizeWindowsPathForComparison,
   safeStatSync,
 } from "@openclaw/fs-safe/path";
+export { isPathInside };
+
+/** Returns true only when target is a descendant of root, not root itself. */
+export function isPathStrictlyInside(root: string, target: string): boolean {
+  return isPathInside(root, target) && !isPathInside(target, root);
+}
 
 /**
  * Normalize a Windows path for boundary math whose result is handed back to callers.

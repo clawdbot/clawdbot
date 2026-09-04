@@ -3,7 +3,8 @@ import Foundation
 import JavaScriptCore
 
 enum ExecAllowlistMatcher {
-    private static let hashedArgPatternPrefix = "sha256:argv:"
+    private static let cwdBoundArgPatternPrefix = "sha256:cwd-argv:v1:"
+    private static let legacyArgPatternPrefix = "sha256:argv:"
 
     static func match(entries: [ExecAllowlistEntry], resolution: ExecCommandResolution?) -> ExecAllowlistEntry? {
         guard let resolution, !entries.isEmpty else { return nil }
@@ -40,7 +41,12 @@ enum ExecAllowlistMatcher {
                     }
                     continue
                 }
-                if let argv = resolution.argv, matchesArgPattern(argPattern, argv: argv) {
+                if entry.source == "allow-always", !argPattern.hasPrefix(self.cwdBoundArgPatternPrefix) {
+                    continue
+                }
+                if let argv = resolution.argv,
+                   self.matchesArgPattern(argPattern, argv: argv, cwd: resolution.cwd)
+                {
                     return entry
                 }
             case .invalid:
@@ -97,9 +103,13 @@ enum ExecAllowlistMatcher {
     /// use NUL separators plus a trailing sentinel; hand-authored patterns use
     /// one space between parsed arguments. Redirect-shaped tokens stay literal
     /// because resolution does not retain enough shell syntax provenance.
-    private static func matchesArgPattern(_ argPattern: String, argv: [String]) -> Bool {
-        if argPattern.hasPrefix(self.hashedArgPatternPrefix) {
-            return argPattern == self.hashedArgPattern(argv: argv)
+    private static func matchesArgPattern(_ argPattern: String, argv: [String], cwd: String?) -> Bool {
+        if argPattern.hasPrefix(self.cwdBoundArgPatternPrefix) {
+            guard let cwd else { return false }
+            return argPattern == self.cwdBoundArgPattern(argv: argv, cwd: cwd)
+        }
+        if argPattern.hasPrefix(self.legacyArgPatternPrefix) {
+            return false
         }
         let nul = "\0"
         let arguments = Array(argv.dropFirst())
@@ -123,13 +133,15 @@ enum ExecAllowlistMatcher {
         return result.toBool()
     }
 
-    private static func hashedArgPattern(argv: [String]) -> String {
+    private static func cwdBoundArgPattern(argv: [String], cwd: String) -> String {
+        let normalizedCwd = ExecCommandResolution.canonicalApprovalCwd(cwd)
         let arguments = Array(argv.dropFirst())
-        let subject = "\(arguments.count)\0" + arguments
+        let argvSubject = "\(arguments.count)\0" + arguments
             .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
             .joined()
+        let subject = "\(normalizedCwd.data(using: .utf8)?.count ?? 0)\0\(normalizedCwd)\0\(argvSubject)"
         let digest = SHA256.hash(data: Data(subject.utf8))
-        return self.hashedArgPatternPrefix + digest.map { String(format: "%02x", $0) }.joined()
+        return self.cwdBoundArgPatternPrefix + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func matches(pattern: String, target: String) -> Bool {

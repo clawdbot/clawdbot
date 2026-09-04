@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyAuthProfileConfigWithConflictCheck,
   hasAuthProfileConfigConflict,
@@ -12,7 +13,7 @@ import {
   type HermesAuthProfileConfig,
 } from "./auth-config.js";
 import { collectHermesProviderSecretBindings } from "./config-providers.js";
-import { isRecord, parseEnv, readString, readText, sanitizeName } from "./helpers.js";
+import { parseEnv, readText, sanitizeName } from "./helpers.js";
 import {
   createHermesSecretItem,
   HERMES_REASON_AUTH_PROFILE_EXISTS,
@@ -141,9 +142,9 @@ async function buildOpenCodeSecretCandidates(
   const opencode = isRecord(auth.opencode) ? auth.opencode : {};
   const opencodeGo = isRecord(auth["opencode-go"]) ? auth["opencode-go"] : {};
   const githubCopilot = isRecord(auth["github-copilot"]) ? auth["github-copilot"] : {};
-  const githubCopilotEnterpriseUrl = readString(githubCopilot.enterpriseUrl);
+  const githubCopilotEnterpriseUrl = normalizeOptionalString(githubCopilot.enterpriseUrl);
   const candidates: SecretCandidate[] = [];
-  if (readString(opencode.key)) {
+  if (normalizeOptionalString(opencode.key)) {
     candidates.push({
       id: "secret:opencode:opencode-auth-json",
       source: authPath,
@@ -155,7 +156,7 @@ async function buildOpenCodeSecretCandidates(
       secretField: "key",
     });
   }
-  if (readString(opencodeGo.key)) {
+  if (normalizeOptionalString(opencodeGo.key)) {
     candidates.push({
       id: "secret:opencode-go:opencode-auth-json",
       source: authPath,
@@ -168,7 +169,7 @@ async function buildOpenCodeSecretCandidates(
     });
   }
   // OpenClaw's Copilot token profile cannot preserve OpenCode enterprise routing yet.
-  if (readString(githubCopilot.refresh) && !githubCopilotEnterpriseUrl) {
+  if (normalizeOptionalString(githubCopilot.refresh) && !githubCopilotEnterpriseUrl) {
     candidates.push({
       id: "secret:github-copilot:opencode-auth-json",
       source: authPath,
@@ -214,14 +215,14 @@ async function buildHermesPoolSecretCandidates(
       if (!isRecord(rawEntry)) {
         continue;
       }
-      const sourceCredentialId = readString(rawEntry.id);
-      const authType = readString(rawEntry.auth_type);
-      const source = readString(rawEntry.source);
+      const sourceCredentialId = normalizeOptionalString(rawEntry.id);
+      const authType = normalizeOptionalString(rawEntry.auth_type);
+      const source = normalizeOptionalString(rawEntry.source);
       if (
         !sourceCredentialId ||
         authType !== "api_key" ||
         source !== "manual" ||
-        !readString(rawEntry.access_token)
+        !normalizeOptionalString(rawEntry.access_token)
       ) {
         continue;
       }
@@ -264,7 +265,7 @@ async function readSecretCandidateValue(
       return undefined;
     }
     const provider = isRecord(auth[sourceProvider]) ? auth[sourceProvider] : {};
-    return readString(provider[secretField]);
+    return normalizeOptionalString(provider[secretField]);
   }
   if (details.sourceKind === "hermes-auth-json") {
     const auth = await readAuthJson(source);
@@ -276,7 +277,7 @@ async function readSecretCandidateValue(
     const entry = entries.find(
       (candidate) => isRecord(candidate) && candidate.id === details.sourceCredentialId,
     );
-    return isRecord(entry) ? readString(entry.access_token) : undefined;
+    return isRecord(entry) ? normalizeOptionalString(entry.access_token) : undefined;
   }
   if (!details.envVar) {
     return undefined;

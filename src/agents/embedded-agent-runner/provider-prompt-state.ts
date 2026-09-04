@@ -23,16 +23,6 @@ const providerPromptStates = resolveGlobalSingleton(
   () => new Map<string, ProviderPromptState>(),
 );
 
-class ProviderPromptRetryNoProgressError extends Error {
-  constructor(payloadBytes: number) {
-    super(
-      "Context overflow: refusing to resend the byte-identical provider payload after a " +
-        `context rejection (payloadBytes=${payloadBytes}).`,
-    );
-    this.name = "ProviderPromptRetryNoProgressError";
-  }
-}
-
 const digest = (serialized: string) => crypto.createHash("sha256").update(serialized).digest("hex");
 
 /** Returns run-local retry state; restarts and new run ids intentionally have no baseline. */
@@ -74,7 +64,10 @@ function assertProviderPromptRetryProgress(
 ): void {
   const rejected = state.lastRejected;
   if (rejected?.scopeDigest === candidate.scopeDigest && rejected.digest === candidate.digest) {
-    throw new ProviderPromptRetryNoProgressError(candidate.byteWeight);
+    throw new Error(
+      "Context overflow: refusing to resend the byte-identical provider payload after a " +
+        `context rejection (payloadBytes=${candidate.byteWeight}).`,
+    );
   }
 }
 

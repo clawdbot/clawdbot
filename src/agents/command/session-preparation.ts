@@ -3,12 +3,13 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
-import { persistSessionEntry } from "./session-helpers.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export async function prepareEmbeddedSessionState(params: {
@@ -23,6 +24,8 @@ export async function prepareEmbeddedSessionState(params: {
   lifecycleGeneration: string;
   runId: string;
   workspaceDir: string;
+  executionSkillsDir: string;
+  watchSkills: boolean;
   isNewSession: boolean;
   isSubagentLaneTurn: boolean;
   suppressVisibleSessionEffects: boolean;
@@ -33,6 +36,7 @@ export async function prepareEmbeddedSessionState(params: {
   persistedVerbose?: VerboseLevel;
   verboseDefault?: VerboseLevel;
   sessionStateActor: Parameters<typeof recordSessionHumanDirectMessage>[0]["actor"];
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }) {
   const requestedThinkLevel = params.thinkOnce ?? params.thinkOverride ?? params.persistedThinking;
   const resolvedVerboseLevel =
@@ -46,6 +50,8 @@ export async function prepareEmbeddedSessionState(params: {
       lifecycleGeneration: params.lifecycleGeneration,
       verboseLevel: resolvedVerboseLevel,
       isControlUiVisible: !params.suppressVisibleSessionEffects,
+      // Node and local command ingress may not have a separate chat activity owner.
+      projectSessionActive: !params.suppressVisibleSessionEffects,
     });
   }
 
@@ -64,9 +70,11 @@ export async function prepareEmbeddedSessionState(params: {
   });
   const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
     workspaceDir: params.workspaceDir,
+    executionSkillsDir: params.executionSkillsDir,
     config: params.cfg,
     agentId: params.sessionAgentId,
     existingSnapshot: params.isNewSession ? undefined : currentSkillsSnapshot,
+    librarySelections: sessionEntry?.skillLibrarySelections,
     skillFilter,
     eligibility: {
       nodeSkills: nodeSkillsEligibility,
@@ -74,7 +82,12 @@ export async function prepareEmbeddedSessionState(params: {
         advertiseExecNode: nodeSkillsEligibility.canExec,
       }),
     },
-    watch: false,
+    // A one-shot caller has no later turn to consume invalidations; persistent
+    // watchers would keep its process alive after the reply has completed.
+    watch: params.watchSkills && params.opts.oneShotCliRun !== true,
+    ...(params.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
   });
   const needsSkillsSnapshot =
     params.isNewSession || !currentSkillsSnapshot || skillSnapshotState.shouldRefresh;
@@ -100,7 +113,7 @@ export async function prepareEmbeddedSessionState(params: {
       sessionStartedAt: current.sessionStartedAt ?? now,
       skillsSnapshot,
     };
-    sessionEntry = await persistSessionEntry({
+    sessionEntry = await persistAgentSession({
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
@@ -131,7 +144,7 @@ export async function prepareEmbeddedSessionState(params: {
       agentStatus: undefined,
     };
     applyVerboseOverride(next, params.verboseOverride);
-    sessionEntry = await persistSessionEntry({
+    sessionEntry = await persistAgentSession({
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,

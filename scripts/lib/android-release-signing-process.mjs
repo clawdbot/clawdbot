@@ -16,7 +16,7 @@ export function runAndroidSigningCommandSync(command, args, options = {}) {
       timeout: timeoutMs,
     });
   } catch (error) {
-    if (error && typeof error === "object" && error.code === "ETIMEDOUT") {
+    if (error && typeof error === "object" && "code" in error && error.code === "ETIMEDOUT") {
       throw new Error(
         `Android release signing command timed out after ${timeoutMs}ms: ${command}`,
         { cause: error },

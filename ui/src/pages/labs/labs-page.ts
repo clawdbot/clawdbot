@@ -4,17 +4,19 @@ import { state } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
-  renderDocsLink,
-  renderSettingsDefaultState,
+  renderLearnMoreLink,
   renderSettingsPage,
+  renderSettingsPageHeader,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
@@ -33,6 +35,14 @@ class LabsPage extends OpenClawLightDomElement {
   @state() private pendingValues: Readonly<Record<string, boolean>> = {};
   @state() private saveError: string | null = null;
 
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    invalidateRequests: () => {
+      this.busyFeatureId = null;
+      this.pendingValues = {};
+      this.saveError = null;
+    },
+  });
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.runtimeConfig,
     (runtimeConfig) => {
@@ -76,10 +86,13 @@ class LabsPage extends OpenClawLightDomElement {
   }
 
   private async updateFeature(feature: LabFeature, enabled: boolean, raw: Record<string, unknown>) {
-    if (!this.canToggle()) {
+    const scope = this.gateway.capture();
+    const runtimeConfig = this.context.runtimeConfig;
+    if (!scope || !this.canToggle()) {
       return;
     }
-    const runtimeConfig = this.context.runtimeConfig;
+    const isCurrent = () =>
+      this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
     this.busyFeatureId = feature.id;
     this.pendingValues = { ...this.pendingValues, [feature.id]: enabled };
     this.saveError = null;
@@ -88,19 +101,19 @@ class LabsPage extends OpenClawLightDomElement {
         raw,
         note: `labs: update ${feature.id}`,
       });
-      if (!patched) {
+      if (isCurrent() && !patched) {
         this.saveError = runtimeConfig.state.lastError ?? t("labsPage.saveFailed");
-        return;
-      }
-      if (this.context.runtimeConfig === runtimeConfig) {
-        await runtimeConfig.refresh();
       }
     } catch (error) {
-      this.saveError = String(error);
+      if (isCurrent()) {
+        this.saveError = formatUiError(error);
+      }
     } finally {
-      this.clearPendingValue(feature.id);
-      if (this.busyFeatureId === feature.id) {
-        this.busyFeatureId = null;
+      if (isCurrent()) {
+        this.clearPendingValue(feature.id);
+        if (this.busyFeatureId === feature.id) {
+          this.busyFeatureId = null;
+        }
       }
     }
   }
@@ -117,39 +130,26 @@ class LabsPage extends OpenClawLightDomElement {
     );
   }
 
-  private resetFeature(feature: LabFeature) {
-    const config = this.editableConfig();
-    const featureState = resolveLabFeatureState(config, feature);
-    const resetPatch = labFeatureResetPatch(config, feature);
-    if (!resetPatch) {
-      return;
-    }
-    void this.updateFeature(feature, featureState.defaultEnabled, resetPatch);
-  }
-
   private renderFeature(feature: LabFeature) {
     const title = feature.title();
     const featureState = resolveLabFeatureState(this.editableConfig(), feature);
     const canToggle = this.canToggle();
-    const defaultState = renderSettingsDefaultState({
-      value: featureState.defaultEnabled ? t("common.enabled") : t("common.disabled"),
-      overridden: featureState.overridden,
-      disabled: !canToggle,
-      onReset: () => this.resetFeature(feature),
-    });
+    const defaultDescription = t(
+      featureState.overridden ? "configForm.defaultValue" : "configForm.usingDefault",
+      { value: featureState.defaultEnabled ? t("common.enabled") : t("common.disabled") },
+    );
     const description = html`
       ${feature.description()}
       <a href=${feature.docsUrl} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
         >${t("labsPage.documentation")}</a
       >${feature.restartHint ? html` <span>${feature.restartHint()}</span>` : nothing}
-      <span>${defaultState.description}</span>
+      <span>${defaultDescription}</span>
     `;
     return renderSettingsToggleRow({
       title,
       description,
       checked: this.featureEnabled(feature),
       disabled: !canToggle,
-      actions: defaultState.action,
       onChange: (enabled) => this.setFeatureEnabled(feature, enabled),
     });
   }
@@ -172,20 +172,13 @@ class LabsPage extends OpenClawLightDomElement {
         },
         rows,
       ),
-      {
-        intro: html`${t("labsPage.intro")}
-        ${renderDocsLink(
-          "https://docs.openclaw.ai/concepts/experimental-features",
-          t("common.learnMore"),
-        )}`,
-      },
     );
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("labs")}</div>
-        </div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("labs"),
+        subtitle: html`${t("labsPage.intro")}
+        ${renderLearnMoreLink("https://docs.openclaw.ai/concepts/experimental-features")}`,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

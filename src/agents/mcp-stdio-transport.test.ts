@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
-const killProcessTreeMock = vi.hoisted(() => vi.fn());
 const signalProcessTreeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => ({
@@ -16,7 +15,6 @@ vi.mock("node:child_process", async () => ({
 }));
 
 vi.mock("../process/kill-tree.js", () => ({
-  killProcessTree: killProcessTreeMock,
   signalProcessTree: signalProcessTreeMock,
 }));
 
@@ -35,7 +33,6 @@ describe("OpenClawStdioClientTransport", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     spawnMock.mockReset();
-    killProcessTreeMock.mockReset();
     signalProcessTreeMock.mockReset();
   });
 
@@ -113,14 +110,14 @@ describe("OpenClawStdioClientTransport", () => {
 
     const closing = transport.close();
     await vi.advanceTimersByTimeAsync(2000);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { detached: true });
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGTERM", { detached: true });
 
     child.exitCode = 0;
     child.emit("close", 0);
     await closing;
   });
 
-  it("force-SIGKILLs synchronously when killProcessTree's grace expires (#86412)", async () => {
+  it("force-SIGKILLs synchronously when the owned process group outlives TERM", async () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
@@ -132,11 +129,9 @@ describe("OpenClawStdioClientTransport", () => {
 
     const closing = transport.close();
     await vi.advanceTimersByTimeAsync(2000);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { detached: true });
-    expect(signalProcessTreeMock).not.toHaveBeenCalled();
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGTERM", { detached: true });
+    expect(signalProcessTreeMock).not.toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
 
-    // killProcessTree's SIGKILL is .unref()'d (#86412); close() force-SIGKILLs
-    // synchronously instead.
     await vi.advanceTimersByTimeAsync(2000);
     expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
 
@@ -168,22 +163,22 @@ describe("OpenClawStdioClientTransport", () => {
     expect(transport.pid).toBeNull();
   });
 
-  it("does not kill the process tree when graceful stdio close exits", async () => {
+  it("immediately kills the retained process group after the stdio leader exits", async () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
     spawnMock.mockReturnValue(child);
-
     const transport = new OpenClawStdioClientTransport({ command: "npx" });
     const started = transport.start();
     child.emit("spawn");
     await started;
 
+    child.exitCode = 1;
+    child.emit("close", 1);
     const closing = transport.close();
-    child.exitCode = 0;
-    child.emit("close", 0);
-    await closing;
 
-    expect(killProcessTreeMock).not.toHaveBeenCalled();
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", { detached: true });
+    await vi.advanceTimersByTimeAsync(500);
+    await closing;
   });
 
   it("sends and receives JSON-RPC messages over stdio", async () => {

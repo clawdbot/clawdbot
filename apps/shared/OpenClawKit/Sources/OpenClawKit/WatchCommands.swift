@@ -13,6 +13,9 @@ public enum OpenClawWatchPayloadType: String, Codable, Sendable, Equatable {
     case appSnapshotRequest = "watch.app.snapshotRequest"
     case appCommand = "watch.app.command"
     case chatCompletion = "watch.chat.completion"
+    case chatDeliveryCommand = "watch.chat.delivery.command"
+    case chatDeliveryReceipt = "watch.chat.delivery.receipt"
+    case chatDeliveryReceiptAck = "watch.chat.delivery.receiptAck"
     case execApprovalPrompt = "watch.execApproval.prompt"
     case execApprovalResolve = "watch.execApproval.resolve"
     case execApprovalResolved = "watch.execApproval.resolved"
@@ -350,6 +353,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
     public var chatStatusText: String?
     public var sentAtMs: Int64?
     public var snapshotId: String?
+    public var chatDeliveryContext: OpenClawWatchChatDeliveryContext?
 
     public init(
         gatewayStatus: OpenClawWatchAppStatus,
@@ -370,7 +374,8 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         chatStatus: OpenClawWatchAppStatus? = nil,
         chatStatusText: String? = nil,
         sentAtMs: Int64? = nil,
-        snapshotId: String? = nil)
+        snapshotId: String? = nil,
+        chatDeliveryContext: OpenClawWatchChatDeliveryContext? = nil)
     {
         self.type = .appSnapshot
         self.gatewayStatus = gatewayStatus
@@ -392,6 +397,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         self.chatStatusText = chatStatusText ?? chatStatus.map(Self.legacyText)
         self.sentAtMs = sentAtMs
         self.snapshotId = snapshotId
+        self.chatDeliveryContext = chatDeliveryContext
     }
 
     public init(
@@ -410,7 +416,8 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         chatItems: [OpenClawWatchChatItem]? = nil,
         chatStatusText: String? = nil,
         sentAtMs: Int64? = nil,
-        snapshotId: String? = nil)
+        snapshotId: String? = nil,
+        chatDeliveryContext: OpenClawWatchChatDeliveryContext? = nil)
     {
         // Preserve the shipped source API while producers migrate to semantic statuses.
         self.init(
@@ -438,7 +445,8 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
             chatStatus: Self.decodeLegacyChatStatus(code: nil, text: chatStatusText),
             chatStatusText: chatStatusText,
             sentAtMs: sentAtMs,
-            snapshotId: snapshotId)
+            snapshotId: snapshotId,
+            chatDeliveryContext: chatDeliveryContext)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -463,6 +471,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         case chatStatusText
         case sentAtMs
         case snapshotId
+        case chatDeliveryContext
     }
 
     public init(from decoder: Decoder) throws {
@@ -481,6 +490,8 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         self.chatItems = try container.decodeIfPresent([OpenClawWatchChatItem].self, forKey: .chatItems)
         self.sentAtMs = try container.decodeIfPresent(Int64.self, forKey: .sentAtMs)
         self.snapshotId = try container.decodeIfPresent(String.self, forKey: .snapshotId)
+        self.chatDeliveryContext = try container.decodeIfPresent(
+            OpenClawWatchChatDeliveryContext.self, forKey: .chatDeliveryContext)
 
         let gatewayStatusText = try container.decodeIfPresent(String.self, forKey: .gatewayStatusText)
         if let gatewayStatus = try? container.decode(
@@ -556,6 +567,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         try container.encodeIfPresent(self.chatStatusText, forKey: .chatStatusText)
         try container.encodeIfPresent(self.sentAtMs, forKey: .sentAtMs)
         try container.encodeIfPresent(self.snapshotId, forKey: .snapshotId)
+        try container.encodeIfPresent(self.chatDeliveryContext, forKey: .chatDeliveryContext)
     }
 
     private static func decodeLegacyGatewayStatus(

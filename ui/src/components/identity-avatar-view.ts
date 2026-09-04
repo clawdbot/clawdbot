@@ -2,11 +2,10 @@ import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { live } from "lit/directives/live.js";
 import { until } from "lit/directives/until.js";
+import { resolveAvatarImageUrl, settleAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import {
   resolveAvatar,
-  resolveAvatarImageUrl,
   resolveAvatarInitials,
-  settleAvatarImageUrl,
   type IdentityAvatarInput,
   type ResolvedIdentityAvatar,
 } from "../lib/identity-avatar.ts";
@@ -68,12 +67,14 @@ export function renderIdentityAvatarImage({
   }
   return html`<img
     class=${className ?? nothing}
-    src=${typeof view.imageUrl === "string"
-      ? view.imageUrl
-      : until(
-          view.imageUrl.then((url) => url ?? nothing),
-          nothing,
-        )}
+    src=${
+      typeof view.imageUrl === "string"
+        ? view.imageUrl
+        : until(
+            view.imageUrl.then((url) => url ?? nothing),
+            nothing,
+          )
+    }
     alt=${alt}
     aria-hidden=${ariaHidden ? "true" : nothing}
     referrerpolicy="no-referrer"

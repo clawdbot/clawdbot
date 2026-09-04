@@ -18,6 +18,7 @@ scenario:
     - src/tui/tui-pty-harness.e2e.test.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
     summary: Runs configured TUI PTY assertions through the repository Vitest wrapper and verifies the fresh JSON report before emitting evidence.
     timeoutMs: 180000

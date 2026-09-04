@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
-const scriptPath = path.resolve("scripts/dated-todo-scan.mjs");
+const scriptPath = path.resolve("scripts/dated-todo-scan.mts");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -85,7 +85,17 @@ describe("dated-todo-scan", () => {
     const output = path.join(root, ".artifacts", "candidates.json");
     const result = spawnSync(
       process.execPath,
-      [scriptPath, "--root", root, "--output", output, "--compat-report", compatReport],
+      [
+        "--import",
+        "tsx",
+        scriptPath,
+        "--root",
+        root,
+        "--output",
+        output,
+        "--compat-report",
+        compatReport,
+      ],
       { encoding: "utf8" },
     );
 
@@ -115,18 +125,19 @@ describe("dated-todo-scan", () => {
         }),
       ]),
     );
-    expect(candidates.map((candidate) => candidate.file)).not.toEqual(
-      expect.arrayContaining([
-        "CHANGELOG.md",
-        "docs/.generated/noise.md",
-        "locales/en.json",
-        "src/history.ts",
-        "src/no-date.ts",
-        "src/too-far.ts",
-        "src/untracked.ts",
-        "test/fixtures/noise.ts",
-      ]),
-    );
+    const candidateFiles = candidates.map((candidate) => candidate.file);
+    for (const excludedFile of [
+      "CHANGELOG.md",
+      "docs/.generated/noise.md",
+      "locales/en.json",
+      "src/history.ts",
+      "src/no-date.ts",
+      "src/too-far.ts",
+      "src/untracked.ts",
+      "test/fixtures/noise.ts",
+    ]) {
+      expect(candidateFiles).not.toContain(excludedFile);
+    }
     expect(candidates.filter((candidate) => candidate.source === "compat-registry")).toHaveLength(
       1,
     );

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createCorePluginStateSyncKeyedStore,
@@ -93,7 +93,7 @@ export function isStoredHistoryScanState(value: unknown): value is StoredSkillHi
 }
 
 function loadHistoryScanState(params: Omit<SkillHistoryScanScope, "direction">) {
-  const storePath = resolveStorePath(params.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
   });

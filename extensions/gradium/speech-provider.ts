@@ -5,9 +5,12 @@ import type {
   SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
   SpeechProviderPlugin,
+  SpeechSynthesisRequest,
+  SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech";
-import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
+import { trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_GRADIUM_VOICE_ID, GRADIUM_VOICES, normalizeGradiumBaseUrl } from "./shared.js";
 import { gradiumTTS } from "./tts.js";
 
@@ -18,8 +21,8 @@ type GradiumProviderConfig = {
 };
 
 function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>): GradiumProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.gradium) ?? asObject(rawConfig.gradium);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.gradium) ?? asOptionalRecord(rawConfig.gradium);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -41,6 +44,26 @@ function readGradiumProviderConfig(config: SpeechProviderConfig): GradiumProvide
 
 function resolveGradiumApiKey(configApiKey: unknown): string | undefined {
   return resolveSpeechProviderApiKey(trimToUndefined(configApiKey), process.env.GRADIUM_API_KEY);
+}
+
+async function synthesizeGradium(
+  req: SpeechSynthesisRequest | SpeechTelephonySynthesisRequest,
+  outputFormat: "wav" | "opus" | "ulaw_8000",
+): Promise<Buffer> {
+  const config = readGradiumProviderConfig(req.providerConfig);
+  const apiKey = resolveGradiumApiKey(config.apiKey);
+  if (!apiKey) {
+    throw new Error("Gradium API key missing");
+  }
+  return await gradiumTTS({
+    text: req.text,
+    apiKey,
+    baseUrl: config.baseUrl,
+    voiceId: trimToUndefined(req.providerOverrides?.voiceId) ?? config.voiceId,
+    outputFormat,
+    timeoutMs: req.timeoutMs,
+    maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+  });
 }
 
 function isGradiumProviderConfigured(config: SpeechProviderConfig): boolean {
@@ -91,23 +114,9 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
     listVoices: async () => GRADIUM_VOICES.map((v) => ({ id: v.id, name: v.name })),
     isConfigured: ({ providerConfig }) => isGradiumProviderConfigured(providerConfig),
     synthesize: async (req) => {
-      const config = readGradiumProviderConfig(req.providerConfig);
-      const overrides = req.providerOverrides ?? {};
-      const apiKey = resolveGradiumApiKey(config.apiKey);
-      if (!apiKey) {
-        throw new Error("Gradium API key missing");
-      }
       const wantsVoiceNote = req.target === "voice-note";
       const outputFormat = wantsVoiceNote ? "opus" : "wav";
-      const audioBuffer = await gradiumTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
-        outputFormat,
-        timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-      });
+      const audioBuffer = await synthesizeGradium(req, outputFormat);
       return {
         audioBuffer,
         outputFormat,
@@ -116,23 +125,9 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
       };
     },
     synthesizeTelephony: async (req) => {
-      const config = readGradiumProviderConfig(req.providerConfig);
-      const overrides = req.providerOverrides ?? {};
-      const apiKey = resolveGradiumApiKey(config.apiKey);
-      if (!apiKey) {
-        throw new Error("Gradium API key missing");
-      }
       const outputFormat = "ulaw_8000";
       const sampleRate = 8_000;
-      const audioBuffer = await gradiumTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
-        outputFormat,
-        timeoutMs: req.timeoutMs,
-        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-      });
+      const audioBuffer = await synthesizeGradium(req, outputFormat);
       return { audioBuffer, outputFormat, sampleRate };
     },
   };

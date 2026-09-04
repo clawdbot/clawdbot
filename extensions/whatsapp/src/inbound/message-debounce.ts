@@ -5,8 +5,7 @@ import { getPrimaryIdentityId } from "../identity.js";
 import { requireWhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppIngressLifecycle, WhatsAppReadReceiptTarget } from "./durable-receive.js";
 import { attachWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
-import { withDeprecatedWebInboundMessageFlatAliases } from "./message-aliases.js";
-import type { AdmittedWebInboundCallbackMessage, WebInboundMessageInput } from "./types.js";
+import type { AdmittedWebInboundCallbackMessage } from "./types.js";
 
 export type WhatsAppQueuedInboundMessage = AdmittedWebInboundCallbackMessage & {
   debounceKey?: string;
@@ -18,8 +17,8 @@ export type WhatsAppQueuedInboundMessage = AdmittedWebInboundCallbackMessage & {
 
 export function createWhatsAppInboundMessageDebouncer(options: {
   debounceMs?: number;
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
-  shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  onMessage: (msg: AdmittedWebInboundCallbackMessage) => Promise<void>;
+  shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
   markRead: (target: WhatsAppReadReceiptTarget | undefined) => Promise<void>;
   onPendingWorkChanged: () => void;
   onError: (error: unknown) => void;
@@ -121,7 +120,7 @@ export function createWhatsAppInboundMessageDebouncer(options: {
                 ? { ...last.group, mentions: combinedMentions }
                 : undefined;
             const combinedMessage: WhatsAppQueuedInboundMessage = attachWhatsAppIngressLifecycle(
-              withDeprecatedWebInboundMessageFlatAliases({
+              {
                 ...last,
                 turnAdoptionLifecycle: admissionLifecycle,
                 payload: {
@@ -131,7 +130,7 @@ export function createWhatsAppInboundMessageDebouncer(options: {
                 },
                 group: combinedGroup,
                 event: { ...last.event, isBatched: true },
-              }),
+              },
               admissionLifecycle,
             );
             await options.onMessage(combinedMessage);

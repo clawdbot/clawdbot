@@ -67,11 +67,12 @@ const eventLabelKeys: Record<WorkboardEvent["kind"], string> = {
 
 type LifecycleCopy = readonly [
   labelKey: string,
-  detailKey: string,
+  detailKey: string | undefined,
   tone: "blocked" | "done" | "idle" | "live",
 ];
 
 const lifecycleCopy = {
+  queued: ["sessionsView.statusQueued", undefined, "idle"],
   running: ["workboard.lifecycleRunning", "workboard.lifecycleRunningDetail", "live"],
   succeeded: ["workboard.lifecycleDone", "workboard.lifecycleDoneDetail", "done"],
   failed: ["workboard.lifecycleNeedsReview", "workboard.lifecycleNeedsReviewDetail", "blocked"],
@@ -111,7 +112,7 @@ export function formatAge(value: number | undefined): string {
   if (!value) {
     return "";
   }
-  return formatDurationCompact(Math.max(0, Date.now() - value), { spaced: true }) ?? "0ms";
+  return formatDurationCompact(Math.max(0, Date.now() - value)) ?? "0ms";
 }
 
 export function canMutate(props: WorkboardProps): boolean {
@@ -225,11 +226,11 @@ export function engineBlockedByRuntime(
 
 export function formatLifecycle(lifecycle: WorkboardLifecycle): {
   label: string;
-  detail: string;
+  detail: string | undefined;
   tone: "blocked" | "done" | "idle" | "live";
 } {
   const [labelKey, detailKey, tone] = lifecycleCopy[lifecycle.state];
-  return { label: t(labelKey), detail: t(detailKey), tone };
+  return { label: t(labelKey), detail: detailKey === undefined ? undefined : t(detailKey), tone };
 }
 
 export function taskDetail(task: WorkboardTaskSummary): string {

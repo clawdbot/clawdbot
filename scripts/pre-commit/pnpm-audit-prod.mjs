@@ -7,7 +7,11 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 // This zero-install hook runs on Node 22.22.3+, where native TypeScript stripping is enabled.
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
+import {
+  cancelResponseReaderSoon,
+  readBoundedResponseText as readBoundedResponseTextWithLimit,
+} from "../lib/bounded-response.mjs";
+import { pnpmLockfileDocuments } from "../lib/pnpm-lockfile-documents.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
@@ -42,6 +46,18 @@ const AUDIT_ADVISORY_VERSION_OVERRIDES = [
     unaffectedVersions: new Set(["2.2.1", "2.2.5"]),
   },
 ];
+
+class AdvisoryRequestTimeoutError extends Error {}
+
+/** @typedef {{ write: (chunk: string) => boolean }} AuditOutput */
+/**
+ * @typedef {object} PnpmAuditOptions
+ * @property {string} [rootDir]
+ * @property {typeof fetch} [fetchImpl]
+ * @property {AuditOutput} [stdout]
+ * @property {AuditOutput} [stderr]
+ * @property {string} [minSeverity]
+ */
 
 function normalizeAuditLevel(level) {
   const normalized = String(level ?? "").toLowerCase();
@@ -502,7 +518,7 @@ function resolveSnapshot({ dependencyName, reference, snapshots }) {
 }
 
 export function collectProdResolvedPackagesFromLockfile(lockfileText) {
-  const lockfile = parsePnpmLockfileSections(lockfileText);
+  const lockfile = parsePnpmLockfileSections(pnpmLockfileDocuments(lockfileText).dependencies);
   if (!lockfile.hasImportersSection) {
     throw new Error("pnpm-lock.yaml is missing the importers section.");
   }
@@ -562,25 +578,34 @@ export function collectProdResolvedPackagesFromLockfile(lockfileText) {
 }
 
 export function collectAllResolvedPackagesFromLockfile(lockfileText) {
-  const lockfile = parsePnpmLockfileSections(lockfileText);
-  if (!lockfile.hasSnapshotsSection) {
-    throw new Error("pnpm-lock.yaml is missing the snapshots section.");
-  }
-
   const versionsByPackage = new Map();
-  for (const snapshotKey of Object.keys(lockfile.snapshots)) {
-    const resolved = parseSnapshotKey(snapshotKey);
-    let versions = versionsByPackage.get(resolved.packageName);
-    if (!versions) {
-      versions = new Set();
-      versionsByPackage.set(resolved.packageName, versions);
+  for (const document of Object.values(pnpmLockfileDocuments(lockfileText))) {
+    if (document === null) {
+      continue;
     }
-    versions.add(resolved.version);
+    const lockfile = parsePnpmLockfileSections(document);
+    if (!lockfile.hasSnapshotsSection) {
+      throw new Error("pnpm-lock.yaml is missing the snapshots section.");
+    }
+
+    for (const snapshotKey of Object.keys(lockfile.snapshots)) {
+      const resolved = parseSnapshotKey(snapshotKey);
+      let versions = versionsByPackage.get(resolved.packageName);
+      if (!versions) {
+        versions = new Set();
+        versionsByPackage.set(resolved.packageName, versions);
+      }
+      versions.add(resolved.version);
+    }
   }
 
   return versionsByPackage;
 }
 
+/**
+ * @param {Map<string, Set<string>>} versionsByPackage
+ * @returns {Record<string, string[]>}
+ */
 export function createBulkAdvisoryPayload(versionsByPackage) {
   return Object.fromEntries(
     [...versionsByPackage.entries()]
@@ -676,7 +701,7 @@ function chunkEntries(entries, size) {
   return chunks;
 }
 
-function resolveRegistryBaseUrl() {
+export function resolveRegistryBaseUrl() {
   const configured =
     process.env.npm_config_registry ??
     process.env.NPM_CONFIG_REGISTRY ??
@@ -698,7 +723,7 @@ function parsePositiveIntegerEnv(name, fallback) {
 }
 
 function resolveBulkAdvisoryRequestTimeoutMs() {
-  return clampTimerTimeoutMs(
+  return clampBulkAdvisoryTimeoutMs(
     parsePositiveIntegerEnv(
       "OPENCLAW_PNPM_AUDIT_BULK_TIMEOUT_MS",
       BULK_ADVISORY_REQUEST_TIMEOUT_MS,
@@ -713,18 +738,26 @@ function resolveBulkAdvisoryResponseBodyMaxBytes() {
   );
 }
 
-function clampTimerTimeoutMs(valueMs) {
+function clampBulkAdvisoryTimeoutMs(valueMs) {
   const value = Number.isFinite(valueMs) ? valueMs : BULK_ADVISORY_REQUEST_TIMEOUT_MS;
   return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
-async function withBulkAdvisoryTimeout({ label, timeoutMs, run }) {
-  const resolvedTimeoutMs = clampTimerTimeoutMs(timeoutMs);
+/**
+ * @template T
+ * @param {{ label: string, timeoutMs: number, run: (options: { signal: AbortSignal, timeoutPromise: Promise<never> }) => Promise<T> }} options
+ * @returns {Promise<T>}
+ */
+export async function withAdvisoryRequestTimeout({ label, timeoutMs, run }) {
+  const resolvedTimeoutMs = clampBulkAdvisoryTimeoutMs(timeoutMs);
   const controller = new AbortController();
   let timeout;
+  /** @type {Promise<never>} */
   const timeoutPromise = new Promise((_resolve, reject) => {
     timeout = setTimeout(() => {
-      const error = new Error(`${label} exceeded timeout of ${resolvedTimeoutMs}ms`);
+      const error = new AdvisoryRequestTimeoutError(
+        `${label} exceeded timeout of ${resolvedTimeoutMs}ms`,
+      );
       controller.abort(error);
       reject(error);
     }, resolvedTimeoutMs);
@@ -770,9 +803,7 @@ export async function readBoundedBulkAdvisoryErrorText(
             read,
             options.timeoutPromise.catch((error) => {
               canceled = true;
-              void Promise.resolve()
-                .then(() => reader.cancel())
-                .catch(() => undefined);
+              cancelResponseReaderSoon(reader);
               throw error;
             }),
           ])
@@ -822,37 +853,47 @@ export async function fetchBulkAdvisories({
   timeoutMs = resolveBulkAdvisoryRequestTimeoutMs(),
 }) {
   const url = `${registryBaseUrl}${BULK_ADVISORY_PATH}`;
-  return await withBulkAdvisoryTimeout({
-    label: "Bulk advisory request",
-    timeoutMs,
-    run: async ({ signal, timeoutPromise }) => {
-      const response = await fetchImpl(url, {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(payload),
-        signal,
-      });
+  const request = async () =>
+    await withAdvisoryRequestTimeout({
+      label: "Bulk advisory request",
+      timeoutMs,
+      run: async ({ signal, timeoutPromise }) => {
+        const response = await fetchImpl(url, {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          signal,
+        });
 
-      if (!response.ok) {
-        const bodyText = await readBoundedBulkAdvisoryErrorText(response, undefined, {
+        if (!response.ok) {
+          const bodyText = await readBoundedBulkAdvisoryErrorText(response, undefined, {
+            timeoutPromise,
+          });
+          throw new Error(
+            `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
+          );
+        }
+
+        return await readBulkAdvisoryJson(response, responseBodyMaxBytes, {
+          signal,
           timeoutPromise,
         });
-        throw new Error(
-          `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
-        );
-      }
-
-      return await readBulkAdvisoryJson(response, responseBodyMaxBytes, {
-        signal,
-        timeoutPromise,
-      });
-    },
-  });
+      },
+    });
+  try {
+    return await request();
+  } catch (error) {
+    if (!(error instanceof AdvisoryRequestTimeoutError)) {
+      throw error;
+    }
+  }
+  return await request();
 }
 
+/** @param {PnpmAuditOptions} [options] */
 export async function runPnpmAuditProd({
   rootDir = process.cwd(),
   fetchImpl = fetch,
@@ -889,13 +930,15 @@ export async function runPnpmAuditProd({
   );
   if (findings.length === 0) {
     stdout.write(
-      `No ${normalizedMinSeverity} or higher advisories found for production dependencies.\n`,
+      `No matching ${normalizedMinSeverity} or higher advisories returned by npm bulk for production dependencies. ` +
+        "Upstream repository advisories were not checked; this is not comprehensive vulnerability clearance.\n",
     );
     return 0;
   }
 
   stderr.write(
-    `Found ${findings.length} ${normalizedMinSeverity} or higher advisories in production dependencies:\n`,
+    `Found ${findings.length} ${normalizedMinSeverity} or higher advisories from npm bulk in production dependencies ` +
+      "(upstream repository advisories not checked):\n",
   );
   for (const finding of findings.slice(0, 25)) {
     const details = [
@@ -961,4 +1004,7 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
+  if (process.exitCode) {
+    process.stderr.write(`[pnpm-audit-prod] FAILED (exit ${process.exitCode})\n`);
+  }
 }

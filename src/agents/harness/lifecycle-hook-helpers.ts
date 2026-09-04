@@ -5,6 +5,7 @@
  * before-finalize retry/finalize decisions with bounded retry accounting.
  */
 import { createHash } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -240,5 +241,5 @@ function readBeforeAgentFinalizeRetryCandidates(
 function isBeforeAgentFinalizeRetry(
   value: unknown,
 ): value is NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }

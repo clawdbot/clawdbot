@@ -69,6 +69,26 @@ describe("SQLite trajectory runtime store", () => {
     ]);
   });
 
+  it.each(["2026", "0", "1969-12-31T23:59:59.000Z"])(
+    "stores Date.parse-compatible trajectory timestamp %s",
+    (timestamp) => {
+      appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+        createTrajectoryEvent({ ts: timestamp, type: "timestamp-contract" }),
+      ]);
+
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath() });
+      const db = getNodeSqliteKysely<TrajectoryRuntimeTestDatabase>(database.db);
+      const rows = executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("trajectory_runtime_events")
+          .select(["created_at"])
+          .where("session_id", "=", "session-1"),
+      ).rows;
+      expect(rows).toEqual([{ created_at: Date.parse(timestamp) }]);
+    },
+  );
+
   it("trims oldest rows beyond the configured byte window", async () => {
     appendSqliteTrajectoryRuntimeEvents(
       { maxRuntimeBytes: 900, sessionId: "session-1", storePath },
@@ -103,6 +123,26 @@ describe("SQLite trajectory runtime store", () => {
 
     expect(rows.map((row) => row.event.type)).toEqual(["event-2", "event-3"]);
     expect(rows.map((row) => row.seq)).toEqual([1, 2]);
+  });
+
+  it("reads a missing trajectory store without creating an agent database", () => {
+    const missingStorePath = path.join(tempDir, "agents", "missing", "sessions", "sessions.json");
+    const missingDatabasePath = path.join(
+      tempDir,
+      "agents",
+      "missing",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+
+    expect(
+      loadSqliteTrajectoryRuntimeEventRowsSync({
+        agentId: "missing",
+        sessionId: "missing-session",
+        storePath: missingStorePath,
+      }),
+    ).toEqual([]);
+    expect(fs.existsSync(missingDatabasePath)).toBe(false);
   });
 
   it("applies maxEvents to a trailing window", () => {

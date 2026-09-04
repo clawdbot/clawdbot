@@ -21,6 +21,7 @@
 // production callers.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   advanceCronActiveJobGeneration,
   clearCronJobActive,
@@ -30,11 +31,7 @@ import {
   resetCronActiveJobs,
 } from "./active-jobs.js";
 import { CronService } from "./service.js";
-import {
-  createDeferred,
-  setupCronServiceSuite,
-  writeCronStoreSnapshot,
-} from "./service.test-harness.js";
+import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -72,7 +69,7 @@ async function createManualRunHarness(jobId: string) {
     jobs: [createManualIsolatedJob(jobId)],
   });
 
-  const entered = createDeferred<void>();
+  const entered = createDeferred();
   const release = createDeferred<IsolatedRunResult>();
   const cron = new CronService({
     storePath: store.storePath,
@@ -197,7 +194,7 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
       jobs: [firstJob, secondJob],
     });
 
-    const bothStarted = createDeferred<void>();
+    const bothStarted = createDeferred();
     const onIsolatedAgentSetupTimeout = vi.fn();
     let startedCount = 0;
     const cron = new CronService({

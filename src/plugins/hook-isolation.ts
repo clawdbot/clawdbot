@@ -2,11 +2,6 @@ import type { PluginHookName } from "./types.js";
 
 export class HookIsolationError extends Error {}
 
-type WebAssemblyMemoryConstructor = {
-  new (...args: unknown[]): object;
-  prototype: object;
-};
-
 function containsSharedMemory(value: unknown, seen: Set<object>): boolean {
   if (typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer) {
     return true;
@@ -22,7 +17,7 @@ function containsSharedMemory(value: unknown, seen: Set<object>): boolean {
   }
   const webAssemblyMemory = (
     globalThis as unknown as {
-      WebAssembly?: { Memory?: WebAssemblyMemoryConstructor };
+      WebAssembly?: { Memory?: { new (...args: unknown[]): object; prototype: object } };
     }
   ).WebAssembly?.Memory;
   if (

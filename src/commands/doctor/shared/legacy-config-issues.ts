@@ -9,21 +9,14 @@ import type {
 } from "../../../config/types.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import {
-  collectRelevantDoctorPluginIds,
-  collectRelevantDoctorPluginIdsForTouchedPaths,
+  collectDoctorConfigRepairPluginIds,
   listPluginDoctorLegacyConfigRules,
 } from "../../../plugins/doctor-contract-registry.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 
 function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
-  if (!raw || typeof raw !== "object") {
-    return new Set();
-  }
-  const channels = (raw as { channels?: unknown }).channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return new Set();
-  }
-  return new Set(Object.keys(channels).filter((channelId) => channelId !== "defaults"));
+  return new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
 }
 
 function collectPluginLegacyConfigRules(
@@ -31,11 +24,9 @@ function collectPluginLegacyConfigRules(
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigRule[] {
   const channelIds = collectConfiguredChannelIds(raw);
-  const pluginIds = (
-    touchedPaths
-      ? collectRelevantDoctorPluginIdsForTouchedPaths({ raw, touchedPaths })
-      : collectRelevantDoctorPluginIds(raw)
-  ).filter((pluginId) => !channelIds.has(pluginId));
+  const pluginIds = collectDoctorConfigRepairPluginIds(raw, touchedPaths).filter(
+    (pluginId) => !channelIds.has(pluginId),
+  );
   if (pluginIds.length === 0) {
     return [];
   }

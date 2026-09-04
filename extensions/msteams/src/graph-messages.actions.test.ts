@@ -131,6 +131,7 @@ describe("reactMessageMSTeams", () => {
     });
 
     expect(result).toEqual({ ok: true });
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith({}, { preferDelegated: true });
     expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/setReaction`,
@@ -236,6 +237,7 @@ describe("unreactMessageMSTeams", () => {
     });
 
     expect(result).toEqual({ ok: true });
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith({}, { preferDelegated: true });
     expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/unsetReaction`,
@@ -264,4 +266,29 @@ describe("unreactMessageMSTeams", () => {
       beta: true,
     });
   });
+
+  it.each([
+    { reactionType: " LAUGH ", expectedReaction: "😆" },
+    { reactionType: " 🎉 ", expectedReaction: "🎉" },
+  ])(
+    "normalizes $reactionType when removing a reaction",
+    async ({ reactionType, expectedReaction }) => {
+      mockState.mutateGraphJson.mockResolvedValue(undefined);
+
+      await unreactMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHAT_ID,
+        messageId: "msg-1",
+        reactionType,
+      });
+
+      expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
+        token: TOKEN,
+        path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/unsetReaction`,
+        method: "POST",
+        body: { reactionType: expectedReaction },
+        beta: true,
+      });
+    },
+  );
 });

@@ -1,7 +1,26 @@
 // Covers reply-to fanout and delivery policy consumption for explicit,
 // implicit, single-use, and disabled reply modes.
 import { describe, expect, it } from "vitest";
-import { createReplyToFanout } from "./reply-policy.js";
+import { createReplyToFanout, normalizeOutboundReplyFacts } from "./reply-policy.js";
+
+describe("normalizeOutboundReplyFacts", () => {
+  it("canonicalizes legacy modes without suppressing explicit replies", () => {
+    expect(normalizeOutboundReplyFacts({ replyToId: "reply-1", replyToMode: "batched" })).toEqual({
+      source: "implicit",
+      replyToId: "reply-1",
+      mode: "first",
+    });
+    expect(
+      normalizeOutboundReplyFacts({ replyToId: "reply-1", replyToMode: "off" }),
+    ).toBeUndefined();
+    expect(
+      normalizeOutboundReplyFacts({
+        reply: { source: "explicit", replyToId: "reply-1" },
+        replyToMode: "off",
+      }),
+    ).toEqual({ source: "explicit", replyToId: "reply-1" });
+  });
+});
 
 describe("createReplyToFanout", () => {
   it("consumes implicit single-use replies once", () => {

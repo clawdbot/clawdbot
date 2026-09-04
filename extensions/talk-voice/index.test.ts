@@ -220,7 +220,7 @@ describe("talk-voice plugin", () => {
     });
   });
 
-  it("writes canonical talk provider config and legacy elevenlabs voice id", async () => {
+  it("writes only canonical provider-scoped voice config for elevenlabs", async () => {
     const { command, runtime } = createHarness({
       talk: {
         provider: "elevenlabs",
@@ -241,7 +241,8 @@ describe("talk-voice plugin", () => {
       afterWrite: { mode: "auto" },
       mutate: expect.any(Function),
     });
-    expect(runtime.config.current()).toEqual({
+    const updatedConfig = runtime.config.current() as { talk: Record<string, unknown> };
+    expect(updatedConfig).toEqual({
       talk: {
         provider: "elevenlabs",
         providers: {
@@ -250,9 +251,9 @@ describe("talk-voice plugin", () => {
             voiceId: "voice-a",
           },
         },
-        voiceId: "voice-a",
       },
     });
+    expect(Object.hasOwn(updatedConfig.talk, "voiceId")).toBe(false);
     expect(result).toEqual({
       text: "✅ ElevenLabs Talk voice set to Claudia\nvoice-a",
     });

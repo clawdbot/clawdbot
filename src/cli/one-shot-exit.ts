@@ -1,5 +1,5 @@
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 
 type VitestWorkerMarkers = {
   tinypoolState?: unknown;
@@ -7,6 +7,7 @@ type VitestWorkerMarkers = {
 };
 
 const SYSTEM_CA_FLAG = "--use-system-ca";
+const ONE_SHOT_EXIT_DRAIN_TIMEOUT_MS = 5_000;
 
 let requestedExitCode: number | "process" | undefined;
 
@@ -97,8 +98,14 @@ export async function runCliWithExitFinalization(params: {
   try {
     await params.run();
   } catch (error) {
-    await params.onError(error);
-    requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
+    if (error instanceof ExitError) {
+      if (!requestExitAfterOneShotOutput(runtime, error.code)) {
+        throw error;
+      }
+    } else {
+      await params.onError(error);
+      requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
+    }
   } finally {
     requestExitAfterSystemCaCliCompletion(runtime, {
       env: params.env,
@@ -109,14 +116,22 @@ export async function runCliWithExitFinalization(params: {
   }
 }
 
+/** Unwind an already-reported CLI outcome before shared cleanup and output draining. */
+export function exitCliAfterOutput(runtime: RuntimeEnv, exitCode: number): never {
+  if (runtime !== defaultRuntime) {
+    runtime.exit(exitCode);
+  }
+  throw new ExitError(exitCode);
+}
+
 export function requestExitAfterOneShotOutput(
   runtime: RuntimeEnv = defaultRuntime,
-  exitCode = 0,
+  exitCode?: number,
 ): boolean {
   if (runtime !== defaultRuntime) {
     return false;
   }
-  requestedExitCode = exitCode;
+  requestedExitCode = exitCode ?? "process";
   return true;
 }
 
@@ -135,10 +150,15 @@ function flushExitAfterOneShotOutput(
     runtime.exit(requestedCode === "process" ? resolveProcessExitCode() : requestedCode);
   let pendingStreams = 2;
 
+  // A missing pipe callback must not leave a completed one-shot command alive forever.
+  const fallback = setTimeout(exit, ONE_SHOT_EXIT_DRAIN_TIMEOUT_MS);
+  fallback.unref();
+
   const drain = (stream: NodeJS.WriteStream) => {
     stream.write("", () => {
       pendingStreams -= 1;
       if (pendingStreams === 0) {
+        clearTimeout(fallback);
         setImmediate(exit);
       }
     });

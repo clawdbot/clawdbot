@@ -8,10 +8,7 @@ import {
   createSessions,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
-import {
-  SidebarMenusController,
-  type SidebarMenusControllerHost,
-} from "./sidebar-menus-controller.ts";
+import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
 describe("SidebarMenusController session routes", () => {
   it("keeps the current catalog session when switching either face", () => {
@@ -38,7 +35,7 @@ describe("SidebarMenusController session routes", () => {
       requestUpdate: vi.fn(),
       sessionDataContext: context,
       terminalAvailable: false,
-    } as unknown as SidebarMenusControllerHost;
+    } as unknown as ConstructorParameters<typeof SidebarMenusController>[0];
     const controller = new SidebarMenusController(host);
     const container = document.createElement("div");
 

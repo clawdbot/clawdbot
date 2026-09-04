@@ -10,7 +10,12 @@ const taskRuntimeInternalMocks = vi.hoisted(() => ({
   listFreshTasksForOwnerKey: vi.fn(),
 }));
 
+const configMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+}));
+
 vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
+vi.mock("../config/config.js", () => configMocks);
 
 const videoTaskStatusOwner = createMediaGenerationTaskStatusOwner({
   taskKind: "video_generation",
@@ -45,6 +50,14 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
 beforeEach(() => {
   resetRecentMediaGenerationDuplicateGuardsForTests();
   taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+  configMocks.getRuntimeConfig.mockReset().mockReturnValue({
+    session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
+    agents: {
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+  });
 });
 
 describe("media generation delivery-phase prompt guard", () => {
@@ -74,6 +87,23 @@ describe("media generation delivery-phase prompt guard", () => {
 
     expect(videoTaskStatusOwner.listActiveTasksForSession("session/A")).toEqual([task]);
     expect(videoTaskStatusOwner.findActiveTaskForSession("session/A")).toEqual(task);
+  });
+
+  it("keeps restored legacy bare tasks visible only to their persisted requester owner", () => {
+    const task = makeTask({
+      requesterSessionKey: "global",
+      ownerKey: "global",
+      requesterAgentId: undefined,
+      agentId: "research",
+      progressSummary: "Generating video",
+    });
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([task]);
+
+    expect(videoTaskStatusOwner.listActiveTasksForSession("global", "ops")).toEqual([task]);
+    expect(videoTaskStatusOwner.findActiveTaskForSession("global", { agentId: "ops" })).toEqual(
+      task,
+    );
+    expect(videoTaskStatusOwner.listActiveTasksForSession("global", "research")).toEqual([]);
   });
 
   it("blocks the same prompt while allowing a distinct prompt", () => {

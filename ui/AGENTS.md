@@ -6,13 +6,14 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 - Foreign-language files in `ui/src/i18n/locales/*.ts` are stable, source-owned lazy-module adapters; their translations are generated from canonical grouped memory in `ui/src/i18n/.i18n/*.tm.jsonl`.
 - Do not hand-edit translation memory, locale metadata, or fallback metadata unless a targeted generated-output fix is explicitly requested.
-- The source of truth is `ui/src/i18n/locales/en.ts` and `en-agents.ts` plus the generator/runtime wiring in:
+- English source lives in `ui/src/i18n/locales/en.ts`, its static `en-agents.ts` dependency, and lazy `en-*.ts` registrar catalogs. `scripts/lib/control-ui-i18n-catalog.ts` owns complete ordered composition and raw source-hash dependencies for generation, verification, and Vite; it reads `.catalog` data without runtime registration. Related wiring:
   - `scripts/control-ui-i18n.ts`
   - `scripts/lib/control-ui-i18n-catalog.ts`
   - `scripts/lib/control-ui-i18n-sync-plan.ts`
   - `ui/config/control-ui-locales.ts`
   - `ui/src/i18n/lib/types.ts`
   - `ui/src/i18n/lib/registry.ts`
+- Register lazy English synchronously at each lazy consumer, including Settings search before a destination page loads. Keep startup/shared copy eager. Preserve the shared `en` object and sibling namespaces; leave empty whole-subtree anchors in `en.ts` when extraction would change flattened source order and grouped translation-memory aliases. Never import the host-only catalog owner into the runtime.
 - Contributor flow: update English strings and locale adapters/wiring, run keyless `pnpm ui:i18n:baseline`, and commit source files plus any changed raw-copy baseline. Do not include catalog fallback metadata, locale metadata, or translation memory in a source PR; CI rejects mixed source/generated diffs outside canonical `release/YYYY.M.PATCH` branches or an explicitly detected complete canonical-memory ownership migration.
 - `pnpm ui:i18n:verify` is deterministic and keyless. `pnpm lint` and the changed-check UI lane run it. It validates English catalog shape, runtime locale wiring, and raw-copy baseline drift; foreign catalog parity belongs to the post-merge bot and strict generated-output gate.
 - Translation flow: the serialized `control-ui-locale-refresh` workflow translates after merge, opens an isolated generated PR, and enables auto-merge for its exact head. `pnpm ui:i18n:sync` remains the authenticated maintainer/release repair path; do not run it without provider auth when new keys exist.
@@ -25,6 +26,26 @@ This directory owns Control UI-specific guidance that should not live in the rep
 - `pnpm lint:ui:styles` runs stylelint over `ui/src` stylesheets and Lit `css` templates (postcss-lit). `pnpm lint` includes it; error-class rules only, oxfmt owns formatting. Config: `config/stylelint.config.mjs`.
 - Icons: shared 24x24 Lucide icons go through `strokeIcon()` in `ui/src/components/icons-tools.ts` so stroke presentation attributes stay inline and render inside shadow roots. Icon bodies are `svg\`\``fragments, never`html\`\`` (wrong namespace renders nothing).
 - `pnpm lint:ui:lit` is an opt-in lit-analyzer diagnostic for template bindings (slow, ~9 min; known baseline of pre-existing findings). It is not a CI gate.
+
+## Stylesheet Policy
+
+- Cursors: links and controls that open a new tab use the pointer; state-changing controls keep the default arrow.
+- Colors: stylesheet colors flow through custom-property tokens defined in `ui/src/styles/base.css`; `color-no-hex` enforces this. Exempt surfaces (token definitions, `lobster-pet.css` sprite artwork, `--theme-chip-*` preview swatches) each carry a stated contract. Lit `css\`\`` templates are not yet gated — prefer tokens there too.
+- Breakpoints: `max-width` media conditions use the canonical ladder 400/560/640/768/900/1100/1320px (plus the 932×500 landscape-phone compound); stylelint's allowed-list enforces it. New thresholds round up to the next rung. Don't add rungs without updating the config comment and this note.
+- Duplicate selectors are lint errors; deliberate topic-section reopens use `stylelint-disable-next-line no-duplicate-selectors -- <reason>`.
+- Dead CSS: `node --import tsx scripts/audit-control-ui-dead-css.mts` reports class selectors with no production reference (AST-based, understands `X--${...}` stems and `classMap`). Advisory, not a gate — verify by hand before deleting; extend the script's stem detection rather than its allowlist when it misses a dynamic family.
+- Native CSS nesting: opportunistic only — nest when already rewriting a section; no conversion sweeps.
+- `@layer` is deliberately not used: the shared light-DOM stylesheet's precedence relies on import order plus specificity, page CSS imports lazily per component, and measured `no-descending-specificity` hits are within-file — layering the import manifest would flip unlayered-vs-layered precedence across ~48 lazily imported page files for no measured win. Revisit only with computed-style parity proof across all routes on the mocked dev server (PR #123156/#123160 show the evidence pattern).
+
+## Gateway Coupling
+
+- The Control UI ships from and with its Gateway: one install, one version (product decision, 2026-08-16). UI code never carries gateway-version compatibility — no fallbacks to older methods when a current core method is missing, no version-conditional behavior for older gateways.
+- Method-advertisement checks (`isGatewayMethodAdvertised`) remain only as feature gates for config/plugin-dependent surfaces, never as version compat.
+- The handshake rejects gateway-served same-origin skew. The admission-exempt paths (`pnpm ui:dev`, custom `gateway.controlUi.root`, cross-origin/connection-settings dialing) are unsupported for version mismatch without enforcement: they carry no compat code and fail visibly at the first missing method, by design. Tightening admission to reject them at connect is a server-side product change owned separately.
+
+## Build Chunking
+
+- `ui/config/control-ui-boot-modules.json` is generated from ready `/new` and `/chat` captures. Shared modules and each route's exclusive modules get separate `control-ui-boot-*` groups in `ui/config/control-ui-chunking.ts`, reducing requests without pulling chat-only code into New Session. Regenerate with `pnpm ui:boot-manifest:gen` when boot-path surfaces change materially; it builds into a temporary directory with all measured boot groups disabled so stale entries cannot feed back into the capture. Rebuild with `pnpm ui:build` afterward to verify grouped output. Do not hand-edit the manifest.
 
 ## Live Verification
 

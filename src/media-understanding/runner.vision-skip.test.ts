@@ -1,15 +1,12 @@
+import path from "node:path";
 // Vision skip tests cover auto image-model selection and text-only model
 // rejection across bundled provider metadata.
-import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "../plugins/bundled-compat.js";
 import { resolvePluginRegistryLoadCacheKey } from "../plugins/loader.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
@@ -64,6 +61,7 @@ vi.mock("../agents/model-catalog.js", async () => {
 });
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: loadModelCatalog,
 }));
 
@@ -76,7 +74,7 @@ function setCompatibleActiveMediaUnderstandingRegistry(
   pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
   cfg: OpenClawConfig,
 ) {
-  const pluginIds = loadPluginManifestRegistry({
+  const pluginIds = loadPluginManifestRegistryCore({
     config: cfg,
     env: process.env,
   })
@@ -87,37 +85,21 @@ function setCompatibleActiveMediaUnderstandingRegistry(
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  const compatibleConfig = withBundledPluginVitestCompat({
-    config: withBundledPluginEnablementCompat({
-      config: cfg,
-      pluginIds,
-    }),
-    pluginIds,
-    env: process.env,
-  });
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+    allow: [...new Set([...(cfg.plugins?.allow ?? []), ...pluginIds])],
+    entries: {
+      ...Object.fromEntries(pluginIds.map((pluginId) => [pluginId, { enabled: true }])),
+      ...cfg.plugins?.entries,
+    },
+    slots: { ...cfg.plugins?.slots, memory: "none" },
+  };
   const cacheKey = resolvePluginRegistryLoadCacheKey({
-    config: compatibleConfig,
+    config: cfg,
     env: process.env,
   });
   setActivePluginRegistry(pluginRegistry, cacheKey);
-}
-
-type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
-
-function requireDecisionAttachment(result: CapabilityResult, index: number) {
-  const attachment = result.decision.attachments[index];
-  if (!attachment) {
-    throw new Error(`expected media-understanding decision attachment ${index}`);
-  }
-  return attachment;
-}
-
-function requireCapabilityOutput(result: CapabilityResult, index: number) {
-  const output = result.outputs[index];
-  if (!output) {
-    throw new Error(`expected media-understanding output ${index}`);
-  }
-  return output;
 }
 
 describe("runCapability image skip", () => {
@@ -159,7 +141,10 @@ describe("runCapability image skip", () => {
       expect(result.outputs).toHaveLength(0);
       expect(result.decision.outcome).toBe("skipped");
       expect(result.decision.attachments).toHaveLength(1);
-      const attachment = requireDecisionAttachment(result, 0);
+      const attachment = expectDefined(
+        result.decision.attachments[0],
+        "media decision attachment 0",
+      );
       expect(attachment.attachmentIndex).toBe(0);
       const attempt = attachment.attempts[0];
       if (!attempt) {
@@ -188,6 +173,10 @@ describe("runCapability image skip", () => {
         let describeCalls = 0;
         const msgCtx = ctx as MsgContext;
         msgCtx.Body = "please inspect this image";
+        msgCtx.media = Array.from({ length: 4 }, () => ({
+          path: mediaPath,
+          contentType: "image/png",
+        }));
         const cfg = {
           agents: {
             defaults: {
@@ -218,12 +207,202 @@ describe("runCapability image skip", () => {
         const attempt = imageDecision?.attachments[0]?.attempts[0];
         expect(result.appliedImage).toBe(false);
         expect(imageDecision?.outcome).toBe("skipped");
+        expect(imageDecision).toMatchObject({ nativeVisionActive: true });
         expect(attempt?.outcome).toBe("skipped");
         expect(attempt?.reason).toBe("primary model supports vision natively");
         expect(describeCalls).toBe(0);
         expect(msgCtx.Body).not.toContain(plantedVisionSentinel);
+        expect(msgCtx.Body).not.toContain("Image attachment not");
       },
     );
+  });
+
+  it.each([
+    {
+      label: "selected",
+      policy: { mode: "all", maxAttachments: 4 },
+      selectedIndexes: [0, 1, 2, 3],
+    },
+    { label: "dropped by default", policy: undefined, selectedIndexes: [0] },
+    {
+      label: "dropped when preferring the last image",
+      policy: { mode: "all", maxAttachments: 1, prefer: "last" },
+      selectedIndexes: [3],
+    },
+  ] as const)(
+    "markers $label remote-url-only images instead of claiming native handoff",
+    async ({ policy, selectedIndexes }) => {
+      await withMediaFixture(
+        {
+          filePrefix: "openclaw-image-url-only-no-handoff",
+          extension: "png",
+          mediaType: "image/png",
+          fileContents: Buffer.from("image"),
+        },
+        async ({ ctx, mediaPath }) => {
+          const msgCtx = ctx as MsgContext;
+          msgCtx.Body = "please inspect these images";
+          msgCtx.media = [
+            { path: mediaPath, contentType: "image/png" },
+            { url: "https://cdn.example.test/photos/second.png", contentType: "image/png" },
+            { path: mediaPath, contentType: "image/png" },
+            { url: "media://inbound/fourth.png", contentType: "image/png" },
+          ];
+
+          const result = await applyMediaUnderstanding({
+            ctx: msgCtx,
+            cfg: {
+              tools: { media: { image: { attachments: policy } } },
+            },
+            agentDir: "/tmp",
+            workspaceDir: path.dirname(mediaPath),
+            activeModel: { provider: "openai", model: "gpt-4.1" },
+          });
+
+          const imageDecision = result.decisions.find(
+            (decision) => decision.capability === "image",
+          );
+          expect(msgCtx.Body).toContain("[Image attachment could not be analyzed]");
+          expect(msgCtx.BodyForAgent).toContain("[Image attachment could not be analyzed]");
+          expect(imageDecision?.outcome).toBe("skipped");
+          expect(imageDecision?.attachments.map(({ attachmentIndex }) => attachmentIndex)).toEqual(
+            selectedIndexes,
+          );
+          expect(imageDecision?.attachmentDispositions).toEqual(
+            Object.fromEntries(
+              [0, 1, 2, 3].map((index) => [
+                index,
+                index === 1
+                  ? { kind: "failed", reason: "remote-url image is not natively deliverable" }
+                  : {
+                      kind: (selectedIndexes as readonly number[]).includes(index)
+                        ? "handed-to-native-vision"
+                        : "not-selected",
+                    },
+              ]),
+            ),
+          );
+          // Native hydration owns local paths and media-store refs, even when
+          // understanding drops them. Only the remote URL needs a failure marker.
+          expect(msgCtx.Body).not.toContain("not processed");
+        },
+      );
+    },
+  );
+
+  it("runs explicit image models untouched by native-vision probe failure", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-explicit-model-probe-immune",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, mediaPath }) => {
+        const msgCtx = ctx as MsgContext;
+        msgCtx.Body = "inspect this image";
+        msgCtx.media = [{ path: mediaPath, contentType: "image/png" }];
+        const cfg = {
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  capabilities: ["image"],
+                },
+              ],
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        await loadModelCatalog.withImplementation(
+          async () => {
+            throw new Error("catalog unavailable");
+          },
+          async () => {
+            const result = await applyMediaUnderstanding({
+              ctx: msgCtx,
+              cfg,
+              agentDir: "/tmp",
+              workspaceDir: path.dirname(mediaPath),
+              providers: {
+                openrouter: {
+                  id: "openrouter",
+                  capabilities: ["image"],
+                  describeImage: async (req) => ({
+                    text: plantedVisionSentinel,
+                    model: req.model,
+                  }),
+                },
+              },
+              activeModel: { provider: "openai", model: "gpt-4.1" },
+            });
+
+            const imageDecision = result.decisions.find(
+              (decision) => decision.capability === "image",
+            );
+            // The lone selected attachment leaves nothing to marker, so the
+            // probe never fires and catalog failure cannot reach this path.
+            expect(result.appliedImage).toBe(true);
+            expect(imageDecision?.outcome).toBe("success");
+            expect(imageDecision?.attachmentDispositions).toEqual({ 0: { kind: "handled" } });
+            expect(imageDecision).not.toHaveProperty("nativeVisionActive");
+          },
+        );
+      },
+    );
+  });
+
+  it("keeps disabled outcomes precise and suppresses markers when the vision probe fails", async () => {
+    const ctx: MsgContext = {
+      Body: "inspect this image",
+      media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+    };
+
+    await loadModelCatalog.withImplementation(
+      async () => {
+        throw new Error("catalog unavailable");
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({
+          ctx,
+          cfg: { tools: { media: { image: { enabled: false } } } },
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        const imageDecision = result.decisions.find((d) => d.capability === "image");
+        expect(imageDecision).toMatchObject({
+          outcome: "disabled",
+          attachmentDispositions: { 0: { kind: "capability-disabled" } },
+        });
+        // Probe failure leaves the flag unknown: no false delivery claim, no marker.
+        expect(imageDecision).not.toHaveProperty("nativeVisionActive");
+        expect(ctx.Body).not.toContain("not analyzed");
+      },
+    );
+  });
+
+  it("renders disabled markers when the active model has no native vision", async () => {
+    const ctx: MsgContext = {
+      Body: "inspect this image",
+      media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg: { tools: { media: { image: { enabled: false } } } },
+    });
+
+    expect(result.decisions).toContainEqual(
+      expect.objectContaining({
+        capability: "image",
+        outcome: "disabled",
+        nativeVisionActive: false,
+        attachmentDispositions: { 0: { kind: "capability-disabled" } },
+      }),
+    );
+    expect(ctx.Body).toContain("[Image attachment not analyzed: image understanding is disabled]");
   });
 
   it("skips agents.defaults.imageModel fallback when MiniMax M3 supports vision", async () => {
@@ -298,6 +477,10 @@ describe("runCapability image skip", () => {
         let describeCalls = 0;
         const msgCtx = ctx as MsgContext;
         msgCtx.Body = "please inspect this explicit image";
+        msgCtx.media = Array.from({ length: 4 }, () => ({
+          path: mediaPath,
+          contentType: "image/png",
+        }));
         const cfg = {
           tools: {
             media: {
@@ -333,8 +516,17 @@ describe("runCapability image skip", () => {
         const imageDecision = result.decisions.find((decision) => decision.capability === "image");
         expect(result.appliedImage).toBe(true);
         expect(imageDecision?.outcome).toBe("success");
+        expect(imageDecision).toMatchObject({
+          nativeVisionActive: true,
+          attachmentDispositions: {
+            1: { kind: "not-selected" },
+            2: { kind: "not-selected" },
+            3: { kind: "not-selected" },
+          },
+        });
         expect(describeCalls).toBe(1);
         expect(msgCtx.Body).toContain(plantedVisionSentinel);
+        expect(msgCtx.Body).not.toContain("attachment limit reached");
       },
     );
   });
@@ -383,7 +575,7 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(requireCapabilityOutput(result, 0)).toEqual({
+        expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
           kind: "image.description",
           attachmentIndex: 0,
           provider: "openrouter",
@@ -471,6 +663,46 @@ describe("runCapability image skip", () => {
     });
   });
 
+  it("uses a valid imageModel fallback after a malformed primary", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "openrouter/",
+            fallbacks: ["openrouter/google/gemini-2.5-flash"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(resolveAutoImageModel({ cfg })).resolves.toEqual({
+      provider: "openrouter",
+      model: "google/gemini-2.5-flash",
+    });
+  });
+
+  it("resolves a providerless imageModel on its unique configured provider", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          imageModel: { primary: "moondream" },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            models: [{ id: "moondream", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(resolveAutoImageModel({ cfg })).resolves.toEqual({
+      provider: "ollama",
+      model: "moondream",
+    });
+  });
+
   it("runs providerless configured imageModel fallbacks on the unique configured provider", async () => {
     await withMediaFixture(
       {
@@ -532,14 +764,17 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(requireCapabilityOutput(result, 0)).toEqual({
+        expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
           kind: "image.description",
           attachmentIndex: 0,
           provider: "ollama",
           model: "qwen2.5vl:7b",
           text: "ok qwen2.5vl:7b",
         });
-        const attachment = requireDecisionAttachment(result, 0);
+        const attachment = expectDefined(
+          result.decision.attachments[0],
+          "media decision attachment 0",
+        );
         expect(attachment.attempts).toEqual([
           expect.objectContaining({
             type: "provider",
@@ -677,7 +912,7 @@ describe("runCapability image skip", () => {
           });
 
           expect(result.decision.outcome).toBe("success");
-          expect(requireCapabilityOutput(result, 0)).toEqual({
+          expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
             kind: "image.description",
             attachmentIndex: 0,
             provider: "minimax-portal",
@@ -743,7 +978,7 @@ describe("runCapability image skip", () => {
 
           expect(result.decision.outcome).toBe("success");
           expect(seenProviders).toEqual(["minimax-cn"]);
-          expect(requireCapabilityOutput(result, 0)).toEqual({
+          expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
             kind: "image.description",
             attachmentIndex: 0,
             provider: "minimax-cn",
@@ -814,7 +1049,7 @@ describe("runCapability image skip", () => {
 
         expect(result.decision.outcome).toBe("success");
         expect(seenModel).toBe("MiniMax-VL-01");
-        expect(requireCapabilityOutput(result, 0)).toMatchObject({
+        expect(expectDefined(result.outputs[0], "media output 0")).toMatchObject({
           provider: "minimax",
           model: "MiniMax-VL-01",
           text: "vlm ok",
@@ -872,7 +1107,7 @@ describe("runCapability image skip", () => {
 
         expect(result.decision.outcome).toBe("success");
         expect(seenProviders).toEqual(["google"]);
-        expect(requireCapabilityOutput(result, 0)).toEqual({
+        expect(expectDefined(result.outputs[0], "media output 0")).toEqual({
           kind: "image.description",
           attachmentIndex: 0,
           provider: "google",
@@ -935,11 +1170,20 @@ describe("runCapability image skip", () => {
       await expect(
         resolveAutoImageModel({
           cfg,
+          agentId: "image-agent",
+          agentDir: "/tmp/openclaw-agent",
+          workspaceDir: "/tmp/openclaw-workspace",
           activeModel: { provider: "openrouter", model: "google/gemini-2.5-flash" },
         }),
       ).resolves.toEqual({
         provider: "openrouter",
         model: "google/gemini-2.5-flash",
+      });
+      expect(loadModelCatalog).toHaveBeenCalledWith({
+        config: cfg,
+        agentId: "image-agent",
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
       });
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());
@@ -989,7 +1233,7 @@ describe("runCapability image skip", () => {
           });
 
           expect(result.decision.outcome).toBe("success");
-          expect(requireCapabilityOutput(result, 0)).toMatchObject({
+          expect(expectDefined(result.outputs[0], "media output 0")).toMatchObject({
             provider: "workspace-vision",
             model: "vision-v1",
             text: "workspace auth ok",
@@ -1052,7 +1296,7 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        const output = requireCapabilityOutput(result, 0);
+        const output = expectDefined(result.outputs[0], "media output 0");
         expect(output.provider).toBe("openrouter");
         expect(output.model).toBe("auto");
         expect(output.text).toBe("openrouter ok");

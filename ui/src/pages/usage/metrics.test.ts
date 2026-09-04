@@ -2,6 +2,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildAggregatesFromSessions,
   buildPeakErrorHours,
   formatUsageCost,
   formatUsageTokens,
@@ -66,6 +67,108 @@ function peakErrorSummaries(result: ReturnType<typeof buildPeakErrorHours>) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("usage aggregate model identity", () => {
+  it("keeps colon-bearing provider and model identities distinct", () => {
+    const session = (
+      key: string,
+      provider: string,
+      model: string,
+      dailyProvider: string,
+      dailyModel: string,
+      totalCost: number,
+    ): UsageSessionEntry => {
+      const totals = {
+        input: 1,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 1,
+        totalCost,
+        inputCost: totalCost,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      };
+      return {
+        key,
+        usage: {
+          ...totals,
+          modelUsage: [{ provider, model, count: 1, totals }],
+          dailyModelUsage: [
+            {
+              date: "2026-02-01",
+              provider: dailyProvider,
+              model: dailyModel,
+              tokens: 1,
+              cost: totalCost,
+              count: 1,
+            },
+          ],
+        },
+      };
+    };
+
+    const aggregates = buildAggregatesFromSessions([
+      session("current", "fixture", "bedrock::arn", "fixture", "bedrock:arn", 0.02),
+      session("old", "fixture::bedrock", "arn", "fixture:bedrock", "arn", 0.01),
+    ]);
+
+    expect(aggregates.byModel).toMatchObject([
+      { provider: "fixture", model: "bedrock::arn" },
+      { provider: "fixture::bedrock", model: "arn" },
+    ]);
+    expect(aggregates.modelDaily).toMatchObject([
+      { provider: "fixture", model: "bedrock:arn" },
+      { provider: "fixture:bedrock", model: "arn" },
+    ]);
+  });
+
+  it("preserves missing-cost attribution and token ranking when filtering sessions", () => {
+    const session = (agentId: string, model: string, tokens: number): UsageSessionEntry => {
+      const totals = {
+        input: tokens,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: tokens,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 1,
+        missingCostByModel: { [`fixture/${model}`]: 1 },
+      };
+      return {
+        key: `agent:${agentId}:session`,
+        agentId,
+        channel: "webchat",
+        usage: { ...totals, modelUsage: [{ provider: "fixture", model, count: 1, totals }] },
+      };
+    };
+
+    const aggregates = buildAggregatesFromSessions([
+      session("first", "small", 10),
+      session("second", "large", 100),
+    ]);
+
+    expect(aggregates.byProvider[0]?.totals.missingCostByModel).toEqual({
+      "fixture/small": 1,
+      "fixture/large": 1,
+    });
+    expect(aggregates.byAgent.map(({ totals }) => totals.missingCostByModel)).toEqual([
+      { "fixture/small": 1 },
+      { "fixture/large": 1 },
+    ]);
+    expect(aggregates.byChannel[0]?.totals.missingCostByModel).toEqual({
+      "fixture/small": 1,
+      "fixture/large": 1,
+    });
+    expect(aggregates.byModel.map(({ model }) => model)).toEqual(["large", "small"]);
+  });
 });
 
 describe("buildPeakErrorHours", () => {

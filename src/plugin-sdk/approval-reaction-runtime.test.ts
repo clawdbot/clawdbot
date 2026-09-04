@@ -7,11 +7,11 @@ import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   APPROVAL_REACTION_BINDINGS,
   buildApprovalPendingPromptPayload,
+  buildApprovalReactionDeliveredBindingMarker,
   buildApprovalReactionPendingContentForRequest,
   buildApprovalReactionPromptPayloadForRequest,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
-  extractApprovalReactionPromptBinding,
   listApprovalReactionBindings,
   normalizeApprovalReactionEmoji,
   readApprovalReactionDecisionList,
@@ -91,32 +91,6 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     }
   });
 
-  it("extracts only canonical approval prompts and preserves strict reply-only channels", () => {
-    const text = [
-      "**Plugin approval required**",
-      "**ID:** plugin:approval-123",
-      "Allow Once: /approve plugin:approval-123 allow-once",
-      "Reply with: /approve plugin:approval-123 deny|always",
-    ].join("\n");
-    expect(extractApprovalReactionPromptBinding({ text })).toEqual({
-      approvalId: "plugin:approval-123",
-      approvalKind: "plugin",
-      allowedDecisions: ["allow-once", "deny", "allow-always"],
-    });
-    expect(
-      extractApprovalReactionPromptBinding({
-        text,
-        approvalKind: "plugin",
-        replyInstructionOnly: true,
-      }),
-    ).toMatchObject({ allowedDecisions: ["deny", "allow-always"] });
-    expect(
-      extractApprovalReactionPromptBinding({
-        text: "Helpful example:\n/approve plugin:approval-123 allow-once",
-      }),
-    ).toBeNull();
-  });
-
   it("fails closed when typed approval presentation or delivery marker disagrees", () => {
     const metadata = {
       approvalId: "plugin:approval-123",
@@ -144,9 +118,13 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       presentation,
       channelData: {
         execApproval: metadata,
-        privateBinding: { version: 1, ...metadata },
+        privateBinding: buildApprovalReactionDeliveredBindingMarker({
+          ...metadata,
+          allowedDecisions: [...metadata.allowedDecisions],
+        }),
       },
     };
+    expect(payload.channelData.privateBinding).toEqual({ version: 1, ...metadata });
     expect(readApprovalReactionPresentationBinding({ payload })).toMatchObject(metadata);
     expect(
       readApprovalReactionDeliveredBinding({
@@ -239,13 +217,22 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
   });
 
   it("builds canonical exec reaction prompts without presentation controls", () => {
-    const payload = buildApprovalReactionPromptPayloadForRequest({
-      request: execRequest,
+    const content = buildApprovalReactionPendingContentForRequest({
+      request: {
+        ...execRequest,
+        request: {
+          ...execRequest.request,
+          scope: { kind: "payment", amount: "49.99", currency: "EUR", target: "Stripe" },
+        },
+      },
       nowMs: 1_000,
     });
+    const payload = content.reactionPayload;
 
     expect(payload.text).toContain("**Exec approval required**\n**ID:** exec-approval-123");
     expect(payload.text).toContain("**Pending command:**\n```sh\ntouch /tmp/foo\n```");
+    expect(payload.text).toContain("**Scope:** Pay 49.99 EUR to Stripe");
+    expect(content.manualFallbackPayload.text).toContain("Scope: Pay 49.99 EUR to Stripe");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny");
     expect(payload.text).toContain("Allow Once: /approve exec-approval-123 allow-once");
     expect(payload.text).toContain("Allow Always: /approve exec-approval-123 allow-always");
@@ -309,6 +296,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
         request: {
           ...pluginRequest.request,
           allowedDecisions: ["allow-once", "deny"],
+          scope: { kind: "external-post", target: "github", visibility: "public" },
         },
       },
       nowMs: 1_000,
@@ -316,6 +304,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
 
     expect(payload.text).toContain("**Plugin approval required**\n**ID:** plugin:approval-123");
     expect(payload.text).toContain("**Title:** Use 1Password");
+    expect(payload.text).toContain("**Scope:** Post publicly to github");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
     expect(payload.text).not.toContain("♾️ Allow Always");
     expect(payload.text).toContain("Allow Once: /approve plugin:approval-123 allow-once");

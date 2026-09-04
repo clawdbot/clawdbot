@@ -44,7 +44,7 @@ export default defineSingleProviderPluginEntry({
     buildReplayPolicy: () => buildMistralReplayPolicy(),
   },
   register(api) {
-    api.registerMemoryEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
     api.registerRealtimeTranscriptionProvider(buildMistralRealtimeTranscriptionProvider());
   },

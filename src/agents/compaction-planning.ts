@@ -3,6 +3,8 @@
  * token usage, chooses chunking strategy, and preserves active tool-use pairs
  * while splitting history for summaries.
  */
+import { estimateTokens } from "../../packages/agent-core/src/harness/compaction/compaction.js";
+import { createToolCallOccurrenceQueue } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   projectCompactionPlanningMessages,
   readCompactionPlanningOmittedChars,
@@ -10,7 +12,6 @@ import {
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
-import { estimateTokens } from "./sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 /** Default share of context window targeted for compaction chunks. */
@@ -109,7 +110,7 @@ function groupCompactionMessages(
   const groups: CompactionMessageGroup[] = [];
   let current: AgentMessage[] = [];
   let currentTokens = 0;
-  let pendingToolCallIds = new Set<string>();
+  let pendingToolCalls = createToolCallOccurrenceQueue<true>();
 
   for (const [index, message] of messages.entries()) {
     current.push(message);
@@ -121,19 +122,22 @@ function groupCompactionMessages(
         stopReason === "aborted" || stopReason === "error"
           ? []
           : extractToolCallsFromAssistant(message);
-      pendingToolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
-    } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
+      pendingToolCalls = createToolCallOccurrenceQueue();
+      for (const toolCall of toolCalls) {
+        pendingToolCalls.add(toolCall.id, true);
+      }
+    } else if (message.role === "toolResult" && pendingToolCalls.size > 0) {
       const resultId = extractToolResultId(message);
       if (resultId) {
-        pendingToolCallIds.delete(resultId);
+        pendingToolCalls.claim(resultId);
       } else {
-        pendingToolCallIds.clear();
+        pendingToolCalls.clear();
       }
     }
 
     // A displaced user turn still belongs to an unfinished call/result batch;
     // splitting it would make one of the resulting provider transcripts invalid.
-    if (pendingToolCallIds.size === 0) {
+    if (pendingToolCalls.size === 0) {
       groups.push({ messages: current, tokens: currentTokens });
       current = [];
       currentTokens = 0;
@@ -220,12 +224,6 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
   }
 
   return BASE_CHUNK_RATIO;
-}
-
-/** Returns whether one message exceeds the safe summarization context share. */
-export function isOversizedForSummary(msg: AgentMessage, contextWindow: number): boolean {
-  const tokens = estimateMessagesTokens([msg]) * SAFETY_MARGIN;
-  return tokens > contextWindow * 0.5;
 }
 
 /** Builds sanitized chunks for summarization prompts. */
@@ -326,10 +324,11 @@ function pruneHistoryForContextShare(params: {
   let keptMessages = params.messages;
   const allDroppedMessages: AgentMessage[] = [];
   let droppedChunks = 0;
-  let droppedMessages = 0;
-  let droppedTokens = 0;
 
   const parts = normalizeCompactionParts(params.parts ?? DEFAULT_PARTS, keptMessages.length);
+  const originalMessageIndexes = new Map(
+    params.messages.map((message, index) => [message, index] as const),
+  );
 
   while (keptMessages.length > 0 && estimateMessagesTokens(keptMessages) > budgetTokens) {
     const chunks = splitMessagesByTokenShare(keptMessages, parts);
@@ -338,21 +337,27 @@ function pruneHistoryForContextShare(params: {
     }
     const dropped = chunks[0]!;
     // Dropping a call owner also drops orphaned results; providers reject replay without the pair.
-    const repairReport = repairToolUseResultPairing(chunks.slice(1).flat());
+    const retained = chunks.slice(1).flat();
+    const repairReport = repairToolUseResultPairing(retained);
+    const repairedDropped = repairReport.discarded;
 
     droppedChunks += 1;
-    droppedMessages += dropped.length + repairReport.droppedOrphanCount;
-    droppedTokens += estimateMessagesTokens(dropped);
-    allDroppedMessages.push(...dropped);
+    allDroppedMessages.push(...dropped, ...repairedDropped);
     keptMessages = repairReport.messages;
   }
+
+  allDroppedMessages.sort(
+    (left, right) =>
+      (originalMessageIndexes.get(left) ?? params.messages.length) -
+      (originalMessageIndexes.get(right) ?? params.messages.length),
+  );
 
   return {
     messages: keptMessages,
     droppedMessagesList: allDroppedMessages,
     droppedChunks,
-    droppedMessages,
-    droppedTokens,
+    droppedMessages: allDroppedMessages.length,
+    droppedTokens: estimateMessagesTokens(allDroppedMessages),
     keptTokens: estimateMessagesTokens(keptMessages),
     budgetTokens,
   };

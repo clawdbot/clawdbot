@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase } from "./lib/npm-publish-plan.mjs";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
@@ -13,13 +13,13 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "./lib/package-dist-inventory.ts";
+import { isRecord } from "./lib/record-shared.mjs";
 import {
   compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
   parseReleaseVersion as parseReleaseVersionBase,
-  type ParsedReleaseVersion,
 } from "./lib/release-version.mjs";
-import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type PackageJson = {
@@ -43,6 +43,18 @@ type ParsedReleaseTag = {
   correctionNumber?: number;
 };
 
+type ParsedReleaseVersion = {
+  alphaNumber?: number;
+  baseVersion: string;
+  betaNumber?: number;
+  channel: "stable" | "alpha" | "beta";
+  correctionNumber?: number;
+  month: number;
+  patch: number;
+  version: string;
+  year: number;
+};
+
 type NpmPublishPlan = {
   channel: "stable" | "alpha" | "beta";
   publishTag: "latest" | "alpha" | "beta";
@@ -54,7 +66,6 @@ type NpmDistTagMirrorAuth = {
   source: "node-auth-token" | "npm-token" | "none";
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
-const OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE = "node-llama-cpp";
 const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -350,29 +361,9 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
       `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
   }
-  if (pkg.dependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
-    errors.push(
-      `package.json dependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
-    );
-  }
   if (isLocalDependencySpec(pkg.dependencies?.[FS_SAFE_PACKAGE])) {
     errors.push(
       `package.json dependencies["${FS_SAFE_PACKAGE}"] must use a published semver range before npm release; found "${pkg.dependencies?.[FS_SAFE_PACKAGE]}".`,
-    );
-  }
-  if (pkg.optionalDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
-    errors.push(
-      `package.json optionalDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it operator-installed.`,
-    );
-  }
-  if (pkg.peerDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
-    errors.push(
-      `package.json peerDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
-    );
-  }
-  if (pkg.peerDependenciesMeta?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
-    errors.push(
-      `package.json peerDependenciesMeta["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
     );
   }
 
@@ -528,13 +519,10 @@ function runNpmCommand(args: string[]): string {
   });
 }
 
-type NpmPackFileEntry = {
-  path?: string;
-};
-
-type NpmPackResult = {
+export type NpmPackResult = {
   filename?: string;
-  files?: NpmPackFileEntry[];
+  files?: { path: string }[];
+  unpackedSize?: number;
 };
 
 type ExecFailure = Error & {
@@ -584,11 +572,19 @@ export function parseNpmPackJsonOutput(stdout: string): NpmPackResult[] | null {
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate) as unknown;
-      const entries = resolveNpmJsonEntries(parsed).filter(
-        (entry): entry is NpmPackResult =>
-          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
-      );
-      if (entries.length > 0) {
+      const entries = resolveNpmJsonEntries(parsed);
+      if (
+        entries.length > 0 &&
+        entries.every(
+          (entry): entry is NpmPackResult =>
+            isRecord(entry) &&
+            (entry.filename === undefined || typeof entry.filename === "string") &&
+            (entry.unpackedSize === undefined || typeof entry.unpackedSize === "number") &&
+            (entry.files === undefined ||
+              (Array.isArray(entry.files) &&
+                entry.files.every((file) => isRecord(file) && typeof file.path === "string"))),
+        )
+      ) {
         return entries;
       }
     } catch {

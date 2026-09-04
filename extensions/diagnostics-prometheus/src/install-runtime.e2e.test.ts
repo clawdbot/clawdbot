@@ -1,12 +1,16 @@
 // Proves the external Prometheus plugin's managed install and trusted runtime boundary.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { stopChildProcess } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
@@ -14,31 +18,19 @@ const packageName = "@openclaw/diagnostics-prometheus";
 const pluginId = "diagnostics-prometheus";
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const pluginRoot = path.resolve(import.meta.dirname, "..");
-const tempDirs: string[] = [];
+const tempWorkspaces: TempWorkspace[] = [];
 const children: ChildProcess[] = [];
 
-async function stopChild(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  const exited = once(child, "exit").then(() => true);
-  child.kill("SIGTERM");
-  if (!(await Promise.race([exited, delay(5_000, false)]))) {
-    child.kill("SIGKILL");
-    await Promise.race([exited, delay(5_000)]);
-  }
-}
-
 afterEach(async () => {
-  await Promise.all(children.splice(0).map(stopChild));
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  const stopped = await Promise.allSettled(
+    children.splice(0).map((child) => stopChildProcess(child, 5_000)),
+  );
+  const errors = stopped.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "failed to stop Prometheus E2E children");
+  }
+  await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prometheus-install-"));
-  tempDirs.push(dir);
-  return dir;
-}
 
 async function reservePort(): Promise<number> {
   const server = net.createServer();
@@ -106,7 +98,10 @@ async function runCli(args: string[], env: NodeJS.ProcessEnv, build = false): Pr
   return result.stdout;
 }
 
-async function packPlugin(outputDir: string): Promise<{
+async function packPlugin(
+  outputDir: string,
+  version: string,
+): Promise<{
   files: string[];
   tarballPath: string;
 }> {
@@ -124,7 +119,7 @@ async function packPlugin(outputDir: string): Promise<{
     maxBuffer: 2 * 1024 * 1024,
     timeout: 60_000,
   });
-  const result = await execFileAsync(
+  await execFileAsync(
     process.execPath,
     [
       "scripts/lib/plugin-npm-package-manifest.mjs",
@@ -133,7 +128,6 @@ async function packPlugin(outputDir: string): Promise<{
       "--",
       "npm",
       "pack",
-      "--json",
       "--ignore-scripts",
       "--pack-destination",
       outputDir,
@@ -148,20 +142,21 @@ async function packPlugin(outputDir: string): Promise<{
       timeout: 60_000,
     },
   );
-  const entries = JSON.parse(result.stdout) as Array<{
-    filename?: string;
-    files?: Array<{ path?: string }>;
-  }>;
-  const entry = entries[0];
-  const filename = entry?.filename;
-  if (!filename) {
-    throw new Error("npm pack did not report the diagnostics-prometheus tarball");
-  }
+  const tarballPath = path.join(
+    outputDir,
+    `${packageName.replace(/^@/, "").replace("/", "-")}-${version}.tgz`,
+  );
+  expect((await fs.stat(tarballPath)).isFile()).toBe(true);
+  const entries = await execFileAsync("tar", ["-tzf", tarballPath], {
+    maxBuffer: 2 * 1024 * 1024,
+    timeout: 60_000,
+  });
   return {
-    files: (entry.files ?? []).flatMap((file) =>
-      typeof file.path === "string" ? [file.path] : [],
-    ),
-    tarballPath: path.join(outputDir, filename),
+    files: entries.stdout
+      .trim()
+      .split(/\r?\n/u)
+      .map((file) => file.replace(/^package\//u, "")),
+    tarballPath,
   };
 }
 
@@ -260,7 +255,12 @@ async function waitForGateway(params: {
 
 describe("diagnostics-prometheus managed install runtime", () => {
   it("installs the exact official package and exports metrics at Gateway startup", async () => {
-    const root = await makeTempDir();
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-prometheus-install-",
+    });
+    tempWorkspaces.push(workspace);
+    const root = workspace.dir;
     const home = path.join(root, "home");
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -288,7 +288,7 @@ describe("diagnostics-prometheus managed install runtime", () => {
     );
 
     const pluginVersion = await readPluginVersion();
-    const packedPlugin = await packPlugin(root);
+    const packedPlugin = await packPlugin(root, pluginVersion);
     expect(packedPlugin.files.some((file) => /^dist\/index\.(?:js|mjs|cjs)$/u.test(file))).toBe(
       true,
     );
@@ -304,7 +304,11 @@ describe("diagnostics-prometheus managed install runtime", () => {
       stateDir,
     });
 
-    await runCli(["plugins", "install", `npm:${packageName}@${pluginVersion}`], env, true);
+    await runCli(
+      ["plugins", "install", `npm:${packageName}@${pluginVersion}`, "--accept-capabilities"],
+      env,
+      true,
+    );
     const inspect = JSON.parse(
       await runCli(["plugins", "inspect", pluginId, "--runtime", "--json"], env),
     ) as {

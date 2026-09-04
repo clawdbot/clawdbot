@@ -67,11 +67,7 @@ describe("parseZalouserTextStyles blocks", () => {
     {
       name: "four-column bullet child becomes a nested native list",
       input: "- parent\n    - child",
-      before: {
-        text: `parent\n${"\u00A0".repeat(4)}- child`,
-        styles: [{ start: 0, len: 6, st: TextStyle.UnorderedList }],
-      },
-      after: {
+      expected: {
         text: "parent\nchild",
         styles: [
           { start: 0, len: 6, st: TextStyle.UnorderedList },
@@ -83,14 +79,7 @@ describe("parseZalouserTextStyles blocks", () => {
     {
       name: "ordered child gains parser-owned nesting",
       input: "1. parent\n   1. child",
-      before: {
-        text: "parent\nchild",
-        styles: [
-          { start: 0, len: 6, st: TextStyle.OrderedList },
-          { start: 7, len: 5, st: TextStyle.OrderedList },
-        ],
-      },
-      after: {
+      expected: {
         text: "parent\nchild",
         styles: [
           { start: 0, len: 6, st: TextStyle.OrderedList },
@@ -102,11 +91,7 @@ describe("parseZalouserTextStyles blocks", () => {
     {
       name: "wide ordered parent owns its bullet child",
       input: "10. parent\n    - child",
-      before: {
-        text: `parent\n${"\u00A0".repeat(4)}- child`,
-        styles: [{ start: 0, len: 6, st: TextStyle.OrderedList }],
-      },
-      after: {
+      expected: {
         text: "parent\nchild",
         styles: [
           { start: 0, len: 6, st: TextStyle.OrderedList },
@@ -118,11 +103,7 @@ describe("parseZalouserTextStyles blocks", () => {
     {
       name: "lazy continuation remains owned by one native item",
       input: "- parent\n  continuation",
-      before: {
-        text: "parent\n  continuation",
-        styles: [{ start: 0, len: 6, st: TextStyle.UnorderedList }],
-      },
-      after: {
+      expected: {
         text: "parent\ncontinuation",
         styles: [{ start: 0, len: 19, st: TextStyle.UnorderedList }],
       },
@@ -130,14 +111,7 @@ describe("parseZalouserTextStyles blocks", () => {
     {
       name: "loose continuation remains inside its native item",
       input: "- first\n\n  continuation\n- next",
-      before: {
-        text: "first\n\n  continuation\nnext",
-        styles: [
-          { start: 0, len: 5, st: TextStyle.UnorderedList },
-          { start: 22, len: 4, st: TextStyle.UnorderedList },
-        ],
-      },
-      after: {
+      expected: {
         text: "first\n\ncontinuation\nnext",
         styles: [
           { start: 0, len: 19, st: TextStyle.UnorderedList },
@@ -148,11 +122,7 @@ describe("parseZalouserTextStyles blocks", () => {
     {
       name: "nested task child keeps checkbox fallback without a native bullet",
       input: "- parent\n  - [ ] child",
-      before: {
-        text: "parent\n- [ ] child",
-        styles: [{ start: 0, len: 6, st: TextStyle.UnorderedList }],
-      },
-      after: {
+      expected: {
         text: "parent\n[ ] child",
         styles: [
           { start: 0, len: 6, st: TextStyle.UnorderedList },
@@ -160,9 +130,8 @@ describe("parseZalouserTextStyles blocks", () => {
         ],
       },
     },
-  ])("documents CommonMark list before and after: $name", ({ input, before, after }) => {
-    expect(before).not.toEqual(after);
-    expect(parseZalouserTextStyles(input)).toEqual(after);
+  ])("renders CommonMark lists: $name", ({ input, expected }) => {
+    expect(parseZalouserTextStyles(input)).toEqual(expected);
   });
 
   it("keeps a top-level four-space list-looking line as indented code", () => {

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 324587,
-  "reason": "multi-gateway footer subtitle plus accumulated main drift (PR #114059), then the Memory settings surface: its i18n strings plus the rendering-free memory-schema facts settings search reads at startup",
-  "updatedAt": "2026-07-26"
+  "startupJsGzipBytes": 349565,
+  "reason": "Integrated Control UI and dependency changes since the 348668 B baseline, including chat face/visibility, locale, first-render, Meetings, and Appearance work, now measure 349565 B (+897 B, 0.26%); an independent exact-head build measured 349533 B (32 B lower, within the 64 B build-variance allowance); fixed 358400 B cap and existing allowances retained",
+  "updatedAt": "2026-09-03"
 }

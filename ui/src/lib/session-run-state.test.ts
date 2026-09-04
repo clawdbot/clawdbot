@@ -19,4 +19,9 @@ describe("isSessionRunActive", () => {
     expect(isSessionRunActive({ status: "running" })).toBe(true);
     expect(isSessionRunActive({ hasActiveRun: true })).toBe(true);
   });
+
+  it("keeps queued work active before execution starts", () => {
+    expect(isSessionRunActive({ status: "queued", hasActiveRun: true })).toBe(true);
+    expect(isSessionRunActive({ status: "queued" })).toBe(true);
+  });
 });

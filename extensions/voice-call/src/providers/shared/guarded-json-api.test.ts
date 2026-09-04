@@ -1,5 +1,6 @@
 // Voice Call tests cover guarded json api plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../../../test-support/streaming-error-response.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -10,28 +11,6 @@ vi.mock("../../../api.js", () => ({
 }));
 
 import { guardedJsonApiRequest } from "./guarded-json-api.js";
-
-function cancelTrackedTextResponse(
-  text: string,
-  init?: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
 
 describe("guardedJsonApiRequest", () => {
   beforeEach(() => {
@@ -190,6 +169,42 @@ describe("guardedJsonApiRequest", () => {
     expect(caught?.message).not.toContain("tail");
     expect(caught?.message.length).toBeLessThan(8_300);
     expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts credential-bearing content from provider error bodies", async () => {
+    const release = vi.fn(async () => {});
+    const secretBasic = "QUMxMjM6c3VwZXItc2VjcmV0LWF1dGgtdG9rZW4";
+    const secretApiKey = "sk-live-1234567890abcdef";
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          message: "Authentication failed",
+          detail: `Authorization: Basic ${secretBasic} rejected; retry with api_key=${secretApiKey}`,
+        }),
+        { status: 401 },
+      ),
+      release,
+    });
+
+    let caught: Error | undefined;
+    try {
+      await guardedJsonApiRequest({
+        url: "https://api.example.com/v1/calls/9",
+        method: "POST",
+        headers: { Authorization: `Basic ${secretBasic}` },
+        allowedHostnames: ["api.example.com"],
+        auditContext: "voice-call:test",
+        errorPrefix: "provider error",
+      });
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("provider error: 401 ");
+    expect(caught?.message).not.toContain(secretBasic);
+    expect(caught?.message).not.toContain(secretApiKey);
+    expect(caught?.message).toContain("***");
     expect(release).toHaveBeenCalledTimes(1);
   });
 

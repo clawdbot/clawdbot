@@ -9,7 +9,10 @@ import type {
   QaLabRunSelection,
 } from "../runner-contract.js";
 import { defaultQaModelForMode as defaultStaticQaModelForMode } from "./model-selection.js";
-import { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
+import {
+  defaultQaRuntimeModelForMode,
+  resolveQaRuntimeModelPair,
+} from "./model-selection.runtime.js";
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
@@ -73,8 +76,7 @@ function createDefaultQaRunSelection(
     channelDriver: profile.channelDriver,
     evidenceMode: profile.evidenceMode,
     providerMode,
-    primaryModel: resolveDefaultModel(providerMode),
-    alternateModel: resolveDefaultModel(providerMode, true),
+    ...resolveQaRuntimeModelPair({ providerMode, resolveDefaultModel }),
     fastMode: getQaProvider(providerMode).kind === "live",
     runtimePair: null,
     runtimePairLane: null,
@@ -91,11 +93,6 @@ export function normalizeQaProviderMode(input: unknown): QaProviderMode {
   }
   const details = typeof input === "string" ? `: ${input}` : "";
   throw new Error(`unknown QA provider mode${details}`);
-}
-
-function normalizeModel(input: unknown, fallback: string) {
-  const value = typeof input === "string" ? input.trim() : "";
-  return value || fallback;
 }
 
 function normalizeScenarioIds(input: unknown, scenarios: QaSeedScenario[]): string[] | null {
@@ -230,17 +227,18 @@ export function normalizeQaRunSelection(
   const providerMode = normalizeQaProviderMode(
     payload.providerMode ?? (profile === "smoke-ci" ? "mock-openai" : undefined),
   );
+  const models = resolveQaRuntimeModelPair({
+    providerMode,
+    primaryModel: typeof payload.primaryModel === "string" ? payload.primaryModel : undefined,
+    alternateModel: typeof payload.alternateModel === "string" ? payload.alternateModel : undefined,
+  });
   return {
     profile,
     channel: normalizeQaChannel(payload.channel),
     channelDriver: normalizeQaChannelDriver(payload.channelDriver, profileDefaults.channelDriver),
     evidenceMode: normalizeQaEvidenceMode(payload.evidenceMode, profileDefaults.evidenceMode),
     providerMode,
-    primaryModel: normalizeModel(payload.primaryModel, defaultQaModelForMode(providerMode)),
-    alternateModel: normalizeModel(
-      payload.alternateModel,
-      defaultQaModelForMode(providerMode, true),
-    ),
+    ...models,
     fastMode: getQaProvider(providerMode).kind === "live" || payload.fastMode === true,
     runtimePair: normalizeQaRuntimePair(payload.runtimePair),
     runtimePairLane: normalizeQaRuntimePairLane(payload.runtimePairLane),

@@ -442,6 +442,10 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
   if (!(inputBytes instanceof Uint8Array)) {
     throw new Error("Plugin tarball bytes must be a Uint8Array.");
   }
+  const onFile = options.onFile;
+  if (onFile !== undefined && typeof onFile !== "function") {
+    throw new Error("Plugin tarball onFile option must be a function.");
+  }
   const tarballBytes = Buffer.from(inputBytes.buffer, inputBytes.byteOffset, inputBytes.byteLength);
   const limits = normalizeTarInspectionOptions(options);
   if (tarballBytes.length === 0 || tarballBytes.length > limits.maxArchiveBytes) {
@@ -585,6 +589,7 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
       type: "file",
     };
     inventory.push(entry);
+    onFile?.({ content, path: safePath });
     if (safePath === "package/package.json") {
       if (content.length === 0 || content.length > MAX_MANIFEST_BYTES) {
         throw new Error(

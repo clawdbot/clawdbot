@@ -6,7 +6,7 @@ enum GatewayDiscoveryPreferences {
     private static let preferredRouteBindingKey = "gateway.preferredStableIDRouteBinding.v1"
 
     static func preferredStableID() -> String? {
-        let defaults = UserDefaults.standard
+        let defaults = AppDefaults.standard
         let raw = defaults.string(forKey: self.preferredStableIDKey)
             ?? defaults.string(forKey: self.legacyPreferredStableIDKey)
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -16,19 +16,19 @@ enum GatewayDiscoveryPreferences {
     static func setPreferredStableID(_ stableID: String?) {
         // A caller without an endpoint binding cannot prove that a prior binding
         // belongs to this id. The bound overload installs a fresh one below.
-        UserDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
+        AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
         let trimmed = stableID?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmed, !trimmed.isEmpty {
-            UserDefaults.standard.set(trimmed, forKey: self.preferredStableIDKey)
-            UserDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
+            AppDefaults.standard.set(trimmed, forKey: self.preferredStableIDKey)
+            AppDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: self.preferredStableIDKey)
-            UserDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
+            AppDefaults.standard.removeObject(forKey: self.preferredStableIDKey)
+            AppDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
         }
     }
 
     static func preferredRouteBinding() -> String? {
-        let raw = UserDefaults.standard.string(forKey: self.preferredRouteBindingKey)
+        let raw = AppDefaults.standard.string(forKey: self.preferredRouteBindingKey)
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
     }
@@ -38,10 +38,10 @@ enum GatewayDiscoveryPreferences {
         guard self.preferredStableID() != nil,
               let routeBinding = self.normalized(routeBinding)
         else {
-            UserDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
+            AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
             return
         }
-        UserDefaults.standard.set(routeBinding, forKey: self.preferredRouteBindingKey)
+        AppDefaults.standard.set(routeBinding, forKey: self.preferredRouteBindingKey)
     }
 
     /// Discovery ids name one concrete Gateway. Persist the non-secret fallback
@@ -50,14 +50,16 @@ enum GatewayDiscoveryPreferences {
         connectionMode: AppState.ConnectionMode,
         remoteTransport: AppState.RemoteTransport,
         remoteURL: String,
-        remoteTarget: String) -> String?
+        remoteTarget: String,
+        root: [String: Any] = OpenClawConfigFile.loadDict()) -> String?
     {
         guard connectionMode == .remote else { return nil }
-        let defaultRemotePort = GatewayEnvironment.gatewayPort()
+        let defaultRemotePort = GatewayEnvironment.gatewayPort(root: root)
         let sshRemotePort: Int = if remoteTransport == .ssh {
             RemotePortTunnel.resolveRemotePortOverride(
                 defaultRemotePort: defaultRemotePort,
-                for: CommandResolver.parseSSHTarget(remoteTarget)?.host ?? "") ?? defaultRemotePort
+                for: CommandResolver.parseSSHTarget(remoteTarget)?.host ?? "",
+                root: root) ?? defaultRemotePort
         } else {
             defaultRemotePort
         }
@@ -74,30 +76,48 @@ enum GatewayDiscoveryPreferences {
     /// This intentionally ignores discovery ids: manual direct/SSH selections
     /// must still isolate device tokens before discovery has identified them.
     static func deviceAuthGatewayID(
+        root: [String: Any],
+        connectionMode: AppState.ConnectionMode? = nil) -> String?
+    {
+        let mode = connectionMode ?? ConnectionModeResolver.resolve(root: root).mode
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        return self.deviceAuthGatewayID(
+            connectionMode: mode,
+            remoteTransport: resolution.transport,
+            remoteURL: resolution.directURL?.absoluteString ?? GatewayRemoteConfig.resolveUrlString(root: root) ?? "",
+            remoteTarget: resolution.transport == .ssh ? CommandResolver.connectionSettings(configRoot: root)
+                .target : "",
+            root: root)
+    }
+
+    static func deviceAuthGatewayID(
         connectionMode: AppState.ConnectionMode,
         remoteTransport: AppState.RemoteTransport,
         remoteURL: String,
-        remoteTarget: String) -> String?
+        remoteTarget: String,
+        root: [String: Any] = OpenClawConfigFile.loadDict()) -> String?
     {
         if connectionMode == .remote {
             return self.routeBinding(
                 connectionMode: connectionMode,
                 remoteTransport: remoteTransport,
                 remoteURL: remoteURL,
-                remoteTarget: remoteTarget)
+                remoteTarget: remoteTarget,
+                root: root)
         }
         return OnboardingSystemAgentResumeStore.routeIdentity(
             connectionMode: connectionMode,
             preferredGatewayID: nil,
             remoteTransport: remoteTransport,
             remoteURL: remoteURL,
-            remoteTarget: remoteTarget)
+            remoteTarget: remoteTarget,
+            sshRemotePort: GatewayEnvironment.gatewayPort(root: root))
     }
 
     @discardableResult
     static func clearPreferredStableIDIfRouteBindingMismatch(_ currentRouteBinding: String?) -> Bool {
         guard self.preferredStableID() != nil else {
-            UserDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
+            AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
             return false
         }
         guard let stored = self.preferredRouteBinding(),

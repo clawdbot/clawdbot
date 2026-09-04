@@ -1,8 +1,9 @@
 // Session utility performance tests protect resolver cache scaling for large
 // session lists with repeated provider/model tuples.
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, describe, test, expect, vi } from "vitest";
+import { describe, test, expect, vi } from "vitest";
 import {
   readAcpSessionMetaBatch,
   readAcpSessionMetaForEntry,
@@ -15,10 +16,15 @@ import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import * as titleReader from "./session-transcript-title-reader.js";
-import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils.js";
+import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
+import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
+import * as rowProjection from "./session-utils-row.js";
+import { listSessionsFromStoreAsync } from "./session-utils.js";
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
@@ -31,115 +37,162 @@ import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-uti
  * CI runners cannot give a stable wall-time signal, and call-count regressions
  * are the actual scaling failure mode we care about.
  */
-describe("listSessionsFromStore resolver cache", () => {
-  beforeAll(async () => {
-    await withStateDirEnv("openclaw-perf-warm-", async ({ stateDir }) => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const cfg = {
-        agents: { defaults: { model: { primary: "google-vertex/gemini-3-flash-preview" } } },
-      } as OpenClawConfig;
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
-      listSessionsFromStore({
-        cfg,
-        storePath: path.join(stateDir, "sessions.json"),
-        store: {
-          google: {
-            sessionId: "google",
-            updatedAt: 1,
-            modelProvider: "google-vertex",
-            model: "gemini-3-flash-preview",
-          },
-          openai: {
-            sessionId: "openai",
-            updatedAt: 1,
-            modelProvider: "openai",
-            model: "gpt-5",
-          },
-          anthropic: {
-            sessionId: "anthropic",
-            updatedAt: 1,
-            modelProvider: "anthropic",
-            model: "claude-opus-4-7",
-          },
-          openrouter: {
-            sessionId: "openrouter",
-            updatedAt: 1,
-            modelProvider: "openrouter",
-            model: "z-ai/glm-5",
-          },
-        },
-        opts: {},
-      });
-    });
-  });
-
-  test("collapses non-lightweight per-row resolver work to O(unique provider/model tuples)", async () => {
-    await withStateDirEnv("openclaw-perf-", async ({ stateDir }) => {
-      resetPluginRuntimeStateForTest();
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: { model: { primary: "google-vertex/gemini-3-flash-preview" } },
-        },
-      } as OpenClawConfig;
-      resetConfigRuntimeState();
-      setRuntimeConfigSnapshot(cfg);
-
-      const tuples: Array<{ modelProvider: string; model: string }> = [
-        { modelProvider: "google-vertex", model: "gemini-3-flash-preview" },
-        { modelProvider: "openai", model: "gpt-5" },
-        { modelProvider: "anthropic", model: "claude-opus-4-7" },
-        { modelProvider: "openrouter", model: "z-ai/glm-5" },
-        { modelProvider: "google", model: "gemini-2.5-pro" },
-      ];
-
-      const store: Record<string, SessionEntry> = {};
-      const now = Date.now();
-      const rowCount = 30;
-      for (let i = 0; i < rowCount; i++) {
-        const tuple = expectDefined(
-          tuples[i % tuples.length],
-          "tuples[i % tuples.length] test invariant",
+describe("session list resolver cache", () => {
+  test.each([
+    { rowWorkMs: 0, shouldYield: false },
+    { rowWorkMs: 20, shouldYield: true },
+  ])(
+    "yields for row work rather than row count ($rowWorkMs ms)",
+    async ({ rowWorkMs, shouldYield }) => {
+      await withStateDirEnv("openclaw-list-work-budget-", async ({ stateDir }) => {
+        resetPluginRuntimeStateForTest();
+        setActivePluginRegistry(createEmptyPluginRegistry());
+        const cfg: OpenClawConfig = {};
+        resetConfigRuntimeState();
+        setRuntimeConfigSnapshot(cfg);
+        const store = Object.fromEntries(
+          Array.from({ length: 32 }, (_, index) => [
+            `agent:main:budget-${index}`,
+            { sessionId: `budget-${index}`, updatedAt: index + 1 },
+          ]),
         );
-        store[`agent:default:webchat:dm:${i}`] = {
-          updatedAt: now - i,
+        let workMs = 0;
+        const buildRow = rowProjection.buildGatewaySessionRow;
+        const clock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
+        const rows = vi
+          .spyOn(rowProjection, "buildGatewaySessionRow")
+          .mockImplementation((params) => {
+            const row = buildRow(params);
+            workMs += rowWorkMs;
+            return row;
+          });
+        let controlRan = false;
+        const controlCallback = new Promise<void>((resolve) => {
+          setImmediate(() => {
+            controlRan = true;
+            resolve();
+          });
+        });
+        try {
+          const result = await listSessionsFromStoreAsync({
+            cfg,
+            storePath: path.join(stateDir, "sessions.json"),
+            store,
+            opts: {},
+          });
+          expect(result.sessions.map((row) => row.key)).toEqual(Object.keys(store).toReversed());
+          expect(controlRan).toBe(shouldYield);
+        } finally {
+          rows.mockRestore();
+          clock.mockRestore();
+          await controlCallback;
+        }
+      });
+    },
+  );
+
+  test.each([
+    { name: "legacy flat estimate", recorded: undefined, tiered: false, expected: 0.00015 },
+    { name: "recorded per-call total", recorded: 0.25, tiered: true, expected: 0.25 },
+    { name: "recorded zero", recorded: 0, tiered: true, expected: 0 },
+    { name: "unknown tiered total", recorded: undefined, tiered: true, expected: undefined },
+  ])("bounds resolver work and preserves $name", ({ recorded, tiered, expected }) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "google-vertex/gemini-3-flash-preview" },
+          thinkingDefault: "off",
+        },
+      },
+    } as OpenClawConfig;
+    const tuples: Array<{ modelProvider: string; model: string }> = [
+      { modelProvider: "google-vertex", model: "gemini-3-flash-preview" },
+      { modelProvider: "openai", model: "gpt-5" },
+      { modelProvider: "anthropic", model: "claude-opus-4-7" },
+      { modelProvider: "openrouter", model: "z-ai/glm-5" },
+      { modelProvider: "google", model: "gemini-2.5-pro" },
+    ];
+    const now = Date.now();
+    const rowCount = 30;
+    const rowContext = buildSessionListRowMetadataContext({ now });
+    const thinkingSpy = vi
+      .spyOn(thinking, "resolveThinkingProfile")
+      .mockReturnValue({ levels: [{ id: "off", label: "Off", rank: 0 }], defaultLevel: "off" });
+    const costSpy = vi.spyOn(usageFormat, "resolveModelCostConfig").mockReturnValue({
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      ...(tiered
+        ? {
+            tieredPricing: [
+              {
+                input: 2,
+                output: 2,
+                cacheRead: 0,
+                cacheWrite: 0,
+                range: [0, Infinity] as [number, number],
+              },
+            ],
+          }
+        : {}),
+    });
+    try {
+      for (let index = 0; index < rowCount; index += 1) {
+        const tuple = expectDefined(
+          tuples[index % tuples.length],
+          "tuples[index % tuples.length] test invariant",
+        );
+        const sessionKey = `agent:default:webchat:dm:${index}`;
+        const entry: SessionEntry = {
+          sessionId: `cache-proof-${index}`,
+          updatedAt: now - index,
           modelProvider: tuple.modelProvider,
           model: tuple.model,
           inputTokens: 100,
           outputTokens: 50,
-        } as SessionEntry;
-      }
-
-      const thinkingSpy = vi.spyOn(thinking, "listThinkingLevelOptions");
-      const costSpy = vi.spyOn(usageFormat, "resolveModelCostConfig");
-      try {
-        const result = listSessionsFromStore({
+          estimatedCostUsd: recorded,
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: sessionKey,
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: now,
+          },
+        };
+        expect(
+          resolveGatewaySessionThinkingProjectionInternal({
+            cfg,
+            agentId: "default",
+            provider: tuple.modelProvider,
+            model: tuple.model,
+            sessionKey,
+            entry,
+            rowContext,
+          }).thinkingOptions,
+        ).toEqual(["Off"]);
+        const resolvedCost = resolveEstimatedSessionCostUsd({
           cfg,
-          storePath: path.join(stateDir, "sessions.json"),
-          store,
-          // sessions.list bounds responses to 100 rows by default; the perf
-          // smoke explicitly opts into the full set so the non-lightweight
-          // row builder exercises the display-identity, thinking-default, and
-          // model-cost caches at scale.
-          opts: { limit: rowCount },
+          provider: tuple.modelProvider,
+          model: tuple.model,
+          entry,
+          rowContext,
         });
-        expect(result.sessions.length).toBe(rowCount);
-
-        // The cache keys on rowContext are (provider, model) or
-        // (agentId, provider, model). With K=5 unique tuples we must see at
-        // most a small constant number of resolver calls, not O(N=30). A
-        // pre-cache regression would scale linearly and easily exceed the
-        // threshold below.
-        const cacheCallCeiling = tuples.length * 4;
-        expect(thinkingSpy.mock.calls.length).toBeLessThanOrEqual(cacheCallCeiling);
-        expect(costSpy.mock.calls.length).toBeLessThanOrEqual(cacheCallCeiling);
-      } finally {
-        thinkingSpy.mockRestore();
-        costSpy.mockRestore();
+        if (expected !== undefined) {
+          expect(resolvedCost).toBeCloseTo(expected, 10);
+        } else {
+          expect(resolvedCost).toBeUndefined();
+        }
       }
-    });
+
+      // Recorded prices bypass lookup; legacy fallback still scales by model, not row.
+      expect(thinkingSpy).toHaveBeenCalledTimes(tuples.length);
+      expect(costSpy).toHaveBeenCalledTimes(recorded !== undefined ? 0 : tuples.length);
+    } finally {
+      thinkingSpy.mockRestore();
+      costSpy.mockRestore();
+    }
   });
 
   test("batches ACP metadata reads once per list without changing row results", async () => {
@@ -147,7 +200,7 @@ describe("listSessionsFromStore resolver cache", () => {
       resetPluginRuntimeStateForTest();
       setActivePluginRegistry(createEmptyPluginRegistry());
       const cfg = {
-        agents: { defaults: { model: { primary: "openai/gpt-5" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" } },
       } as OpenClawConfig;
       resetConfigRuntimeState();
       setRuntimeConfigSnapshot(cfg);
@@ -225,18 +278,6 @@ describe("listSessionsFromStore resolver cache", () => {
         ]),
       );
 
-      const aboveSqliteVariableLimit = Array.from({ length: 33_000 }, (_, index) => ({
-        sessionKey: `agent:default:webchat:dm:missing-${index}`,
-        entry: {
-          sessionId: `missing-session-${index}`,
-          updatedAt: index,
-        } satisfies SessionEntry,
-      }));
-      const largeBatch = readAcpSessionMetaBatch({ entries: aboveSqliteVariableLimit });
-      expect(largeBatch.size).toBe(aboveSqliteVariableLimit.length);
-      expect(largeBatch.get(aboveSqliteVariableLimit[0]!.entry)).toBeUndefined();
-      expect(largeBatch.get(aboveSqliteVariableLimit.at(-1)!.entry)).toBeUndefined();
-
       const database = openOpenClawStateDatabase();
       const originalPrepare = database.db.prepare.bind(database.db);
       let acpSelects = 0;
@@ -247,7 +288,23 @@ describe("listSessionsFromStore resolver cache", () => {
         return originalPrepare(sql);
       });
       try {
-        const result = listSessionsFromStore({
+        // Composite and legacy identities share the production 500-key chunks.
+        // Cross two boundaries without materializing tens of thousands of rows.
+        const aboveBatchChunkSize = Array.from({ length: 501 }, (_, index) => ({
+          sessionKey: `agent:default:webchat:dm:missing-${index}`,
+          entry: {
+            sessionId: `missing-session-${index}`,
+            updatedAt: index,
+          } satisfies SessionEntry,
+        }));
+        const chunkedBatch = readAcpSessionMetaBatch({ entries: aboveBatchChunkSize });
+        expect(chunkedBatch.size).toBe(aboveBatchChunkSize.length);
+        expect(chunkedBatch.get(aboveBatchChunkSize[0]!.entry)).toBeUndefined();
+        expect(chunkedBatch.get(aboveBatchChunkSize.at(-1)!.entry)).toBeUndefined();
+        expect(acpSelects).toBe(3);
+
+        acpSelects = 0;
+        const result = await listSessionsFromStoreAsync({
           cfg,
           storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
           store: {
@@ -265,21 +322,42 @@ describe("listSessionsFromStore resolver cache", () => {
     });
   });
 
-  test("batches transcript title hydration once instead of O(rows)", async () => {
+  test.each([
+    { name: "ordinary", count: 30, owned: 0, limit: 30, rows: 30, enriched: 30, sharedTail: 29 },
+    {
+      name: "retained owner-first",
+      count: 480,
+      owned: 240,
+      limit: 240,
+      rows: 300,
+      enriched: 160,
+      sharedTail: 99,
+    },
+  ])("batches $name transcript hydration without starving shared rows", async (scenario) => {
     await withStateDirEnv("openclaw-perf-title-batch-", async () => {
       resetPluginRuntimeStateForTest();
       setActivePluginRegistry(createEmptyPluginRegistry());
       const cfg = {
-        agents: { defaults: { model: { primary: "openai/gpt-5" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" } },
       } as OpenClawConfig;
       resetConfigRuntimeState();
       setRuntimeConfigSnapshot(cfg);
       const storePath = "/tmp/sessions.json";
       const store: Record<string, SessionEntry> = {};
-      for (let index = 0; index < 30; index += 1) {
+      const ownerId = scenario.owned ? ensureProfileForEmail("owner@example.com").id : undefined;
+      for (let index = 0; index < scenario.count; index += 1) {
         const sessionId = `title-batch-${index}`;
         const sessionKey = `agent:main:${sessionId}`;
-        const entry = { sessionId, updatedAt: 1_000 - index } satisfies SessionEntry;
+        const entry: SessionEntry = {
+          sessionId,
+          updatedAt: 1_000 - index,
+          ...(ownerId && index >= scenario.count - scenario.owned
+            ? {
+                createdVia: "operator",
+                createdActor: { type: "human", source: "profile", id: ownerId },
+              }
+            : {}),
+        };
         store[sessionKey] = entry;
       }
 
@@ -296,20 +374,21 @@ describe("listSessionsFromStore resolver cache", () => {
           cfg,
           storePath,
           store,
-          opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 30 },
+          ownerFirstActorId: ownerId,
+          opts: { includeDerivedTitles: true, includeLastMessage: true, limit: scenario.limit },
         });
 
-        expect(result.sessions).toHaveLength(30);
+        expect(result.sessions).toHaveLength(scenario.rows);
         expect(titleBatchSpy).toHaveBeenCalledOnce();
-        expect(titleBatchSpy.mock.calls[0]?.[0]).toHaveLength(30);
+        expect(titleBatchSpy.mock.calls[0]?.[0]).toHaveLength(scenario.enriched);
         const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
         expect(sessionsByKey.get("agent:main:title-batch-0")).toMatchObject({
           derivedTitle: "title 0",
           lastMessagePreview: "last 0",
         });
-        expect(sessionsByKey.get("agent:main:title-batch-29")).toMatchObject({
-          derivedTitle: "title 29",
-          lastMessagePreview: "last 29",
+        expect(sessionsByKey.get(`agent:main:title-batch-${scenario.sharedTail}`)).toMatchObject({
+          derivedTitle: `title ${scenario.sharedTail}`,
+          lastMessagePreview: `last ${scenario.sharedTail}`,
         });
 
         titleBatchSpy.mockClear();
@@ -317,7 +396,8 @@ describe("listSessionsFromStore resolver cache", () => {
           cfg,
           storePath,
           store,
-          opts: { includeDerivedTitles: false, includeLastMessage: false, limit: 30 },
+          ownerFirstActorId: ownerId,
+          opts: { includeDerivedTitles: false, includeLastMessage: false, limit: scenario.limit },
         });
         expect(titleBatchSpy).toHaveBeenCalledOnce();
         expect(titleBatchSpy).toHaveBeenCalledWith([]);

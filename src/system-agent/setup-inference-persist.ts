@@ -2,6 +2,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import {
+  type AgentRunResultView,
+  extractAgentRunTerminalError,
+  extractAgentRunText,
+} from "../agents/agent-run-result.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -15,6 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { prepareProviderAuthProfilesForPersistence } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -23,13 +31,10 @@ import {
   SETUP_INFERENCE_TEST_TIMEOUT_MS,
   SetupInferenceCancelledError,
   type SetupInferenceFailureStatus,
-  log,
+  setupInferenceLog,
 } from "./setup-inference-core.js";
 import {
-  type RunResult,
   type SetupInferenceTestPlan,
-  extractRunTerminalError,
-  extractRunText,
   extractRunWinnerError,
   mapFailoverReasonToSetupStatus,
   resolveStrictSetupAuthProfileError,
@@ -50,7 +55,7 @@ export async function cleanupSetupInferenceTempDir(params: {
   } catch {
     // Windows cannot remove an open SQLite file. Keep cleanup nonfatal, but
     // always try the directory removal so callers do not retain probe secrets.
-    log.warn("Could not dispose the temporary inference auth database.");
+    setupInferenceLog.warn("Could not dispose the temporary inference auth database.");
   }
   try {
     await (
@@ -62,7 +67,7 @@ export async function cleanupSetupInferenceTempDir(params: {
     params.runtime?.error?.(
       `Could not remove temporary AI setup files: ${formatErrorMessage(error)}`,
     );
-    log.warn("Could not remove the temporary inference test directory.");
+    setupInferenceLog.warn("Could not remove the temporary inference test directory.");
   }
 }
 
@@ -106,13 +111,13 @@ export async function retainUnownedCodexInstall(params: {
       reason: "openclaw-inference-activation-not-committed",
     });
     if (!marked) {
-      log.warn("Could not retain the uncommitted Codex runtime package generation.");
+      setupInferenceLog.warn("Could not retain the uncommitted Codex runtime package generation.");
     }
     return marked;
   } catch {
     // Retention is best effort and marker-after-adoption is non-destructive.
     // A later install or GC may still reuse or remove the unowned generation.
-    log.warn("Could not retain the uncommitted Codex runtime package generation.");
+    setupInferenceLog.warn("Could not retain the uncommitted Codex runtime package generation.");
     return false;
   } finally {
     await clearUnownedCodexInstallCaches(params.deps);
@@ -127,7 +132,9 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
         .clearLoadInstalledPluginIndexInstallRecordsCache;
     clearInstallRecords();
   } catch {
-    log.warn("Could not clear the plugin install-record cache after failed Codex activation.");
+    setupInferenceLog.warn(
+      "Could not clear the plugin install-record cache after failed Codex activation.",
+    );
   }
   try {
     const clearPluginMetadata =
@@ -135,42 +142,32 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
       (await import("../plugins/plugin-metadata-lifecycle.js")).clearPluginMetadataLifecycleCaches;
     clearPluginMetadata();
   } catch {
-    log.warn("Could not clear plugin metadata caches after failed Codex activation.");
+    setupInferenceLog.warn("Could not clear plugin metadata caches after failed Codex activation.");
   }
   try {
     const invalidateRuntimeDiscovery =
       deps.invalidatePluginRuntimeDiscoveryAfterConfigMutation ??
       (await import("../plugins/registry-refresh.js"))
         .invalidatePluginRuntimeDiscoveryAfterConfigMutation;
-    await invalidateRuntimeDiscovery({ logger: log });
+    await invalidateRuntimeDiscovery({ logger: setupInferenceLog });
   } catch {
-    log.warn("Could not clear plugin runtime discovery after failed Codex activation.");
+    setupInferenceLog.warn(
+      "Could not clear plugin runtime discovery after failed Codex activation.",
+    );
   }
 }
 
-export async function reloadCodexRegistryAfterActivation(params: {
+export async function restoreSetupPluginMetadata(params: {
   readSnapshot: () => Promise<
     Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>
   >;
   workspaceDir: string;
   deps: ActivateSetupInferenceDeps;
-}): Promise<boolean> {
-  let snapshot: Awaited<ReturnType<typeof import("../config/config.js").readConfigFileSnapshot>>;
+}): Promise<void> {
   try {
-    snapshot = await params.readSnapshot();
-  } catch {
-    log.warn("Could not read config while reloading the plugin registry after Codex activation.");
-    return false;
-  }
-  const runtimeConfig =
-    snapshot.exists && snapshot.valid
-      ? (snapshot.runtimeConfig ?? snapshot.config)
-      : ({} satisfies OpenClawConfig);
-  const sourceConfig =
-    snapshot.exists && snapshot.valid
-      ? (snapshot.sourceConfig ?? snapshot.config)
-      : ({} satisfies OpenClawConfig);
-  try {
+    const snapshot = await params.readSnapshot();
+    const sourceConfig =
+      snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const refreshPluginRegistry =
       params.deps.refreshPluginRegistryAfterConfigMutation ??
       (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
@@ -178,30 +175,15 @@ export async function reloadCodexRegistryAfterActivation(params: {
       config: sourceConfig,
       reason: "source-changed",
       workspaceDir: params.workspaceDir,
-      logger: log,
+      logger: setupInferenceLog,
     });
   } catch {
-    log.warn("Could not refresh persisted plugin registry metadata after Codex activation.");
-  }
-  try {
-    const ensurePluginRegistryLoaded =
-      params.deps.ensurePluginRegistryLoaded ??
-      (await import("../plugins/runtime/runtime-registry-loader.js")).ensurePluginRegistryLoaded;
-    ensurePluginRegistryLoaded({
-      scope: "all",
-      config: runtimeConfig,
-      activationSourceConfig: sourceConfig,
-      workspaceDir: params.workspaceDir,
-    });
-    return true;
-  } catch {
-    log.warn("Could not reload the active plugin registry after Codex inference activation.");
-    return false;
+    setupInferenceLog.warn("Could not restore plugin metadata after the inference setup probe.");
   }
 }
 
 function isMergePatchObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function mergePatchConflicts(base: unknown, current: unknown, patch: unknown): boolean {
@@ -257,6 +239,7 @@ export type ManualAuthPersistenceReceipt = {
   }>;
   /** Profiles created by this activation; rollback must not delete prior identical entries. */
   insertedProfileIds: ReadonlySet<string>;
+  rollbackProtectedSecretStorage: () => void;
 };
 
 type ManualAuthProfilesReadback = "present" | "absent" | "mismatch" | "unknown";
@@ -343,13 +326,26 @@ export async function persistManualAuthProfiles(params: {
   profiles: ProviderAuthResult["profiles"];
   agentDir: string;
   deps: ActivateSetupInferenceDeps;
+  secretStorage?: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
 }): Promise<ManualAuthPersistenceResult> {
-  const profiles = params.profiles.map((profile) => ({
+  const prepared = params.secretStorage
+    ? prepareProviderAuthProfilesForPersistence({
+        profiles: params.profiles,
+        config: params.secretStorage.config,
+        ...(params.secretStorage.env ? { env: params.secretStorage.env } : {}),
+      })
+    : { profiles: [...params.profiles], rollback: () => {} };
+  const profiles = prepared.profiles.map((profile) => ({
     profileId: profile.profileId,
     credential: normalizeAuthProfileCredential(profile.credential),
   }));
   const insertedProfileIds = new Set<string>();
-  const receipt = { agentDir: params.agentDir, profiles, insertedProfileIds };
+  const receipt = {
+    agentDir: params.agentDir,
+    profiles,
+    insertedProfileIds,
+    rollbackProtectedSecretStorage: prepared.rollback,
+  };
   let collision = false;
   const update = params.deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
   const updated = await update({
@@ -373,6 +369,7 @@ export async function persistManualAuthProfiles(params: {
     },
   });
   if (collision) {
+    prepared.rollback();
     return { status: "not-persisted" };
   }
   // The store helper can report a post-commit chmod failure as null. Read back
@@ -381,7 +378,20 @@ export async function persistManualAuthProfiles(params: {
   if (updated !== null || readback === "present") {
     return { status: "persisted", receipt };
   }
-  return readback === "absent" ? { status: "not-persisted" } : { status: "unknown", receipt };
+  if (readback === "absent") {
+    prepared.rollback();
+    return { status: "not-persisted" };
+  }
+  return { status: "unknown", receipt };
+}
+
+function rollbackManualAuthSecretStorage(receipt: ManualAuthPersistenceReceipt): boolean {
+  try {
+    receipt.rollbackProtectedSecretStorage();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function rollbackManualAuthProfiles(
@@ -389,7 +399,7 @@ export async function rollbackManualAuthProfiles(
   deps: ActivateSetupInferenceDeps,
 ): Promise<boolean> {
   if (receipt.insertedProfileIds.size === 0) {
-    return true;
+    return rollbackManualAuthSecretStorage(receipt);
   }
   const update = deps.updateAuthProfileStoreWithLock ?? updateAuthProfileStoreWithLock;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -425,7 +435,7 @@ export async function rollbackManualAuthProfiles(
           updated.profiles[profile.profileId] === undefined,
       )
     ) {
-      return true;
+      return rollbackManualAuthSecretStorage(receipt);
     }
     let persistedStore: ReturnType<typeof loadPersistedAuthProfileStore>;
     try {
@@ -443,7 +453,7 @@ export async function rollbackManualAuthProfiles(
           persistedStore.profiles[profile.profileId] === undefined,
       )
     ) {
-      return true;
+      return rollbackManualAuthSecretStorage(receipt);
     }
   }
   return false;
@@ -476,12 +486,30 @@ export async function runSetupInferenceTest(params: {
   const sessionKey = `agent:${effectiveAgentId}:setup-inference:incognito-${runId}`;
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
+  const failed = (status: SetupInferenceFailureStatus, error: string) => {
+    setupInferenceLog.warn("Inference setup probe failed.", {
+      event: "setup_inference_probe_failed",
+      provider: plan.provider,
+      model: plan.model,
+      runner: plan.runner,
+      status,
+      timeoutMs,
+      durationMs: Date.now() - started,
+    });
+    return { ok: false as const, status, error };
+  };
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    plan.config,
+    runId,
+    effectiveAgentId,
+    "system-agent.setup-inference",
+  );
   let successfulAuth: AgentExecutionAuthBinding | undefined;
   try {
     if (plan.runner === "cli") {
       const unsupportedError = resolveToolFreeCliSetupError(plan);
       if (unsupportedError) {
-        return { ok: false, status: "unavailable", error: unsupportedError };
+        return failed("unavailable", unsupportedError);
       }
     }
     const strictProfileError = resolveStrictSetupAuthProfileError({
@@ -490,13 +518,14 @@ export async function runSetupInferenceTest(params: {
       deps,
     });
     if (strictProfileError) {
-      return { ok: false, status: "auth", error: strictProfileError };
+      return failed("auth", strictProfileError);
     }
 
-    let result: RunResult;
+    let result: AgentRunResultView;
     if (plan.runner === "cli") {
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
       result = (await runCli({
+        preparedRunAdmission,
         sessionId,
         sessionKey,
         sessionManager,
@@ -505,7 +534,7 @@ export async function runSetupInferenceTest(params: {
         sessionFile,
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.config,
+        config: plan.executionConfig ?? plan.config,
         prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
@@ -521,20 +550,23 @@ export async function runSetupInferenceTest(params: {
           successfulAuth = binding;
         },
         ...(params.signal ? { abortSignal: params.signal } : {}),
-      })) as RunResult;
+      })) as AgentRunResultView;
     } else {
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
       result = (await runEmbedded({
+        preparedRunAdmission,
         sessionId,
         sessionKey,
         sessionManager,
+        // The probe owns its transcript; session admission must not create durable agent state.
+        sessionPersistence: "detached",
         agentId: effectiveAgentId,
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.config,
+        config: plan.executionConfig ?? plan.config,
         prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
@@ -554,10 +586,9 @@ export async function runSetupInferenceTest(params: {
         reasoningLevel: "off",
         verboseLevel: "off",
         disableTrajectory: true,
-        // The 32-token probe cap is sized for the "reply OK" verification
-        // prompt only. Custom completions pass no explicit cap: the stream
-        // layer then applies the resolved model's own required maxTokens
-        // budget, which both bounds output and never exceeds provider limits.
+        // Keep the "reply OK" probe bounded while leaving room for reasoning.
+        // Custom completions pass no explicit cap: the stream layer applies the
+        // resolved model's own maxTokens budget without exceeding its limits.
         ...(params.prompt === undefined
           ? resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride)
           : {}),
@@ -569,39 +600,32 @@ export async function runSetupInferenceTest(params: {
           successfulAuth = binding;
         },
         ...(params.signal ? { abortSignal: params.signal } : {}),
-      })) as RunResult;
+      })) as AgentRunResultView;
     }
     if (params.signal?.aborted) {
       throw new SetupInferenceCancelledError();
     }
-    const terminalError = extractRunTerminalError(result);
+    const terminalError = extractAgentRunTerminalError(result);
     if (terminalError) {
       const described = describeFailoverError(new Error(terminalError));
-      return {
-        ok: false,
-        status: mapFailoverReasonToSetupStatus(described.reason),
-        error: described.message,
-      };
+      return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
     }
-    const text = extractRunText(result)?.trim();
+    const text = extractAgentRunText(result)?.trim();
     if (!text) {
-      return {
-        ok: false,
-        status: "format",
-        error: "The model started but did not send a reply. Try again or pick another option.",
-      };
+      return failed(
+        "format",
+        "The model started but did not send a reply. Try again or pick another option.",
+      );
     }
-    const winnerError = extractRunWinnerError(plan, result);
+    const winnerError = await extractRunWinnerError(plan, result);
     if (winnerError) {
-      return { ok: false, status: "format", error: winnerError };
+      return failed("unknown", winnerError);
     }
     if (requireExecutionOwner && !successfulAuth) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse.",
-      };
+      return failed(
+        "unknown",
+        "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse.",
+      );
     }
     return {
       ok: true,
@@ -613,10 +637,8 @@ export async function runSetupInferenceTest(params: {
     };
   } catch (error) {
     const described = describeFailoverError(error);
-    return {
-      ok: false,
-      status: mapFailoverReasonToSetupStatus(described.reason),
-      error: described.message,
-    };
+    return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
+  } finally {
+    preparedRunAdmission.close();
   }
 }

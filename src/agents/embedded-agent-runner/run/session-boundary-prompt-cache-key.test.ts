@@ -10,9 +10,12 @@ describe("resolveSessionBoundaryPromptCacheKey", () => {
         sessionId: "session-1",
       });
 
-    expect(resolve(0)).toBe(resolve(0));
-    expect(resolve(1)).not.toBe(resolve(0));
-    expect(resolve(2)).not.toBe(resolve(1));
+    expect([resolve(0), resolve(0), resolve(1), resolve(2)]).toEqual([
+      "session-1:0",
+      "session-1:0",
+      "session-1:1",
+      "session-1:2",
+    ]);
   });
 
   it("preserves an explicit caller cache key", () => {
@@ -26,15 +29,21 @@ describe("resolveSessionBoundaryPromptCacheKey", () => {
     ).toBe("caller-key");
   });
 
-  it("clamps derived keys from long internal session ids to OpenAI's 64-char limit", () => {
-    const longSessionId = `internal-session-effects-session-companion-${"a".repeat(50)}`;
-    const key = resolveSessionBoundaryPromptCacheKey({
-      api: "openai-responses",
-      boundaryCount: 0,
-      sessionId: longSessionId,
-    });
-    expect(key).toBeDefined();
-    expect(Array.from(key ?? "").length).toBeLessThanOrEqual(64);
-    expect(key?.startsWith("internal-session-effects-session-companion-")).toBe(true);
+  it("keeps long Unicode derived keys distinct across boundaries within the 64-char limit", () => {
+    const longSessionId = `internal-session-effects-${"🦞".repeat(64)}`;
+    const keys = [0, 1, 2].map((boundaryCount) =>
+      resolveSessionBoundaryPromptCacheKey({
+        api: "openai-responses",
+        boundaryCount,
+        sessionId: longSessionId,
+      }),
+    );
+
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const [boundaryCount, key] of keys.entries()) {
+      expect(key).toBeDefined();
+      expect(Array.from(key ?? "").length).toBeLessThanOrEqual(64);
+      expect(key?.endsWith(`:${boundaryCount}`)).toBe(true);
+    }
   });
 });

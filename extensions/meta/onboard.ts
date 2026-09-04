@@ -17,6 +17,6 @@ export const { applyConfig: applyMetaConfig } = createModelCatalogPresetAppliers
     api: "openai-responses",
     baseUrl: META_BASE_URL,
     catalogModels: buildMetaCatalogModels(),
-    aliases: [{ modelRef: META_DEFAULT_MODEL_REF, alias: "Muse Spark 1.1" }],
+    aliases: [{ modelRef: META_DEFAULT_MODEL_REF, alias: "Muse Spark 1.3" }],
   }),
 });

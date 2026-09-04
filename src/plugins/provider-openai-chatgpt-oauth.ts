@@ -62,7 +62,6 @@ export async function loginOpenAICodexOAuth(
   const provider = resolveProviderRuntimePlugin({
     provider: OPENAI_CODEX_PROVIDER_ID,
     config: {},
-    bundledProviderVitestCompat: true,
   });
   const oauth = provider?.auth?.find((method) => method.id === OPENAI_CODEX_OAUTH_METHOD_ID);
   if (!oauth) {

@@ -1,4 +1,3 @@
-// LLM Core module implements event stream behavior.
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -7,27 +6,25 @@ import type {
 
 /** Generic async-iterable event stream with a separately awaited final result. */
 export class EventStream<T, R = T> implements AsyncIterable<T> {
-  private queue: T[] = [];
+  private queue: (T | undefined)[] = [];
   private queueHead = 0;
   private waiting: ((value: IteratorResult<T>) => void)[] = [];
   private done = false;
+  private resultSettled = false;
   private finalResultPromise: Promise<R>;
-  private resolveFinalResult: (result: R) => void;
+  // Promise invokes its executor before construction returns.
+  private resolveFinalResult!: (result: R) => void;
+  private rejectFinalResult!: (error: Error) => void;
   private isComplete: (event: T) => boolean;
   private extractResult: (event: T) => R;
 
   constructor(isComplete: (event: T) => boolean, extractResult: (event: T) => R) {
     this.isComplete = isComplete;
     this.extractResult = extractResult;
-    const resolvers: Array<(result: R) => void> = [];
-    this.finalResultPromise = new Promise((resolve) => {
-      resolvers.push(resolve);
+    this.finalResultPromise = new Promise((resolve, reject) => {
+      this.resolveFinalResult = resolve;
+      this.rejectFinalResult = reject;
     });
-    const resolveFinalResult = resolvers.at(0);
-    if (!resolveFinalResult) {
-      throw new Error("event stream result promise did not initialize its resolver");
-    }
-    this.resolveFinalResult = resolveFinalResult;
   }
 
   push(event: T): void {
@@ -37,6 +34,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 
     if (this.isComplete(event)) {
       this.done = true;
+      this.resultSettled = true;
       this.resolveFinalResult(this.extractResult(event));
     }
 
@@ -51,7 +49,19 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
   end(result?: R): void {
     this.done = true;
     if (result !== undefined) {
+      this.resultSettled = true;
       this.resolveFinalResult(result);
+    } else if (!this.resultSettled) {
+      // A producer that ends without a terminal event or explicit result would
+      // otherwise leave result() pending forever; awaiting consumers dead-end
+      // silently for the whole run budget. Reject loudly instead. The
+      // pre-attached catch keeps iterate-only consumers (which legitimately
+      // never call result()) free of unhandled rejections.
+      this.resultSettled = true;
+      void this.finalResultPromise.catch(() => {});
+      this.rejectFinalResult(
+        new Error("event stream ended without a terminal event or final result"),
+      );
     }
     while (this.waiting.length > 0) {
       const waiter = this.waiting.shift();
@@ -66,6 +76,8 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
     while (true) {
       if (this.queueHead < this.queue.length) {
         const event = this.queue[this.queueHead] as T;
+        // The consumer owns this event now; compaction must not delay payload release.
+        this.queue[this.queueHead] = undefined;
         this.queueHead += 1;
         // Compact only after a substantial consumed prefix reaches half the
         // backing array, keeping dequeue amortized O(1) when consumers lag.

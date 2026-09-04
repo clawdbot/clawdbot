@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildChannelAccountSnapshot } from "./account-summary.js";
+import { buildChannelAccountSummary } from "./account-summary.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 
-describe("buildChannelAccountSnapshot", () => {
+describe("buildChannelAccountSummary", () => {
   it("redacts a raw baseUrl returned by describeAccount without mutating the account", () => {
     const rawBaseUrl = [
       "https://",
@@ -25,7 +25,7 @@ describe("buildChannelAccountSnapshot", () => {
       },
     } as unknown as ChannelPlugin;
 
-    const snapshot = buildChannelAccountSnapshot({
+    const snapshot = buildChannelAccountSummary({
       plugin,
       account,
       cfg: {} as OpenClawConfig,

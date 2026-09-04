@@ -5,6 +5,18 @@ import Foundation
 /// transcript exporter and the Listen action so exported and spoken text
 /// always match the visible transcript.
 public enum ChatMessageVisibleText {
+    static func isVisibleContentType(_ type: String?, role: String) -> Bool {
+        let kind = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if kind.isEmpty || kind == "text" {
+            return true
+        }
+        let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if kind == "input_text" {
+            return normalizedRole == "user" || normalizedRole == "assistant"
+        }
+        return normalizedRole == "assistant" && kind == "output_text"
+    }
+
     static func copyText(in message: OpenClawChatMessage) -> String {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return role == "assistant" ? self.visibleText(in: message) : self.primaryText(in: message)
@@ -29,8 +41,8 @@ public enum ChatMessageVisibleText {
         let isAssistant = message.role.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() == "assistant"
         let parts = message.content.compactMap { content -> String? in
-            let kind = (content.type ?? "text").lowercased()
-            if kind == "text" || kind.isEmpty {
+            let kind = content.type?.lowercased() ?? ""
+            if self.isVisibleContentType(kind, role: message.role) {
                 return content.text
             }
             guard

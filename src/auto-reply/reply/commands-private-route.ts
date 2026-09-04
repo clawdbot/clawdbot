@@ -99,6 +99,7 @@ export async function deliverPrivateCommandReply(params: {
         accountId: target.accountId ?? undefined,
         threadId: target.threadId ?? undefined,
         cfg: params.commandParams.cfg,
+        agentId: params.commandParams.agentId,
         sessionKey: params.commandParams.sessionKey,
         policyConversationType: "direct",
         mirror: false,

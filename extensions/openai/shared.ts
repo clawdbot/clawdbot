@@ -1,19 +1,18 @@
 // Openai plugin module implements shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeSurface,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createOpenAINativeWebSearchWrapper } from "./native-web-search.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
-import {
-  resolveOpenAITransportTurnState,
-  resolveOpenAIWebSocketSessionPolicy,
-} from "./transport-policy.js";
+import { resolveOpenAITransportTurnState } from "./transport-policy.js";
 
 type SyntheticOpenAIModelCatalogCost = {
   input: number;
@@ -43,13 +42,18 @@ export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined):
 
 function hasSupportedOpenAIResponsesTransport(
   transport: unknown,
-): transport is "auto" | "sse" | "websocket" {
-  return transport === "auto" || transport === "sse" || transport === "websocket";
+): transport is "auto" | "sse" | "websocket" | "websocket-cached" {
+  return (
+    transport === "auto" ||
+    transport === "sse" ||
+    transport === "websocket" ||
+    transport === "websocket-cached"
+  );
 }
 
 function defaultOpenAIResponsesExtraParams(
   extraParams: Record<string, unknown> | undefined,
-  options?: { transport?: "auto" | "sse" | "websocket" },
+  options?: { transport?: "auto" | "sse" | "websocket" | "websocket-cached" },
 ): Record<string, unknown> | undefined {
   const hasSupportedTransport = hasSupportedOpenAIResponsesTransport(extraParams?.transport);
   const defaultTransport = options?.transport ?? "auto";
@@ -65,42 +69,33 @@ function defaultOpenAIResponsesExtraParams(
 
 type OpenAIResponsesProviderHooks = Pick<
   ProviderPlugin,
-  | "buildReplayPolicy"
-  | "prepareExtraParams"
-  | "wrapStreamFn"
-  | "resolveTransportTurnState"
-  | "resolveWebSocketSessionPolicy"
+  "buildReplayPolicy" | "prepareExtraParams" | "wrapStreamFn" | "resolveTransportTurnState"
 >;
 
 const resolveOpenAIResponsesTransportTurnState: NonNullable<
   OpenAIResponsesProviderHooks["resolveTransportTurnState"]
 > = (ctx) => resolveOpenAITransportTurnState(ctx);
 
-const resolveOpenAIResponsesWebSocketSessionPolicy: NonNullable<
-  OpenAIResponsesProviderHooks["resolveWebSocketSessionPolicy"]
-> = (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx);
-
-const openAIResponsesStreamHooks = buildProviderStreamFamilyHooks("openai-responses-defaults");
-const wrapOpenAIResponsesStreamFn = openAIResponsesStreamHooks.wrapStreamFn;
+const loadResponsesStream = createLazyRuntimeModule(() => import("./responses-stream.runtime.js"));
 const wrapOpenAIResponsesProviderStreamFn: NonNullable<
   OpenAIResponsesProviderHooks["wrapStreamFn"]
-> = (ctx) =>
-  createOpenAINativeWebSearchWrapper(wrapOpenAIResponsesStreamFn?.(ctx) ?? ctx.streamFn, {
-    config: ctx.config,
-    agentId: ctx.agentId,
-    nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
-  });
+> = (ctx) => {
+  // Catalog registration keeps synchronous hooks; StreamFn already permits async
+  // startup, so transport and tool execution load only when the stream is invoked.
+  const loadStream = createLazyRuntimeSurface(loadResponsesStream, (runtime) =>
+    runtime.wrapOpenAIResponsesStream(ctx),
+  );
+  return async (...args) => (await loadStream())(...args);
+};
 
 export function buildOpenAIResponsesProviderHooks(options?: {
-  transport?: "auto" | "sse" | "websocket";
+  transport?: "auto" | "sse" | "websocket" | "websocket-cached";
 }): OpenAIResponsesProviderHooks {
   return {
     buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
-    ...openAIResponsesStreamHooks,
     wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
     resolveTransportTurnState: resolveOpenAIResponsesTransportTurnState,
-    resolveWebSocketSessionPolicy: resolveOpenAIResponsesWebSocketSessionPolicy,
   };
 }
 

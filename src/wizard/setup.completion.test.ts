@@ -50,6 +50,14 @@ function createDeps(shell: "zsh" | "bash" | "fish" | "powershell" = "zsh") {
   return deps;
 }
 
+function wrappedFsError(code: string, profilePath: string): Error {
+  const cause = Object.assign(new Error(`${code}: profile write failed`), {
+    code,
+    path: profilePath,
+  });
+  return new Error(`Failed to install completion: ${cause.message}`, { cause });
+}
+
 describe("setupWizardShellCompletion", () => {
   it("QuickStart: installs without prompting", async () => {
     const prompter = createPrompter();
@@ -75,6 +83,66 @@ describe("setupWizardShellCompletion", () => {
     expect(deps.ensureCompletionCacheExists).not.toHaveBeenCalled();
     expect(deps.installCompletion).not.toHaveBeenCalled();
     expect(prompter.note).not.toHaveBeenCalled();
+  });
+
+  describe.each(["en", "zh-CN", "zh-TW"])("%s permission recovery", (locale) => {
+    it.each([
+      {
+        description: "upgrading a slow shell profile",
+        profileInstalled: true,
+        usesSlowPattern: true,
+      },
+      {
+        description: "installing a new shell profile",
+        profileInstalled: false,
+        usesSlowPattern: false,
+      },
+    ])(
+      "offers session recovery when $description fails",
+      async ({ profileInstalled, usesSlowPattern }) => {
+        await withLocale(locale, async () => {
+          const failedPath = "/tmp/read-only/.openclaw-completion-profile-stage";
+          const prompter = createPrompter();
+          const deps = createDeps();
+          vi.mocked(deps.checkShellCompletionStatus!).mockResolvedValue({
+            shell: "zsh",
+            profileInstalled,
+            cacheExists: false,
+            cachePath: "/tmp/openclaw.zsh",
+            usesSlowPattern,
+          });
+          vi.mocked(deps.installCompletion!).mockRejectedValue(
+            wrappedFsError("EACCES", failedPath),
+          );
+
+          await expect(
+            setupWizardShellCompletion({ flow: "quickstart", prompter, deps }),
+          ).resolves.not.toThrow();
+
+          expect(prompter.note).toHaveBeenCalledTimes(1);
+          expect(prompter.note).toHaveBeenCalledWith(
+            expect.stringContaining("source /tmp/openclaw.zsh"),
+            "Shell completion",
+          );
+          expect(prompter.note).toHaveBeenCalledWith(
+            expect.stringContaining(failedPath),
+            "Shell completion",
+          );
+        });
+      },
+    );
+  });
+
+  it("re-throws unexpected completion installation errors", async () => {
+    const prompter = createPrompter();
+    const deps = createDeps();
+    vi.mocked(deps.installCompletion!).mockRejectedValue(
+      wrappedFsError("ENOSPC", "/tmp/full/.zshrc"),
+    );
+
+    await expect(
+      setupWizardShellCompletion({ flow: "quickstart", prompter, deps }),
+    ).rejects.toThrow("ENOSPC");
   });
 
   it.each([
@@ -117,6 +185,7 @@ describe("setupWizardShellCompletion", () => {
         "Shell completion",
       );
       expect(deps.installCompletion).not.toHaveBeenCalled();
+      expect(prompter.note.mock.calls.flat().join("\n")).not.toContain("source /tmp/openclaw.zsh");
     },
   );
 

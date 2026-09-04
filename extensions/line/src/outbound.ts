@@ -1,5 +1,8 @@
 import type { messagingApi } from "@line/bot-sdk";
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 // Line plugin module implements outbound behavior.
 import {
   defineChannelMessageAdapter,
@@ -11,19 +14,23 @@ import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
-import {
-  buildLineMediaMessage,
-  hasLineSpecificMediaOptions,
-  resolveLineOutboundMedia,
-} from "./outbound-media.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
+import {
+  createLineQuickReply,
+  LINE_PRESENTATION_CAPABILITIES,
+  renderLineCard,
+  renderLinePresentation,
+} from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import type { LineChannelData, LineSendResult } from "./types.js";
+import { explainLineRefusal } from "./send-retry.js";
+import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
 
@@ -32,14 +39,19 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
   textChunkLimit: 5000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
+  presentationCapabilities: LINE_PRESENTATION_CAPABILITIES,
+  renderPresentation: ({ payload, presentation }) => renderLinePresentation(payload, presentation),
   sendPayload: async ({ to, payload, accountId, cfg, onDeliveryResult }) => {
     const runtime = getLineRuntime();
     const outboundRuntime = await loadLineOutboundRuntime();
-    const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+    const rawLineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+    const lineData =
+      rawLineData.card && !rawLineData.flexMessage
+        ? { ...rawLineData, flexMessage: renderLineCard(rawLineData.card) }
+        : rawLineData;
     const lineRuntime = runtime.channel.line;
     const location = lineData.location;
     const locationMessage = location ? outboundRuntime.createLocationMessage(location) : null;
-    const validLocation = locationMessage ? location : undefined;
     const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
     const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
     const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
@@ -51,12 +63,28 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const buildTemplate =
       lineRuntime?.buildTemplateMessageFromPayload ??
       outboundRuntime.buildTemplateMessageFromPayload;
+    const sendOptions = { verbose: false, cfg, accountId: accountId ?? undefined };
 
     let lastResult: LineSendResult | null = null;
     const recordResult = async (
       resultPromise: Promise<LineSendResult>,
     ): Promise<LineSendResult> => {
-      const result = await resultPromise;
+      let result: LineSendResult;
+      try {
+        result = await resultPromise;
+      } catch (error) {
+        // Accepted payload parts keep their receipt and must not wait for quota diagnosis.
+        const refusal =
+          lastResult !== null || isChannelPartialDeliveryError(error)
+            ? undefined
+            : await explainLineRefusal({ error, cfg, accountId });
+        throw refusal?.retryable !== undefined
+          ? new PlatformMessageNotDispatchedError(refusal.reason, {
+              cause: error,
+              retryable: refusal.retryable,
+            })
+          : error;
+      }
       lastResult = result;
       try {
         await onDeliveryResult?.(createEmptyChannelResult("line", { ...result }));
@@ -71,10 +99,18 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       return result;
     };
     const quickReplies = lineData.quickReplies ?? [];
-    const hasQuickReplies = quickReplies.length > 0;
-    const quickReply = hasQuickReplies
-      ? (lineRuntime?.createQuickReplyItems ?? outboundRuntime.createQuickReplyItems)(quickReplies)
-      : undefined;
+    const quickReplyItems = lineData.quickReplyItems ?? [];
+    const hasQuickReplies = quickReplies.length > 0 || quickReplyItems.length > 0;
+    const quickReply = quickReplyItems.length
+      ? createLineQuickReply(quickReplyItems)
+      : quickReplies.length
+        ? (lineRuntime?.createQuickReplyItems ?? outboundRuntime.createQuickReplyItems)(
+            quickReplies,
+          )
+        : undefined;
+    const quickReplyLabels = quickReplyItems.length
+      ? quickReplyItems.map((item) => item.label)
+      : quickReplies;
 
     // LINE SDK expects Message[] but we build dynamically.
     const sendMessageBatch = async (messages: Array<Record<string, unknown>>) => {
@@ -83,14 +119,16 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       }
       for (let i = 0; i < messages.length; i += 5) {
         const batch = messages.slice(i, i + 5) as unknown as Parameters<typeof sendBatch>[1];
-        await recordResult(
-          sendBatch(to, batch, {
-            verbose: false,
-            cfg,
-            accountId: accountId ?? undefined,
-          }),
-        );
+        await recordResult(sendBatch(to, batch, sendOptions));
       }
+    };
+
+    const sendTextWithQuickReply = async (text: string) => {
+      if (quickReplyItems.length > 0 && quickReply) {
+        await sendMessageBatch([{ type: "text", text, quickReply }]);
+        return;
+      }
+      await recordResult(sendQuickReplies(to, text, quickReplies, sendOptions));
     };
 
     const processed = payload.text
@@ -117,9 +155,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
         : [];
     const mediaUrls = resolveOutboundMediaUrls(payload);
-    const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
     const mediaOptions = {
-      mediaKind: useLineSpecificMedia ? lineData.mediaKind : ("image" as const),
+      mediaKind: lineData.mediaKind,
       previewImageUrl: lineData.previewImageUrl,
       durationMs: lineData.durationMs,
       trackingId: lineData.trackingId,
@@ -131,28 +168,11 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         if (!trimmed) {
           continue;
         }
-        if (!useLineSpecificMedia) {
-          await recordResult(
-            (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
-              verbose: false,
-              mediaUrl: trimmed,
-              cfg,
-              accountId: accountId ?? undefined,
-            }),
-          );
-          continue;
-        }
-        const resolved = await resolveLineOutboundMedia(trimmed, mediaOptions);
         await recordResult(
           (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
-            verbose: false,
-            mediaUrl: resolved.mediaUrl,
-            mediaKind: resolved.mediaKind,
-            previewImageUrl: resolved.previewImageUrl,
-            durationMs: resolved.durationMs,
-            trackingId: resolved.trackingId,
-            cfg,
-            accountId: accountId ?? undefined,
+            ...sendOptions,
+            ...mediaOptions,
+            mediaUrl: trimmed,
           }),
         );
       }
@@ -161,47 +181,23 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     if (!shouldSendQuickRepliesInline) {
       if (lineData.flexMessage) {
         const flexContents = lineData.flexMessage.contents as Parameters<typeof sendFlex>[2];
-        await recordResult(
-          sendFlex(to, lineData.flexMessage.altText, flexContents, {
-            verbose: false,
-            cfg,
-            accountId: accountId ?? undefined,
-          }),
-        );
+        await recordResult(sendFlex(to, lineData.flexMessage.altText, flexContents, sendOptions));
       }
 
       if (lineData.templateMessage) {
         const template = buildTemplate(lineData.templateMessage);
         if (template) {
-          await recordResult(
-            sendTemplate(to, template, {
-              verbose: false,
-              cfg,
-              accountId: accountId ?? undefined,
-            }),
-          );
+          await recordResult(sendTemplate(to, template, sendOptions));
         }
       }
 
-      if (validLocation) {
-        await recordResult(
-          sendLocation(to, validLocation, {
-            verbose: false,
-            cfg,
-            accountId: accountId ?? undefined,
-          }),
-        );
+      if (location) {
+        await recordResult(sendLocation(to, location, sendOptions));
       }
 
       if (!orderedMessages) {
         for (const flexMsg of processed.flexMessages) {
-          await recordResult(
-            sendFlex(to, flexMsg.altText, flexMsg.contents, {
-              verbose: false,
-              cfg,
-              accountId: accountId ?? undefined,
-            }),
-          );
+          await recordResult(sendFlex(to, flexMsg.altText, flexMsg.contents, sendOptions));
         }
       }
     }
@@ -211,58 +207,28 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await sendMediaMessages();
     }
 
-    if (orderedMessages) {
+    if (orderedMessages && !shouldSendQuickRepliesInline) {
       for (const [index, message] of orderedMessages.entries()) {
         const isLast = index === orderedMessages.length - 1;
         if (message.type === "flex") {
           if (isLast && quickReply) {
             await sendMessageBatch([{ ...message, quickReply }]);
           } else {
-            await recordResult(
-              sendFlex(to, message.altText, message.contents, {
-                verbose: false,
-                cfg,
-                accountId: accountId ?? undefined,
-              }),
-            );
+            await recordResult(sendFlex(to, message.altText, message.contents, sendOptions));
           }
         } else if (isLast && hasQuickReplies) {
-          await recordResult(
-            sendQuickReplies(to, message.text, quickReplies, {
-              verbose: false,
-              cfg,
-              accountId: accountId ?? undefined,
-            }),
-          );
+          await sendTextWithQuickReply(message.text);
         } else {
-          await recordResult(
-            sendText(to, message.text, {
-              verbose: false,
-              cfg,
-              accountId: accountId ?? undefined,
-            }),
-          );
+          await recordResult(sendText(to, message.text, sendOptions));
         }
       }
     } else if (chunks.length > 0) {
       for (const [i, chunk] of chunks.entries()) {
         const isLast = i === chunks.length - 1;
         if (isLast && hasQuickReplies) {
-          await recordResult(
-            sendQuickReplies(to, chunk, quickReplies, {
-              verbose: false,
-              cfg,
-              accountId: accountId ?? undefined,
-            }),
-          );
+          await sendTextWithQuickReply(chunk);
         } else {
-          await recordResult(
-            sendText(to, chunk, {
-              verbose: false,
-              cfg,
-              accountId: accountId ?? undefined,
-            }),
-          );
+          await recordResult(sendText(to, chunk, sendOptions));
         }
       }
     } else if (shouldSendQuickRepliesInline) {
@@ -306,13 +272,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         };
         await sendMessageBatch(quickReplyMessages);
       } else if (quickReply) {
-        await recordResult(
-          sendQuickReplies(to, buildLineQuickReplyFallbackText(quickReplies), quickReplies, {
-            verbose: false,
-            cfg,
-            accountId: accountId ?? undefined,
-          }),
-        );
+        await sendTextWithQuickReply(buildLineQuickReplyFallbackText(quickReplyLabels));
       }
     }
 

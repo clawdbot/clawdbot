@@ -99,8 +99,4 @@ describe("isRequesterParentOfBackgroundAcpSession", () => {
       ),
     ).toBe(true);
   });
-
-  it("delegates to isParentOwnedBackgroundAcpSession for target-only checks", () => {
-    expect(isParentOwnedBackgroundAcpSession(backgroundEntry)).toBe(true);
-  });
 });

@@ -25,7 +25,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-import { isNotFoundPathError } from "../infra/path-guards.js";
+import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginHttpRouteRegistry } from "../plugins/runtime.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -40,7 +40,8 @@ import { readRemoteMediaBuffer } from "./fetch.js";
 import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
-  getDefaultLocalRoots,
+  getDefaultLocalRootsCore,
+  HostReadMediaTypeError,
   LocalMediaAccessError,
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
@@ -52,8 +53,9 @@ import {
   readImageProbeFromHeader,
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
+import { formatMediaSize } from "./store.shared.js";
 
-export { getDefaultLocalRoots, LocalMediaAccessError };
+export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
 
 /** Loaded media bytes plus resolved MIME kind and filename metadata for outbound/plugin callers. */
@@ -160,6 +162,11 @@ function resolveWebMediaOptions(params: {
   };
 }
 
+// Pre-compression fetch headroom for callers with an explicit delivery cap:
+// enough to pull a large phone photo (~20MB+) and compress it under the cap,
+// without letting a tight channel cap buffer up to the 100MB document bound.
+const IMAGE_OPTIMIZE_HEADROOM_FACTOR = 4;
+
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
@@ -201,7 +208,6 @@ const HOST_READ_DECLARED_TEXT_ERROR =
 const HOST_READ_TEXT_PLAIN_EXTENSION_BY_MIME: Record<string, readonly string[]> = {
   "text/plain": [".txt"],
 };
-const MB = 1024 * 1024;
 
 function stripLegacyMediaDirectivePrefix(mediaUrl: string): string {
   if (/^\s*media:\/\//i.test(mediaUrl)) {
@@ -295,19 +301,9 @@ function getValidatedHostReadText(buffer?: Buffer): string | undefined {
   return printableRatio > 0.95 ? text : undefined;
 }
 
-function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
-  if (!filePath) {
-    return false;
-  }
-  const relative = path.relative(path.resolve(root), path.resolve(filePath));
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 function resolveLocalMediaFileName(filePath: string): string | undefined {
   const fileName = basenameFromAnyPath(filePath) || undefined;
-  return fileName && isPathInsideRoot(filePath, getMediaDir())
+  return fileName && isPathInside(getMediaDir(), filePath)
     ? extractOriginalFilename(fileName)
     : fileName;
 }
@@ -370,15 +366,13 @@ async function resolveTrustedGeneratedHostReadHtml(
   }
   // Outbound staging always requires provenance, even when a custom state dir
   // places media/outbound underneath the otherwise trusted temp root.
-  if (outboundRoot && isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+  if (outboundRoot && isPathInside(outboundRoot, resolvedFilePath)) {
     const marker = await getTrustedGeneratedHtmlMarker(resolvedFilePath);
     return marker
       ? { source: "outbound", expectedSha256: marker.sha256, expectedSize: marker.size }
       : undefined;
   }
-  return tmpRoot && isPathInsideRoot(resolvedFilePath, tmpRoot)
-    ? { source: "temp-root" }
-    : undefined;
+  return tmpRoot && isPathInside(tmpRoot, resolvedFilePath) ? { source: "temp-root" } : undefined;
 }
 
 /** Records exact-byte provenance for a trusted generated HTML staged outbound. */
@@ -388,7 +382,7 @@ export async function markTrustedGeneratedHtmlPath(
 ): Promise<void> {
   const resolvedFilePath = await realpath(filePath);
   const outboundRoot = await realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined);
-  if (!outboundRoot || !isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+  if (!outboundRoot || !isPathInside(outboundRoot, resolvedFilePath)) {
     throw new Error(
       `markTrustedGeneratedHtmlPath: refusing path outside outbound staging: ${resolvedFilePath}`,
     );
@@ -505,16 +499,12 @@ function isAllowedHostReadTextAlias(mime: string | undefined, filePath?: string)
   return ext !== undefined && allowedExtensions.includes(ext);
 }
 
-function formatMb(bytes: number, digits = 2): string {
-  return (bytes / MB).toFixed(digits);
-}
-
 function formatCapLimit(label: string, cap: number, size: number): string {
-  return `${label} exceeds ${formatMb(cap, 0)}MB limit (got ${formatMb(size)}MB)`;
+  return `${label} exceeds ${formatMediaSize(cap)} limit (got ${formatMediaSize(size)})`;
 }
 
 function formatCapReduce(label: string, cap: number, size: number): string {
-  return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
+  return `${label} could not be reduced below ${formatMediaSize(cap)} (got ${formatMediaSize(size)})`;
 }
 
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
@@ -561,7 +551,7 @@ function assertHostReadMediaAllowed(params: {
     ) {
       return;
     }
-    throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
+    throw new HostReadMediaTypeError(HOST_READ_DECLARED_TEXT_ERROR);
   }
   const sniffedKind = kindFromMime(params.sniffedContentType);
   if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
@@ -600,18 +590,16 @@ function assertHostReadMediaAllowed(params: {
     normalizedMime &&
     HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)
   ) {
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
+    throw new HostReadMediaTypeError(
       `Host-local media sends require buffer-verified media/document types (got fallback ${normalizedMime}).`,
     );
   }
-  throw new LocalMediaAccessError(
-    "path-not-allowed",
+  throw new HostReadMediaTypeError(
     `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, and validated plain-text documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
-function toJpegFileName(fileName?: string): string | undefined {
+function toImageFileName(fileName: string | undefined, mimeType: string): string | undefined {
   if (!fileName) {
     return undefined;
   }
@@ -620,10 +608,10 @@ function toJpegFileName(fileName?: string): string | undefined {
     return fileName;
   }
   const parsed = path.parse(trimmed);
-  if (!parsed.ext || HEIC_EXT_RE.test(parsed.ext)) {
-    return path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext: ".jpg" });
-  }
-  return path.format({ dir: parsed.dir, name: parsed.name, ext: ".jpg" });
+  const ext = extensionForMime(mimeType);
+  return mimeType !== "image/jpeg" && parsed.ext.toLowerCase() === ext
+    ? fileName
+    : path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext });
 }
 
 type OptimizedImage = {
@@ -905,12 +893,12 @@ function logOptimizedImage(params: { originalSize: number; optimized: OptimizedI
   }
   if (params.optimized.format === "png") {
     logVerbose(
-      `Optimized PNG (preserving alpha) from ${formatMb(params.originalSize)}MB to ${formatMb(params.optimized.optimizedSize)}MB (side<=${params.optimized.resizeSide}px)`,
+      `Optimized PNG (preserving alpha) from ${formatMediaSize(params.originalSize)} to ${formatMediaSize(params.optimized.optimizedSize)} (side<=${params.optimized.resizeSide}px)`,
     );
     return;
   }
   logVerbose(
-    `Optimized media from ${formatMb(params.originalSize)}MB to ${formatMb(params.optimized.optimizedSize)}MB (side<=${params.optimized.resizeSide}px, q=${params.optimized.quality})`,
+    `Optimized media from ${formatMediaSize(params.originalSize)} to ${formatMediaSize(params.optimized.optimizedSize)} (side<=${params.optimized.resizeSide}px, q=${params.optimized.quality})`,
   );
 }
 
@@ -934,7 +922,7 @@ async function optimizeImageWithFallback(params: {
     transparency: "auto",
   });
   if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
-    logVerbose(`Image transparency flattened to fit ${formatMb(cap, 0)}MB optimization budget`);
+    logVerbose(`Image transparency flattened to fit ${formatMediaSize(cap)} optimization budget`);
   }
   return {
     buffer: optimized.data,
@@ -1001,7 +989,7 @@ export async function optimizeImageBufferForWebMedia(params: {
     buffer: optimized.buffer,
     contentType: optimized.mimeType,
     kind: "image",
-    fileName: optimized.format === "jpeg" ? toJpegFileName(params.fileName) : params.fileName,
+    fileName: toImageFileName(params.fileName, optimized.mimeType),
   };
 }
 
@@ -1030,7 +1018,7 @@ async function loadWebMediaInternal(
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
-  if (mediaUrl.startsWith("file://")) {
+  if (/^file:/iu.test(mediaUrl)) {
     try {
       mediaUrl = safeFileURLToPath(mediaUrl);
     } catch (err) {
@@ -1061,7 +1049,7 @@ async function loadWebMediaInternal(
       throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
     }
 
-    const fileName = optimized.format === "jpeg" ? toJpegFileName(meta?.fileName) : meta?.fileName;
+    const fileName = toImageFileName(meta?.fileName, optimized.mimeType);
 
     return {
       buffer: optimized.buffer,
@@ -1131,13 +1119,19 @@ async function loadWebMediaInternal(
   };
 
   // Bound source reads before buffering. Optimized images may exceed their
-  // delivery cap because they are compressed before the final size check.
+  // delivery cap because they are compressed before the final size check, so
+  // an explicit caller cap gets image-compression headroom — sized off the
+  // image cap, not the 100MB document cap, or a tight channel cap would still
+  // permit a 100MB buffer from a hostile URL. Accepted tradeoff: originals
+  // above the headroom fail even when they would have compressed under the
+  // cap; the error names the fetch bound so the user can shrink the source.
   const defaultSourceReadCap = maxBytesForKind("document");
+  const imageOptimizeHeadroom = IMAGE_OPTIMIZE_HEADROOM_FACTOR * maxBytesForKind("image");
   const sourceReadCap =
     maxBytes === undefined
       ? defaultSourceReadCap
       : optimizeImages
-        ? Math.max(maxBytes, defaultSourceReadCap)
+        ? Math.max(maxBytes, imageOptimizeHeadroom)
         : maxBytes;
 
   if (hasHttpUrlPrefix(mediaUrl)) {
@@ -1214,7 +1208,7 @@ async function loadWebMediaInternal(
     } catch (err) {
       if (err instanceof FsSafeError) {
         if (err.code === "too-large") {
-          throw new Error(`Media exceeds ${formatMb(sourceReadCap, 0)}MB limit`, {
+          throw new Error(`Media exceeds ${formatMediaSize(sourceReadCap)} limit`, {
             cause: err,
           });
         }
@@ -1248,7 +1242,7 @@ async function loadWebMediaInternal(
       throw err;
     }
   }
-  const sniffedMime = await detectMime({ buffer: data });
+  const sniffedMime = hostReadCapability ? await detectMime({ buffer: data }) : undefined;
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = kindFromMime(mime);
   if (hostReadCapability) {

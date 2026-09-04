@@ -330,7 +330,7 @@ describe("msteamsOutbound cfg threading", () => {
     expect(result).toEqual({
       channel: "msteams",
       messageId: "msg-card-1",
-      conversationId: "conv-card-1",
+      target: { kind: "conversation", id: "conv-card-1" },
     });
   });
 
@@ -418,7 +418,7 @@ describe("msteamsOutbound cfg threading", () => {
     expect(result).toEqual({
       channel: "msteams",
       messageId: "msg-1",
-      conversationId: "conv-1",
+      target: { kind: "conversation", id: "conv-1" },
     });
   });
 
@@ -451,7 +451,7 @@ describe("msteamsOutbound cfg threading", () => {
     expect(result).toEqual({
       channel: "msteams",
       messageId: "msg-text-2",
-      conversationId: "conv-text",
+      target: { kind: "conversation", id: "conv-text" },
     });
   });
 
@@ -528,7 +528,7 @@ describe("msteamsOutbound cfg threading", () => {
     expect(result).toEqual({
       channel: "msteams",
       messageId: "msg-media-2",
-      conversationId: "conv-media",
+      target: { kind: "conversation", id: "conv-media" },
     });
   });
 

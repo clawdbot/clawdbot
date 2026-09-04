@@ -89,7 +89,7 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
   if (!Array.isArray(entry.content)) {
     return undefined;
   }
-  const explicitPhases = new Set<AssistantPhase>();
+  let explicitPhase: AssistantPhase | undefined;
   for (const block of entry.content) {
     if (!block || typeof block !== "object") {
       continue;
@@ -100,10 +100,13 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
     }
     const phase = parseAssistantTextSignature(record)?.phase;
     if (phase) {
-      explicitPhases.add(phase);
+      if (explicitPhase && explicitPhase !== phase) {
+        return undefined;
+      }
+      explicitPhase = phase;
     }
   }
-  return explicitPhases.size === 1 ? [...explicitPhases][0] : undefined;
+  return explicitPhase;
 }
 
 /** Finds assistant phase metadata on event payloads that may wrap message-like records. */
@@ -216,7 +219,7 @@ export function extractAssistantTextForPhase(
 }
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */
-export function extractAssistantVisibleText(message: unknown): string | undefined {
+export function extractAssistantPhaseText(message: unknown): string | undefined {
   const finalAnswerText = extractAssistantTextForPhase(message, { phase: "final_answer" });
   if (finalAnswerText) {
     return finalAnswerText;

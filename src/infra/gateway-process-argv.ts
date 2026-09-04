@@ -19,37 +19,18 @@ export function parseProcCmdline(raw: string): string[] {
   return normalizeStringEntries(raw.split("\0"));
 }
 
-export function isOpenClawCommandArgv(args: string[], command: string): boolean {
+export function isOpenClawArgv(args: string[]): boolean {
   const normalized = args.map(normalizeProcArg);
   const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
-  if (!normalized.includes(normalizeProcArg(command))) {
-    return false;
-  }
   if (normalized.some((arg) => ENTRY_CANDIDATES.some((entry) => arg.endsWith(entry)))) {
     return true;
   }
   return exe.endsWith("/openclaw") || exe === "openclaw";
 }
 
-export function isOpenClawProcessArgv(args: string[]): boolean {
-  if (isGatewayArgv(args, { allowGatewayBinary: true })) {
-    return true;
-  }
-  const normalized = args.map(normalizeProcArg);
-  const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
-  return (
-    exe === "openclaw" ||
-    exe.endsWith("/openclaw") ||
-    normalized.some(
-      (arg) =>
-        arg === "openclaw" ||
-        arg.endsWith("/openclaw") ||
-        arg === "openclaw.mjs" ||
-        arg.endsWith("/openclaw.mjs"),
-    ) ||
-    (normalized.includes("agent") &&
-      normalized.some((arg) => ENTRY_CANDIDATES.some((entry) => arg.endsWith(entry))))
-  );
+export function isOpenClawCommandArgv(args: string[], command: string): boolean {
+  const normalizedCommand = normalizeProcArg(command);
+  return args.some((arg) => normalizeProcArg(arg) === normalizedCommand) && isOpenClawArgv(args);
 }
 
 export function isGatewayArgv(args: string[], opts?: { allowGatewayBinary?: boolean }): boolean {

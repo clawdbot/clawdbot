@@ -2,11 +2,16 @@
 import { randomUUID } from "node:crypto";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  invokeNodeClaudeSkillRuntime,
+  type NodeClaudeSkillRuntime,
+} from "./node-claude-skill-runtime.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeInvokeResult } from "./node-registry.js";
-import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 
 export async function invokeNodeClaudeCliRun(params: {
+  assertCurrent?: () => void;
   nodeId: string;
   argv: string[];
   stdin: string;
@@ -22,8 +27,9 @@ export async function invokeNodeClaudeCliRun(params: {
   idleTimeoutMs: number;
   onProgress: (chunk: string) => void;
   signal?: AbortSignal;
+  skillRuntime?: NodeClaudeSkillRuntime;
 }): Promise<NodeInvokeResult> {
-  const context = getFallbackGatewayContext();
+  const context = getPluginRuntimeGatewayRequestScope()?.context;
   if (!context) {
     return {
       ok: false,
@@ -58,7 +64,8 @@ export async function invokeNodeClaudeCliRun(params: {
       },
     };
   }
-  return await context.nodeRegistry.invoke({
+  params.skillRuntime?.assertCurrent();
+  const invocation: Parameters<typeof context.nodeRegistry.invoke>[0] = {
     nodeId: params.nodeId,
     expectedConnId: node.connId,
     ...(node.pairingGeneration ? { expectedPairingGeneration: node.pairingGeneration } : {}),
@@ -76,11 +83,24 @@ export async function invokeNodeClaudeCliRun(params: {
       ...(params.systemRunPlan ? { systemRunPlan: params.systemRunPlan } : {}),
       idleTimeoutMs: params.idleTimeoutMs,
       timeoutMs: params.timeoutMs,
+      ...(params.skillRuntime ? { skillRuntime: true } : {}),
     },
     timeoutMs: params.timeoutMs,
     idleTimeoutMs: params.idleTimeoutMs,
     idempotencyKey: randomUUID(),
     onProgress: params.onProgress,
     ...(params.signal ? { signal: params.signal } : {}),
-  });
+    isDispatchAuthorized: () => {
+      params.assertCurrent?.();
+      return true;
+    },
+  };
+  return params.skillRuntime
+    ? await invokeNodeClaudeSkillRuntime({
+        registry: context.nodeRegistry,
+        invocation,
+        runtime: params.skillRuntime,
+        onProgress: params.onProgress,
+      })
+    : await context.nodeRegistry.invoke(invocation);
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-let resolveApiKeyForProvider: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+let resolveApiKeyForProviderCore: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
 let closeOpenClawAgentDatabasesForTest: typeof import("../state/openclaw-agent-db.js").closeOpenClawAgentDatabasesForTest;
 let withOpenClawTestState: typeof import("../test-utils/openclaw-test-state.js").withOpenClawTestState;
 let activateSecretsRuntimeSnapshot: typeof import("./runtime.js").activateSecretsRuntimeSnapshot;
@@ -17,7 +17,7 @@ describe("auth profile migration isolation", () => {
       clearSecretsRuntimeSnapshot,
       prepareSecretsRuntimeSnapshot,
     } = await import("./runtime.js"));
-    ({ resolveApiKeyForProvider } = await import("../agents/model-auth.js"));
+    ({ resolveApiKeyForProviderCore } = await import("../agents/model-auth.js"));
     ({ closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js"));
     ({ withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js"));
     clearSecretsRuntimeSnapshot();
@@ -79,14 +79,14 @@ describe("auth profile migration isolation", () => {
         activateSecretsRuntimeSnapshot(snapshot);
 
         await expect(
-          resolveApiKeyForProvider({ provider: "openai", agentDir: legacyAgentDir }),
+          resolveApiKeyForProviderCore({ provider: "openai", agentDir: legacyAgentDir }),
         ).rejects.toMatchObject({
           code: "AUTH_PROFILE_MIGRATION_REQUIRED",
           action: "openclaw doctor --fix",
           sourceKinds: ["legacy-auth"],
         });
         await expect(
-          resolveApiKeyForProvider({
+          resolveApiKeyForProviderCore({
             provider: "openai",
             agentDir: healthyAgentDir,
             profileId: "openai:default",

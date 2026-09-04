@@ -59,8 +59,11 @@ function classifyProbeErrorKind(error: unknown): string {
 }
 
 export function readProcessRssMb(pid: number | undefined): number | null {
-  if (!pid || process.platform === "win32") {
+  if (!pid) {
     return null;
+  }
+  if (process.platform === "win32") {
+    return readWindowsProcessMetrics(pid)?.rssMb ?? null;
   }
   const result = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], {
     encoding: "utf8",
@@ -83,8 +86,11 @@ export function parseProcessRssKb(raw: string): number | null {
 }
 
 export function readProcessTreeCpuMs(rootPid: number | undefined): number | null {
-  if (!rootPid || process.platform === "win32") {
+  if (!rootPid) {
     return null;
+  }
+  if (process.platform === "win32") {
+    return readWindowsProcessMetrics(rootPid)?.cpuMs ?? null;
   }
   const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
     encoding: "utf8",
@@ -133,6 +139,38 @@ export function readProcessTreeCpuMs(rootPid: number | undefined): number | null
   return totalCpuMs;
 }
 
+function readWindowsProcessMetrics(pid: number): { cpuMs: number; rssMb: number } | null {
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    "[System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture",
+    `$process = Get-Process -Id ${pid}`,
+    "[Console]::Out.Write(('{0:R},{1}' -f $process.CPU, $process.WorkingSet64))",
+  ].join("; ");
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", command],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1_000,
+      windowsHide: true,
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  const match = /^([0-9]+(?:\.[0-9]+)?),([1-9][0-9]*)$/u.exec(result.stdout.trim());
+  if (!match) {
+    return null;
+  }
+  const cpuSeconds = Number(match[1]);
+  const rssBytes = Number(match[2]);
+  if (!Number.isFinite(cpuSeconds) || !Number.isSafeInteger(rssBytes)) {
+    return null;
+  }
+  return { cpuMs: cpuSeconds * 1_000, rssMb: rssBytes / (1024 * 1024) };
+}
+
 function requestStatus(port: number, pathname: string): Promise<number> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -162,14 +200,22 @@ function requestStatus(port: number, pathname: string): Promise<number> {
 }
 
 function parsePsCpuTimeMs(raw: string): number | null {
-  const parts = raw.trim().split(":").map(Number);
-  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
+  const value = raw.trim();
+  const [dayText, clockText] = value.includes("-") ? value.split("-", 2) : ["0", value];
+  const days = Number(dayText);
+  const parts = expectDefined(clockText, "process CPU clock").split(":").map(Number);
+  if (
+    !Number.isFinite(days) ||
+    days < 0 ||
+    parts.some((part) => !Number.isFinite(part) || part < 0)
+  ) {
     return null;
   }
   if (parts.length === 2) {
     const [minutes, seconds] = parts;
     return Math.round(
-      (expectDefined(minutes, "process CPU minutes") * 60 +
+      (days * 24 * 60 * 60 +
+        expectDefined(minutes, "process CPU minutes") * 60 +
         expectDefined(seconds, "process CPU seconds")) *
         1000,
     );
@@ -177,7 +223,8 @@ function parsePsCpuTimeMs(raw: string): number | null {
   if (parts.length === 3) {
     const [hours, minutes, seconds] = parts;
     return Math.round(
-      (expectDefined(hours, "process CPU hours") * 60 * 60 +
+      (days * 24 * 60 * 60 +
+        expectDefined(hours, "process CPU hours") * 60 * 60 +
         expectDefined(minutes, "process CPU minutes") * 60 +
         expectDefined(seconds, "process CPU seconds")) *
         1000,

@@ -599,17 +599,6 @@ export function setMinimalOutboundSessionPluginRegistryForTests(): void {
         targetPrefixes: ["fallbackchat"],
       },
     },
-    {
-      ...createChannelTestPluginBase({
-        id: "legacyparser",
-        label: "Legacy Parser",
-        capabilities: { chatTypes: ["direct", "group", "channel"] },
-      }),
-      messaging: {
-        parseExplicitTarget: ({ raw }) =>
-          raw === "team-ops" ? { to: raw, chatType: "group" } : null,
-      },
-    },
   ];
   setActivePluginRegistry(
     createTestRegistry(

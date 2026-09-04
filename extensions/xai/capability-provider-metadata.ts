@@ -17,8 +17,8 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import {
   isRecord,
   normalizeOptionalString,
-  parseBooleanValue as readBoolean,
-  parseFiniteNumber as readFiniteNumber,
+  parseBooleanValue,
+  parseFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   VideoGenerationProvider,
@@ -210,10 +210,10 @@ export function normalizeXaiRealtimeTranscriptionProviderConfig(
       path: "plugins.entries.voice-call.config.streaming.providers.xai.apiKey",
     }),
     baseUrl: normalizeOptionalString(xai.baseUrl),
-    sampleRate: readFiniteNumber(xai.sampleRate ?? xai.sample_rate),
+    sampleRate: parseFiniteNumber(xai.sampleRate ?? xai.sample_rate),
     encoding: normalizeRealtimeTranscriptionEncoding(xai.encoding),
-    interimResults: readBoolean(xai.interimResults ?? xai.interim_results),
-    endpointingMs: readFiniteNumber(xai.endpointingMs ?? xai.endpointing ?? xai.silenceDurationMs),
+    interimResults: parseBooleanValue(xai.interimResults ?? xai.interim_results),
+    endpointingMs: parseFiniteNumber(xai.endpointingMs ?? xai.endpointing ?? xai.silenceDurationMs),
     language: normalizeOptionalString(xai.language),
   };
 }
@@ -268,8 +268,12 @@ export function createXaiRealtimeVoiceProviderMetadata() {
       supportsSessionResumption: true,
     },
     resolveConfig: ({ rawConfig }) => normalizeXaiRealtimeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig, cfg }) =>
-      hasXaiRealtimeApiKeyInput(normalizeXaiRealtimeProviderConfig(providerConfig).apiKey, cfg),
+    isConfigured: ({ providerConfig, cfg, agentId }) =>
+      hasXaiRealtimeApiKeyInput(
+        normalizeXaiRealtimeProviderConfig(providerConfig).apiKey,
+        cfg,
+        agentId,
+      ),
   } satisfies Omit<RealtimeVoiceProviderPlugin, "createBridge" | "createBrowserSession">;
 }
 

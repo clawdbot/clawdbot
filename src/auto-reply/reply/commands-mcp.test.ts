@@ -20,6 +20,9 @@ vi.mock("../../config/mcp-config.js", () => ({
     config: {},
     mcpServers: Object.fromEntries(mcpServers),
   })),
+}));
+
+vi.mock("../../agents/mcp-config-mutation.js", () => ({
   setConfiguredMcpServer: vi.fn(async ({ name, server }) => {
     mcpServers.set(name, { ...(server as Record<string, unknown>) });
     return {
@@ -115,7 +118,10 @@ describe("handleCommands /mcp", () => {
       setParams.command.senderIsOwner = false;
 
       const setResult = expectMcpResult(await handleMcpCommand(setParams, true));
-      expect(setResult).toEqual({ shouldContinue: false });
+      expect(setResult).toEqual({
+        shouldContinue: false,
+        reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+      });
       expect(mcpServers.has("evil")).toBe(false);
 
       const unsetParams = buildCommandTestParams("/mcp unset existing", buildCfg(), undefined, {
@@ -123,7 +129,10 @@ describe("handleCommands /mcp", () => {
       });
       unsetParams.command.senderIsOwner = false;
       const unsetResult = expectMcpResult(await handleMcpCommand(unsetParams, true));
-      expect(unsetResult).toEqual({ shouldContinue: false });
+      expect(unsetResult).toEqual({
+        shouldContinue: false,
+        reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+      });
       expect(mcpServers.has("existing")).toBe(true);
     });
   });
@@ -138,7 +147,10 @@ describe("handleCommands /mcp", () => {
       showParams.command.senderIsOwner = false;
 
       const showResult = expectMcpResult(await handleMcpCommand(showParams, true));
-      expect(showResult).toEqual({ shouldContinue: false });
+      expect(showResult).toEqual({
+        shouldContinue: false,
+        reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+      });
       const replyText = showResult.reply?.text ?? "";
       expect(replyText).not.toContain('MCP server "context7"');
       expect(replyText).not.toContain('"command": "uvx"');

@@ -1,0 +1,36 @@
+title: Autonomous task lifecycle receipts
+
+scenario:
+  id: autonomous-task-lifecycle-receipts
+  surface: gateway
+  coverage:
+    primary:
+      - gateway.identity-and-presence-apis
+      - automation.openclaw-tasks-flow
+  objective: Verify exact-bound cron, task, and flow owner lifecycle rows are explained without generic decision-fact copies.
+  successCriteria:
+    - A mapped hook transform suppression returns HTTP 204 before admission and creates no execution identity.
+    - A real forced scheduled agent run binds one exact context/execution to its cron receipt and task row.
+    - A real Gateway agent action binds one exact context/execution to its CLI task row; focused owner tests cover bound flow rows.
+    - JSON and human audit inspection expose only bounded attribution-only lifecycle displays with closed producers, accept the cron cursor prefix, and omit task/prompt content.
+    - A replacement Gateway returns byte-equivalent JSON and the generic decision-fact table remains empty.
+  docsRefs:
+    - docs/gateway/audit.md
+    - docs/cli/audit.md
+    - docs/automation/cron-jobs.md
+    - docs/automation/tasks.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/audit/execution-decision-receipts.ts
+    - src/cron/store/run-receipt-store.ts
+    - src/tasks/task-registry.store.sqlite.ts
+    - src/tasks/task-flow-registry.store.sqlite.ts
+    - src/gateway/hooks-mapping.ts
+    - test/e2e/qa-lab/runtime/autonomous-task-lifecycle-receipts.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/autonomous-task-lifecycle-receipts.ts
+    summary: Starts an ephemeral Gateway and mock provider, proves pre-admission suppression, runs cron and CLI task lifecycles, replaces the Gateway, and compares inspection output.
+    args:
+      - --artifact-base
+      - ${outputDir}

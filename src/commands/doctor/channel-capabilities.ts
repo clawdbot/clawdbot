@@ -11,6 +11,7 @@ type DoctorGroupModel = "sender" | "route" | "hybrid";
 
 type DoctorChannelCapabilities = {
   dmAllowFromMode: ChannelDmAllowFromMode;
+  openDmRequiresAllowFromWildcard?: boolean;
   groupModel: DoctorGroupModel;
   groupAllowFromFallbackToAllowFrom: boolean;
   warnOnEmptyGroupSenderAllowlist: boolean;
@@ -29,6 +30,9 @@ function mergeDoctorChannelCapabilities(
   return {
     dmAllowFromMode:
       capabilities?.dmAllowFromMode ?? DEFAULT_DOCTOR_CHANNEL_CAPABILITIES.dmAllowFromMode,
+    ...(typeof capabilities?.openDmRequiresAllowFromWildcard === "boolean"
+      ? { openDmRequiresAllowFromWildcard: capabilities.openDmRequiresAllowFromWildcard }
+      : {}),
     groupModel: capabilities?.groupModel ?? DEFAULT_DOCTOR_CHANNEL_CAPABILITIES.groupModel,
     groupAllowFromFallbackToAllowFrom:
       capabilities?.groupAllowFromFallbackToAllowFrom ??

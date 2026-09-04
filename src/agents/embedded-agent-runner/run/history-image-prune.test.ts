@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   attachRuntimePromptMediaFacts,
   readRuntimePromptMediaFacts,
@@ -706,10 +706,49 @@ describe("installHistoryImagePruneContextTransform", () => {
     }
   });
 
+  it("surfaces a failed active image through the installed context transform", async () => {
+    const onCurrentTurnImageFailure = vi.fn();
+    const message = castAgentMessage({
+      role: "user",
+      content: [
+        { type: "text", text: "inspect" },
+        { type: "image", data: "%%%", mimeType: "image/png" },
+      ],
+      __openclaw: {
+        media: [{ kind: "image" }],
+        mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+      },
+    });
+    const agent: {
+      transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]> | AgentMessage[];
+    } = {};
+    const restore = installHistoryImagePruneContextTransform(agent, {
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      onCurrentTurnImageFailure,
+    });
+
+    try {
+      const replay = await agent.transformContext?.([message]);
+      expect(onCurrentTurnImageFailure).toHaveBeenCalledWith(1);
+      expect(expectArrayMessageContent(replay?.[0], "expected failure notice")).toEqual([
+        { type: "text", text: "inspect" },
+        {
+          type: "text",
+          text: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
+        },
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
   it("strips nested media metadata before old turns can rehydrate", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruned-nested-media-"));
     const imagePath = path.join(workspaceDir, "old.png");
+    const videoPath = path.join(workspaceDir, "old.mp4");
     await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    await fs.writeFile(videoPath, Buffer.from("0000001c6674797069736f6d", "hex"));
     const baseBridge = createHostSandboxFsBridge(workspaceDir);
     let hydrationReadCount = 0;
     const bridge = {
@@ -723,7 +762,10 @@ describe("installHistoryImagePruneContextTransform", () => {
       role: "user",
       content: "[media attached: ./old.png (image/png)]",
       __openclaw: {
-        media: [{ path: "./old.png", contentType: "image/png" }],
+        media: [
+          { path: "./old.png", contentType: "image/png" },
+          { path: "./old.mp4", contentType: "video/mp4" },
+        ],
         mediaImageBlockFactIndexes: [0],
         mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
       },

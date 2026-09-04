@@ -1,10 +1,11 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage as formatSharedErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 // Qa Lab plugin module implements app behavior.
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { getJson, getJsonNoStore, postJson, QaLabHttpError } from "./http.js";
 import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
+import { redactSensitiveText } from "./ui-render-capture-redaction.js";
 import {
   type Bootstrap,
   type EvidenceEnvelope,
@@ -22,6 +23,10 @@ import {
   type UiState,
   renderQaLabUi,
 } from "./ui-render.js";
+
+function formatErrorMessage(error: unknown): string {
+  return redactSensitiveText(formatSharedErrorMessage(error));
+}
 
 function countCaptureDimension(
   events: UiState["captureEvents"],

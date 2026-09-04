@@ -1,7 +1,7 @@
 // Schedule error isolation tests cover one bad job not blocking other cron jobs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob, CronStoreFile } from "../types.js";
-import { recomputeNextRuns } from "./jobs.js";
+import { recomputeNextRuns } from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
 
 function createMockState(jobs: CronJob[]): CronServiceState {
@@ -116,7 +116,7 @@ describe("cron schedule error isolation", () => {
         jobId: "bad-job",
         name: "Bad Job",
         errorCount: 1,
-        err: "TypeError: CronPattern: invalid configuration format ('not valid'), exactly five, six, or seven space separated parts are required.",
+        err: "CronPattern: invalid configuration format ('not valid'), exactly five, six, or seven space separated parts are required.",
       },
       "cron: failed to compute next run for job (skipping)",
     );
@@ -146,7 +146,7 @@ describe("cron schedule error isolation", () => {
         jobId: "bad-job",
         name: "Bad Job",
         errorCount: 3,
-        err: "TypeError: CronPattern: invalid configuration format ('garbage'), exactly five, six, or seven space separated parts are required.",
+        err: "CronPattern: invalid configuration format ('garbage'), exactly five, six, or seven space separated parts are required.",
       },
       "cron: auto-disabled job after repeated schedule errors",
     );
@@ -154,6 +154,9 @@ describe("cron schedule error isolation", () => {
       expect.stringContaining("openclaw automations enable bad-job"),
       expect.objectContaining({ contextKey: "cron:bad-job:auto-disabled" }),
     );
+    const notification = vi.mocked(state.deps.enqueueSystemEvent).mock.calls[0]?.[0];
+    expect(notification).toContain("Check automation history for details.");
+    expect(notification).not.toContain("invalid configuration format");
   });
 
   it("clears scheduleErrorCount when schedule computation succeeds", () => {

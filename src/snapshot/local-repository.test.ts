@@ -9,7 +9,7 @@ import { createPrivateSqliteDirectory } from "../infra/sqlite-private-directory.
 import { runExec } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { hashSnapshotArtifact, readSnapshotManifest } from "./manifest.js";
 import {
@@ -1320,16 +1320,16 @@ describe("local SQLite snapshot repository", () => {
         linkedArtifactPath = path.resolve(String(target));
       }
     });
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (filePath) => {
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       if (
         linkedArtifactPath &&
         !failedInspection &&
-        path.resolve(String(filePath)) === linkedArtifactPath
+        path.resolve(String(args[0])) === linkedArtifactPath
       ) {
         failedInspection = true;
         throw Object.assign(new Error("post-link inspection failed"), { code: "EIO" });
       }
-      return await originalLstat(filePath);
+      return await originalLstat(...args);
     });
 
     await withRestoredSpies([lstatSpy, linkSpy], async () => {
@@ -1467,12 +1467,11 @@ describe("local SQLite snapshot repository", () => {
     ).rejects.toThrow(/expected global/u);
   });
 
-  it("sanitizes transient leases from agent snapshots without touching the source", async () => {
+  it("snapshots agents without requiring legacy lease storage", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "openclaw-agent.sqlite");
     const repositoryPath = path.join(tempDir, "snapshots");
     createAgentDatabase(sourcePath, "worker-1");
-    seedStateLease(sourcePath);
     const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
 
     const snapshot = await provider.create({
@@ -1482,18 +1481,26 @@ describe("local SQLite snapshot repository", () => {
     withDatabase(
       path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME),
       (artifact) => {
-        expect(artifact.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
-          count: 0,
-        });
+        expect(
+          artifact
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'state_leases'",
+            )
+            .get(),
+        ).toBeUndefined();
       },
       { readOnly: true },
     );
     withDatabase(
       sourcePath,
       (source) => {
-        expect(source.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
-          count: 1,
-        });
+        expect(
+          source
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'state_leases'",
+            )
+            .get(),
+        ).toBeUndefined();
       },
       { readOnly: true },
     );

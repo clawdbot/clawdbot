@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
@@ -31,7 +32,7 @@ function terminalReceipt(params: {
     sessionId: "session-model-switch",
     turnId: `turn-${params.runId}`,
     requested: { provider: params.provider, model: params.model },
-    effective: { provider: params.provider, model: responseModel, responseModel },
+    effective: { provider: params.provider, model: params.model, responseModel },
     successfulToolNames: [],
     rerouted: responseModel !== params.model,
     terminalDisposition: "visible",
@@ -47,6 +48,8 @@ async function runFollowUp(params?: {
   alternateReplyText?: string;
   alternateOutboundText?: string;
   alternateDelivery?: { status: string; resultCount: number } | null;
+  primaryResponseModel?: string;
+  alternateResponseModel?: string;
   unrelatedPrimaryOutboundText?: string;
   unrelatedLaterOutboundText?: string;
   onRun?: () => void;
@@ -101,6 +104,8 @@ async function runFollowUp(params?: {
             runId: call === 2 ? (params?.alternateReceiptRunId ?? runId) : runId,
             provider,
             model,
+            responseModel:
+              call === 1 ? params?.primaryResponseModel : params?.alternateResponseModel,
           }),
         },
       };
@@ -118,8 +123,7 @@ async function runFollowUp(params?: {
       runAgentPrompt,
       splitModelRef,
       normalizeModelRef,
-      normalizeLowercaseStringOrEmpty: (value: unknown) =>
-        typeof value === "string" ? value.trim().toLowerCase() : "",
+      normalizeLowercaseStringOrEmpty,
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
     },
   });
@@ -157,6 +161,25 @@ describe("model-switch follow-up terminal evidence", () => {
     await expect(runFollowUp({ alternateReceiptRunId: "run-1" })).rejects.toThrow(
       "alternate-model run did not return distinct exact owned model evidence",
     );
+  });
+
+  it("accepts a response-model reroute recorded by the terminal receipt", async () => {
+    const { result } = await runFollowUp({
+      primaryResponseModel: "primary-model-served",
+      alternateResponseModel: "alternate-model-served",
+    });
+
+    expect(result.status).toBe("pass");
+    expect(result.modelSwitchEvidence).toMatchObject({
+      primary: {
+        effective: { model: "primary-model", responseModel: "primary-model-served" },
+        rerouted: true,
+      },
+      alternate: {
+        effective: { model: "alternate-model", responseModel: "alternate-model-served" },
+        rerouted: true,
+      },
+    });
   });
 
   it("rejects normalized-identical refs before starting an agent run", async () => {

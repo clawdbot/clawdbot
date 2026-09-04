@@ -72,6 +72,15 @@ describe("TuiStreamAssembler", () => {
     expect(second).toBe("[thinking]\nBrain\n\nHello");
   });
 
+  it("defers streamed terminal sanitization to the markdown boundary", () => {
+    const assembler = new TuiStreamAssembler();
+    const unsafe = "before\x1b]52;c;unsafe\x07after";
+
+    expect(assembler.ingestDelta("run-unsafe", messageWithContent([text(unsafe)]), false)).toBe(
+      unsafe,
+    );
+  });
+
   it("omits thinking when showThinking is false", () => {
     const assembler = new TuiStreamAssembler();
     const output = assembler.ingestDelta(

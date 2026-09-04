@@ -29,6 +29,7 @@ scenario:
     - test/e2e/qa-lab/runtime/gateway-stability-runtime.test.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-stability-runtime.ts
     summary: Exercise live stability RPC, bounded retention, persisted bundle filtering, and support export through the real child CLI.
     args:

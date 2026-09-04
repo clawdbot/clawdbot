@@ -108,24 +108,56 @@ struct GatewayConnectionTests {
         await conn.shutdown()
     }
 
-    @Test func `disconnected server lease rejects before dispatch`() async throws {
-        let session = self.makeSession(serverCapabilities: ["openclaw-setup-model-ref"])
-        let (conn, _) = try makeConnection(session: session)
+    @Test(arguments: ["disconnected", "endpoint-before", "endpoint-after", "send-cancelled", "success"])
+    func `server lease preserves dispatch certainty`(outcome: String) async throws {
+        let cfg = ConfigSource(token: "initial-test-token")
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                // Connect and health precede the bound request under test.
+                if sendIndex == 2 {
+                    if outcome == "send-cancelled" {
+                        throw CancellationError()
+                    }
+                    if outcome == "endpoint-after" {
+                        cfg.setToken("replacement-test-token")
+                    }
+                }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let conn = GatewayConnection(
+            configProvider: { (url: url, token: cfg.snapshotToken(), password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
         let lease = try await conn.acquireServerLease()
 
-        await conn._test_handleDisconnect(socketGeneration: 1)
+        if outcome == "disconnected" {
+            await conn._test_handleDisconnect(socketGeneration: lease.socketGeneration)
+        } else if outcome == "endpoint-before" {
+            cfg.setToken("replacement-test-token")
+        }
+        let refusedBeforeDispatch = outcome == "disconnected" || outcome == "endpoint-before"
         do {
-            _ = try await conn.request(
-                method: "openclaw.setup.detect",
+            let data = try await conn.request(
+                method: "openclaw.setup.activate",
                 params: [:],
                 ifCurrentServerLease: lease)
-            Issue.record("expected disconnected server lease rejection")
-        } catch is OpenClawChatTransportSendError {} catch {
-            Issue.record("unexpected disconnected lease error: \(error)")
+            #expect(outcome == "success")
+            #expect(!data.isEmpty)
+        } catch OpenClawChatTransportSendError.notDispatched {
+            #expect(refusedBeforeDispatch)
+        } catch is CancellationError {
+            #expect(outcome == "endpoint-after" || outcome == "send-cancelled")
+        } catch {
+            Issue.record("unexpected server lease error: \(error)")
         }
 
+        #expect(!Task.isCancelled)
         #expect(session.snapshotMakeCount() == 1)
-        #expect(session.latestTask()?.snapshotSendCount() == 2)
+        #expect(session.latestTask()?.snapshotSendCount() == (refusedBeforeDispatch ? 2 : 3))
         await conn.shutdown()
     }
 
@@ -261,7 +293,7 @@ struct GatewayConnectionTests {
         var iterator = stream.makeAsyncIterator()
         let first = await iterator.next()
 
-        guard case let .snapshot(snap) = first else {
+        guard first?.isCurrent == true, case let .snapshot(snap) = first?.push else {
             Issue.record("expected snapshot, got \(String(describing: first))")
             return
         }
@@ -285,7 +317,7 @@ struct GatewayConnectionTests {
         session.latestTask()?.emitReceiveSuccess(.data(evt1))
 
         let firstEvent = await iterator.next()
-        guard case let .event(firstFrame) = firstEvent else {
+        guard firstEvent?.isCurrent == true, case let .event(firstFrame) = firstEvent?.push else {
             Issue.record("expected event, got \(String(describing: firstEvent))")
             return
         }
@@ -298,7 +330,7 @@ struct GatewayConnectionTests {
         session.latestTask()?.emitReceiveSuccess(.data(evt3))
 
         let gap = await iterator.next()
-        guard case let .seqGap(expected, received) = gap else {
+        guard gap?.isCurrent == true, case let .seqGap(expected, received) = gap?.push else {
             Issue.record("expected seqGap, got \(String(describing: gap))")
             return
         }
@@ -306,7 +338,7 @@ struct GatewayConnectionTests {
         #expect(received == 3)
 
         let secondEvent = await iterator.next()
-        guard case let .event(secondFrame) = secondEvent else {
+        guard secondEvent?.isCurrent == true, case let .event(secondFrame) = secondEvent?.push else {
             Issue.record("expected event, got \(String(describing: secondEvent))")
             return
         }

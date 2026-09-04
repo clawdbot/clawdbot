@@ -1,10 +1,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildHostnameAllowlistPolicyFromSuffixAllowlist } from "openclaw/plugin-sdk/ssrf-policy";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonObject } from "./protocol.js";
 
 export type CodexWebSearchPlan = {
   kind: "native-hosted" | "managed" | "disabled";
   suppressManagedWebSearch: boolean;
   threadConfig: JsonObject;
+  webFetchHostnameAllowlist?: string[];
 };
 
 export type CodexNativeWebSearchSupport = "supported" | "unsupported" | "unknown";
@@ -13,10 +16,6 @@ const CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG: JsonObject = {
   "features.standalone_web_search": false,
   web_search: "disabled",
 };
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() || undefined : undefined;
-}
 
 function normalizeUniqueStrings(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
@@ -128,5 +127,8 @@ export function resolveCodexWebSearchPlan(params: {
     // exposing managed web_search here could bypass native allowed_domains.
     suppressManagedWebSearch: true,
     threadConfig: buildCodexNativeWebSearchThreadConfig(params.config),
+    webFetchHostnameAllowlist: buildHostnameAllowlistPolicyFromSuffixAllowlist(
+      nativeConfig?.allowedDomains,
+    )?.hostnameAllowlist,
   };
 }

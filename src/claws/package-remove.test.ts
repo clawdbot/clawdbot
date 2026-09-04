@@ -115,12 +115,13 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([
       {
         action: "retain",
-        reason: "Referenced resources are retained unless a cleanup mode selects them.",
+        reason:
+          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
       },
     ]);
   });
 
-  it("removes an unused Claw-introduced reference through the canonical plugin lifecycle", async () => {
+  it("requires separate selection before invoking the canonical plugin lifecycle", async () => {
     const ref = packageRef();
     const store = packageRefStore(ref);
     const uninstallPlugin = vi.fn().mockResolvedValue(undefined);
@@ -134,7 +135,10 @@ describe("Claw package removal", () => {
           installedVersion: "1.0.0",
         }),
       },
-      referencedCleanup: { mode: "remove-if-unused" },
+      referencedCleanup: {
+        mode: "remove-selected",
+        selected: ["plugin:audit@1.0.0"],
+      },
     });
 
     expect(decisions).toMatchObject([{ action: "uninstall", pluginId: "audit" }]);
@@ -157,6 +161,28 @@ describe("Claw package removal", () => {
       invalidateRuntimeCache: false,
       clawManaged: true,
     });
+  });
+
+  it("excludes plugins from generic remove-if-unused cleanup", async () => {
+    const ref = packageRef();
+    const resolvePlugin = vi.fn();
+
+    const decisions = await planClawPackageRemovals(install, [ref], {
+      deps: {
+        readPackageRefs: vi.fn().mockReturnValue([ref]),
+        resolvePlugin,
+      },
+      referencedCleanup: { mode: "remove-if-unused" },
+    });
+
+    expect(decisions).toMatchObject([
+      {
+        action: "retain",
+        reason:
+          "Global plugins are excluded from generic remove-if-unused cleanup; select the plugin explicitly to invoke its canonical owner.",
+      },
+    ]);
+    expect(resolvePlugin).not.toHaveBeenCalled();
   });
 
   it("rechecks plugin identity under the lifecycle lease before uninstalling", async () => {
@@ -295,22 +321,6 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([{ action: "retain", reason: expect.any(String) }]);
   });
 
-  it("does not inspect global plugin artifact state during removal planning", async () => {
-    const ref = packageRef();
-    const decisions = await planClawPackageRemovals(install, [ref], {
-      deps: {
-        readPackageRefs: vi.fn().mockReturnValue([ref]),
-        resolvePlugin: vi.fn(),
-      },
-    });
-    expect(decisions).toMatchObject([
-      {
-        action: "retain",
-        reason: "Referenced resources are retained unless a cleanup mode selects them.",
-      },
-    ]);
-  });
-
   it("retains a same-version plugin whose installed integrity drifted", async () => {
     const ref = packageRef();
     const decisions = await planClawPackageRemovals(install, [ref], {
@@ -327,7 +337,8 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([
       {
         action: "retain",
-        reason: "Referenced resources are retained unless a cleanup mode selects them.",
+        reason:
+          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
       },
     ]);
   });
@@ -353,7 +364,8 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([
       {
         action: "retain",
-        reason: "Referenced resources are retained unless a cleanup mode selects them.",
+        reason:
+          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
       },
     ]);
   });

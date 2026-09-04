@@ -30,7 +30,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     );
   });
 
-  it("keeps raw table values literal without changing authored Slack text", () => {
+  it("neutralizes raw table mentions without changing authored Slack text", () => {
     expect(
       renderSlackMessagePresentationFallbackText({
         text: "Intentional <!here>",
@@ -47,7 +47,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
         },
       }),
     ).toBe(
-      "Intentional <!here>\n\nReport &lt;@U999&gt;\n\n&lt;!channel&gt; \\*report\\* (table)\n- Owner\\_name: &lt;@U123&gt; &amp; &lt;https://example.com&gt;",
+      "Intentional <!here>\n\nReport &lt;@U999&gt;\n\n&lt;!channel&gt; *report* (table)\n- Owner_name: &lt;@U123&gt; &amp; &lt;https://example.com&gt;",
     );
   });
 
@@ -521,6 +521,31 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     });
   });
 
+  it.each(["interactive", "presentation"] as const)(
+    "preserves %s text across Slack's 50-block message boundary",
+    (surface) => {
+      const text = "x".repeat(3_000 * 50 + 1);
+      const payload =
+        surface === "interactive"
+          ? { interactive: { blocks: [{ type: "text" as const, text }] } }
+          : { presentation: { blocks: [{ type: "text" as const, text }] } };
+      const { segments } = resolveSlackReplyBlockResolution(payload);
+      const blockSegments = segments.flatMap((segment) =>
+        segment.kind === "blocks" ? [segment.blocks] : [],
+      );
+      const delivered = blockSegments.flatMap((blocks) =>
+        blocks.flatMap((block) =>
+          block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+            ? [block.text.text]
+            : [],
+        ),
+      );
+
+      expect(blockSegments.map((blocks) => blocks.length)).toEqual([50, 1]);
+      expect(delivered.join("")).toBe(text);
+    },
+  );
+
   it("subtracts exact legacy mirrors for every typed action family", () => {
     const presentation = {
       blocks: [
@@ -539,6 +564,14 @@ describe("renderSlackMessagePresentationFallbackText", () => {
                 approvalId: "plugin:req-1",
                 approvalKind: "plugin",
                 decision: "allow-once",
+              },
+            },
+            {
+              label: "Question",
+              action: {
+                type: "question",
+                questionId: "ask_0123456789abcdef0123456789abcdef",
+                optionValue: "Question",
               },
             },
             { label: "URL", action: { type: "url", url: "https://example.com/docs" } },
@@ -567,6 +600,12 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     } satisfies MessagePresentation;
 
     const { segments } = resolveSlackReplyBlockResolution({
+      channelData: {
+        askUser: {
+          questionId: "ask_0123456789abcdef0123456789abcdef",
+          optionValues: ["Question", "Unused"],
+        },
+      },
       presentation,
       interactive: presentationToInteractiveControlsReply(presentation),
     });
@@ -585,8 +624,9 @@ describe("renderSlackMessagePresentationFallbackText", () => {
       "openclaw:reply_button:1:1",
       "openclaw:callback_button:1:2",
       "openclaw:approval_button:1:3",
-      "openclaw:reply_link:1:4",
+      "openclaw:question_button:1:4",
       "openclaw:reply_link:1:5",
+      "openclaw:reply_link:1:6",
       "openclaw:reply_select:1",
       "openclaw:callback_select:2",
     ]);

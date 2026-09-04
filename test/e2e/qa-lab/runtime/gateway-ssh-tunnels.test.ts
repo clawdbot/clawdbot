@@ -46,6 +46,20 @@ const evidence = await runGatewaySshTunnels({
 process.exitCode = evidence.entries[0]?.result.status === "pass" ? 0 : 1;
 `;
 
+describe("Gateway SSH tunnel QA preflight", () => {
+  it("records blocked evidence outside Testbox without privileged setup", async () => {
+    const artifactBase = tempDirs.make("openclaw-gateway-ssh-guard-");
+    const evidence = await withEnvAsync({ OPENCLAW_TESTBOX: undefined }, async () =>
+      runGatewaySshTunnels({ artifactBase, repoRoot: process.cwd() }),
+    );
+
+    expect(evidence.entries[0]?.result).toMatchObject({ status: "blocked" });
+    await expect(fs.access(path.join(artifactBase, ".ssh-namespace"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
+
 async function terminateChild(child: ChildProcessWithoutNullStreams) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
@@ -155,21 +169,6 @@ async function readOptionalFile(filePath: string) {
 }
 
 describeOnTestbox("Gateway SSH tunnel QA producer", () => {
-  it("rejects privileged setup outside Testbox", async () => {
-    const artifactBase = tempDirs.make("openclaw-gateway-ssh-guard-");
-    await withEnvAsync({ OPENCLAW_TESTBOX: undefined }, async () => {
-      await expect(
-        runGatewaySshTunnels({
-          artifactBase,
-          repoRoot: process.cwd(),
-        }),
-      ).rejects.toThrow("requires OPENCLAW_TESTBOX=1 before privileged setup");
-    });
-    await expect(fs.access(path.join(artifactBase, ".ssh-namespace"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
   it("proves real forwarding, cleanup, and operator diagnostics", async () => {
     const artifactBase = tempDirs.make("openclaw-gateway-ssh-evidence-");
     const gatewayStartupEnv = snapshotGatewayStartupEnv();

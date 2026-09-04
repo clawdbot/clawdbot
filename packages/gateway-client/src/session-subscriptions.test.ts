@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  GatewayProtocolRequestTimeoutError,
+  type GatewayProtocolRequestOptions,
+} from "./protocol-request.js";
 import {
   GatewaySessionMessageSubscriptionCoordinator,
   getGatewaySessionMessageSubscriptionCoordinator,
@@ -6,6 +11,7 @@ import {
   resetGatewaySessionMessageSubscriptionCoordinator,
   type GatewaySessionMessageRequestClient,
 } from "./session-subscriptions.js";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 type SessionRequestHandler = (method: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -15,20 +21,52 @@ function createClient(
 ) {
   const request = vi.fn(handler);
   return {
+    client: {
+      request: (method: string, params: Record<string, unknown>) => request(method, params),
+    } as unknown as GatewaySessionMessageRequestClient,
+    request,
+  };
+}
+
+function createStalledRequestClient(stalledMethod: string, stalledKey: string) {
+  let shouldStall = true;
+  const request = vi.fn(
+    (
+      method: string,
+      params: Record<string, unknown>,
+      options?: GatewayProtocolRequestOptions,
+    ): Promise<unknown> => {
+      if (shouldStall && method === stalledMethod && params.key === stalledKey) {
+        shouldStall = false;
+        return new Promise((_, reject) => {
+          const timeoutMs = options?.timeoutMs;
+          if (typeof timeoutMs === "number") {
+            setTimeout(
+              () =>
+                reject(
+                  new GatewayProtocolRequestTimeoutError({
+                    method,
+                    timeoutMs,
+                    requestSent: true,
+                  }),
+                ),
+              timeoutMs,
+            );
+          }
+        });
+      }
+      return Promise.resolve(method === "sessions.messages.subscribe" ? { key: params.key } : {});
+    },
+  );
+  return {
     client: { request } as unknown as GatewaySessionMessageRequestClient,
     request,
   };
 }
 
-function deferred<T>() {
-  let resolve: (value: T) => void = () => undefined;
-  let reject: (error: unknown) => void = () => undefined;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   it("shares one in-flight wire subscription across canonical session aliases", async () => {
@@ -118,39 +156,50 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     });
   });
 
-  it("coalesces distinct requested aliases before the first canonical acknowledgment", async () => {
-    const acknowledgement = deferred<unknown>();
-    const { client, request } = createClient(async (method) =>
-      method === "sessions.messages.subscribe" ? await acknowledgement.promise : {},
-    );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+  it.each([
+    { name: "default main", requestedKey: "main", canonicalKey: "agent:main:main" },
+    {
+      name: "configured main",
+      requestedKey: "agent:ops:main",
+      canonicalKey: "agent:ops:work",
+    },
+    { name: "global main", requestedKey: "agent:ops:main", canonicalKey: "global" },
+  ])(
+    "coalesces $name aliases before the first canonical acknowledgment",
+    async ({ requestedKey, canonicalKey }) => {
+      const acknowledgement = createDeferred<unknown>();
+      const { client, request } = createClient(async (method) =>
+        method === "sessions.messages.subscribe" ? await acknowledgement.promise : {},
+      );
+      const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
 
-    const requested = coordinator.acquire("main");
-    const canonical = coordinator.acquire("agent:main:main");
+      const requested = coordinator.acquire(requestedKey);
+      const canonical = coordinator.acquire(canonicalKey);
 
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
-      key: "main",
-    });
+      expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
+        key: requestedKey,
+      });
 
-    acknowledgement.resolve({ key: "agent:main:main" });
-    const [first, second] = await Promise.all([requested, canonical]);
+      acknowledgement.resolve({ key: canonicalKey });
+      const [first, second] = await Promise.all([requested, canonical]);
 
-    expect(first).not.toBe(second);
-    expect(first).toEqual({ key: "agent:main:main", agentId: null });
-    expect(second).toEqual({ key: "agent:main:main", agentId: null });
-    expect(request).toHaveBeenCalledOnce();
+      expect(first).not.toBe(second);
+      expect(first).toEqual({ key: canonicalKey, agentId: null });
+      expect(second).toEqual({ key: canonicalKey, agentId: null });
+      expect(request).toHaveBeenCalledOnce();
 
-    await coordinator.release(first);
-    expect(request).toHaveBeenCalledOnce();
-    await coordinator.release(second);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      key: "agent:main:main",
-    });
-  });
+      await coordinator.release(first);
+      expect(request).toHaveBeenCalledOnce();
+      await coordinator.release(second);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
+        key: canonicalKey,
+      });
+    },
+  );
 
   it("upgrades a provisional canonical alias without creating a competing plain observer", async () => {
-    const acknowledgement = deferred<unknown>();
+    const acknowledgement = createDeferred<unknown>();
     const replay = { approvals: [{ id: "approval-after-ack" }] };
     const { client, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.unsubscribe") {
@@ -192,7 +241,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("keeps unacknowledged subscriptions isolated by canonical agent", async () => {
-    const acknowledgement = deferred<unknown>();
+    const acknowledgement = createDeferred<unknown>();
     const { client, request } = createClient(async (_method, params) =>
       params.agentId === "main" ? await acknowledgement.promise : { key: params.key },
     );
@@ -205,6 +254,56 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenCalledTimes(2);
     acknowledgement.resolve({ key: "global" });
     await expect(main).resolves.toEqual({ key: "global", agentId: "main" });
+  });
+
+  it("subscribes another session before its agent's stalled subscription times out", async () => {
+    vi.useFakeTimers();
+    const { client, request } = createStalledRequestClient(
+      "sessions.messages.subscribe",
+      "stalled",
+    );
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    let failure: unknown;
+
+    void coordinator.acquire("stalled").catch((error: unknown) => {
+      failure = error;
+    });
+    const recovered = coordinator.acquire("healthy");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "sessions.messages.subscribe",
+      { key: "healthy" },
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+    );
+    await expect(recovered).resolves.toEqual({ key: "healthy", agentId: null });
+    expect(failure).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+
+    expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      "sessions.messages.unsubscribe",
+      { key: "stalled" },
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+    );
+  });
+
+  it("does not compensate an unsent subscription timeout", async () => {
+    const timeout = new GatewayProtocolRequestTimeoutError({
+      method: "sessions.messages.subscribe",
+      timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+      requestSent: false,
+    });
+    const request = vi.fn(async () => {
+      throw timeout;
+    });
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+
+    await expect(coordinator.acquire("main")).rejects.toBe(timeout);
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("retries a rejected final unsubscribe with the original live lease", async () => {
@@ -233,8 +332,25 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps a timed-out final unsubscribe retryable on its original lease", async () => {
+    vi.useFakeTimers();
+    const { client, request } = createStalledRequestClient("sessions.messages.unsubscribe", "main");
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const subscription = await coordinator.acquire("main");
+    let failure: unknown;
+
+    void coordinator.release(subscription).catch((error: unknown) => {
+      failure = error;
+    });
+    await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+
+    expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+    await expect(coordinator.release(subscription)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it("coalesces concurrent releases of the final lease", async () => {
-    const unsubscribe = deferred<unknown>();
+    const unsubscribe = createDeferred<unknown>();
     const { client, request } = createClient(async (method, params) =>
       method === "sessions.messages.subscribe" ? { key: params.key } : await unsubscribe.promise,
     );
@@ -251,7 +367,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("waits for a closing observer before acquiring its replacement", async () => {
-    const unsubscribe = deferred<unknown>();
+    const unsubscribe = createDeferred<unknown>();
     const { client, request } = createClient(async (method, params) =>
       method === "sessions.messages.subscribe" ? { key: params.key } : await unsubscribe.promise,
     );
@@ -369,7 +485,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("lets concurrent plain observers recover when the first approval request is unauthorized", async () => {
-    const approval = deferred<unknown>();
+    const approval = createDeferred<unknown>();
     const { client, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.unsubscribe") {
         return {};
@@ -400,7 +516,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("releases the last plain owner after its provisional approval upgrade fails", async () => {
-    const approval = deferred<unknown>();
+    const approval = createDeferred<unknown>();
     const { client, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.unsubscribe") {
         return {};
@@ -481,7 +597,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   });
 
   it("rejects a subscribe acknowledgment from a retired connection", async () => {
-    const response = deferred<unknown>();
+    const response = createDeferred<unknown>();
     const { client, request } = createClient(async () => await response.promise);
     const coordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
     const pending = coordinator.acquire("main");

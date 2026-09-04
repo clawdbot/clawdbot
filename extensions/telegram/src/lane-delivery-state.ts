@@ -5,7 +5,7 @@ type LaneDeliverySnapshot = {
   failedNonSilent: number;
 };
 
-type LaneDeliveryStateTracker = {
+export type LaneDeliveryStateTracker = {
   markDelivered: () => void;
   markNonSilentSkip: () => void;
   markNonSilentFailure: () => void;

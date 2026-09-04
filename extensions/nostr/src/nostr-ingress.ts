@@ -8,6 +8,8 @@ import {
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   inspectNostrIngressEvent,
   isNostrIngressRecord,
@@ -246,28 +248,29 @@ export function createNostrIngress(options: {
       );
     }
 
-    let lastError: unknown;
-    for (const delayMs of NOSTR_INGRESS_APPEND_RETRY_MS) {
-      if (delayMs > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
-      }
-      try {
-        const result = await getQueue().enqueue(prepared.facts.eventId, prepared.payload, {
-          receivedAt: prepared.receivedAt,
-          laneKey: prepared.facts.laneKey,
-        });
-        options.afterDurableAppend(prepared.event);
-        monitor.requestDrain();
-        return result.kind === "accepted" ? "accepted" : "duplicate";
-      } catch (error) {
-        lastError = error;
-      }
+    try {
+      return await retryAsync(
+        async () => {
+          const result = await getQueue().enqueue(prepared.facts.eventId, prepared.payload, {
+            receivedAt: prepared.receivedAt,
+            laneKey: prepared.facts.laneKey,
+          });
+          options.afterDurableAppend(prepared.event);
+          monitor.requestDrain();
+          return result.kind === "accepted" ? "accepted" : "duplicate";
+        },
+        {
+          attempts: NOSTR_INGRESS_APPEND_RETRY_MS.length,
+          minDelayMs: 0,
+          delayMs: ({ attempt }) => NOSTR_INGRESS_APPEND_RETRY_MS[attempt] ?? 0,
+          sleep: (delayMs) => sleepWithAbort(delayMs),
+        },
+      );
+    } catch (error) {
+      throw new Error(`Nostr durable admission failed: ${formatErrorMessage(error)}`, {
+        cause: error,
+      });
     }
-    throw new Error(`Nostr durable admission failed: ${formatErrorMessage(lastError)}`, {
-      cause: lastError,
-    });
   };
 
   return {

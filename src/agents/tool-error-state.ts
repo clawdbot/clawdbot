@@ -1,47 +1,34 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
-import { isSameToolMutationAction } from "./tool-mutation.js";
 
-type ToolErrorState = {
-  recordFailure: (failure: ToolErrorSummary) => ToolErrorSummary;
-  recordSuccess: (
-    success: Pick<ToolErrorSummary, "toolName" | "meta" | "actionFingerprint" | "fileTarget">,
-  ) => ToolErrorSummary | undefined;
+type ToolTerminalState = {
+  lastToolError?: ToolErrorSummary;
 };
 
-/** Keep attempt-local mutation recovery state outside the public error summary. */
-export function createToolErrorState(): ToolErrorState {
-  let nonMutatingFailure: ToolErrorSummary | undefined;
-  let unresolvedMutations: ToolErrorSummary[] = [];
+type ToolErrorState = {
+  recordFailure: (failure: ToolErrorSummary) => ToolTerminalState;
+  recordSuccess: (toolName: string) => ToolTerminalState;
+};
 
-  const current = () => unresolvedMutations.at(-1) ?? nonMutatingFailure;
+/** Track the run's last tool failure until the same tool succeeds. */
+export function createToolErrorState(): ToolErrorState {
+  let lastToolError: ToolErrorSummary | undefined;
+  const terminalState = (): ToolTerminalState => (lastToolError ? { lastToolError } : {});
 
   return {
     recordFailure(failure) {
-      if (failure.mutatingAction !== true) {
-        if (unresolvedMutations.length === 0) {
-          nonMutatingFailure = failure;
-        }
-        return current() ?? failure;
-      }
-      nonMutatingFailure = undefined;
-      const sameIndex = unresolvedMutations.findIndex((entry) =>
-        isSameToolMutationAction(entry, failure),
-      );
-      if (sameIndex >= 0) {
-        unresolvedMutations.splice(sameIndex, 1);
-      }
-      unresolvedMutations.push(failure);
-      return failure;
+      lastToolError = failure;
+      return terminalState();
     },
-    recordSuccess(success) {
-      if (unresolvedMutations.length === 0) {
-        nonMutatingFailure = undefined;
-        return undefined;
+    recordSuccess(toolName) {
+      if (
+        lastToolError &&
+        normalizeLowercaseStringOrEmpty(lastToolError.toolName) ===
+          normalizeLowercaseStringOrEmpty(toolName)
+      ) {
+        lastToolError = undefined;
       }
-      unresolvedMutations = unresolvedMutations.filter(
-        (entry) => !isSameToolMutationAction(entry, success),
-      );
-      return current();
+      return terminalState();
     },
   };
 }

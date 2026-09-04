@@ -156,6 +156,7 @@ extension VoiceWakeOverlayController {
 
     func dismiss(token: UUID? = nil, reason: DismissReason = .explicit, outcome: SendOutcome = .empty) {
         guard self.guardToken(token, context: "dismiss") else { return }
+        guard let dismissedToken = self.activeToken else { return }
         let message = """
         overlay dismiss token=\(self.activeToken?.uuidString ?? "nil") \
         reason=\(String(describing: reason)) \
@@ -196,7 +197,7 @@ extension VoiceWakeOverlayController {
             window.animator().alphaValue = 0
         } completionHandler: {
             Task { @MainActor in
-                let dismissedToken = self.activeToken
+                guard self.guardToken(dismissedToken, context: "dismissCompletion") else { return }
                 window.orderOut(nil)
                 self.model.isVisible = false
                 self.model.level = 0

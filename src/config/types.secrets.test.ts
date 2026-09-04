@@ -1,6 +1,10 @@
 // Verifies secret config type guards and normalization helpers.
 import { describe, expect, it } from "vitest";
-import { collectEnvSecretRefIds, parseEnvTemplateSecretRef } from "./types.secrets.js";
+import {
+  coerceSecretRef,
+  collectEnvSecretRefIds,
+  parseEnvTemplateSecretRef,
+} from "./types.secrets.js";
 
 describe("parseEnvTemplateSecretRef", () => {
   it("parses ${VAR} template syntax", () => {
@@ -54,5 +58,13 @@ describe("collectEnvSecretRefIds", () => {
         ignored: { source: "file", provider: "default", id: "/run/secret" },
       }),
     ).toEqual(new Set(["OPENAI_API_KEY", "LEGACY_API_KEY", "DISCORD_BOT_TOKEN"]));
+  });
+});
+
+describe("store SecretRef coercion", () => {
+  it("applies the store-specific default provider to providerless refs", () => {
+    expect(
+      coerceSecretRef({ source: "store", id: "STORED_API_KEY" }, { store: "teamstore" }),
+    ).toEqual({ source: "store", provider: "teamstore", id: "STORED_API_KEY" });
   });
 });

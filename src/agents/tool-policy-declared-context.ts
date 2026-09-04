@@ -12,16 +12,16 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { DeclaredToolAllowlistContext } from "./tool-policy.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolDenylist = ReturnType<typeof compileGlobPatterns>;
 
 function normalizeToolDenylist(list?: string[]): ToolDenylist {
-  return compileGlobPatterns({ raw: list, normalize: normalizeToolName });
+  return compileGlobPatterns({ raw: list, normalize: normalizeToolPolicyName });
 }
 
 function denylistBlocksName(name: string, denylist: ToolDenylist): boolean {
-  const normalized = normalizeToolName(name);
+  const normalized = normalizeToolPolicyName(name);
   return normalized ? matchesAnyGlobPattern(normalized, denylist) : false;
 }
 
@@ -29,7 +29,7 @@ function denylistBlocksMcpServerNamespace(params: {
   safeServerName: string;
   denylist: ToolDenylist;
 }): boolean {
-  const serverPrefix = normalizeToolName(params.safeServerName + TOOL_NAME_SEPARATOR);
+  const serverPrefix = normalizeToolPolicyName(params.safeServerName + TOOL_NAME_SEPARATOR);
   if (!serverPrefix) {
     return false;
   }
@@ -54,17 +54,6 @@ function denylistBlocksPlugin(params: { pluginId: string; denylist: ToolDenylist
   return (
     denylistBlocksName(params.pluginId, params.denylist) ||
     matchesAnyGlobPattern("group:plugins", params.denylist)
-  );
-}
-
-function denylistBlocksPluginTool(params: {
-  pluginId: string;
-  toolName: string;
-  denylist: ToolDenylist;
-}): boolean {
-  return (
-    denylistBlocksPlugin({ pluginId: params.pluginId, denylist: params.denylist }) ||
-    denylistBlocksName(params.toolName, params.denylist)
   );
 }
 
@@ -101,14 +90,7 @@ function collectAvailableManifestToolNames(params: {
   denylist: ToolDenylist;
 }): string[] {
   return (params.plugin.contracts?.tools ?? [])
-    .filter(
-      (toolName) =>
-        !denylistBlocksPluginTool({
-          pluginId: params.plugin.id,
-          toolName,
-          denylist: params.denylist,
-        }),
-    )
+    .filter((toolName) => !denylistBlocksName(toolName, params.denylist))
     .filter((toolName) =>
       hasManifestToolAvailability({
         plugin: params.plugin,
@@ -117,7 +99,7 @@ function collectAvailableManifestToolNames(params: {
         env: params.env,
       }),
     )
-    .map(normalizeToolName)
+    .map(normalizeToolPolicyName)
     .filter(Boolean);
 }
 
@@ -163,9 +145,8 @@ function collectDeclaredPluginContext(params: {
         snapshot,
         plugin,
         config: params.config,
+        normalizedConfig: normalizedPlugins,
       }) ||
-      normalizedPlugins.entries[plugin.id]?.enabled === false ||
-      normalizedPlugins.deny.includes(plugin.id) ||
       denylistBlocksPlugin({ pluginId: plugin.id, denylist })
     ) {
       continue;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { WizardSession } from "../wizard/session.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 

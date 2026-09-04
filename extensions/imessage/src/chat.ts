@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
 
 type ChatActionOpts = {
@@ -12,6 +13,7 @@ type ChatActionOpts = {
   client?: IMessageRpcClient;
   cliPath?: string;
   dbPath?: string;
+  remoteHost?: string;
   service?: IMessageService;
   region?: string;
   timeoutMs?: number;
@@ -57,7 +59,11 @@ async function runChatAction<T>(
   const account = opts.account ?? resolveIMessageAccount({ cfg, accountId: opts.accountId });
   const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
-  const client = opts.client ?? (await createIMessageRpcClient({ cliPath, dbPath }));
+  const remoteHost = await resolveIMessageRemoteHost({
+    cliPath,
+    remoteHost: opts.remoteHost ?? account.config.remoteHost,
+  });
+  const client = opts.client ?? (await createIMessageRpcClient({ cliPath, dbPath, remoteHost }));
   const shouldClose = !opts.client;
   try {
     return await client.request<T>(method, params, { timeoutMs: opts.timeoutMs });

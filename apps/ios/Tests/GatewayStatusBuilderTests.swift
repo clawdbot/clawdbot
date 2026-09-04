@@ -3,9 +3,10 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayStatusBuilderTests {
-    @Test func `paused problem keeps error status`() {
+    @Test(arguments: [nil, "gateway.example.com"] as [String?])
+    func `paused problem keeps error status`(_ gatewayServerName: String?) {
         let state = GatewayStatusBuilder.build(
-            gatewayServerName: nil,
+            gatewayServerName: gatewayServerName,
             lastGatewayProblem: GatewayConnectionProblem(
                 kind: .pairingRequired,
                 owner: .gateway,
@@ -19,9 +20,10 @@ struct GatewayStatusBuilderTests {
         #expect(state == .error)
     }
 
-    @Test func `transient problem keeps error status while reconnecting`() {
+    @Test(arguments: [nil, "gateway.example.com"] as [String?])
+    func `transient problem keeps error status while reconnecting`(_ gatewayServerName: String?) {
         let state = GatewayStatusBuilder.build(
-            gatewayServerName: nil,
+            gatewayServerName: gatewayServerName,
             lastGatewayProblem: GatewayConnectionProblem(
                 kind: .timeout,
                 owner: .network,

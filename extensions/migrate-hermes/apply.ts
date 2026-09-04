@@ -1,7 +1,8 @@
-// Migrate Hermes plugin module implements apply behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  applyMigrationConfigPatchItem,
+  applyMigrationManualItem,
   markMigrationItemConflict,
   markMigrationItemError,
   summarizeMigrationItems,
@@ -22,7 +23,6 @@ import type {
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { applyAuthItem } from "./auth.js";
-import { applyConfigItem, applyManualItem } from "./config.js";
 import { appendItem } from "./helpers.js";
 import {
   findHermesModelProviderDependency,
@@ -181,9 +181,9 @@ export async function applyHermesPlan(params: {
         appliedItem = await applyModelItem(applyCtx, item);
       }
     } else if (item.kind === "config") {
-      appliedItem = await applyConfigItem(applyCtx, item);
+      appliedItem = await applyMigrationConfigPatchItem(applyCtx, item);
     } else if (item.kind === "manual") {
-      appliedItem = applyManualItem(item);
+      appliedItem = applyMigrationManualItem(item);
     } else if (item.action === "archive") {
       appliedItem = await archiveHermesItem(item, reportDir);
     } else if (item.kind === "auth") {

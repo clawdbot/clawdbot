@@ -27,10 +27,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 
 /**
  * Full-height terminal surface: embeds the gateway-served terminal-only
- * Control UI document (`/?view=terminal`, the same ghostty-web surface the
+ * Control UI focus document (`/focus/terminal`, the same ghostty-web surface the
  * desktop Control UI uses) for the currently connected gateway.
  */
 @Composable
@@ -61,7 +62,7 @@ internal fun TerminalSettingsScreen(
           key(page) {
             ControlUiWebView(
               page = page,
-              url = "${page.baseUrl}/?view=terminal",
+              url = terminalUrl(page.baseUrl),
               modifier = Modifier.fillMaxSize(),
             )
           }
@@ -75,3 +76,16 @@ internal fun TerminalSettingsScreen(
     }
   }
 }
+
+/** Builds the terminal focus route without putting gateway credentials in the URL. */
+internal fun terminalUrl(baseUrl: String): String =
+  baseUrl
+    .trimEnd('/')
+    .toUri()
+    .buildUpon()
+    .clearQuery()
+    .fragment(null)
+    .appendPath("focus")
+    .appendPath("terminal")
+    .build()
+    .toString()

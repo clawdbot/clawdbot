@@ -55,4 +55,14 @@ describe("client voice session store", () => {
       ),
     ).toBeUndefined();
   });
+
+  it.each([
+    { name: "version", patch: { version: 2 } },
+    { name: "origin", patch: { origin: "server" } },
+    { name: "provider", patch: { provider: "   " } },
+    { name: "updated timestamp", patch: { updatedAt: "later" } },
+  ])("rejects an invalid $name", ({ patch }) => {
+    const value = JSON.parse(storedRecord([])) as Record<string, unknown>;
+    expect(parseStoredVoiceSessionRecord(JSON.stringify({ ...value, ...patch }))).toBeUndefined();
+  });
 });

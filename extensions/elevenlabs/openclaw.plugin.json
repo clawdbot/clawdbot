@@ -1,6 +1,8 @@
 {
   "id": "elevenlabs",
-  "icon": "https://cdn.simpleicons.org/elevenlabs",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },

@@ -25,23 +25,6 @@ describe("resolveTelegramMiniAppUrls", () => {
     });
   });
 
-  it("uses service MagicDNS for Tailscale Serve service names", async () => {
-    const runCommand = vi.fn(async () => ({
-      code: 0,
-      stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net" } }),
-    }));
-    const cfg = {
-      gateway: {
-        tailscale: { mode: "serve", serviceName: "svc:openclaw" },
-      },
-    } satisfies OpenClawConfig;
-
-    await expect(resolveTelegramMiniAppUrls({ cfg, runCommand })).resolves.toMatchObject({
-      pageUrl: "https://openclaw.tailnet.ts.net/__openclaw_tg_miniapp/",
-      gatewayUrl: "wss://openclaw.tailnet.ts.net",
-    });
-  });
-
   it("fails loud when Tailscale mode is off or MagicDNS cannot resolve", async () => {
     await expect(resolveTelegramMiniAppUrls({ cfg: {} })).rejects.toThrow(
       TELEGRAM_MINIAPP_URL_ERROR,

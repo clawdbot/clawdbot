@@ -25,6 +25,8 @@ export type PluginLoadOptions = {
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
+  /** Registry-construction fact supplied by the process composition root. */
+  allowProcessHomeSessionCatalogs?: boolean;
   hostServices?: PluginRegistryParams["hostServices"];
   runtimeOptions?: CreatePluginRuntimeOptions;
   startupTrace?: {
@@ -39,7 +41,7 @@ export type PluginLoadOptions = {
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   /** Select full runtime registration or the lightweight unconfigured-channel setup path. */
   channelPluginLoadIntent?: ChannelPluginLoadIntent;
-  /** Prefer bundled JavaScript artifacts over source TypeScript entrypoints. */
+  /** Built hosts prefer canonical checkout artifacts by default; false retains source execution. */
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
   activate?: boolean;

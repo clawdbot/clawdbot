@@ -142,45 +142,70 @@ describe("buildEmbeddedAgentSettingsSnapshot", () => {
 });
 
 describe("createPreparedEmbeddedAgentSettingsManager", () => {
-  it("keeps trusted file-backed settings runtime-scoped after preparation", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-settings-"));
-    try {
-      const cwd = path.join(baseDir, "workspace");
-      const agentDir = path.join(baseDir, "agent");
-      const projectSettingsDir = path.join(cwd, ".openclaw");
-      const agentSettingsPath = path.join(agentDir, "settings.json");
-      await fs.mkdir(projectSettingsDir, { recursive: true });
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(
-        agentSettingsPath,
-        JSON.stringify({ retry: { enabled: true } }, null, 2),
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(projectSettingsDir, "settings.json"),
-        JSON.stringify({ shellCommandPrefix: "echo trusted &&" }, null, 2),
-        "utf8",
-      );
+  it.each([
+    { policy: "trusted", shellCommandPrefix: "echo trusted &&", reserveTokens: 32_000 },
+    { policy: "sanitize", shellCommandPrefix: "echo global &&", reserveTokens: 32_000 },
+    { policy: "ignore", shellCommandPrefix: "echo global &&", reserveTokens: 22_000 },
+  ] as const)(
+    "keeps $policy file-backed settings runtime-scoped after preparation",
+    async (testCase) => {
+      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-settings-"));
+      try {
+        const cwd = path.join(baseDir, "workspace");
+        const agentDir = path.join(baseDir, "agent");
+        const projectSettingsDir = path.join(cwd, ".openclaw");
+        const agentSettingsPath = path.join(agentDir, "settings.json");
+        await fs.mkdir(projectSettingsDir, { recursive: true });
+        await fs.mkdir(agentDir, { recursive: true });
+        const globalSettings = {
+          retry: { enabled: true },
+          shellCommandPrefix: "echo global &&",
+          compaction: { reserveTokens: 22_000, keepRecentTokens: 23_000 },
+        };
+        await fs.writeFile(agentSettingsPath, JSON.stringify(globalSettings, null, 2), "utf8");
+        await fs.writeFile(
+          path.join(projectSettingsDir, "settings.json"),
+          JSON.stringify({
+            shellCommandPrefix: "echo trusted &&",
+            compaction: { reserveTokens: 32_000 },
+          }),
+          "utf8",
+        );
 
-      const settingsManager = createPreparedEmbeddedAgentSettingsManager({
-        cwd,
-        agentDir,
-        cfg: {
-          agents: { defaults: { embeddedAgent: { projectSettingsPolicy: "trusted" } } },
-        },
-      });
+        const params = {
+          cwd,
+          agentDir,
+          cfg: {
+            agents: { defaults: { embeddedAgent: { projectSettingsPolicy: testCase.policy } } },
+          },
+        };
+        const settingsManager = createPreparedEmbeddedAgentSettingsManager(params);
 
-      expect(settingsManager.getShellCommandPrefix()).toBe("echo trusted &&");
-      expect(settingsManager.getRetryEnabled()).toBe(false);
+        expect(settingsManager.getShellCommandPrefix()).toBe(testCase.shellCommandPrefix);
+        expect(settingsManager.getCompactionReserveTokens()).toBe(testCase.reserveTokens);
+        expect(settingsManager.getCompactionKeepRecentTokens()).toBe(23_000);
+        expect(settingsManager.getRetryEnabled()).toBe(false);
 
-      await settingsManager.flush();
+        await settingsManager.flush();
 
-      const diskSettings = JSON.parse(await fs.readFile(agentSettingsPath, "utf8")) as {
-        retry?: { enabled?: boolean };
-      };
-      expect(diskSettings.retry?.enabled).toBe(true);
-    } finally {
-      await fs.rm(baseDir, { recursive: true, force: true });
-    }
-  });
+        expect(JSON.parse(await fs.readFile(agentSettingsPath, "utf8"))).toEqual(globalSettings);
+
+        await fs.writeFile(
+          agentSettingsPath,
+          JSON.stringify({
+            ...globalSettings,
+            compaction: { ...globalSettings.compaction, keepRecentTokens: 45_000 },
+          }),
+        );
+        await settingsManager.reload();
+        expect(settingsManager.getCompactionKeepRecentTokens()).toBe(23_000);
+        expect(settingsManager.getRetryEnabled()).toBe(false);
+        const nextSettingsManager = createPreparedEmbeddedAgentSettingsManager(params);
+        expect(nextSettingsManager.getCompactionKeepRecentTokens()).toBe(45_000);
+        await nextSettingsManager.flush();
+      } finally {
+        await fs.rm(baseDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

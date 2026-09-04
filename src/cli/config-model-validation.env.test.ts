@@ -242,6 +242,30 @@ describe("config model validation env handling", () => {
     expect(resolveModelRef).not.toHaveBeenCalled();
   });
 
+  it("keeps numeric agent ids as object keys when matching unresolved paths", async () => {
+    const result = await checkTouchedTextModelRefs({
+      config: { agents: { entries: { "123": { model: "${MODEL_REF}" } } } },
+      touchedPaths: [["agents", "entries", "123", "model"]],
+      env: {},
+      resolveModelRef: vi.fn(async () => undefined),
+    });
+
+    expect(result.errors).toEqual([expect.stringContaining("unresolved environment variable")]);
+  });
+
+  it("does not classify an escaped placeholder literal as unresolved", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+    const result = await checkTouchedTextModelRefs({
+      config: { agents: { defaults: { model: { primary: "$${MODEL_REF}" } } } },
+      touchedPaths: [["agents", "defaults", "model", "primary"]],
+      env: {},
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledOnce();
+  });
+
   it("validates a bare fallback when its primary provider resolves from env", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const result = await checkTouchedTextModelRefs({

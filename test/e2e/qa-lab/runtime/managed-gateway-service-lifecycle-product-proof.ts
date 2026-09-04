@@ -7,6 +7,7 @@ import {
   type QaEvidenceSummaryJson,
   validateQaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "managed-gateway-service-lifecycle";
@@ -89,10 +90,6 @@ if (process.platform === "darwin") {
     testPaths: ["src/daemon/schtasks.integration.e2e.test.ts"],
     vitestArgs: ["run", "--config", "test/vitest/vitest.e2e.config.ts"],
   });
-}
-
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function parseOptions(args: string[]): ProducerOptions {

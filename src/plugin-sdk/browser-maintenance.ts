@@ -1,10 +1,7 @@
 /**
  * Public SDK facade for browser cleanup and trash operations.
  */
-import {
-  canLoadActivatedBundledPluginPublicSurface,
-  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
-} from "./facade-runtime.js";
+import { tryLoadActivatedBundledPluginPublicSurfaceModule } from "./facade-runtime.js";
 export { movePathToTrash, type MovePathToTrashOptions } from "./browser-trash.js";
 
 type CloseTrackedBrowserTabsParams = {
@@ -17,26 +14,8 @@ type BrowserMaintenanceSurface = {
   closeTrackedBrowserTabsForSessions: (params: CloseTrackedBrowserTabsParams) => Promise<number>;
 };
 
-let cachedBrowserMaintenanceSurface: BrowserMaintenanceSurface | undefined;
-
 function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolean {
   return sessionKeys.some((key) => Boolean(key?.trim()));
-}
-
-function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface | null {
-  const request = {
-    dirName: "browser",
-    artifactBasename: "browser-maintenance.js",
-  };
-  if (!canLoadActivatedBundledPluginPublicSurface(request)) {
-    return null;
-  }
-  if (!cachedBrowserMaintenanceSurface) {
-    cachedBrowserMaintenanceSurface =
-      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>(request) ??
-      undefined;
-  }
-  return cachedBrowserMaintenanceSurface ?? null;
 }
 
 /** Closes tracked browser tabs for requested session keys when the browser plugin is active. */
@@ -49,7 +28,11 @@ export async function closeTrackedBrowserTabsForSessions(
 
   let surface: BrowserMaintenanceSurface | null;
   try {
-    surface = loadBrowserMaintenanceSurface();
+    // Cleanup is already async; keep cold activation off the synchronous source loader.
+    surface = await tryLoadActivatedBundledPluginPublicSurfaceModule<BrowserMaintenanceSurface>({
+      dirName: "browser",
+      artifactBasename: "browser-maintenance.js",
+    });
   } catch (error) {
     params.onWarn?.(`browser cleanup unavailable: ${String(error)}`);
     return 0;

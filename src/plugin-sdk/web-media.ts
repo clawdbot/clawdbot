@@ -2,7 +2,7 @@
  * Public SDK subpath for loading and optimizing local or remote web media.
  */
 export {
-  getDefaultLocalRoots,
+  getDefaultLocalRootsCore as getDefaultLocalRoots,
   LocalMediaAccessError,
   loadWebMedia,
   loadWebMediaRaw,

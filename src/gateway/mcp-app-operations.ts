@@ -14,7 +14,8 @@ import {
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   peekSessionMcpRuntime,
-} from "../agents/agent-bundle-mcp-runtime.js";
+} from "../agents/agent-bundle-mcp-manager-api.js";
+import { getSessionMcpRequestSignal } from "../agents/agent-bundle-mcp-request-context.js";
 import type { McpCatalogTool, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import {
   acquireMcpAppViewRequest,
@@ -23,8 +24,10 @@ import {
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { restoreMcpAppView } from "./mcp-app-reconstruction.js";
 
 export type McpAppActiveView = {
@@ -94,13 +97,20 @@ export async function resolveMcpAppAllowedToolNames(active: McpAppActiveView): P
     .toSorted();
 }
 
+async function getRequestCatalog(runtime: SessionMcpRuntime) {
+  const signal = getSessionMcpRequestSignal();
+  signal?.throwIfAborted();
+  // A caller can leave the wait, but the session still owns its shared refresh.
+  return racePromiseWithAbortSignal(runtime.getCatalog(), signal);
+}
+
 async function requireCallableTool(
   runtime: SessionMcpRuntime,
   view: McpAppViewLease,
   toolName: string,
 ): Promise<void> {
   await requireMcpAppInteraction(view);
-  const catalog = await runtime.getCatalog();
+  const catalog = await getRequestCatalog(runtime);
   const tool = catalog.tools.find(
     (entry) => entry.serverName === view.serverName && entry.toolName === toolName,
   );
@@ -111,20 +121,28 @@ async function requireCallableTool(
 
 export async function resolveMcpAppActiveView(params: {
   sessionKey: string;
+  agentId?: string;
   viewId: string;
   cfg?: OpenClawConfig;
 }): Promise<McpAppActiveView> {
   if (params.cfg && params.cfg.mcp?.apps?.enabled !== true) {
     throw new Error("MCP App runtime is unavailable");
   }
-  const liveView = getMcpAppViewLeaseForSession(params.viewId, params.sessionKey);
+  const liveView = params.agentId
+    ? getMcpAppViewLeaseForSession(params.viewId, params.sessionKey, params.agentId)
+    : undefined;
   if (liveView) {
     if (liveView.runtime.mcpAppsEnabled !== true) {
       throw new Error("MCP App runtime is unavailable");
     }
     return { runtime: liveView.runtime, view: liveView };
   }
-  const existingRuntime = peekSessionMcpRuntime({ sessionKey: params.sessionKey });
+  // An unscoped runtime key cannot prove its owning agent. Prefer transcript
+  // restoration with the prepared owner instead of adopting a sibling runtime.
+  const existingRuntime =
+    params.agentId && !parseAgentSessionKey(params.sessionKey)
+      ? undefined
+      : peekSessionMcpRuntime({ sessionKey: params.sessionKey });
   if (existingRuntime && existingRuntime.mcpAppsEnabled !== true) {
     throw new Error("MCP App runtime is unavailable");
   }
@@ -137,6 +155,7 @@ export async function resolveMcpAppActiveView(params: {
       : params.cfg
         ? await restoreMcpAppView({
             cfg: params.cfg,
+            agentId: params.agentId,
             sessionKey: params.sessionKey,
             viewId: params.viewId,
           })
@@ -168,6 +187,20 @@ export async function withMcpAppActiveView<T>(
   }
 }
 
+async function withMcpAppResourceAuthority<T>(
+  active: McpAppActiveView,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return await withMcpAppActiveView(active, "read", async () => {
+    await requireMcpAppInteraction(active.view);
+    const result = await operation();
+    // Resource results may contain protected data. Recheck after upstream work
+    // so a grant revoked in flight cannot disclose the completed response.
+    await requireMcpAppInteraction(active.view);
+    return result;
+  });
+}
+
 export async function executeMcpAppOperation(
   active: McpAppActiveView,
   operation: McpAppOperation,
@@ -177,6 +210,7 @@ export async function executeMcpAppOperation(
     case "tools/call":
       return await withMcpAppActiveView(active, "tool", async () => {
         await requireCallableTool(runtime, view, operation.params.name);
+        await requireMcpAppInteraction(view);
         return await runtime.callTool(
           view.serverName,
           operation.params.name,
@@ -194,7 +228,7 @@ export async function executeMcpAppOperation(
             view.serverName,
             operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
           ),
-          runtime.getCatalog(),
+          getRequestCatalog(runtime),
         ]);
         const allowed = new Set(
           catalog.tools
@@ -206,15 +240,17 @@ export async function executeMcpAppOperation(
             )
             .map((tool) => tool.toolName),
         );
-        return {
+        const result = {
           ...listed,
           tools: listed.tools.filter(
             (tool) => allowed.has(tool.name.trim()) && isAppCallableListedTool(tool),
           ),
         };
+        await requireMcpAppInteraction(view);
+        return result;
       });
     case "resources/list":
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await withMcpAppResourceAuthority(active, async () => {
         if (!runtime.listResources) {
           throw new Error("MCP resources/list is unavailable");
         }
@@ -224,7 +260,7 @@ export async function executeMcpAppOperation(
         return Array.isArray(resources) ? { resources } : resources;
       });
     case "resources/templates/list":
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await withMcpAppResourceAuthority(active, async () => {
         if (!runtime.listResourceTemplates) {
           throw new Error("MCP resources/templates/list is unavailable");
         }
@@ -234,7 +270,7 @@ export async function executeMcpAppOperation(
         );
       });
     case "resources/read":
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await withMcpAppResourceAuthority(active, async () => {
         if (!runtime.readResource) {
           throw new Error("MCP resources/read is unavailable");
         }

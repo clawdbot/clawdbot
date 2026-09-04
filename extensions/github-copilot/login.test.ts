@@ -370,7 +370,7 @@ describe("runGitHubCopilotDeviceFlow — polling intervals", () => {
     const pollTimes: number[] = [];
     const pollResponses = [
       { error: "authorization_pending" },
-      { error: "slow_down" },
+      { error: "slow_down", interval: 7 },
       { error: "slow_down" },
       { access_token: "test-access-token", token_type: "bearer" },
     ];

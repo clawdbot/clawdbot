@@ -35,9 +35,9 @@ const loadConfigMock = vi.fn(() => ({}));
 const withResolvedRuntimeMatrixClientMock = vi.hoisted(() => vi.fn());
 const getImageMetadataMock = vi.fn().mockResolvedValue(null);
 const resizeToJpegMock = vi.fn();
-const mediaKindFromMimeMock = vi.fn((_: string | null | undefined) => "image");
+const mediaKindFromMimeMock = vi.fn((_mime: string | null | undefined) => "image");
 const isVoiceCompatibleAudioMock = vi.fn(
-  (_: { contentType?: string | null; fileName?: string | null }) => false,
+  (_options: { contentType?: string | null; fileName?: string | null }) => false,
 );
 const resolveTextChunkLimitMock = vi.fn<
   (cfg: unknown, channel: unknown, accountId?: unknown) => number
@@ -996,6 +996,25 @@ describe("sendMessageMatrix media", () => {
     expect(mediaOptions.localRoots).toBeUndefined();
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
+
+  it.each([{ mediaMaxMb: 0 }, { mediaMaxMb: -5 }])(
+    "leaves outbound media uncapped when mediaMaxMb is $mediaMaxMb",
+    async ({ mediaMaxMb }) => {
+      const { client } = makeClient();
+
+      await sendMessageMatrix("room:!room:example", "caption", {
+        client,
+        cfg: { channels: { matrix: { mediaMaxMb } } },
+        mediaUrl: "file:///tmp/photo.png",
+      });
+
+      const mediaOptions = requireRecord(
+        mockCallArg(loadWebMediaMock, "loadWebMedia", 1),
+        "media options",
+      );
+      expect(mediaOptions.maxBytes).toBeUndefined();
+    },
+  );
 
   it("passes caller mediaLocalRoots to media loading", async () => {
     const { client } = makeClient();

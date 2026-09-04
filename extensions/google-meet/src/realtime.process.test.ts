@@ -446,6 +446,60 @@ describe("local Meet realtime transport process stream errors", () => {
 });
 
 describe("Google Meet bidi realtime engine cleanup", () => {
+  it("preserves the configured realtime agent through provider startup", async () => {
+    let bridgeRequest: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const isConfigured = vi.fn(({ agentId }) => agentId === "molty");
+    const bridge = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      sendUserMessage: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      triggerGreeting: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      isConfigured,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return bridge;
+      },
+    };
+    const transport: MeetingRealtimeAudioTransport = {
+      onFatal: vi.fn(),
+      startInput: vi.fn(),
+      stop: vi.fn(async () => {}),
+      writeOutput: vi.fn(async () => {}),
+      clearOutput: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    const config = resolveGoogleMeetConfig({
+      realtime: { strategy: "bidi", provider: "openai", agentId: "molty" },
+    });
+    const fullConfig = {
+      agents: { list: [{ id: "helper" }, { id: "molty" }] },
+    } as never;
+
+    const handle = await startMeetingRealtimeEngine({
+      config,
+      fullConfig,
+      runtime: {} as never,
+      ...GOOGLE_MEET_ENGINE_BINDINGS,
+      meetingSessionId: "meet-routed-agent",
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      providers: [provider],
+      transport,
+    });
+
+    expect(isConfigured).toHaveBeenCalledWith(expect.objectContaining({ agentId: "molty" }));
+    expect(bridgeRequest?.agentId).toBe("molty");
+    await handle.stop();
+  });
+
   it("disposes the audio transport when provider connection fails", async () => {
     const connectError = new Error("voice bridge connect failed");
     const stopError = new Error("transport stop failed");

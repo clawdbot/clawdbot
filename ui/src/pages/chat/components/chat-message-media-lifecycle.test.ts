@@ -2,8 +2,8 @@
 
 import { html, render } from "lit";
 import { guard } from "lit/directives/guard.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAssistantAttachmentAvailability } from "./chat-message-attachments.ts";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
   isChatMediaResourceCurrent,
@@ -11,8 +11,8 @@ import {
   readManagedImageBlobUrl,
   releaseChatMediaResourceSubscriber,
   schedulePairingQrExpiryRefresh,
+  type ImageBlock,
   type ImageRenderOptions,
-  type RenderableImageBlock,
 } from "./chat-message-media.ts";
 
 const subscribers = new Set<() => void>();
@@ -35,6 +35,10 @@ afterEach(() => {
 
 function managedImageSource(): string {
   return `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+}
+
+function managedImageResourceKey(source: string): string {
+  return `${source.replace(/\/full$/u, "/thumbnail")}::::`;
 }
 
 function installManagedImageUrls(): string {
@@ -63,9 +67,8 @@ function renderManagedImage(
   options: ImageRenderOptions = {},
   artifactId?: string,
 ) {
-  const image: RenderableImageBlock = {
+  const image: ImageBlock = {
     url: source,
-    displayUrl: source,
     alt: "Managed image",
     ...(artifactId ? { artifactId } : {}),
   };
@@ -78,21 +81,36 @@ function observeSubscriber(subscriber: () => void): () => void {
 }
 
 describe("chat media resource lifecycle", () => {
+  it("marks one-to-five image turns for the transcript and sent-message layouts", () => {
+    const container = document.createElement("div");
+    for (const count of [1, 2, 3, 4, 5]) {
+      const images: ImageBlock[] = Array.from({ length: count }, (_, index) => ({
+        url: `data:image/png;base64,image-${count}-${index}`,
+        alt: `Image ${index + 1}`,
+        width: count === 1 ? 16 : 640,
+        height: count === 1 ? 16 : 640,
+      }));
+      render(renderMessageImages(images), container);
+      const gallery = container.querySelector(".chat-message-images");
+      expect(gallery?.classList.contains("chat-message-images--single")).toBe(count === 1);
+      expect(gallery?.classList.contains("chat-message-images--gallery")).toBe(count > 1);
+      expect(gallery?.classList.contains("chat-message-images--two-column")).toBe(
+        count === 2 || count === 4,
+      );
+      expect(gallery?.classList.contains("chat-message-images--five")).toBe(count === 5);
+      if (count === 1) {
+        expect(container.querySelector(".chat-message-image--small")).not.toBeNull();
+      }
+    }
+  });
+
   it("refreshes every split pane when a shared pairing QR expires", async () => {
-    const message = {
-      content: [
-        {
-          type: "openclaw_pairing_qr",
-          image_url: "data:image/png;base64,cXJwbmc=",
-          expiresAtMs: Date.now() + 1_000,
-        },
-      ],
-    };
+    const expiresAt = Date.now() + 1_000;
     const refreshFirst = observeSubscriber(vi.fn());
     const refreshSecond = observeSubscriber(vi.fn());
 
-    schedulePairingQrExpiryRefresh("shared-pairing-qr", message, refreshFirst);
-    schedulePairingQrExpiryRefresh("shared-pairing-qr", message, refreshSecond);
+    schedulePairingQrExpiryRefresh("shared-pairing-qr", expiresAt, refreshFirst);
+    schedulePairingQrExpiryRefresh("shared-pairing-qr", expiresAt, refreshSecond);
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(refreshFirst).toHaveBeenCalledOnce();
@@ -101,19 +119,7 @@ describe("chat media resource lifecycle", () => {
 
   it("releases a pairing QR expiry timer when its chat pane disconnects", async () => {
     const refresh = observeSubscriber(vi.fn());
-    schedulePairingQrExpiryRefresh(
-      "disconnected-pairing-qr",
-      {
-        content: [
-          {
-            type: "openclaw_pairing_qr",
-            image_url: "data:image/png;base64,cXJwbmc=",
-            expiresAtMs: Date.now() + 1_000,
-          },
-        ],
-      },
-      refresh,
-    );
+    schedulePairingQrExpiryRefresh("disconnected-pairing-qr", Date.now() + 1_000, refresh);
 
     releaseChatMediaResourceSubscriber(refresh);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -147,6 +153,45 @@ describe("chat media resource lifecycle", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(blobUrl);
+  });
+
+  it("keeps a cached managed image mounted during rerenders and uses current callbacks", async () => {
+    const source = managedImageSource();
+    installManagedImageUrls();
+    const fetchMock = vi.fn(async () => imageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const container = document.body.appendChild(document.createElement("div"));
+    const previousOpen = vi.fn<NonNullable<ImageRenderOptions["onOpenImage"]>>();
+    const currentOpen = vi.fn<NonNullable<ImageRenderOptions["onOpenImage"]>>();
+    onTestFinished(() => {
+      for (const [item] of [...previousOpen.mock.calls, ...currentOpen.mock.calls]) {
+        item.release?.();
+      }
+      render(null, container);
+      container.remove();
+    });
+    renderManagedImage(container, source, {
+      onRequestUpdate: observeSubscriber(vi.fn()),
+      onOpenImage: previousOpen,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const displayed = container.querySelector(".chat-message-image");
+    expect(displayed).not.toBeNull();
+
+    renderManagedImage(container, source, {
+      onRequestUpdate: observeSubscriber(vi.fn()),
+      onOpenImage: currentOpen,
+    });
+    // A settled cache hit must not blank the native image for a promise turn.
+    expect(container.querySelector(".chat-message-image")).toBe(displayed);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector(".chat-message-image")).toBe(displayed);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(previousOpen).not.toHaveBeenCalled();
+    expect(currentOpen).toHaveBeenCalledOnce();
   });
 
   it("stops after one automatic retry for a permanently unavailable managed image", async () => {
@@ -220,7 +265,9 @@ describe("chat media resource lifecycle", () => {
     for (const source of sources) {
       currentSource = source;
       rerender();
-      resources.push(observeChatMediaResource<string | null>("managed-image", `${source}::::`));
+      resources.push(
+        observeChatMediaResource<string | null>("managed-image", managedImageResourceKey(source)),
+      );
       await vi.advanceTimersByTimeAsync(0);
     }
 
@@ -251,11 +298,11 @@ describe("chat media resource lifecycle", () => {
     rerender();
     const firstResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${firstSource}::::`,
+      managedImageResourceKey(firstSource),
     );
     const secondResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${secondSource}::::`,
+      managedImageResourceKey(secondSource),
     );
     await vi.advanceTimersByTimeAsync(0);
 
@@ -291,7 +338,7 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     const originalResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source}::::`,
+      managedImageResourceKey(source),
     );
     expect(originalResource.subscribers.size).toBe(1);
 
@@ -303,7 +350,7 @@ describe("chat media resource lifecycle", () => {
 
     const reconnectedResource = observeChatMediaResource<string | null>(
       "managed-image",
-      `${source}::::`,
+      managedImageResourceKey(source),
     );
     expect(reconnectedResource.subscribers.size).toBe(1);
     expect(renderImageRow).toHaveBeenCalledTimes(1);
@@ -361,7 +408,10 @@ describe("chat media resource lifecycle", () => {
     const sources = Array.from({ length: 65 }, () => managedImageSource());
     const resources = sources.map((source) => {
       renderManagedImage(document.createElement("div"), source);
-      return observeChatMediaResource<string | null>("managed-image", `${source}::::`);
+      return observeChatMediaResource<string | null>(
+        "managed-image",
+        managedImageResourceKey(source),
+      );
     });
 
     await vi.advanceTimersByTimeAsync(0);
@@ -375,8 +425,10 @@ describe("chat media resource lifecycle", () => {
       throw new Error("expected the oldest and newest managed images");
     }
     expect(isChatMediaResourceCurrent(oldestResource)).toBe(false);
-    expect(readManagedImageBlobUrl(`${oldestSource}::::`)).toBeUndefined();
-    expect(readManagedImageBlobUrl(`${latestSource}::::`)).toBe("blob:bounded-managed-image-64");
+    expect(readManagedImageBlobUrl(managedImageResourceKey(oldestSource))).toBeUndefined();
+    expect(readManagedImageBlobUrl(managedImageResourceKey(latestSource))).toBe(
+      "blob:bounded-managed-image-64",
+    );
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:bounded-managed-image-0");
 
     renderManagedImage(document.createElement("div"), latestSource);
@@ -386,7 +438,9 @@ describe("chat media resource lifecycle", () => {
     renderManagedImage(document.createElement("div"), oldestSource);
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(66);
-    expect(readManagedImageBlobUrl(`${oldestSource}::::`)).toBe("blob:bounded-managed-image-65");
+    expect(readManagedImageBlobUrl(managedImageResourceKey(oldestSource))).toBe(
+      "blob:bounded-managed-image-65",
+    );
   });
 
   it("shares a managed image retry and wakes both subscribed split panes", async () => {
@@ -807,7 +861,7 @@ describe("chat media resource lifecycle", () => {
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [requestUrl, init] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
-      expect(requestUrl).toBe(ticketedUrl);
+      expect(requestUrl).toBe(ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail"));
       const headers = new Headers(init.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();

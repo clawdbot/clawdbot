@@ -1,8 +1,8 @@
-// Control UI tests cover Memory default provenance and persisted restore actions.
-import { mkdir } from "node:fs/promises";
+// Control UI tests cover Memory default provenance and clearing optional overrides.
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,12 +14,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "memory-settings-defaults",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("memory-settings-defaults");
+  }
+});
 
 const memoryPlugins = [
   {
@@ -64,7 +64,6 @@ async function captureProof(page: Page, name: string, locator?: Locator) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   await locator?.scrollIntoViewIfNeeded();
   await page.screenshot({
     animations: "disabled",
@@ -73,7 +72,7 @@ async function captureProof(page: Page, name: string, locator?: Locator) {
 }
 
 suite.define(() => {
-  it("persists engine, backend, and dreaming resets and reloads inherited defaults", async () => {
+  it("persists a cleared dreaming frequency and preserves the explicit engine across reload", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -84,7 +83,6 @@ suite.define(() => {
       async ({ page }) => {
         const config = {
           agents: { defaults: { userTimezone: "Asia/Singapore" } },
-          memory: { backend: "qmd" },
           plugins: {
             slots: { memory: "memory-core" },
             entries: {
@@ -121,23 +119,19 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
 
         const engineRow = settingsRow(page, "Memory engine");
-        const backendRow = settingsRow(page, "Retrieval backend");
         const frequencyRow = settingsRow(page, "Dreaming frequency");
         await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
-        await expect.poll(() => backendRow.textContent()).toContain("Default: Built-in");
         await expect.poll(() => frequencyRow.textContent()).toContain("Default: 0 3 * * *");
         await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("0 6 * * *");
 
-        await captureProof(page, "01-explicit-engine-backend.png");
+        await captureProof(page, "01-explicit-engine.png");
         await captureProof(page, "02-explicit-dreaming.png", scheduleSection(page));
 
-        await engineRow.getByRole("button", { name: "Reset to default" }).click();
-        await backendRow.getByRole("button", { name: "Reset to default" }).click();
-        await frequencyRow.getByRole("button", { name: "Reset to default" }).click();
+        await frequencyRow.getByRole("textbox").fill("");
+        await frequencyRow.getByRole("textbox").blur();
 
         const saved = requestRaw(await gateway.waitForRequest("config.set"));
-        expect(saved).not.toHaveProperty("plugins.slots.memory");
-        expect(saved).not.toHaveProperty("memory.backend");
+        expect(saved).toHaveProperty("plugins.slots.memory", "memory-core");
         expect(saved).not.toHaveProperty("plugins.entries.memory-core.config.dreaming.frequency");
         expect(saved).toHaveProperty(
           "plugins.entries.memory-core.config.dreaming.verboseLogging",
@@ -149,14 +143,10 @@ suite.define(() => {
 
         await page.reload();
         const reloadedEngineRow = settingsRow(page, "Memory engine");
-        const reloadedBackendRow = settingsRow(page, "Retrieval backend");
         const reloadedFrequencyRow = settingsRow(page, "Dreaming frequency");
         await expect
           .poll(() => reloadedEngineRow.textContent())
-          .toContain("Using default: OpenClaw Memory");
-        await expect
-          .poll(() => reloadedBackendRow.textContent())
-          .toContain("Using default: Built-in");
+          .toContain("Default: OpenClaw Memory");
         await expect
           .poll(() => reloadedFrequencyRow.textContent())
           .toContain("Using default: 0 3 * * *");
@@ -164,11 +154,7 @@ suite.define(() => {
         await expect
           .poll(() => reloadedFrequencyRow.getByRole("textbox").getAttribute("placeholder"))
           .toBe("0 3 * * *");
-        await expect
-          .poll(() => page.getByRole("button", { name: "Reset to default" }).count())
-          .toBe(1);
-
-        await captureProof(page, "03-inherited-engine-backend.png");
+        await captureProof(page, "03-preserved-engine.png");
         await captureProof(page, "04-inherited-dreaming.png", scheduleSection(page));
       },
     );

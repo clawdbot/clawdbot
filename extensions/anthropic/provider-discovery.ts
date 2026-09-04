@@ -3,41 +3,25 @@
  * synthetic auth for catalog/runtime discovery without full Anthropic registration.
  */
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { readClaudeCliCredentialsForRuntime } from "./cli-auth-seam.js";
-import { CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER } from "./cli-constants.js";
+import { probeClaudeCliAuthStatus } from "./cli-auth-seam.js";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_NATIVE_AUTH_MARKER } from "./cli-constants.js";
 
-const CLAUDE_CLI_BACKEND_ID = "claude-cli";
-
-export function resolveClaudeCliSyntheticAuth() {
-  const credential = readClaudeCliCredentialsForRuntime();
-  if (!credential) {
+export async function prepareClaudeCliSyntheticAuth(
+  config: object | undefined,
+  params?: { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+) {
+  params?.signal?.throwIfAborted();
+  if (!config) {
     return undefined;
   }
-  switch (credential.type) {
-    case "oauth":
-      return {
-        apiKey: credential.access,
-        source: "Claude CLI native auth",
-        mode: "oauth" as const,
-        expiresAt: credential.expires,
-      };
-    case "token":
-      return {
-        apiKey: credential.token,
-        source: "Claude CLI native auth",
-        mode: "token" as const,
-        expiresAt: credential.expires,
-      };
-    case "api_key_helper": {
-      const marker = CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER;
-      return {
-        apiKey: marker,
-        source: "Claude CLI apiKeyHelper",
-        mode: "api-key" as const,
-      };
-    }
+  if ((await probeClaudeCliAuthStatus(params)).status !== "available") {
+    return undefined;
   }
-  return undefined;
+  return {
+    apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
+    source: "Claude CLI native auth",
+    mode: "oauth" as const,
+  };
 }
 
 const anthropicProviderDiscovery: ProviderPlugin = {
@@ -45,8 +29,8 @@ const anthropicProviderDiscovery: ProviderPlugin = {
   label: "Claude CLI",
   docsPath: "/providers/models",
   auth: [],
-  resolveSyntheticAuth: ({ provider }) =>
-    provider === CLAUDE_CLI_BACKEND_ID ? resolveClaudeCliSyntheticAuth() : undefined,
+  prepareSyntheticAuth: ({ config, provider, ...params }) =>
+    prepareClaudeCliSyntheticAuth(provider === CLAUDE_CLI_BACKEND_ID ? config : undefined, params),
 };
 
 export default anthropicProviderDiscovery;

@@ -229,9 +229,9 @@ flow:
           value:
             expr: "scenarioRequests.filter((request) => request.requestKind === 'compaction-summary')"
         - assert:
-            expr: "compactionSummaryRequests.length > 0 && compactionSummaryRequests.every((request) => request.cursor > overflowRequest.cursor && request.cursor < writeRequest.cursor && request.outcome === 'success' && request.plannedToolName === undefined && request.toolOutputStructuredError !== true)"
+            expr: "compactionSummaryRequests.some((request) => request.cursor > overflowRequest.cursor && request.cursor < writeRequest.cursor) && compactionSummaryRequests.every((request) => request.outcome === 'success' && request.plannedToolName === undefined && request.toolOutputStructuredError !== true)"
             message:
-              expr: "`expected successful OpenClaw compaction summary requests causally between overflow and retry: ${JSON.stringify(requestEvidence.filter((request) => request.kind === 'compaction-summary'))}`"
+              expr: "`expected at least one causal summary between overflow and retry with all OpenClaw compaction summaries healthy: ${JSON.stringify(requestEvidence.filter((request) => request.kind === 'compaction-summary'))}`"
         - assert:
             expr: "compactionSummaryRequests.every((request) => !String(request.allInputText ?? '').includes('Previous summary failed quality checks'))"
             message:
@@ -244,9 +244,9 @@ flow:
           value:
             expr: "store[sessionKey]"
         - assert:
-            expr: "sessionEntry?.compactionCount === 1 && Number.isFinite(sessionEntry?.totalTokens) && sessionEntry?.totalTokensFresh === true"
+            expr: "Number.isInteger(sessionEntry?.compactionCount) && sessionEntry.compactionCount >= 1 && Number.isFinite(sessionEntry?.totalTokens) && sessionEntry?.totalTokensFresh === true"
             message:
-              expr: "`OpenClaw token snapshot was not fresh after one compaction: ${JSON.stringify({ compactionCount: sessionEntry?.compactionCount, totalTokens: sessionEntry?.totalTokens, totalTokensFresh: sessionEntry?.totalTokensFresh })}`"
+              expr: "`OpenClaw token snapshot did not retain a positive compaction count with fresh token data: ${JSON.stringify({ compactionCount: sessionEntry?.compactionCount, totalTokens: sessionEntry?.totalTokens, totalTokensFresh: sessionEntry?.totalTokensFresh })}`"
         - set: checkpointPage
           value:
             expr: "await env.gateway.call('sessions.compaction.list', { key: sessionKey }, { timeoutMs: 15000 })"

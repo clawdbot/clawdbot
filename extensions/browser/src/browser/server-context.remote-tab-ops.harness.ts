@@ -27,6 +27,8 @@ export function makeState(
       cdpPortRangeEnd: 18899,
       extensionRelayDefaultPort: 18799,
       extensionRelayPorts: {},
+      extensionRelay: { allowLegacyAuth: true },
+      extensionRelayInternalTokens: {},
       cdpProtocol: profile === "remote" ? "https" : "http",
       cdpHost: profile === "remote" ? "1.1.1.1" : "127.0.0.1",
       cdpIsLoopback: profile !== "remote",

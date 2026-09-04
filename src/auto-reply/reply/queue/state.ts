@@ -21,6 +21,8 @@ type FollowupQueueState = {
   abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;
+  /** Exact operational drain generation; recovery may retire only this owner. */
+  drainOwner?: object;
   /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
   inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;
@@ -31,6 +33,7 @@ type FollowupQueueState = {
   droppedCount: number;
   summaryLines: string[];
   summarySources: FollowupRun[];
+  steerAcceptanceTail: Promise<boolean>;
   /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
   activeSummarySources: WeakSet<FollowupRun>;
   summaryElisions: Array<{
@@ -154,6 +157,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     droppedCount: 0,
     summaryLines: [],
     summarySources: [],
+    steerAcceptanceTail: Promise.resolve(true),
     activeSummarySources: new WeakSet(),
     summaryElisions: [],
     evictedSummaryCount: 0,

@@ -22,7 +22,7 @@ export function shouldRotateCodexAppServerBindingForRuntime(params: {
 
 type CodexGpt56MultiAgentVersion = "v1" | "v2";
 
-function resolveCodexGpt56MultiAgentVersion(
+export function resolveCodexGpt56MultiAgentVersion(
   modelRef: string | undefined,
 ): CodexGpt56MultiAgentVersion | undefined {
   let modelId = modelRef?.trim().toLowerCase();

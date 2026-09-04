@@ -3,6 +3,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS } from "./api.js";
+import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
+import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
 import { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "./directory-live.js";
 
 function makeParams(overrides: Partial<DirectoryConfigParams> = {}): DirectoryConfigParams {
@@ -51,6 +53,7 @@ describe("discord directory live lookups", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    clearDiscordDirectoryCacheForTest();
   });
 
   afterEach(() => {
@@ -171,5 +174,52 @@ describe("discord directory live lookups", () => {
         raw: { user: { id: "u2", username: "alice-bot", bot: true }, nick: null },
       },
     ]);
+  });
+
+  it.each([
+    {
+      name: "counts each shared-guild user once before applying the peer limit",
+      secondGuildMembers: [
+        { user: { id: "101", username: "alice" }, nick: "second-alice" },
+        { user: { id: "202", username: "alice-two" }, nick: "second-user" },
+      ],
+      limit: 2,
+      expectedIds: ["user:101", "user:202"],
+    },
+    {
+      name: "does not turn one shared-guild user into ambiguous outbound matches",
+      secondGuildMembers: [{ user: { id: "101", username: "alice" }, nick: "second-alice" }],
+      limit: undefined,
+      expectedIds: ["user:101"],
+    },
+  ])("$name", async ({ secondGuildMembers, limit, expectedIds }) => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = resolveFetchUrl(input);
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([
+          { id: "g1", name: "Guild 1" },
+          { id: "g2", name: "Guild 2" },
+        ]);
+      }
+      if (url.includes("/guilds/g1/members/search?")) {
+        return jsonResponse([{ user: { id: "101", username: "alice" }, nick: "first-alice" }]);
+      }
+      if (url.includes("/guilds/g2/members/search?")) {
+        return jsonResponse(secondGuildMembers);
+      }
+      return jsonResponse([]);
+    });
+
+    const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "alice", limit }));
+
+    expect(rows.map((entry) => entry.id)).toEqual(expectedIds);
+    expect(rows.filter((entry) => entry.handle === "@alice")).toHaveLength(1);
+    expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "first-alice" })).toBe(
+      "101",
+    );
+    expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "second-alice" })).toBe(
+      "101",
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 });

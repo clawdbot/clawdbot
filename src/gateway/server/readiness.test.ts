@@ -30,6 +30,7 @@ function snapshotWith(
 function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => snapshot),
+    getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
     startChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
@@ -77,6 +78,7 @@ function createReadinessHarness(params: {
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
   getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
+  getStateDatabaseFailure?: Parameters<typeof createReadinessChecker>[0]["getStateDatabaseFailure"];
   shouldSkipChannelReadiness?: Parameters<
     typeof createReadinessChecker
   >[0]["shouldSkipChannelReadiness"];
@@ -93,6 +95,7 @@ function createReadinessHarness(params: {
       getStartupPendingReason: params.getStartupPendingReason,
       getGatewayDraining: params.getGatewayDraining,
       getEventLoopHealth: params.getEventLoopHealth,
+      getStateDatabaseFailure: params.getStateDatabaseFailure,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
     }),
@@ -216,6 +219,22 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("reports a terminal state database failure after the readiness cache expires", () => {
+    withReadinessClock(() => {
+      const stateDatabase = { failure: undefined as Error | undefined };
+      const { manager, readiness } = createReadinessHarness({
+        getStateDatabaseFailure: () => stateDatabase.failure,
+        cacheTtlMs: 1_000,
+      });
+      expect(readiness()).toEqual(readySnapshot());
+
+      stateDatabase.failure = new Error("newer shared-state schema");
+      vi.advanceTimersByTime(1_000);
+      expect(readiness()).toEqual(failingSnapshot(["state-database"], FIVE_MIN_MS + 1_000));
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("ignores disabled and unconfigured channels", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
@@ -257,6 +276,20 @@ describe("createReadinessChecker", () => {
         },
       });
       expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    });
+  });
+
+  it("keeps a long-running Reef account ready during fresh reconnect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        reef: managedAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
+          lastDisconnect: { at: Date.now() - 5_000, error: "socket closed" },
+        }),
+      });
+      expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
     });
   });
 
@@ -479,6 +512,24 @@ describe("createReadinessChecker", () => {
 
       vi.advanceTimersByTime(600);
       expect(readiness()).toEqual(readySnapshot(301_100));
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("refreshes stopped channels when the clock moves behind cached readiness", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        accounts: { discord: managedAccount({ lifecycle: "ready" }) },
+        cacheTtlMs: 1_000,
+      });
+
+      expect(readiness()).toEqual(readySnapshot());
+      vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
+        snapshotWith({ discord: stoppedAccount({ connected: false, lifecycle: "stopped" }) }),
+      );
+      vi.setSystemTime(Date.now() - 60_000);
+
+      expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS - 60_000));
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     });
   });

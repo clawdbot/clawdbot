@@ -117,6 +117,7 @@ function allowSilentLocalPairing(overrides: Partial<SilentLocalPairingParams>) {
     hasBrowserOriginHeader: false,
     isControlUi: false,
     isWebchat: false,
+    authMethod: "token",
     reason: "not-paired",
     ...overrides,
   });
@@ -173,7 +174,7 @@ describe("handshake auth helpers", () => {
 
   it("recommends device-token retry only for shared-token mismatch with device identity", () => {
     const resolved = resolveUnauthorizedHandshakeContext({
-      connectAuth: { token: "shared-token" },
+      connectAuth: { token: "shared" },
       failedAuth: { ok: false, reason: "token_mismatch" },
       hasDeviceIdentity: true,
     });
@@ -303,6 +304,25 @@ describe("handshake auth helpers", () => {
         reason: "scope-upgrade",
       }),
     ).toBe(false);
+  });
+
+  it("limits silent scope-upgrade to local-grade auth methods", () => {
+    for (const authMethod of ["none", "token", "password"] as const) {
+      expect(allowSilentLocalPairing({ authMethod, reason: "scope-upgrade" })).toBe(true);
+    }
+    // Identity-proxy and bearer-token connects never proved local-grade
+    // credentials, so their pairing rows stay a durable scope cap.
+    for (const authMethod of [
+      "tailscale",
+      "trusted-proxy",
+      "device-token",
+      "bootstrap-token",
+    ] as const) {
+      expect(allowSilentLocalPairing({ authMethod, reason: "scope-upgrade" })).toBe(false);
+      expect(allowSilentLocalPairing({ authMethod, reason: "not-paired" })).toBe(true);
+      expect(allowSilentLocalPairing({ authMethod, reason: "role-upgrade" })).toBe(true);
+    }
+    expect(allowSilentLocalPairing({ authMethod: undefined, reason: "scope-upgrade" })).toBe(false);
   });
 
   it("rejects silent role-upgrade for remote clients", () => {

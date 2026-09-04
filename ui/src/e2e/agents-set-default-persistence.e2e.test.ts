@@ -1,4 +1,5 @@
 // Control UI tests cover Agents page Set Default persistence behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -10,12 +11,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);

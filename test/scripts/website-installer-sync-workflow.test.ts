@@ -2,12 +2,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const { detectInstallSmokeScope } = (await import("../../scripts/ci-changed-scope.mjs")) as {
-  detectInstallSmokeScope: (paths: string[]) => {
-    runFastInstallSmoke: boolean;
-    runFullInstallSmoke: boolean;
-  };
-};
+const { detectInstallSmokeScope } = await import("../../scripts/ci-changed-scope.mjs");
 
 const WORKFLOW_PATH = ".github/workflows/website-installer-sync.yml";
 
@@ -21,9 +16,26 @@ describe("website installer sync workflow", () => {
     }
   });
 
-  it("verifies installers on Linux Docker plus native macOS and Windows runners", () => {
+  it("verifies installers across Linux privilege and package-manager paths", () => {
     expect(workflow).toContain("linux-docker:");
-    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(2);
+    expect(workflow).toContain("debian-installer:");
+    expect(workflow).toContain("debian:bookworm-slim");
+    expect(workflow).toContain("node --version | grep -E '^v24\\.[0-9]+\\.[0-9]+$'");
+    expect(workflow).toContain('require("node:sqlite")');
+    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(6);
+    expect(workflow).toContain("linux-build-tools-failure:");
+    expect(workflow).toContain("/tmp/build-tools-stub-triggered");
+    expect(workflow).toContain('grep -aFq "Installing build tools failed"');
+    expect(workflow).toContain('grep -aFq "Build tools installed"');
+    expect(workflow).toContain("linux-non-root:");
+    expect(workflow).toContain("sudo -u installer -H bash");
+    expect(workflow).toContain('test "$(npm config get prefix)" = "$HOME/.npm-global"');
+    expect(workflow).toContain(
+      `grep -Fxq 'export PATH="$HOME/.npm-global/bin:$PATH"' "$HOME/.bashrc"`,
+    );
+    expect(workflow).toContain("fedora-installer:");
+    expect(workflow).toContain("user: [root, non-root]");
+    expect(workflow.match(/fedora:44/g)?.length).toBe(2);
     expect(workflow).not.toContain("timeout 20m docker run --rm");
     expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm/u);
     expect(workflow).toContain("bash /tmp/install.sh --version latest && openclaw --version");
@@ -44,7 +56,21 @@ describe("website installer sync workflow", () => {
   });
 
   it("syncs verified scripts to openclaw.ai only after all installer checks pass", () => {
-    expect(workflow).toContain("needs: [static, linux-docker, macos-installer, windows-installer]");
+    const syncNeeds = workflow.match(/  sync-website:\n    needs:\n((?:      - [^\n]+\n)+)/u);
+    expect(syncNeeds?.[1]).toBe(
+      [
+        "static",
+        "linux-docker",
+        "debian-installer",
+        "linux-build-tools-failure",
+        "linux-non-root",
+        "fedora-installer",
+        "macos-installer",
+        "windows-installer",
+      ]
+        .map((job) => `      - ${job}\n`)
+        .join(""),
+    );
     expect(workflow).toContain("repository: openclaw/openclaw.ai");
     expect(workflow).toContain("OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}");
     expect(workflow).toContain("OPENCLAW_GH_TOKEN is not configured");

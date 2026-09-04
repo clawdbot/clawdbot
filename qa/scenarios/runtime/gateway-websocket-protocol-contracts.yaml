@@ -28,6 +28,7 @@ scenario:
     - src/gateway/server-methods/nodes.read.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-websocket-protocol-contracts.ts
     summary: Starts a real Gateway child, drives raw WebSocket clients, and fetches a capability-scoped fixture plugin route.
     args:

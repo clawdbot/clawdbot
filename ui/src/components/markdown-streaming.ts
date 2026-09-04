@@ -10,6 +10,8 @@ const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 const LIST_ITEM_OPEN_RE = /^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/u;
 const LINK_REFERENCE_CANDIDATE_RE = /^[ \t]*\[/u;
+const DISCLOSURE_LINE_CANDIDATE_RE = /^[ \t]*<\/?(?:details|summary)(?=[\s>])/iu;
+const STREAMING_SPLIT_CACHE_LIMIT = 8;
 
 type DetailsFrame = { hasSummary: boolean };
 type FenceMarker = { length: number; marker: "`" | "~" };
@@ -106,20 +108,70 @@ type StreamingMarkdownSplit = {
   tailRepairStart: number | null;
 };
 
-export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMarkdownSplit {
-  let boundary = 0;
-  let index = 0;
-  let openFence: FenceMarker | null = null;
+type StreamingMarkdownCursor = {
+  boundary: number;
+  firstListOffset: number | null;
+  hasLinkReferenceDefinition: boolean;
+  index: number;
+  lastFenceOffset: number;
+  lineMode: "fence" | "plain" | null;
+  openFence: FenceMarker | null;
+};
+
+type StreamingMarkdownCacheEntry = {
+  cursor: StreamingMarkdownCursor;
+  markdown: string;
+};
+
+// A reused row key does not imply append-only text: rollovers, snapshots, and
+// completed citation markers can all replace the normalized Markdown prefix.
+const streamingSplitCache = new Map<string, StreamingMarkdownCacheEntry>();
+
+function findStreamingCodeSpans(markdown: string, start: number): Array<[number, number]> {
+  return findMarkdownCodeSpans(markdown.slice(start)).map(([from, to]) => [
+    from + start,
+    to + start,
+  ]);
+}
+
+function scanStableStreamingMarkdown(
+  markdownLocal: string,
+  cursor: StreamingMarkdownCursor = {
+    boundary: 0,
+    firstListOffset: null,
+    hasLinkReferenceDefinition: false,
+    index: 0,
+    lastFenceOffset: 0,
+    lineMode: null,
+    openFence: null,
+  },
+): { cursor: StreamingMarkdownCursor; result: StreamingMarkdownSplit } {
+  let { boundary, firstListOffset, hasLinkReferenceDefinition, index, lastFenceOffset } = cursor;
+  let lineMode = cursor.lineMode;
+  let openFence = cursor.openFence;
   const detailsStack: DetailsFrame[] = [];
-  const codeSpans = findMarkdownCodeSpans(markdownLocal);
-  let lastFenceOffset = 0;
-  let firstListOffset: number | null = null;
-  let hasLinkReferenceDefinition = false;
+  let codeSpans: ReturnType<typeof findMarkdownCodeSpans> | undefined;
+  let resumeCursor = cursor;
 
   while (index < markdownLocal.length) {
     const nextLineBreak = markdownLocal.indexOf("\n", index);
     const lineEnd = nextLineBreak === -1 ? markdownLocal.length : nextLineBreak + 1;
+    if (lineMode) {
+      index = lineEnd;
+      lineMode = nextLineBreak === -1 ? lineMode : null;
+      resumeCursor = {
+        boundary,
+        firstListOffset,
+        hasLinkReferenceDefinition,
+        index,
+        lastFenceOffset,
+        lineMode,
+        openFence,
+      };
+      continue;
+    }
     const line = markdownLocal.slice(index, nextLineBreak === -1 ? lineEnd : nextLineBreak);
+    const lineFence = openFence;
 
     if (openFence) {
       if (isFenceClose(line, openFence)) {
@@ -129,32 +181,52 @@ export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMa
           boundary = lineEnd;
         }
       }
-      index = lineEnd;
-      continue;
-    }
-
-    if (firstListOffset === null && LIST_ITEM_OPEN_RE.test(line)) {
-      firstListOffset = index;
-    }
-
-    const openingFence = getFenceMarker(line);
-    if (openingFence) {
-      openFence = openingFence;
-      lastFenceOffset = lineEnd;
-      index = lineEnd;
-      continue;
-    }
-
-    updateDetailsStack(line, detailsStack, false, codeSpans, index);
-    if (detailsStack.length === 0) {
-      if (LINK_REFERENCE_CANDIDATE_RE.test(stripMarkdownContainerPrefixes(line).content)) {
-        hasLinkReferenceDefinition = true;
+    } else {
+      if (firstListOffset === null && LIST_ITEM_OPEN_RE.test(line)) {
+        firstListOffset = index;
       }
-      if (line.trim() === "") {
-        boundary = lineEnd;
+
+      const openingFence = getFenceMarker(line);
+      if (openingFence) {
+        openFence = openingFence;
+        lastFenceOffset = lineEnd;
+      } else {
+        const strippedLine = stripMarkdownContainerPrefixes(line).content;
+        if (DISCLOSURE_LINE_CANDIDATE_RE.test(strippedLine)) {
+          updateDetailsStack(
+            line,
+            detailsStack,
+            false,
+            (codeSpans ??= findStreamingCodeSpans(markdownLocal, firstListOffset ?? boundary)),
+            index,
+          );
+        }
+        if (detailsStack.length === 0) {
+          if (LINK_REFERENCE_CANDIDATE_RE.test(strippedLine)) {
+            hasLinkReferenceDefinition = true;
+          }
+          if (line.trim() === "") {
+            boundary = lineEnd;
+          }
+        }
       }
     }
     index = lineEnd;
+    if (
+      detailsStack.length === 0 &&
+      (nextLineBreak !== -1 || canResumeStreamingLine(line, lineFence))
+    ) {
+      lineMode = nextLineBreak === -1 ? (lineFence ? "fence" : "plain") : null;
+      resumeCursor = {
+        boundary,
+        firstListOffset,
+        hasLinkReferenceDefinition,
+        index,
+        lastFenceOffset,
+        lineMode,
+        openFence,
+      };
+    }
   }
 
   // A bracket-leading line can start a multiline or escaped reference label.
@@ -168,9 +240,50 @@ export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMa
   }
 
   return {
-    boundary,
-    tailRepairStart: openFence ? null : Math.max(boundary, lastFenceOffset),
+    cursor: resumeCursor,
+    result: {
+      boundary,
+      tailRepairStart: openFence ? null : Math.max(boundary, lastFenceOffset),
+    },
   };
+}
+
+function canResumeStreamingLine(line: string, fence: FenceMarker | null): boolean {
+  const first = stripMarkdownContainerPrefixes(line).content.charAt(0);
+  if (!first) {
+    return false;
+  }
+  return fence ? first !== fence.marker : !/[\s`~<[\]*+\-\d>]/u.test(first);
+}
+
+export function splitStableStreamingMarkdown(
+  markdownLocal: string,
+  streamKey?: string,
+  stablePrefixLength = markdownLocal.length,
+): StreamingMarkdownSplit {
+  if (!streamKey) {
+    return scanStableStreamingMarkdown(markdownLocal).result;
+  }
+  const stableMarkdown = markdownLocal.slice(0, stablePrefixLength);
+  const cached = streamingSplitCache.get(streamKey);
+  const scanned = scanStableStreamingMarkdown(
+    stableMarkdown,
+    cached && stableMarkdown.startsWith(cached.markdown) ? cached.cursor : undefined,
+  );
+  streamingSplitCache.delete(streamKey);
+  streamingSplitCache.set(streamKey, { cursor: scanned.cursor, markdown: stableMarkdown });
+  while (streamingSplitCache.size > STREAMING_SPLIT_CACHE_LIMIT) {
+    const oldest = streamingSplitCache.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    streamingSplitCache.delete(oldest);
+  }
+  // Truncation notices change on every chunk even after their capped content is
+  // fixed; retain the immutable checkpoint and rescan only that short suffix.
+  return stablePrefixLength === markdownLocal.length
+    ? scanned.result
+    : scanStableStreamingMarkdown(markdownLocal, scanned.cursor).result;
 }
 
 // Streaming-tail repair config: math is not rendered by this pipeline, so
@@ -181,6 +294,9 @@ const streamingRemendOptions = { katex: false, linkMode: "text-only" } satisfies
 export function repairStreamingMarkdownTail(tail: string, repairStart = 0): string {
   const repaired =
     tail.slice(0, repairStart) + remend(tail.slice(repairStart), streamingRemendOptions);
+  if (!repaired.includes("<")) {
+    return repaired;
+  }
   const detailsStack: DetailsFrame[] = [];
   const codeSpans = findMarkdownCodeSpans(repaired);
   let openFence: FenceMarker | null = null;

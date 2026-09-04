@@ -92,7 +92,7 @@ export type IrcClient = {
   close: () => void;
 };
 
-function toError(err: unknown): Error {
+function toIrcError(err: unknown): Error {
   if (err instanceof Error) {
     return err;
   }
@@ -175,7 +175,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   });
 
   const fail = (err: unknown) => {
-    const error = toError(err);
+    const error = toIrcError(err);
     if (options.onError) {
       options.onError(error);
     }

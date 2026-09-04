@@ -5,17 +5,13 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { markAuthProfileBlockedUntil } from "openclaw/plugin-sdk/agent-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
-import {
-  isJsonObject,
-  type CodexServerNotification,
-  type JsonObject,
-  type JsonValue,
-} from "./protocol.js";
+import { isJsonObject, type CodexServerNotification, type JsonValue } from "./protocol.js";
 import {
   readCodexRateLimitsRevision,
   readRecentCodexRateLimits,
@@ -43,6 +39,15 @@ type CodexUsageLimitErrorResult = {
 
 export function createCodexUsageLimitPromptError(message: string): Error & { status: 429 } {
   return Object.assign(new Error(message), { status: 429 as const });
+}
+
+export function resolveCodexPromptError(
+  source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
+): string | Error | undefined {
+  const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
+  return usageLimitMessage
+    ? createCodexUsageLimitPromptError(usageLimitMessage)
+    : (source.message ?? undefined);
 }
 
 export function isCodexUsageLimitPromptError(error: unknown): error is Error & { status: 429 } {
@@ -256,9 +261,4 @@ function readCodexErrorPayload(error: unknown): {
     codexErrorInfo: nestedError.codexErrorInfo,
     rateLimits,
   };
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }

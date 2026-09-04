@@ -1,5 +1,6 @@
 import Foundation
-import OpenClawKit
+@testable import OpenClaw
+@testable import OpenClawKit
 
 extension WebSocketTasking {
     /// Keep unit-test doubles resilient to protocol additions.
@@ -9,6 +10,17 @@ extension WebSocketTasking {
 }
 
 enum GatewayWebSocketTestSupport {
+    static let identityFreeOperatorConnectOptions = GatewayConnectOptions(
+        role: "operator",
+        scopes: GatewayChannelActor.defaultOperatorConnectScopes,
+        caps: [],
+        commands: [],
+        permissions: [:],
+        clientId: "openclaw-macos",
+        clientMode: "ui",
+        clientDisplayName: "OpenClaw macOS Test",
+        includeDeviceIdentity: false)
+
     static func connectChallengeData(
         nonce: String = "test-nonce",
         ts: Int64 = 1_800_000_000_000) -> Data
@@ -52,11 +64,13 @@ enum GatewayWebSocketTestSupport {
         id: String,
         tickIntervalMs: Int = 30000,
         deviceToken: String? = nil,
+        mainSessionKey: String? = nil,
         canvasPluginSurfaceURL: String? = nil,
         methods: [String] = [],
         capabilities: [String] = []) -> Data
     {
         let deviceTokenField = deviceToken.map { #", "deviceToken": "\#($0)""# } ?? ""
+        let sessionDefaultsField = mainSessionKey.map { #", "sessionDefaults": {"mainSessionKey": "\#($0)"}"# } ?? ""
         let pluginSurfaceField = canvasPluginSurfaceURL.map {
             #", "pluginSurfaceUrls": { "canvas": "\#($0)" }"#
         } ?? ""
@@ -80,7 +94,7 @@ enum GatewayWebSocketTestSupport {
               "presence": [ { "ts": 1 } ],
               "health": {},
               "stateVersion": { "presence": 0, "health": 0 },
-              "uptimeMs": 0
+              "uptimeMs": 0\(sessionDefaultsField)
             },
             "auth": { "role": "operator", "scopes": []\(deviceTokenField) },
             "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": \(tickIntervalMs) }

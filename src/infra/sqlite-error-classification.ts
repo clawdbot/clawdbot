@@ -10,12 +10,14 @@ const SQLITE_NOTADB_RESULT_CODE = 26;
 const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
 
 function sqliteErrorCode(error: unknown): string | undefined {
+  // SAFETY: the object guard permits reading an optional unknown field; its type is checked below.
   const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
   return typeof code === "string" ? code : undefined;
 }
 
 function sqliteExtendedResultCode(error: unknown): number | undefined {
   const errcode =
+    // SAFETY: the object guard permits an unknown field, validated by the integer check below.
     error && typeof error === "object" ? (error as { errcode?: unknown }).errcode : undefined;
   return typeof errcode === "number" && Number.isInteger(errcode) ? errcode : undefined;
 }

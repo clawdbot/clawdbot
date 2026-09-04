@@ -1,9 +1,11 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString as readStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveMergedModelProviderConfig,
   resolveMergedModelProviderModels,
   resolveModelProviderRouteOverridePresence,
 } from "../../config/model-provider-config.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -11,9 +13,10 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import { hasAuthoredProviderRequestParams } from "../model-extra-params.js";
 import { canonicalizeProviderModelId } from "../provider-model-route.js";
+import type { PreparedAgentRuntimeAuthAttempt } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
@@ -69,6 +72,28 @@ export function resolveAgentHarnessPreparedRouteSupport(
     : {};
 }
 
+/** Projects one prepared compaction attempt into secret-free harness support facts. */
+export function projectPreparedModelProvider(params: {
+  model?: Pick<NonNullable<AgentHarnessSupportContext["modelProvider"]>, "api" | "baseUrl">;
+  plan?: AgentRuntimeAuthPlan;
+  attemptKind?: PreparedAgentRuntimeAuthAttempt["kind"];
+}): NonNullable<AgentHarnessSupportContext["modelProvider"]> {
+  const route = params.plan?.modelRoute;
+  return {
+    api: route?.api ?? params.model?.api,
+    baseUrl: route?.baseUrl ?? params.model?.baseUrl,
+    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
+    ...(params.plan
+      ? {
+          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
+            plan: params.plan,
+            source: params.attemptKind === "implicit" ? undefined : params.attemptKind,
+          }),
+        }
+      : {}),
+  };
+}
+
 /** Builds the provider/model facts passed to registered harness support probes. */
 export function buildAgentHarnessSupportContext(params: {
   provider: string;
@@ -85,6 +110,9 @@ export function buildAgentHarnessSupportContext(params: {
   providerOwnership?: HarnessProviderOwnership;
 }): AgentHarnessSupportContext {
   const providerConfig = resolveMergedModelProviderConfig(params.config, params.provider);
+  const authoredConfig = params.config
+    ? projectConfigOntoRuntimeSourceSnapshot(params.config)
+    : undefined;
   const modelId = params.modelId ? normalizeModelId(params.provider, params.modelId) : undefined;
   const modelConfig = modelId
     ? resolveMergedModelProviderModels({
@@ -94,8 +122,13 @@ export function buildAgentHarnessSupportContext(params: {
       }).get(modelId)
     : undefined;
   const agentId =
-    params.agentId ??
-    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
+    params.config && (params.agentId?.trim() || params.sessionKey?.trim())
+      ? resolveSessionAgentIds({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        }).sessionAgentId
+      : params.agentId;
   const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
     provider: params.provider,
@@ -113,7 +146,7 @@ export function buildAgentHarnessSupportContext(params: {
         requestTransportOverrides: resolveModelProviderRouteOverridePresence({
           provider: params.provider,
           modelId: params.modelId,
-          config: params.config,
+          authoredConfig,
           canonicalizeModelId: (configuredModelId) =>
             canonicalizeProviderModelId(params.provider, configuredModelId),
         }),
@@ -256,10 +289,6 @@ function isSupportedHarness(entry: {
   support: AgentHarnessSupport & { supported: true };
 } {
   return entry.support.supported;
-}
-
-function readStringParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeModelId(provider: string, modelId: string): string {

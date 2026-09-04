@@ -2,12 +2,14 @@
 import { BROWSER_PROXY_COMMAND } from "./browser-node-commands.js";
 import { resolveNodeIdFromList } from "./sdk-setup-tools.js";
 
-type BrowserNodeCandidate = {
+export type BrowserNodeTarget = {
   nodeId: string;
   displayName?: string;
+  label?: string;
   connected?: boolean;
   caps?: string[];
   commands?: string[];
+  pendingDeclaredCommands?: string[];
 };
 
 type BrowserNodeRoutingPolicy = {
@@ -16,7 +18,7 @@ type BrowserNodeRoutingPolicy = {
 };
 
 /** Select the same authorized browser-capable node on every request surface. */
-export function resolveBrowserNodeTarget<T extends BrowserNodeCandidate>(params: {
+export function resolveBrowserNodeTarget<T extends BrowserNodeTarget>(params: {
   nodes: T[];
   policy?: BrowserNodeRoutingPolicy;
   requestedNode?: string;

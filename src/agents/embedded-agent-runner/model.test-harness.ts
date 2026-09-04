@@ -1,5 +1,6 @@
 // Shared model fixtures for embedded runner model resolution tests.
 import { vi } from "vitest";
+import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 
 type DiscoverModelsMock = typeof import("../agent-model-discovery.js").discoverModels;
@@ -15,6 +16,10 @@ export const makeModel = (id: string): ModelDefinitionConfig => ({
   contextWindow: 1,
   maxTokens: 1,
 });
+
+export function makeOpenClawConfigFixture(input: OpenClawConfigInput = {}): OpenClawConfig {
+  return input as OpenClawConfig;
+}
 
 export const OPENAI_CODEX_TEMPLATE_MODEL = {
   id: "gpt-5.3-codex",

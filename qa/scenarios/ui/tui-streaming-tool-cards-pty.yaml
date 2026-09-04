@@ -20,6 +20,7 @@ scenario:
     - src/tui/tui-pty-harness.e2e.test.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts
     timeoutMs: 180000
     args: [--artifact-base, "${outputDir}", --scenario-id, "${scenarioId}"]

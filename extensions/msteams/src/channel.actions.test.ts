@@ -20,6 +20,7 @@ const {
   sendAdaptiveCardMSTeamsMock,
   sendMessageMSTeamsMock,
   unpinMessageMSTeamsMock,
+  unreactMessageMSTeamsMock,
 } = vi.hoisted(() => ({
   addParticipantMSTeamsMock: vi.fn(),
   editMessageMSTeamsMock: vi.fn(),
@@ -37,6 +38,7 @@ const {
   sendAdaptiveCardMSTeamsMock: vi.fn(),
   sendMessageMSTeamsMock: vi.fn(),
   unpinMessageMSTeamsMock: vi.fn(),
+  unreactMessageMSTeamsMock: vi.fn(),
 }));
 vi.mock("./channel.runtime.js", () => ({
   msTeamsChannelRuntime: {
@@ -56,6 +58,7 @@ vi.mock("./channel.runtime.js", () => ({
     sendAdaptiveCardMSTeams: sendAdaptiveCardMSTeamsMock,
     sendMessageMSTeams: sendMessageMSTeamsMock,
     unpinMessageMSTeams: unpinMessageMSTeamsMock,
+    unreactMessageMSTeams: unreactMessageMSTeamsMock,
   },
 }));
 
@@ -76,12 +79,12 @@ const actionMocks = [
   sendAdaptiveCardMSTeamsMock,
   sendMessageMSTeamsMock,
   unpinMessageMSTeamsMock,
+  unreactMessageMSTeamsMock,
 ];
 const currentChannelId = "conversation:19:ctx@thread.tacv2";
 const graphTeamId = "11111111-1111-1111-1111-111111111111";
 const graphChannelId = "19:channel-1@thread.tacv2";
 const graphChannelTarget = `${graphTeamId}/${graphChannelId}`;
-const reactChannelId = "conversation:19:react@thread.tacv2";
 const targetChannelId = "conversation:19:target@thread.tacv2";
 const editedConversationId = "19:edited@thread.tacv2";
 const editedMessageId = "msg-edit-1";
@@ -599,6 +602,41 @@ describe("msteamsPlugin message actions", () => {
     ).toContain("upload-file");
   });
 
+  it("hides message actions when the selected certificate is unavailable", () => {
+    const discovery = msteamsPlugin.actions?.describeMessageTool?.({
+      cfg: {
+        channels: {
+          msteams: {
+            appId: "app-id",
+            tenantId: "tenant-id",
+            authType: "federated",
+            certificatePath: "/private/openclaw-msteams-unavailable-actions.pem",
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(discovery).toEqual({ actions: [], capabilities: [], schema: null });
+  });
+
+  it("keeps message actions available when managed identity owns federated auth", () => {
+    expect(
+      msteamsPlugin.actions?.describeMessageTool?.({
+        cfg: {
+          channels: {
+            msteams: {
+              appId: "app-id",
+              tenantId: "tenant-id",
+              authType: "federated",
+              certificatePath: "/private/openclaw-msteams-unused-certificate.pem",
+              useManagedIdentity: true,
+            },
+          },
+        } as OpenClawConfig,
+      })?.actions,
+    ).toContain("upload-file");
+  });
+
   it("routes upload-file through sendMessageMSTeams with filename override", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
     const mediaAccess = {
@@ -1056,37 +1094,75 @@ describe("msteamsPlugin message actions", () => {
     expect(properties).toHaveProperty("pinnedMessageId");
   });
 
-  it("reuses currentChannelId fallback for react actions", async () => {
-    await expectSuccessfulAction({
-      mockFn: reactMessageMSTeamsMock,
-      mockResult: { ok: true },
-      action: "react",
-      cfg: unrestrictedReadCfg,
-      accountId: "default",
-      requesterAccountId: "default",
-      actionParams: {
-        messageId: padded("msg-3"),
-        emoji: padded(reactionType),
-      },
-      toolContext: {
-        currentChannelId: padded(reactChannelId),
-      },
-      runtimeParams: {
-        to: reactChannelId,
-        messageId: "msg-3",
-        reactionType,
-      },
-      details: okMSTeamsActionDetails("react", {
-        reactionType,
-      }),
-      contentDetails: {
-        channel: "msteams",
+  it.each(
+    (
+      [
+        {
+          chatType: "channel",
+          conversationTarget: "conversation:19:c@thread.tacv2",
+          currentMessagingTarget: "team-1/19:c@thread.tacv2",
+          expectedTarget: "team-1/19:c@thread.tacv2",
+        },
+        {
+          chatType: "group",
+          conversationTarget: "conversation:19:g@thread.v2",
+          currentMessagingTarget: undefined,
+          expectedTarget: "conversation:19:g@thread.v2",
+        },
+        {
+          chatType: "direct",
+          conversationTarget: "conversation:a:dm",
+          currentMessagingTarget: undefined,
+          expectedTarget: "conversation:a:dm",
+        },
+      ] as const
+    ).flatMap((conversation) =>
+      [false, true].map((remove) => ({
+        conversation,
+        chatType: conversation.chatType,
+        operation: remove ? "remove" : "add",
+        remove,
+      })),
+    ),
+  )(
+    "routes agent reaction $operation actions and preserves their result shape for $chatType turns",
+    async ({ conversation, remove }) => {
+      const { chatType, conversationTarget, currentMessagingTarget, expectedTarget } = conversation;
+      const resultDetails = { ...(remove ? { removed: true } : {}), reactionType };
+      await expectSuccessfulAction({
+        mockFn: remove ? unreactMessageMSTeamsMock : reactMessageMSTeamsMock,
+        mockResult: { ok: true },
         action: "react",
-        reactionType,
-        ok: true,
-      },
-    });
-  });
+        cfg: unrestrictedReadCfg,
+        accountId: "default",
+        requesterAccountId: "default",
+        actionParams: {
+          ...(chatType === "channel" ? { target: conversationTarget } : {}),
+          messageId: padded("msg-react"),
+          emoji: padded(reactionType),
+          ...(remove ? { remove: true } : {}),
+        },
+        toolContext: {
+          currentChannelProvider: "msteams",
+          currentChannelId: padded(conversationTarget),
+          currentChatType: chatType,
+          ...(currentMessagingTarget ? { currentMessagingTarget } : {}),
+        },
+        runtimeParams: {
+          to: expectedTarget,
+          messageId: "msg-react",
+          reactionType,
+        },
+        details: okMSTeamsActionDetails("react", resultDetails),
+        contentDetails: {
+          channel: "msteams",
+          action: "react",
+          ...resultDetails,
+          ok: true,
+        },
+      });
+    },
+  );
 
   it("shares the missing target and messageId validation across actions", async () => {
     await expectActionParamError("delete", {}, deleteMissingTargetError);
@@ -1200,20 +1276,24 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
-  it("reports the allowed reaction types when emoji is missing", async () => {
-    await expectActionParamError(
-      "react",
-      {
-        to: targetChannelId,
-        messageId: "msg-4",
-      },
-      reactMissingEmojiError,
-      {
-        error: reactMissingEmojiDetail,
-        validTypes: reactionTypes,
-      },
-    );
-  });
+  it.each([false, true])(
+    "reports the allowed reaction types when emoji is missing (remove=%s)",
+    async (remove) => {
+      await expectActionParamError(
+        "react",
+        {
+          to: targetChannelId,
+          messageId: "msg-4",
+          ...(remove ? { remove: true } : {}),
+        },
+        reactMissingEmojiError,
+        {
+          error: reactMissingEmojiDetail,
+          validTypes: reactionTypes,
+        },
+      );
+    },
+  );
 
   it("requires a non-empty search query after trimming", async () => {
     await expectActionError(
@@ -1284,6 +1364,11 @@ describe("msteamsPlugin message actions", () => {
       params: { to: graphChannelTarget, messageId: "msg-1", emoji: "like" },
       runtimeMock: reactMessageMSTeamsMock,
     },
+    {
+      action: "react",
+      params: { to: graphChannelTarget, messageId: "msg-1", emoji: "like", remove: true },
+      runtimeMock: unreactMessageMSTeamsMock,
+    },
   ])("rejects a blocked $action target before the provider operation", async (testCase) => {
     await expect(
       runAction({
@@ -1309,46 +1394,6 @@ describe("msteamsPlugin message actions", () => {
     expect(testCase.runtimeMock).not.toHaveBeenCalled();
   });
 
-  it("restores the Graph route from a core-materialized channel target", async () => {
-    // Core materializes an omitted target from currentChannelId before plugin
-    // dispatch. Teams must restore the prepared Graph target for channel turns.
-    const teamChannelTarget = "team-1/19:channel-abc@thread.tacv2";
-    const conversationTarget = "conversation:19:channel-abc@thread.tacv2";
-    await expectSuccessfulAction({
-      mockFn: reactMessageMSTeamsMock,
-      mockResult: { ok: true },
-      action: "react",
-      cfg: unrestrictedReadCfg,
-      accountId: "default",
-      requesterAccountId: "default",
-      actionParams: {
-        target: conversationTarget,
-        messageId: "msg-channel-react",
-        emoji: reactionType,
-      },
-      toolContext: {
-        currentChannelProvider: "msteams",
-        currentChannelId: conversationTarget,
-        currentChatType: "channel",
-        currentMessagingTarget: teamChannelTarget,
-      },
-      runtimeParams: {
-        to: teamChannelTarget,
-        messageId: "msg-channel-react",
-        reactionType,
-      },
-      details: okMSTeamsActionDetails("react", {
-        reactionType,
-      }),
-      contentDetails: {
-        channel: "msteams",
-        action: "react",
-        reactionType,
-        ok: true,
-      },
-    });
-  });
-
   it("preserves explicit teamId/channelId target over toolContext fallback", async () => {
     // Even in a channel context with a compound currentChannelId, an
     // explicit `target` param must take precedence.
@@ -1371,41 +1416,6 @@ describe("msteamsPlugin message actions", () => {
       runtimeParams: {
         to: explicitTarget,
         messageId: "msg-explicit",
-        reactionType,
-      },
-      details: okMSTeamsActionDetails("react", {
-        reactionType,
-      }),
-      contentDetails: {
-        channel: "msteams",
-        action: "react",
-        reactionType,
-        ok: true,
-      },
-    });
-  });
-
-  it("keeps chat conversation fallback targets as-is for DM react actions", async () => {
-    // DM/group-chat turns continue to set currentChannelId to a
-    // `conversation:<id>` string (no `teamId/` prefix), which the runtime
-    // will resolve through `/chats/{id}`.
-    const dmFallback = "conversation:19:chat-dm@thread.skype";
-    await expectSuccessfulAction({
-      mockFn: reactMessageMSTeamsMock,
-      mockResult: { ok: true },
-      action: "react",
-      cfg: unrestrictedReadCfg,
-      actionParams: {
-        messageId: "msg-dm-react",
-        emoji: reactionType,
-      },
-      toolContext: {
-        currentChannelId: dmFallback,
-        currentChatType: "direct",
-      },
-      runtimeParams: {
-        to: dmFallback,
-        messageId: "msg-dm-react",
         reactionType,
       },
       details: okMSTeamsActionDetails("react", {

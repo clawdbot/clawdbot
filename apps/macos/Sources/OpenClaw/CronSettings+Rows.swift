@@ -32,31 +32,31 @@ extension CronSettings {
     }
 
     @ViewBuilder
-    func jobContextMenu(_ job: CronJob) -> some View {
-        Button("Run now") { Task { await self.store.runJob(id: job.id, force: true) } }
-        if let transcriptSessionKey = job.transcriptSessionKey {
+    func jobContextMenu(_ context: CronJobsStore.JobContext) -> some View {
+        let job = context.job
+        Button("Run now") { Task { await self.store.runJob(context, force: true) } }
+        if job.transcriptSessionKey != nil {
             Button("Open transcript") {
-                WebChatManager.shared.show(sessionKey: transcriptSessionKey)
+                self.store.openTranscript(context)
             }
         }
         Divider()
         Button(job.enabled ? "Disable" : "Enable") {
-            Task { await self.store.setJobEnabled(id: job.id, enabled: !job.enabled) }
+            Task { await self.store.setJobEnabled(context, enabled: !job.enabled) }
         }
         Button("Edit…") {
-            self.editingJob = job
-            self.editorError = nil
-            self.showEditor = true
+            self.editor = context.editor
         }
         .disabled(!job.payload.isEditableInMacApp)
         Divider()
         Button("Delete…", role: .destructive) {
-            self.confirmDelete = job
+            self.confirmDelete = context
         }
     }
 
-    func detailHeader(_ job: CronJob) -> some View {
-        HStack(alignment: .center) {
+    func detailHeader(_ context: CronJobsStore.JobContext) -> some View {
+        let job = context.job
+        return HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(job.displayName)
                     .font(.title3.weight(.semibold))
@@ -71,21 +71,19 @@ extension CronSettings {
             HStack(spacing: 8) {
                 Toggle("Enabled", isOn: Binding(
                     get: { job.enabled },
-                    set: { enabled in Task { await self.store.setJobEnabled(id: job.id, enabled: enabled) } }))
+                    set: { enabled in Task { await self.store.setJobEnabled(context, enabled: enabled) } }))
                     .toggleStyle(.switch)
                     .labelsHidden()
-                Button("Run") { Task { await self.store.runJob(id: job.id, force: true) } }
+                Button("Run") { Task { await self.store.runJob(context, force: true) } }
                     .buttonStyle(.borderedProminent)
-                if let transcriptSessionKey = job.transcriptSessionKey {
+                if job.transcriptSessionKey != nil {
                     Button("Transcript") {
-                        WebChatManager.shared.show(sessionKey: transcriptSessionKey)
+                        self.store.openTranscript(context)
                     }
                     .buttonStyle(.bordered)
                 }
                 Button("Edit") {
-                    self.editingJob = job
-                    self.editorError = nil
-                    self.showEditor = true
+                    self.editor = context.editor
                 }
                 .buttonStyle(.bordered)
                 .disabled(!job.payload.isEditableInMacApp)
@@ -120,7 +118,8 @@ extension CronSettings {
             }
             LabeledContent("Last run") {
                 if let date = job.lastRunDate {
-                    Text("\(date.formatted(date: .abbreviated, time: .standard)) · \(relativeAge(from: date))")
+                    Text(
+                        verbatim: "\(date.formatted(date: .abbreviated, time: .standard)) · \(relativeAge(from: date))")
                 } else {
                     Text("—").foregroundStyle(.secondary)
                 }
@@ -142,14 +141,14 @@ extension CronSettings {
         .cornerRadius(8)
     }
 
-    func runHistoryCard(_ job: CronJob) -> some View {
+    func runHistoryCard(_ context: CronJobsStore.JobContext) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Run history")
                     .font(.headline)
                 Spacer()
                 Button {
-                    Task { await self.store.refreshRuns(jobId: job.id) }
+                    self.store.refreshRuns(context)
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
@@ -188,7 +187,7 @@ extension CronSettings {
                     .foregroundStyle(.secondary)
                 Spacer()
                 if let ms = entry.durationMs {
-                    Text("\(ms)ms")
+                    Text(String(format: String(localized: "%lldms"), ms))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

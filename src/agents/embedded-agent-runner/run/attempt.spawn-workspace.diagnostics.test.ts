@@ -13,7 +13,7 @@ import {
   createContextEngineBootstrapAndAssemble,
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
-} from "./attempt.spawn-workspace.test-support.js";
+} from "./attempt-spawn-workspace.test-support.js";
 
 describe("runEmbeddedAttempt diagnostics", () => {
   const tempPaths: string[] = [];

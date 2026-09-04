@@ -1,8 +1,8 @@
 // Covers plugin embedding provider registration and lookup.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { collectRegisteredEmbeddingProviderIds } from "./channel-plugin-ids.js";
+import { CORE_EMBEDDING_PROVIDERS } from "./core-embedding-providers.js";
 import {
-  clearEmbeddingProviders,
   getRegisteredEmbeddingProvider,
   listRegisteredEmbeddingProviders,
   registerEmbeddingProvider,
@@ -10,9 +10,12 @@ import {
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { withPluginRegistrationContext } from "./runtime.js";
-
-const INITIAL_REGISTERED_EMBEDDING_PROVIDERS = listRegisteredEmbeddingProviders();
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "./runtime.js";
 
 function createAdapter(id: string): EmbeddingProviderAdapter {
   return {
@@ -21,12 +24,10 @@ function createAdapter(id: string): EmbeddingProviderAdapter {
   };
 }
 
-beforeEach(() => {
-  clearEmbeddingProviders();
-});
-
-afterEach(() => {
-  restoreRegisteredEmbeddingProviders(INITIAL_REGISTERED_EMBEDDING_PROVIDERS);
+beforeEach(({ onTestFinished }) => {
+  const previous = captureActivePluginRegistrySnapshot();
+  onTestFinished(() => rollbackStagedPluginRegistry(previous));
+  stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
 });
 
 describe("embedding provider registry", () => {
@@ -40,28 +41,26 @@ describe("embedding provider registry", () => {
     restoreRegisteredEmbeddingProviders([entry]);
 
     expect(getRegisteredEmbeddingProvider("local-compatible")).toEqual(entry);
-    expect(listRegisteredEmbeddingProviders()).toEqual([
-      INITIAL_REGISTERED_EMBEDDING_PROVIDERS[0],
-      entry,
-    ]);
+    expect(listRegisteredEmbeddingProviders()).toEqual([...CORE_EMBEDDING_PROVIDERS, entry]);
   });
 
-  it("keeps core providers from being shadowed by restored snapshots", () => {
-    const adapter = createAdapter("openai-compatible");
+  it.each(CORE_EMBEDDING_PROVIDERS)(
+    "keeps core provider $adapter.id from being shadowed by restored snapshots",
+    (coreEntry) => {
+      const adapter = createAdapter(coreEntry.adapter.id);
 
-    expect(() =>
-      restoreRegisteredEmbeddingProviders([
-        {
-          adapter,
-          ownerPluginId: "shadow",
-        },
-      ]),
-    ).toThrow("embedding provider already registered: openai-compatible (owner: core)");
+      expect(() =>
+        restoreRegisteredEmbeddingProviders([
+          {
+            adapter,
+            ownerPluginId: "shadow",
+          },
+        ]),
+      ).toThrow(`embedding provider already registered: ${adapter.id} (owner: core)`);
 
-    expect(getRegisteredEmbeddingProvider("openai-compatible")).toEqual(
-      INITIAL_REGISTERED_EMBEDDING_PROVIDERS[0],
-    );
-  });
+      expect(getRegisteredEmbeddingProvider(adapter.id)).toBe(coreEntry);
+    },
+  );
 
   it("stores adapters in the active registry", () => {
     const adapter = createAdapter("local-protocol");
@@ -100,16 +99,14 @@ describe("collectRegisteredEmbeddingProviderIds", () => {
   // Boot-equivalence: the shared helper unions the same three sources the gateway
   // startup "configured but unregistered" warning uses, so the /status drift line and
   // the boot warning agree on what counts as "registered".
-  it("unions registry memory + general embedding providers with the global registry", () => {
+  it("unions registry embedding providers with the global registry", () => {
     registerEmbeddingProvider(createAdapter("global-embed"), { ownerPluginId: "p" });
     const registry = {
-      memoryEmbeddingProviders: [{ provider: { id: "mem-embed" } }],
       embeddingProviders: [{ provider: { id: "gen-embed" } }],
     } as never;
 
     const ids = collectRegisteredEmbeddingProviderIds(registry);
 
-    expect(ids.has("mem-embed")).toBe(true);
     expect(ids.has("gen-embed")).toBe(true);
     expect(ids.has("global-embed")).toBe(true);
     // Every globally registered provider (core + plugin-registered) is always included.

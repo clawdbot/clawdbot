@@ -26,7 +26,7 @@ scenario:
     - scripts/lib/plugin-sdk-entrypoints.json
     - scripts/lib/plugin-sdk-private-local-only-subpaths.json
     - scripts/lib/plugin-sdk-deprecated-public-subpaths.json
-    - src/plugin-sdk/entrypoints.ts
+    - scripts/lib/plugin-sdk-entries.mts
     - src/plugins/contracts/plugin-sdk-subpaths.test.ts
   execution:
     kind: vitest

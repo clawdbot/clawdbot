@@ -15,11 +15,11 @@ export async function isPortFree(port: number): Promise<boolean> {
   });
 }
 
-export async function getFreePort(): Promise<number> {
+export async function getFreePort(host = "127.0.0.1"): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = createServer();
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, host, () => {
       const addr = server.address();
       if (!addr || typeof addr === "string") {
         server.close();

@@ -15,7 +15,11 @@ export function sanitizeNodeInvokeParamsForForwarding(opts: {
   client: GatewayClient | null;
   execApprovalManager?: ExecApprovalManager;
 }):
-  | { ok: true; params: unknown }
+  | {
+      ok: true;
+      params: unknown;
+      approvalAuthority?: { recordId: string; decision: "allow-once" | "allow-always" };
+    }
   | { ok: false; message: string; details?: Record<string, unknown> } {
   if (opts.command === "system.run") {
     return sanitizeSystemRunParamsForForwarding({

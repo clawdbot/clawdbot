@@ -20,7 +20,7 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - ui/src/e2e/operator-admin.e2e.test.ts
-    - ui/src/pages/nodes/view-exec-approvals.ts
+    - ui/src/pages/devices/view-exec-approvals.ts
     - ui/src/lib/nodes/index.ts
   execution:
     kind: playwright

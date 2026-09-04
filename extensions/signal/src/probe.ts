@@ -79,7 +79,7 @@ async function probeSignalTransport(
     } catch (error) {
       result.error = formatErrorMessage(error);
     }
-    return { ...result, ok: true, status: check.status ?? null };
+    return { ...result, ok: result.error === null, status: check.status ?? null };
   });
 }
 

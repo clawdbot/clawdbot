@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
-import { VERSION } from "../version.js";
+import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -334,6 +334,7 @@ export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
   existingNodeOptions?: string;
+  runtime?: GatewayDaemonRuntime;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
   extraPathDirs?: string[];
@@ -354,7 +355,12 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
-    NODE_OPTIONS: resolveGatewayHeapNodeOptions(params.existingNodeOptions),
+    // An empty assignment clears supervisor ambient options; omission would
+    // allow preloads/debug flags to bypass the heap-only service boundary.
+    NODE_OPTIONS: resolveGatewayHeapNodeOptions(
+      params.existingNodeOptions,
+      wrapperPath ? undefined : params.runtime,
+    ),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),
@@ -364,7 +370,6 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
-    OPENCLAW_SERVICE_VERSION: VERSION,
   };
 }
 
@@ -384,14 +389,20 @@ export function buildNodeServiceEnvironment(params: {
   );
   const gatewayToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
   const gatewayPassword = normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD);
+  const cloudflareAccessClientId = normalizeOptionalString(env.CF_ACCESS_CLIENT_ID);
+  const cloudflareAccessClientSecret = normalizeOptionalString(env.CF_ACCESS_CLIENT_SECRET);
   const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
+    CF_ACCESS_CLIENT_ID: cloudflareAccessClientId,
+    CF_ACCESS_CLIENT_SECRET: cloudflareAccessClientSecret,
     OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: allowInsecurePrivateWs,
+    // launchd manager variables outlive the installer. Worker snapshots scope
+    // this host fence by the canonical managed-node service identity.
+    NODE_DISABLE_COMPILE_CACHE: platform === "darwin" ? "1" : undefined,
     ...resolveNodeServiceIdentityEnvironment(),
-    OPENCLAW_SERVICE_VERSION: VERSION,
   };
 }
 

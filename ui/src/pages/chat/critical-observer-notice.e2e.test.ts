@@ -154,6 +154,78 @@ async function emitObserverAndReadToast(
 }
 
 suite.define(() => {
+  it("keeps a critical notice above a shadow-root modal through nested overlay hides", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          historyMessages: [
+            {
+              content: [{ type: "text", text: "Selected session A is ready." }],
+              role: "assistant",
+              timestamp: baseTime,
+            },
+          ],
+          methodResponses: {
+            "sessions.list": sessionsListResponse(),
+          },
+          sessionKey: selectedSessionKey,
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        await page.getByText("Selected session A is ready.").waitFor({ state: "visible" });
+
+        await page.evaluate(() => {
+          const owner = document.createElement("div");
+          owner.id = "toast-shadow-owner";
+          const modal = document.createElement("openclaw-modal-dialog");
+          modal.label = "Shadow modal";
+          const content = document.createElement("button");
+          content.textContent = "Modal action";
+          modal.append(content);
+          owner.attachShadow({ mode: "open" }).append(modal);
+          document.body.append(owner);
+        });
+        const modal = page.locator("#toast-shadow-owner").locator("openclaw-modal-dialog");
+        await page.getByRole("dialog", { name: "Shadow modal" }).waitFor({ state: "visible" });
+
+        const headline = "Shadow-root session needs attention";
+        const result = await emitObserverAndReadToast(
+          page,
+          observerDigest({
+            sessionKey: backgroundSessionKey,
+            health: "stuck",
+            headline,
+            revision: 1,
+          }),
+        );
+        expect(result.visible).toBe(true);
+        expect(result.message).toContain(headline);
+
+        const host = modal.locator(":scope > openclaw-toast-host");
+        await expect.poll(() => host.count()).toBe(1);
+        await modal.evaluate((element) => {
+          const nestedOverlay = document.createElement("div");
+          element.append(nestedOverlay);
+          nestedOverlay.dispatchEvent(
+            new CustomEvent("wa-after-hide", { bubbles: true, composed: true }),
+          );
+          nestedOverlay.remove();
+        });
+        await expect.poll(() => host.count()).toBe(1);
+        await host.locator(".app-toast__action").click({ trial: true });
+
+        await modal.evaluate((element) => (element as HTMLElement & { hide: () => void }).hide());
+        const appToast = page.locator(".shell > openclaw-toast-host .app-toast");
+        await expect.poll(() => appToast.textContent()).toContain(headline);
+        await appToast.getByRole("button", { name: "Dismiss" }).click();
+      },
+    );
+  });
+
   it("announces critical background sessions, navigates, and dedupes after dismissal", async () => {
     await rm(artifactDir, { force: true, recursive: true });
     await mkdir(artifactDir, { recursive: true });
@@ -164,8 +236,6 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        page.setDefaultTimeout(10_000);
-
         const gateway = await installMockGateway(page, {
           historyMessages: [
             {
@@ -335,8 +405,6 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        page.setDefaultTimeout(10_000);
-
         const gateway = await installMockGateway(page, {
           assistantAgentId: "work",
           defaultAgentId: "work",

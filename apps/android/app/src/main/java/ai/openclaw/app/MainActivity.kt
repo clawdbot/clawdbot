@@ -233,6 +233,13 @@ class MainActivity : AppCompatActivity() {
       viewModel.handleShareLaunchIntent(intent)
       return
     }
+    parseConversationNotificationLaunchIntent(
+      intent = intent,
+      takeTarget = (application as NodeApp).conversationNotificationLaunchStore::take,
+    )?.let { target ->
+      viewModel.openConversationNotification(target)
+      return
+    }
     parseHomeDestinationIntent(intent)?.let { destination ->
       viewModel.requestHomeDestination(destination)
       return

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { testing } from "../../scripts/test-perf-budget.mjs";
+import { testing } from "../../scripts/test-perf-budget.mts";
 
 function withReport(payload: unknown, run: (reportPath: string) => void) {
   const reportPath = path.join(os.tmpdir(), `openclaw-test-perf-budget-${Date.now()}.json`);

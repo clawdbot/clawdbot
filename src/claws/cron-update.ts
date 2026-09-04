@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   CLAW_CRON_REF_SCHEMA_VERSION,
@@ -14,6 +14,7 @@ import {
 } from "./cron.js";
 import type { ClawCronJob, ClawManifest } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
+import { collectClawRollbackFailures } from "./update-rollback.js";
 
 export type ClawCronUpdateExecution = {
   appliedIds: string[];
@@ -94,7 +95,7 @@ export async function applyClawCronUpdate(
     try {
       raw = await gateway.add(clawCronGatewayInput(updatePlan.agentId, ref));
     } catch (error) {
-      throw new ClawCronUpdateError(error instanceof Error ? error.message : String(error), true);
+      throw new ClawCronUpdateError(coerceErrorMessage(error), true);
     }
     const result = clawCronSchedulerJobFromResult(raw);
     if (!result) {
@@ -103,14 +104,7 @@ export async function applyClawCronUpdate(
     return result.id;
   };
   const rollback = async () => {
-    const failures: string[] = [];
-    for (const revert of undo.toReversed()) {
-      try {
-        await revert();
-      } catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
-      }
-    }
+    const failures = await collectClawRollbackFailures(undo.toReversed());
     if (failures.length > 0) {
       throw new ClawCronUpdateError(failures.join("; "));
     }
@@ -142,10 +136,7 @@ export async function applyClawCronUpdate(
         try {
           await gateway.remove(previous.schedulerJobId);
         } catch (error) {
-          throw new ClawCronUpdateError(
-            error instanceof Error ? error.message : String(error),
-            true,
-          );
+          throw new ClawCronUpdateError(coerceErrorMessage(error), true);
         }
         undo.push(async () => {
           const restoredId = await add(previous);
@@ -174,7 +165,7 @@ export async function applyClawCronUpdate(
             }
           } catch (error) {
             throw new ClawCronUpdateError(
-              `cron.add did not converge and cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+              `cron.add did not converge and cleanup failed: ${coerceErrorMessage(error)}`,
               true,
             );
           }
@@ -200,12 +191,12 @@ export async function applyClawCronUpdate(
       await rollback();
     } catch (rollbackError) {
       throw new ClawCronUpdateError(
-        `${error instanceof Error ? error.message : String(error)}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        `${coerceErrorMessage(error)}; rollback failed: ${coerceErrorMessage(rollbackError)}`,
         true,
       );
     }
     throw new ClawCronUpdateError(
-      error instanceof Error ? error.message : String(error),
+      coerceErrorMessage(error),
       error instanceof ClawCronUpdateError && error.partial,
     );
   }

@@ -13,9 +13,8 @@ vi.mock("./src/cli.js", () => ({
 import plugin from "./cli-metadata.js";
 
 describe("memory-core CLI metadata", () => {
-  it("passes SQLite state and lease hosts to the standalone CLI", async () => {
+  it("passes the SQLite state host to the standalone CLI", async () => {
     let registrar: Parameters<OpenClawPluginApi["registerCli"]>[0] | undefined;
-    const hostWithLease = vi.fn();
     const keyedStore = {};
     const openKeyedStore = vi.fn(() => keyedStore);
     const acquireLocalService = vi.fn(async () => undefined);
@@ -23,7 +22,7 @@ describe("memory-core CLI metadata", () => {
       createTestPluginApi({
         runtime: {
           llm: { acquireLocalService },
-          state: { openKeyedStore, withLease: hostWithLease },
+          state: { openKeyedStore },
         } as unknown as OpenClawPluginApi["runtime"],
         registerCli(nextRegistrar) {
           registrar = nextRegistrar;
@@ -40,7 +39,6 @@ describe("memory-core CLI metadata", () => {
     expect(registerMemoryCliMock).toHaveBeenCalledWith(program, {
       acquireLocalService,
       openKeyedStore: expect.any(Function),
-      withLease: expect.any(Function),
     });
     const boundOpenKeyedStore = registerMemoryCliMock.mock.calls[0]?.[1]?.openKeyedStore as
       | ((options: unknown) => unknown)
@@ -51,13 +49,5 @@ describe("memory-core CLI metadata", () => {
     const storeOptions = { namespace: "cli-status-regression", maxEntries: 1 };
     expect(boundOpenKeyedStore(storeOptions)).toBe(keyedStore);
     expect(openKeyedStore).toHaveBeenCalledWith(storeOptions);
-    const withLease = registerMemoryCliMock.mock.calls[0]?.[1]?.withLease as
-      | ((...args: unknown[]) => unknown)
-      | undefined;
-    if (!withLease) {
-      throw new Error("bound lease hook missing");
-    }
-    withLease("options", "callback");
-    expect(hostWithLease).toHaveBeenCalledWith("options", "callback");
   });
 });

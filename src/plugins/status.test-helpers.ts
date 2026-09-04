@@ -35,7 +35,6 @@ export function createPluginRecord(
     webSearchProviderIds: [],
     migrationProviderIds: [],
     contextEngineIds: [],
-    memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
     cliCommands: [],
     services: [],

@@ -4,9 +4,8 @@ import type { OpenClawConfig } from "../config/types.js";
 import {
   canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
-  parseCsvFilter,
+  parseVideoProviderFilter,
   parseProviderModelMap,
-  redactLiveApiKey,
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoAuthStore,
   resolveLiveVideoResolution,
@@ -24,9 +23,9 @@ describe("video-generation live-test helpers", () => {
   });
 
   it("parses provider filters and treats empty/all as unfiltered", () => {
-    expect(parseCsvFilter()).toBeNull();
-    expect(parseCsvFilter("all")).toBeNull();
-    expect(parseCsvFilter(" google , openai ")).toEqual(new Set(["google", "openai"]));
+    expect(parseVideoProviderFilter()).toBeNull();
+    expect(parseVideoProviderFilter("all")).toBeNull();
+    expect(parseVideoProviderFilter(" google , openai ")).toEqual(new Set(["google", "openai"]));
   });
 
   it("parses provider model overrides by provider id", () => {
@@ -87,13 +86,6 @@ describe("video-generation live-test helpers", () => {
         hasLiveKeys: false,
       }),
     ).toBeUndefined();
-  });
-
-  it("redacts live API keys for diagnostics", () => {
-    expect(redactLiveApiKey(undefined)).toBe("none");
-    expect(redactLiveApiKey("   ")).toBe("none");
-    expect(redactLiveApiKey("synthetic-12")).toBe("<redacted>");
-    expect(redactLiveApiKey("synthetic-credential-value")).toBe("<redacted>");
   });
 
   it("runs buffer-backed video-to-video only for supported providers/models", () => {

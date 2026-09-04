@@ -1,7 +1,7 @@
 // LLM Task doctor contract migrates shipped plugin-local completion policy.
-import { parseModelRef } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
+import { parseModelRef } from "openclaw/plugin-sdk/model-ref-parse";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 const ENTRY_PATH = "plugins.entries.llm-task";
 

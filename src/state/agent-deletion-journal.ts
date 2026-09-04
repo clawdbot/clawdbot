@@ -9,6 +9,7 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { deleteAgentProvenanceForAgent, ensureAgentProvenanceSchema } from "./agent-provenance.js";
 import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
@@ -16,7 +17,10 @@ import type {
 import { ensureAgentDeletionJournalSchema } from "./openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawRegisteredAgentDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "./openclaw-state-db.paths.js";
 
 type AgentDeletionDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -366,6 +370,7 @@ export function beginAgentDeletionJournal(
     cleanupPaths: entry.cleanupPaths ?? [],
   };
   let persisted: AgentDeletionJournalEntry | undefined;
+  ensureAgentProvenanceSchema(options);
   runOpenClawStateWriteTransaction((database) => {
     ensureAgentDeletionJournalSchema(database.db);
     const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
@@ -379,7 +384,11 @@ export function beginAgentDeletionJournal(
     const registeredDatabasePaths = executeSqliteQuerySync(
       database.db,
       db.selectFrom("agent_databases").select("path").where("agent_id", "=", normalized.agentId),
-    ).rows.flatMap((row) => resolveSqliteDatabaseFilePaths(row.path));
+    ).rows.flatMap((row) =>
+      resolveSqliteDatabaseFilePaths(
+        resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
+      ),
+    );
     const databasePaths = [
       ...new Set(
         [
@@ -412,6 +421,7 @@ export function beginAgentDeletionJournal(
         cleanupCompleted: false,
         deleteFiles: normalized.deleteFiles,
       };
+      deleteAgentProvenanceForAgent(database.db, normalized.agentId);
       return;
     }
     const createdAt = Date.now();
@@ -431,6 +441,7 @@ export function beginAgentDeletionJournal(
       }),
     );
     persisted = { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false };
+    deleteAgentProvenanceForAgent(database.db, normalized.agentId);
   }, options);
   if (!persisted) {
     throw new Error(`Failed to record deletion journal for agent ${normalized.agentId}.`);
@@ -494,22 +505,30 @@ export function completeAgentDeletionJournal(
   operationId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
+  return runOpenClawStateWriteTransaction(
+    (database) => completeAgentDeletionJournalInDatabase(database, agentId, operationId),
+    options,
+  );
+}
+
+/** Complete a deletion journal inside a caller-owned shared-state transaction. */
+export function completeAgentDeletionJournalInDatabase(
+  database: OpenClawStateDatabase,
+  agentId: string,
+  operationId: string,
+): boolean {
   const id = normalizeAgentId(agentId);
-  let completed = false;
-  runOpenClawStateWriteTransaction((database) => {
-    ensureAgentDeletionJournalSchema(database.db);
-    const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("agent_deletion_journal")
-        .set({ cleanup_completed: 1 })
-        .where("agent_id", "=", id)
-        .where("operation_id", "=", operationId),
-    );
-    completed = Number(result.numAffectedRows ?? 0) > 0;
-  }, options);
-  return completed;
+  ensureAgentDeletionJournalSchema(database.db);
+  const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
+  const result = executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("agent_deletion_journal")
+      .set({ cleanup_completed: 1 })
+      .where("agent_id", "=", id)
+      .where("operation_id", "=", operationId),
+  );
+  return Number(result.numAffectedRows ?? 0) > 0;
 }
 
 export function removeAgentDeletionJournal(

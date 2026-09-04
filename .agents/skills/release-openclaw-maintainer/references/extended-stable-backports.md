@@ -48,8 +48,8 @@ Extended-stable is a maintenance line, not an API or configuration delivery
 vehicle. Treat every backport that changes either surface as a visible
 **SDK/config backport warning**:
 
-- the public plugin SDK: exports, entrypoints, declarations, API-baseline
-  hashes, plugin contracts, or public package export metadata;
+- the public plugin SDK: exports, entrypoints, declarations, rendered API
+  differences, plugin contracts, or public package export metadata;
 - configuration/defaults: schema or help text, generated config baselines,
   config keys/defaults, plugin/channel configuration metadata, doctor
   migrations, or compatibility behavior.
@@ -71,13 +71,17 @@ surface is important context, not an implicit approval.
 
 Before the staging PR, collect this evidence against the exact canonical branch
 tip recorded before applying any candidates. The first command is optional
-owner-path context for investigating a warning. The generated public-contract
-manifests in the second command are the warning trigger:
+owner-path context for investigating a warning. Capture both commits in the
+staging checkout, then run the comparison from the checkout pinned to the
+current `origin/main` tooling SHA so older maintenance branches do not supply
+obsolete release tooling:
 
 ```bash
 baseline_sha=<canonical-extended-stable-tip-before-backports>
+staging_sha=$(git rev-parse HEAD)
 
-git diff --name-status "$baseline_sha"..HEAD -- \
+# Run the remaining commands from the pinned current-main tooling checkout.
+git diff --name-status "$baseline_sha".."$staging_sha" -- \
   src/plugin-sdk \
   src/plugins/contracts \
   src/config \
@@ -85,29 +89,33 @@ git diff --name-status "$baseline_sha"..HEAD -- \
   scripts/lib/plugin-sdk-entrypoints.json \
   scripts/lib/plugin-sdk-private-local-only-subpaths.json \
   scripts/lib/plugin-sdk-deprecated-public-subpaths.json \
-  scripts/generate-plugin-sdk-api-baseline.ts \
   scripts/generate-config-doc-baseline.ts \
-  docs/.generated/plugin-sdk-api-baseline.sha256 \
   docs/.generated/config-baseline.sha256 \
   docs/.generated/config-baseline.counts.json
 
-git diff --numstat "$baseline_sha"..HEAD -- \
-  docs/.generated/plugin-sdk-api-baseline.sha256 \
+pnpm plugin-sdk:api:diff -- \
+  --base "$baseline_sha" \
+  --head "$staging_sha" \
+  --json .artifacts/extended-stable-plugin-sdk-api-diff.json
+
+git diff --numstat "$baseline_sha".."$staging_sha" -- \
   docs/.generated/config-baseline.sha256 \
   docs/.generated/config-baseline.counts.json
 ```
 
-Nonempty manifest output is the warning. Include it in the release ledger and
-PR body, then either remove the unnecessary surface change or record why the
-maintainer accepted it. Owner-path output with unchanged manifests is optional
-review context, not a warning by itself. A recorded decision is not a reusable
-waiver.
+Any Plugin SDK API change in the readable report, or nonempty config-manifest
+output, is the warning. Include the report and changed config records in the
+release ledger and PR body, then either remove the unnecessary surface change
+or record why the maintainer accepted it. Owner-path output without a public
+API or config-manifest change is optional review context, not a warning by
+itself. A recorded decision is not a reusable waiver.
 
 Do not use a SHA of all SDK/config source as an automated warning: it would
-noise on harmless implementation-only repairs. The two generated hash manifests
-are the stable public-contract signal. If this becomes CI, run the comparison
-after `pnpm release:prep` and annotate the staging PR with changed records and
-the required maintainer decision; do not add a caller-controlled bypass.
+noise on harmless implementation-only repairs. The exact-SHA readable SDK diff
+and config hash manifest are the stable public-contract signals. If this becomes
+CI, run the comparison after `pnpm release:prep` and annotate the staging PR with
+changed records and the required maintainer decision; do not add a
+caller-controlled bypass.
 
 ## Resolve the Active Line
 

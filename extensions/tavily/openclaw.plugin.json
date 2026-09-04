@@ -24,6 +24,17 @@
       "help": "Tavily API base URL override."
     }
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "webSearch.apiKey",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
   "contracts": {
     "webSearchProviders": ["tavily"],
     "tools": ["tavily_search", "tavily_extract"]

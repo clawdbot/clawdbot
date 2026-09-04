@@ -2,11 +2,16 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { resolveFeishuMediaList } from "./bot-content.js";
+import { feishuPlugin } from "./channel.js";
+import { sendStickerFeishu } from "./media.js";
 import { getMessageFeishu } from "./send.js";
 
 const { mockLogVerbose } = vi.hoisted(() => ({ mockLogVerbose: vi.fn() }));
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
@@ -19,10 +24,14 @@ type RecordedMessageRequest = {
   cardMessageContentType?: string;
   appId?: string;
   authorization?: string;
+  messageType?: unknown;
+  content?: unknown;
+  receiveId?: unknown;
+  replyInThread?: unknown;
 };
 
 describe("Feishu message content over the real Lark SDK", () => {
-  it("authenticates message reads and diagnoses malformed content without exposing its bytes", async () => {
+  it("authenticates message reads and sticker sends without exposing malformed content", async () => {
     const requests: RecordedMessageRequest[] = [];
     const sensitiveContentByMessageId = new Map([
       ["om_loopback_bad_text", { type: "text", content: "LKTEXT107" }],
@@ -50,6 +59,9 @@ describe("Feishu message content over the real Lark SDK", () => {
           ...(typeof request.headers.authorization === "string"
             ? { authorization: request.headers.authorization }
             : {}),
+          ...(body.msg_type ? { messageType: body.msg_type, content: body.content } : {}),
+          ...(body.receive_id ? { receiveId: body.receive_id } : {}),
+          ...(body.reply_in_thread ? { replyInThread: body.reply_in_thread } : {}),
         };
         requests.push(record);
 
@@ -76,12 +88,29 @@ describe("Feishu message content over the real Lark SDK", () => {
           return;
         }
 
-        if (
-          request.method !== "GET" ||
-          record.authorization !== "Bearer tat-feishu-content-107947" ||
-          record.cardMessageContentType !== "user_card_content"
-        ) {
+        if (record.authorization !== "Bearer tat-feishu-content-107947") {
           sendJson(401, { code: 99991663, msg: "missing authenticated message request" });
+          return;
+        }
+
+        if (request.method === "POST" && body.msg_type === "sticker") {
+          if (url.pathname === "/open-apis/im/v1/messages/om_withdrawn_sticker/reply") {
+            sendJson(200, { code: 230011, msg: "The message was withdrawn." });
+            return;
+          }
+          const isCreate = url.pathname === "/open-apis/im/v1/messages";
+          const isReply = url.pathname === "/open-apis/im/v1/messages/om_received_sticker/reply";
+          if ((isCreate && url.searchParams.get("receive_id_type") === "chat_id") || isReply) {
+            sendJson(200, {
+              code: 0,
+              data: { message_id: isCreate ? "om_sticker_sent" : "om_sticker_reply" },
+            });
+            return;
+          }
+        }
+
+        if (request.method !== "GET" || record.cardMessageContentType !== "user_card_content") {
+          sendJson(400, { code: 400, msg: "unexpected loopback request" });
           return;
         }
 
@@ -163,6 +192,10 @@ describe("Feishu message content over the real Lark SDK", () => {
             appId: "cli_feishu_content_107947",
             appSecret: "loopback-placeholder", // pragma: allowlist secret
             domain: "feishu",
+            actions: { sticker: true },
+            stickerSets: {
+              cli_feishu_content_107947: { file_sticker_received: ["赞👍"] },
+            },
           },
         },
       } as ClawdbotConfig;
@@ -229,6 +262,87 @@ describe("Feishu message content over the real Lark SDK", () => {
           cardMessageContentType: "user_card_content",
         });
       }
+
+      const requestCountBeforeSticker = requests.length;
+      await expect(
+        resolveFeishuMediaList({
+          cfg,
+          messageId: "om_received_sticker",
+          messageType: "sticker",
+          content: JSON.stringify({ file_key: "file_sticker_received" }),
+          maxBytes: 1024,
+        }),
+      ).resolves.toEqual([]);
+      expect(requests).toHaveLength(requestCountBeforeSticker);
+
+      const searchResult = await feishuPlugin.actions!.handleAction!({
+        channel: "feishu",
+        action: "sticker-search",
+        cfg,
+        accountId: "default",
+        params: { query: "赞" },
+      });
+      expect(searchResult.details).toEqual({
+        stickers: [{ fileId: "file_sticker_received", keyword: "赞👍" }],
+        truncated: false,
+      });
+      expect(requests).toHaveLength(requestCountBeforeSticker);
+      const searchDetails = requireRecord(searchResult.details, "search details");
+      const stickers = searchDetails.stickers;
+      if (!Array.isArray(stickers)) {
+        throw new Error("Expected sticker search results");
+      }
+      const sticker = requireRecord(stickers[0], "sticker");
+      for (const replyInThread of [false, true]) {
+        const result = await feishuPlugin.actions!.handleAction!({
+          channel: "feishu",
+          action: "sticker",
+          cfg,
+          accountId: "default",
+          params: {
+            ...sticker,
+            to: "chat:oc_feishu_content_107947",
+            ...(replyInThread ? { threadId: "om_received_sticker" } : {}),
+          },
+        });
+        expect(result.details).toMatchObject({
+          messageId: replyInThread ? "om_sticker_reply" : "om_sticker_sent",
+          receipt: { parts: [expect.objectContaining({ kind: "media" })] },
+        });
+      }
+      expect(requests.filter((request) => request.messageType === "sticker")).toEqual([
+        {
+          method: "POST",
+          path: "/open-apis/im/v1/messages",
+          authorization: "Bearer tat-feishu-content-107947",
+          messageType: "sticker",
+          content: JSON.stringify({ file_key: "file_sticker_received" }),
+          receiveId: "oc_feishu_content_107947",
+        },
+        {
+          method: "POST",
+          path: "/open-apis/im/v1/messages/om_received_sticker/reply",
+          authorization: "Bearer tat-feishu-content-107947",
+          messageType: "sticker",
+          content: JSON.stringify({ file_key: "file_sticker_received" }),
+          replyInThread: true,
+        },
+      ]);
+      const createsBeforeWithdrawnReply = requests.filter(
+        (request) => request.path === "/open-apis/im/v1/messages",
+      ).length;
+      await expect(
+        sendStickerFeishu({
+          cfg,
+          to: "chat:oc_feishu_content_107947",
+          fileKey: "file_sticker_received",
+          replyToMessageId: "om_withdrawn_sticker",
+          replyInThread: true,
+        }),
+      ).rejects.toThrow("cannot safely fall back to a top-level send");
+      expect(
+        requests.filter((request) => request.path === "/open-apis/im/v1/messages"),
+      ).toHaveLength(createsBeforeWithdrawnReply);
     } finally {
       Lark.defaultHttpInstance.interceptors.request.eject(loopbackInterceptor);
       await new Promise<void>((resolve, reject) => {

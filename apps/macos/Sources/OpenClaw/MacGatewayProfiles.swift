@@ -62,10 +62,14 @@ actor MacGatewayProfileStore {
     // poisoning path. Release-config ad-hoc builds stay out of scope; running
     // those against saved Keychain items is already unsupported.
     #if DEBUG
-    private static let service = "ai.openclaw.gateway-profiles.debug"
+    private static let baseService = "ai.openclaw.gateway-profiles.debug"
     #else
-    private static let service = "ai.openclaw.gateway-profiles"
+    private static let baseService = "ai.openclaw.gateway-profiles"
     #endif
+    static var service: String {
+        AppProfile.current.keychainService(base: self.baseService)
+    }
+
     private static let registryAccount = "registry-v1"
     private static let currentLegacyPrimaryMigrationVersion = 1
 
@@ -339,16 +343,18 @@ actor MacGatewayConnectionFleet {
         return connection
     }
 
-    func remove(profileID: String) async {
-        guard let connection = self.connections.removeValue(forKey: profileID) else { return }
+    func remove(profileID: String) async -> GatewayConnection? {
+        guard let connection = self.connections.removeValue(forKey: profileID) else { return nil }
         await connection.shutdown()
+        return connection
     }
 
-    func shutdown() async {
-        let connections = self.connections.values
+    func shutdown() async -> [GatewayConnection] {
+        let connections = Array(self.connections.values)
         self.connections.removeAll()
         for connection in connections {
             await connection.shutdown()
         }
+        return connections
     }
 }

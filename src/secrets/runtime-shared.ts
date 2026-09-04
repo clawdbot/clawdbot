@@ -1,6 +1,7 @@
 /** Shared secrets runtime resolver context, assignments, and warning helpers. */
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
@@ -180,7 +181,12 @@ export function collectRuntimeSecretInputAssignment(params: {
   apply: (value: unknown) => void;
   applyUnavailable?: () => void;
 }): void {
-  const ref = coerceSecretRef(params.value, params.defaults);
+  const ref = resolveConfigSecretRef({
+    config: params.context.sourceConfig,
+    path: params.path,
+    value: params.value,
+    defaults: params.defaults,
+  });
   if (!ref) {
     return;
   }

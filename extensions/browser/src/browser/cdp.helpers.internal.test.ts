@@ -1,10 +1,10 @@
 // Browser tests cover cdp.helpers.internal plugin behavior.
-import { createServer } from "node:http";
+import http, { createServer } from "node:http";
 import type { Socket } from "node:net";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { toErrorObject } from "../infra/errors.js";
-import { rawDataToString } from "../infra/ws.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const sleepWithAbortMock = vi.hoisted(() =>
@@ -115,7 +115,10 @@ describe("cdp.helpers internal", () => {
         assertCdpEndpointAllowed("http://93.184.216.34:443/cdp", {
           allowPrivateNetwork: true,
         }),
-      ).resolves.toBeUndefined();
+      ).resolves.toMatchObject({
+        addresses: ["93.184.216.34"],
+        hostname: "93.184.216.34",
+      });
     });
   });
 
@@ -256,6 +259,176 @@ describe("cdp.helpers internal", () => {
   });
 
   describe("createCdpSender (via withCdpSocket)", () => {
+    function pinnedLookupMock() {
+      return vi.fn((hostname: string, options: unknown, callback?: unknown) => {
+        const cb = typeof options === "function" ? options : callback;
+        if (typeof cb === "function") {
+          if (typeof options === "object" && options !== null && "all" in options) {
+            cb(null, [{ address: "127.0.0.1", family: 4 }]);
+            return undefined as never;
+          }
+          cb(null, "127.0.0.1", 4);
+        }
+        return undefined as never;
+      });
+    }
+
+    it("uses a per-connection agent for pinned WebSocket handshakes", async () => {
+      const server = await startWsServer();
+      wss = server.wss;
+      const lookup = pinnedLookupMock();
+      const globalCreateConnection = vi
+        .spyOn(http.globalAgent, "createConnection")
+        .mockImplementation(() => {
+          throw new Error("global agent must not be used for pinned CDP sockets");
+        });
+      server.wss.on("connection", (socket) => {
+        socket.close();
+      });
+
+      try {
+        const ws = openCdpWebSocket(`ws://cdp-pinned.test:${server.port}/devtools/browser/TEST`, {
+          lookup: lookup as never,
+        });
+        await new Promise<void>((resolve, reject) => {
+          ws.once("open", () => resolve());
+          ws.once("error", reject);
+        });
+
+        expect(lookup).toHaveBeenCalled();
+        expect(globalCreateConnection).not.toHaveBeenCalled();
+        ws.close();
+      } finally {
+        globalCreateConnection.mockRestore();
+      }
+    });
+
+    it.each([
+      { playwrightTransportDefaults: false, expectedMaxPayload: 100 * 1024 * 1024 },
+      { playwrightTransportDefaults: true, expectedMaxPayload: 256 * 1024 * 1024 },
+    ])(
+      "uses the expected payload limit when Playwright transport defaults are $playwrightTransportDefaults",
+      async ({ playwrightTransportDefaults, expectedMaxPayload }) => {
+        const server = await startWsServer();
+        wss = server.wss;
+        const ws = openCdpWebSocket(server.url, { playwrightTransportDefaults });
+
+        try {
+          await new Promise<void>((resolve, reject) => {
+            ws.once("open", resolve);
+            ws.once("error", reject);
+          });
+          const receiver = Reflect.get(ws, "_receiver") as object | undefined;
+          const maxPayload = receiver ? Reflect.get(receiver, "_maxPayload") : undefined;
+
+          expect(maxPayload).toBe(expectedMaxPayload);
+        } finally {
+          ws.close();
+        }
+      },
+    );
+
+    it("preserves IPv6 hostnames in pinned WebSocket agent checks", async () => {
+      const server = new WebSocketServer({ port: 0, host: "::1" });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.once("listening", () => resolve());
+          server.once("error", reject);
+        });
+      } catch {
+        return;
+      }
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("IPv6 test server did not expose a TCP port");
+      }
+      server.on("connection", (socket) => {
+        socket.close();
+      });
+      const lookup = vi.fn((_hostname: string, options: unknown, callback?: unknown) => {
+        const cb = typeof options === "function" ? options : callback;
+        if (typeof cb === "function") {
+          if (typeof options === "object" && options !== null && "all" in options) {
+            cb(null, [{ address: "::1", family: 6 }]);
+            return undefined as never;
+          }
+          cb(null, "::1", 6);
+        }
+        return undefined as never;
+      });
+
+      try {
+        const ws = openCdpWebSocket(`ws://[::1]:${address.port}/devtools/browser/TEST`, {
+          lookup: lookup as never,
+        });
+        await new Promise<void>((resolve, reject) => {
+          ws.once("open", () => resolve());
+          ws.once("error", reject);
+        });
+
+        ws.close();
+      } finally {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    });
+
+    it("blocks pinned WebSocket redirects before connecting to a new authority", async () => {
+      const redirectServer = http.createServer();
+      const targetServer = http.createServer();
+      let targetConnections = 0;
+      targetServer.on("connection", () => {
+        targetConnections += 1;
+      });
+      await new Promise<void>((resolve) => {
+        targetServer.listen(0, "127.0.0.1", () => resolve());
+      });
+      const targetAddress = targetServer.address();
+      if (!targetAddress || typeof targetAddress === "string") {
+        throw new Error("target server did not expose a TCP port");
+      }
+      redirectServer.on("upgrade", (_request, socket) => {
+        socket.write(
+          `HTTP/1.1 302 Found\r\nLocation: ws://127.0.0.1:${targetAddress.port}/devtools/browser/redirected\r\nConnection: close\r\n\r\n`,
+        );
+        socket.destroy();
+      });
+      await new Promise<void>((resolve) => {
+        redirectServer.listen(0, "127.0.0.1", () => resolve());
+      });
+      const redirectAddress = redirectServer.address();
+      if (!redirectAddress || typeof redirectAddress === "string") {
+        throw new Error("redirect server did not expose a TCP port");
+      }
+      const ws = openCdpWebSocket(
+        `ws://cdp-pinned.test:${redirectAddress.port}/devtools/browser/start`,
+        {
+          lookup: pinnedLookupMock() as never,
+          playwrightTransportDefaults: true,
+        },
+      );
+
+      try {
+        const error = await new Promise<Error>((resolve, reject) => {
+          ws.once("open", () => reject(new Error("redirect unexpectedly opened")));
+          ws.once("error", (err) => resolve(err instanceof Error ? err : new Error(String(err))));
+        });
+        expect(error.message).toContain("CDP WebSocket redirect changed authority");
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 25);
+        });
+        expect(targetConnections).toBe(0);
+      } finally {
+        ws.close();
+        await new Promise<void>((resolve) => {
+          redirectServer.close(() => {
+            targetServer.close(() => resolve());
+          });
+        });
+      }
+    });
+
     it("ignores messages with a non-numeric id", async () => {
       const server = await startWsServer();
       wss = server.wss;
@@ -731,5 +904,81 @@ describe("openCdpWebSocket option handling", () => {
     expect(ws.url).toBe(url);
     ws.once("error", () => {});
     ws.close();
+  });
+
+  it("uses a pinned lookup for websocket connections", async () => {
+    const server = await startWsServer();
+    try {
+      const url = server.url.replace("127.0.0.1", "cdp.test.local");
+      const lookup = vi.fn((hostname: string, options: unknown, callback?: unknown) => {
+        const cb = typeof options === "function" ? options : callback;
+        expect(hostname).toBe("cdp.test.local");
+        if (typeof cb === "function") {
+          const wantsAll =
+            typeof options === "object" && options !== null && (options as { all?: boolean }).all;
+          if (wantsAll) {
+            cb(null, [{ address: "127.0.0.1", family: 4 }]);
+            return;
+          }
+          cb(null, "127.0.0.1", 4);
+        }
+      });
+
+      const ws = openCdpWebSocket(url, {
+        handshakeTimeoutMs: 500,
+        lookup: lookup as never,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("error", reject);
+      });
+
+      expect(lookup).toHaveBeenCalled();
+      ws.close();
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.wss.close(() => resolve());
+      });
+    }
+  });
+
+  it("forwards pinned lookup options through withCdpSocket", async () => {
+    const server = await startWsServer();
+    server.wss.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const msg = JSON.parse(rawDataToString(data)) as { id?: number };
+        socket.send(JSON.stringify({ id: msg.id, result: { ok: true } }));
+      });
+    });
+    try {
+      const url = server.url.replace("127.0.0.1", "cdp.test.local");
+      const lookup = vi.fn((hostname: string, options: unknown, callback?: unknown) => {
+        const cb = typeof options === "function" ? options : callback;
+        expect(hostname).toBe("cdp.test.local");
+        if (typeof cb === "function") {
+          const wantsAll =
+            typeof options === "object" && options !== null && (options as { all?: boolean }).all;
+          if (wantsAll) {
+            cb(null, [{ address: "127.0.0.1", family: 4 }]);
+            return;
+          }
+          cb(null, "127.0.0.1", 4);
+        }
+      });
+
+      const result = await withCdpSocket(url, async (send) => await send("Browser.getVersion"), {
+        handshakeTimeoutMs: 500,
+        handshakeRetries: 0,
+        lookup: lookup as never,
+      });
+
+      expect(result).toStrictEqual({ ok: true });
+      expect(lookup).toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.wss.close(() => resolve());
+      });
+    }
   });
 });

@@ -1,8 +1,8 @@
 // Xai tests cover index plugin behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  createCapturedPluginRegistration,
   registerProviderPlugin,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -201,11 +201,53 @@ describe("xai provider plugin", () => {
     );
   });
 
+  it("registers SuperGrok usage through xAI OAuth only", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const oauth = vi.fn(async () => ({
+      token: "oauth-token",
+      accountId: "acct",
+      email: "user@example.com",
+    }));
+    const apiKey = vi.fn();
+
+    await expect(
+      provider.resolveUsageAuth?.({
+        config: {},
+        agentDir: "/agent",
+        env: {},
+        provider: "xai",
+        resolveOAuthToken: oauth,
+        resolveApiKeyFromConfigAndStore: apiKey,
+        resolveApiKeyCandidatesFromConfigAndStore: vi.fn(),
+      }),
+    ).resolves.toEqual({
+      token: "oauth-token",
+      accountId: "acct",
+      email: "user@example.com",
+    });
+
+    expect(apiKey).not.toHaveBeenCalled();
+    await expect(
+      provider.resolveUsageAuth?.({
+        config: {},
+        agentDir: "/agent",
+        env: { XAI_API_KEY: "xai-api-key" },
+        provider: "xai",
+        resolveOAuthToken: vi.fn(async () => null),
+        resolveApiKeyFromConfigAndStore: apiKey,
+        resolveApiKeyCandidatesFromConfigAndStore: vi.fn(),
+      }),
+    ).resolves.toEqual({ handled: true });
+    expect(manifest.contracts).toMatchObject({ usageProviders: ["xai"] });
+    expect(provider.fetchUsageSnapshot).toEqual(expect.any(Function));
+  });
+
   it("filters the xAI API-key catalog against live model ids", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
+          { id: "grok-4.6", object: "model" },
           { id: "grok-4.5", object: "model" },
           { id: "grok-4.20-0309-reasoning", object: "model" },
           { id: "grok-4.20-0309-non-reasoning", object: "model" },
@@ -222,6 +264,7 @@ describe("xai provider plugin", () => {
     });
 
     expect(provider.apiKey).toBe("xai-key");
+    expect(provider.models.map((model) => model.id)).toContain("grok-4.6");
     expect(provider.models.map((model) => model.id)).toContain("grok-4.5");
     expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-reasoning");
     expect(provider.models.map((model) => model.id)).toContain("grok-4.20-0309-non-reasoning");
@@ -802,6 +845,12 @@ describe("xai provider plugin", () => {
     expect(
       provider.isModernModelRef?.({
         provider: "xai",
+        modelId: "grok-4.6",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "xai",
         modelId: "grok-4.3",
       } as never),
     ).toBe(true);
@@ -853,5 +902,29 @@ describe("xai provider plugin", () => {
     expect(normalizedCompat?.toolSchemaProfile).toBe("xai");
     expect(normalizedCompat?.toolCallArgumentsEncoding).toBe("html-entities");
     expect(normalizedCompat?.unsupportedToolSchemaKeywords).toEqual(["minContains", "maxContains"]);
+  });
+
+  it("preserves Grok 4.6 xhigh reasoning through OAuth auto", async () => {
+    mockXaiRuntimeOAuth();
+    stubXaiFetch((url) =>
+      url.endsWith("/settings")
+        ? Response.json({ default_model: "grok-4.6" })
+        : Response.json({
+            data: [{ id: "grok-4.6", api_backend: "responses" }],
+          }),
+    );
+    const { provider, result } = await runXaiCatalog();
+    const auto = result.models.find((model) => model.id === "auto");
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: "auto",
+      model: { ...auto, provider: "xai" },
+    } as never);
+
+    expect(normalized?.id).toBe("grok-4.6");
+    expect(normalized?.thinkingLevelMap?.xhigh).toBe("xhigh");
+    expect(normalized?.compat).toMatchObject({
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    });
   });
 });

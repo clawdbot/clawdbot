@@ -4,6 +4,7 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { sql, type Generated } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import { registerNodeSqliteKyselyQueryErrorHandler } from "./kysely-sync-cache-state.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
@@ -11,7 +12,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
-  registerNodeSqliteKyselyQueryErrorHandler,
+  prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "./kysely-sync.js";
 
 type SyncHelperTestDatabase = {
@@ -60,6 +62,70 @@ describe("kysely sync helpers", () => {
       { id: 1, name: "Ada" },
       { id: 2, name: "Grace" },
     ]);
+  });
+
+  it("binds changing values without confusing repeated bindings and literal parameters", () => {
+    database = new DatabaseSync(":memory:");
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const select = prepareSqliteQuerySync<{
+      name: string | null;
+      bytes: Uint8Array;
+      count: bigint;
+    }>(database, (parameter) => {
+      const name = parameter((input) => input.name);
+      return db.selectNoFrom([
+        name.as("name"),
+        name.as("repeated"),
+        sql.val("literal").as("literal"),
+        parameter((input) => input.bytes).as("bytes"),
+        parameter((input) => input.count).as("count"),
+      ]);
+    });
+    for (const name of ["literal", "'); DROP TABLE items; --", null, "λ🦞"]) {
+      const bytes = new Uint8Array([1, 2, 255]);
+      expect(select({ name, bytes, count: 42n }).rows).toEqual([
+        { name, repeated: name, literal: "literal", bytes, count: 42 },
+      ]);
+    }
+  });
+
+  it("preserves string binding and set semantics in JSON-backed selections", () => {
+    database = new DatabaseSync(":memory:");
+    database.exec("create table items (id integer primary key, name text not null unique)");
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const values = ["", "plain", "λ🦞", "\uFFFD", "nul\0tail", "'); DROP TABLE items; --"];
+    for (const name of values) {
+      executeSqliteQuerySync(database, db.insertInto("items").values({ name }));
+    }
+    for (const names of [[], values, ["plain", "plain"], ["\uD800"], ["\uDC00"], ["absent"]]) {
+      const query = db.selectFrom("items").selectAll().orderBy("name");
+      expect(
+        executeSqliteQuerySync(database, query.where("name", "in", sqliteStringSet(names))).rows,
+      ).toEqual(executeSqliteQuerySync(database, query.where("name", "in", names)).rows);
+    }
+  });
+
+  it("keeps prepared query bindings independent during synchronous callback re-entry", () => {
+    database = new DatabaseSync(":memory:");
+    enableNodeSqliteKyselyStatementCache(database);
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const select = prepareSqliteQuerySync<number, { nested: number; input: number }>(
+      database,
+      (parameter) => {
+        const value = parameter((input) => input);
+        return db.selectNoFrom([
+          db.fn<number>("nested_value", [value]).as("nested"),
+          value.as("input"),
+        ]);
+      },
+    );
+    database.function("nested_value", (value) => {
+      const input = Number(value);
+      return input === 0 ? 0 : select(input - 1).rows[0]!.nested + 1;
+    });
+    for (const input of [2, 3, 4]) {
+      expect(select(input).rows).toEqual([{ nested: input, input }]);
+    }
   });
 
   it("returns identical results while repeated statements move from cold to warm", () => {
@@ -604,7 +670,7 @@ function runRetentionScenario(options: {
       };
     }
 
-    process.stdout.write(JSON.stringify(await runScenario()));
+    process.stdout.write(JSON.stringify(await runScenario()), () => process.exit(0));
   `;
   const result = spawnSync(
     process.execPath,

@@ -1,10 +1,9 @@
 // Model auth status methods report provider credential health, profile expiry,
 // usage windows, cleanup actions, and auth-state refreshes.
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import {
   type AuthHealthSummary,
   type AuthProfileHealthStatus,
@@ -15,50 +14,45 @@ import {
 } from "../../agents/auth-health.js";
 import {
   type AuthProfileStore,
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   externalCliDiscoveryForConfigStatus,
   listProfilesForProvider,
   removeAuthProfilesAcrossOwnerStores,
   removeProviderAuthProfilesWithLock,
+  resolveAuthProfileMetadata,
+  resolveExplicitAuthOrderSelection,
   resolvePersistedAuthProfileOwnerAgentDir,
+  type RuntimeAuthProfileStore,
 } from "../../agents/auth-profiles.js";
+import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
 import {
-  listProviderEnvAuthLookupKeys,
-  resolveProviderEnvAuthLookupMaps,
-} from "../../agents/model-auth-env-vars.js";
-import { resolveProviderEnvAuthEvidence } from "../../agents/model-auth-env.js";
-import {
-  isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
 } from "../../agents/model-auth-markers.js";
 import {
-  resolveProviderEntryApiKeyProfileReference,
-  resolveUsableCustomProviderApiKey,
-} from "../../agents/model-auth.js";
-import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import {
+  type ProviderAuthAliasLookupParams,
+  resolveProviderIdForAuth,
+} from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { coerceSecretRef, hasConfiguredSecretInput } from "../../config/types.secrets.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  resolveModelAuthAgentScope,
-  unknownModelAuthAgentIdError,
-} from "./model-auth-agent-scope.js";
+import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
+import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
+import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
+import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
 import {
   clearModelAuthStatusUsageCache,
-  fingerprintProviderUsageCredentials,
   type ProviderUsageStatus,
   readProviderUsageStaleWhileRevalidate,
 } from "./models-auth-status-usage-cache.js";
@@ -67,19 +61,55 @@ import type {
   ModelAuthLogoutResult,
   ModelAuthStatusProvider,
   ModelAuthStatusResult,
+  ModelProviderCapability,
 } from "./models-auth-status.types.js";
+import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 export type {
   ModelAuthExpiry,
   ModelAuthLogoutResult,
+  ModelAuthOrderSetResult,
   ModelAuthStatusProfile,
   ModelAuthStatusProvider,
   ModelAuthStatusResult,
+  ModelProviderCapability,
 } from "./models-auth-status.types.js";
 
 const log = createSubsystemLogger("models-auth-status");
 const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
+
+type PreparedAuthMetadataLookupParams = ProviderAuthAliasLookupParams & {
+  metadataSnapshot: NonNullable<
+    Awaited<ReturnType<typeof readPreparedCatalog>>
+  >["metadataSnapshot"];
+};
+
+function buildProviderCapabilities(params: {
+  config: OpenClawConfig;
+  workspaceDir: string;
+  metadataSnapshot: NonNullable<
+    Awaited<ReturnType<typeof readPreparedCatalog>>
+  >["metadataSnapshot"];
+}): ModelProviderCapability[] {
+  return resolveModelProviderCapabilities(params).capabilities;
+}
+
+function resolveAuthRefreshScope(cfg: OpenClawConfig): {
+  providerIds: string[];
+  profileIds?: string[];
+} {
+  const discovery = externalCliDiscoveryForConfigStatus({ cfg });
+  if (discovery.mode !== "scoped") {
+    return { providerIds: [] };
+  }
+  const providerIds = [...(discovery.providerIds ?? [])];
+  const profileIds = [...(discovery.profileIds ?? [])];
+  return {
+    providerIds,
+    ...(profileIds.length > 0 ? { profileIds } : {}),
+  };
+}
 
 /**
  * Invalidate auxiliary usage and prepared provider-auth state after an auth
@@ -97,21 +127,13 @@ export function invalidateModelAuthStatusCache(): void {
 }
 
 async function refreshModelAuthStatusRuntimeState(): Promise<void> {
-  // Keep same-credential usage visible while the explicit refresh replaces it.
-  // A changed credential/config produces a different cache key below; logout
-  // still uses invalidateModelAuthStatusCache() and clears usage immediately.
-  clearCurrentProviderAuthState();
+  // Durable and CLI auth refresh into the transient prepared owner below. Do not clear the
+  // process-wide warmed auth state for a read; mutations still invalidate it explicitly.
   try {
-    if (await refreshActiveProviderAuthRuntimeSnapshot()) {
-      return;
-    }
+    await refreshActiveProviderAuthRuntimeSnapshot();
   } catch (err) {
     log.warn(`runtime auth snapshot refresh before auth status failed: ${formatForLog(err)}`);
-    return;
   }
-  // Explicit status refresh follows CLI/doctor repairs. If no secrets runtime is
-  // active, drop runtime auth snapshots so the next status read observes disk.
-  clearRuntimeAuthProfileStoreSnapshots();
 }
 
 function readProviderParam(params: Record<string, unknown>): string | null {
@@ -260,12 +282,35 @@ export function aggregateRefreshableAuthStatus(
 
 function mapProvider(
   prov: AuthProviderHealth,
+  cfg: OpenClawConfig,
+  store: AuthProfileStore,
+  authAliasLookupParams: ProviderAuthAliasLookupParams,
   usageByProvider: Map<string, ProviderUsageStatus>,
   expectsOAuthSet: Set<string>,
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
   logoutProfileIds: ReadonlySet<string>,
   configBoundProfileIds: ReadonlySet<string>,
+  externalProfileIds: ReadonlySet<string>,
+  externalCliProfileIds: ReadonlySet<string>,
+  includeProfileIdentity: boolean,
 ): ModelAuthStatusProvider {
+  const providerKey = normalizeProviderId(prov.provider);
+  const authProviderKey = resolveProviderIdForAuth(prov.provider, authAliasLookupParams);
+  const profileOrder = resolveExplicitAuthOrderSelection({
+    storeOrder: store.order,
+    configuredOrder: cfg.auth?.order,
+    providerKey,
+    providerAuthKey: authProviderKey,
+  });
+  const runtimeStore: RuntimeAuthProfileStore = store;
+  const localProfileIds = new Set(
+    runtimeStore.runtimeLocalProfileIds ??
+      Object.keys(store.profiles).filter((profileId) => !externalProfileIds.has(profileId)),
+  );
+  const providerOrderLocked = prov.profiles.some((profile) =>
+    configBoundProfileIds.has(profile.profileId),
+  );
+  const configuredOrderLocked = profileOrder.order !== undefined && !profileOrder.fromStore;
   const usageProfile =
     prov.profiles.find((profile) => profile.type === "oauth" || profile.type === "token") ??
     prov.profiles.find((profile) => profile.type === "api_key");
@@ -273,33 +318,74 @@ function mapProvider(
     credentialType: usageProfile?.type,
   });
   const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
-  const rollup = aggregateRefreshableAuthStatus(
+  const rawRollup = aggregateRefreshableAuthStatus(
     prov,
     Date.now(),
     expectsOAuthSet.has(prov.provider),
   );
+  const effectiveProfiles = prov.effectiveProfiles ?? prov.profiles;
+  const refreshableProfiles = effectiveProfiles.filter(
+    (profile) => profile.type === "oauth" || profile.type === "token",
+  );
+  // External CLI access tokens rotate without operator action. Keep their raw
+  // profile expiry diagnostic, but do not turn it into a provider login warning.
+  const externalCliOwnsOAuthRefresh =
+    refreshableProfiles.length > 0 &&
+    refreshableProfiles.every(
+      (profile) => profile.type === "oauth" && externalCliProfileIds.has(profile.profileId),
+    );
+  const rollup: ModelAuthStatusRollup =
+    externalCliOwnsOAuthRefresh &&
+    (rawRollup.status === "expired" || rawRollup.status === "expiring")
+      ? { status: "ok" }
+      : rawRollup;
   const apiKey = apiKeys.get(normalizeProviderId(prov.provider));
   const hasRefreshableProfile = prov.profiles.some(
     (profile) => profile.type === "oauth" || profile.type === "token",
   );
   return {
     provider: prov.provider,
+    authProvider: authProviderKey,
     displayName: providerDisplayName(prov.provider),
     status:
       apiKey && !hasRefreshableProfile && rollup.status === "missing" ? "static" : rollup.status,
     expiry: buildExpiry(rollup.remainingMs, rollup.expiresAt),
-    profiles: prov.profiles.map((prof) => ({
-      profileId: prof.profileId,
-      type: prof.type,
-      status: prof.status,
-      reasonCode: prof.reasonCode,
-      expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
-      ...((prof.type === "oauth" || prof.type === "token") &&
-      logoutProfileIds.has(prof.profileId) &&
-      !configBoundProfileIds.has(prof.profileId)
-        ? { logoutSupported: true }
+    profiles: prov.profiles.map((prof) => {
+      const metadata = resolveAuthProfileMetadata({ cfg, store, profileId: prof.profileId });
+      const lastUsedAt = store.usageStats?.[prof.profileId]?.lastUsed;
+      return {
+        profileId: prof.profileId,
+        type: prof.type,
+        status: prof.status,
+        reasonCode: prof.reasonCode,
+        source: configBoundProfileIds.has(prof.profileId)
+          ? "config"
+          : externalProfileIds.has(prof.profileId)
+            ? "external"
+            : localProfileIds.has(prof.profileId)
+              ? "saved"
+              : "inherited",
+        expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
+        ...(externalCliProfileIds.has(prof.profileId) ? { externallyManaged: true } : {}),
+        ...(includeProfileIdentity && metadata.displayName
+          ? { displayName: metadata.displayName }
+          : {}),
+        ...(includeProfileIdentity && metadata.email ? { email: metadata.email } : {}),
+        ...(includeProfileIdentity && lastUsedAt ? { lastUsedAt } : {}),
+        ...((prof.type === "oauth" || prof.type === "token") &&
+        logoutProfileIds.has(prof.profileId) &&
+        !configBoundProfileIds.has(prof.profileId)
+          ? { logoutSupported: true }
+          : {}),
+      };
+    }),
+    ...(profileOrder.order !== undefined ? { profileOrder: profileOrder.order } : {}),
+    ...(profileOrder.fromStore ? { profileOrderStored: true } : {}),
+    ...(providerOrderLocked
+      ? { profileOrderLocked: "provider-config" as const }
+      : configuredOrderLocked
+        ? { profileOrderLocked: "auth-config" as const }
         : {}),
-    })),
     ...(apiKey ? { apiKey } : {}),
     usage:
       usage && usageKey
@@ -309,98 +395,12 @@ function mapProvider(
             ...(usage.summary ? { summary: usage.summary } : {}),
             ...(usage.plan ? { plan: usage.plan } : {}),
             ...(usage.billing?.length ? { billing: usage.billing } : {}),
-            ...(usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
+            ...(includeProfileIdentity && usage.accountEmail
+              ? { accountEmail: usage.accountEmail }
+              : {}),
           }
         : undefined,
   };
-}
-
-// API-key provenance stays presence-only. SecretRef ids may be shown, but
-// credential values never cross this status boundary.
-function resolveEnvVarName(source: string): string | undefined {
-  const match = /^(?:shell env|env): ([A-Z][A-Z0-9_]*)$/u.exec(source);
-  return match?.[1];
-}
-
-function resolveProviderApiKeys(
-  cfg: OpenClawConfig,
-  store: AuthProfileStore,
-): Map<string, ModelAuthStatusProvider["apiKey"]> {
-  const lookupMaps = resolveProviderEnvAuthLookupMaps({ config: cfg, env: process.env });
-  const providerIds = new Set<string>([
-    ...Object.keys(cfg.models?.providers ?? {}),
-    ...Object.values(cfg.auth?.profiles ?? {})
-      .map((profile) => profile?.provider)
-      .filter((provider): provider is string => typeof provider === "string"),
-    ...listProviderEnvAuthLookupKeys(lookupMaps),
-  ]);
-  const apiKeys = new Map<string, ModelAuthStatusProvider["apiKey"]>();
-  for (const rawProvider of providerIds) {
-    const provider = normalizeProviderId(rawProvider);
-    if (!provider) {
-      continue;
-    }
-    const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
-    if (hasConfiguredSecretInput(providerConfig?.apiKey, cfg.secrets?.defaults)) {
-      const ref = coerceSecretRef(providerConfig?.apiKey, cfg.secrets?.defaults);
-      const profileReference = resolveProviderEntryApiKeyProfileReference({
-        cfg,
-        provider,
-        store,
-      });
-      if (profileReference.kind !== "profile" && profileReference.kind !== "profile-incompatible") {
-        if (ref && ref.source !== "env") {
-          apiKeys.set(provider, { source: "config" });
-          continue;
-        }
-        const available = resolveUsableCustomProviderApiKey({
-          cfg,
-          provider,
-          env: process.env,
-        });
-        if (available) {
-          const rawKey =
-            typeof providerConfig?.apiKey === "string" ? providerConfig.apiKey.trim() : "";
-          // Local no-auth placeholders (e.g. the ollama-local marker) resolve to
-          // a usable value but represent no credential; do not advertise them as
-          // a configured API key or the provider would render as static.
-          if (rawKey && isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false })) {
-            continue;
-          }
-          const envVar =
-            ref?.source === "env"
-              ? ref.id
-              : profileReference.kind === "marker" && isKnownEnvApiKeyMarker(rawKey)
-                ? rawKey
-                : resolveEnvVarName(available.source);
-          apiKeys.set(provider, envVar ? { source: "env", envVar } : { source: "config" });
-          continue;
-        }
-      }
-    }
-    const envEvidence = resolveProviderEnvAuthEvidence(provider, process.env, {
-      aliasMap: lookupMaps.aliasMap,
-      candidateMap: lookupMaps.envCandidateMap,
-      authEvidenceMap: lookupMaps.authEvidenceMap,
-    });
-    if (envEvidence?.mode !== "api-key") {
-      continue;
-    }
-    const envVar = resolveEnvVarName(envEvidence.source);
-    apiKeys.set(provider, { source: "env", ...(envVar ? { envVar } : {}) });
-  }
-  return apiKeys;
-}
-
-function resolveConfigBoundProfileIds(cfg: OpenClawConfig, store: AuthProfileStore): Set<string> {
-  const profileIds = new Set<string>();
-  for (const provider of Object.keys(cfg.models?.providers ?? {})) {
-    const reference = resolveProviderEntryApiKeyProfileReference({ cfg, provider, store });
-    if (reference.kind === "profile" || reference.kind === "profile-incompatible") {
-      profileIds.add(reference.profileId);
-    }
-  }
-  return profileIds;
 }
 
 function resolveConfiguredProviders(
@@ -476,7 +476,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
-        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        respond(false, undefined, modelAuthAgentScopeError(scope));
         return;
       }
       const { agentDir } = scope;
@@ -562,32 +562,68 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "models.authStatus": async ({ params, respond, context }) => {
+  "models.authStatus": async ({ params, respond, context, client }) => {
     const now = Date.now();
     const refreshRequested = Boolean(params.refresh);
+    const includeProfileIdentity =
+      Array.isArray(client?.connect?.scopes) && client.connect.scopes.includes(ADMIN_SCOPE);
+    const resolveScope = (cfg: OpenClawConfig) =>
+      resolveModelAuthAgentScope(
+        cfg,
+        params.agentId === undefined || params.agentId === ""
+          ? tryResolveAmbientOwnerAgentId(cfg)
+          : params.agentId,
+      );
     try {
       let cfg = context.getRuntimeConfig();
-      let scope = resolveModelAuthAgentScope(cfg, params.agentId);
+      let scope = resolveScope(cfg);
       if (!scope.ok) {
-        respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+        respond(false, undefined, modelAuthAgentScopeError(scope));
         return;
       }
       if (refreshRequested) {
         await refreshModelAuthStatusRuntimeState();
         cfg = context.getRuntimeConfig();
-        scope = resolveModelAuthAgentScope(cfg, params.agentId);
+        scope = resolveScope(cfg);
         if (!scope.ok) {
-          respond(false, undefined, unknownModelAuthAgentIdError(scope.agentId));
+          respond(false, undefined, modelAuthAgentScopeError(scope));
           return;
         }
       }
-      const { agentId, agentDir } = scope;
-      // Use the external-profile-aware store for status reads so the dashboard
-      // reflects CLI-discovered credentials without persisting them here.
-      const store = ensureAuthProfileStore(agentDir, {
-        externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
-      });
-      const apiKeys = resolveProviderApiKeys(cfg, store);
+      const preparedSnapshot = refreshRequested
+        ? await loadDeferredCatalog(context, scope.agentId, {
+            readOnly: true,
+            authScope: resolveAuthRefreshScope(cfg),
+            refreshAuth: true,
+            refreshFullCatalog: false,
+          })
+        : await readPreparedCatalog(context, scope.agentId);
+      if (!preparedSnapshot) {
+        // A lifecycle replacement may temporarily withdraw this owner. Status must not
+        // rediscover credentials or turn missing preparation into a connection failure.
+        const result: ModelAuthStatusResult = {
+          ts: now,
+          providers: [],
+          unavailable: {
+            code: "PREPARED_MODEL_AUTH_UNAVAILABLE",
+            message:
+              "Model authentication status is unavailable. Refresh Models after setup finishes; restart the Gateway if it persists.",
+          },
+        };
+        respond(true, result, undefined);
+        return;
+      }
+      cfg = preparedSnapshot.config;
+      const { agentId, agentDir, authStore: store, workspaceDir } = preparedSnapshot;
+      // Generic auth helpers may consult provider metadata indirectly. Carry this owner's exact
+      // snapshot through them so a global miss cannot rediscover plugins on the event loop.
+      const authAliasLookupParams: PreparedAuthMetadataLookupParams = {
+        config: cfg,
+        workspaceDir,
+        metadataSnapshot: preparedSnapshot.metadataSnapshot,
+        includeUntrustedWorkspacePlugins: false,
+      };
+      const apiKeys = resolveProviderApiKeys(cfg, store, authAliasLookupParams);
       const configured = resolveConfiguredProviders(cfg, apiKeys);
       const statusProviderIds = new Set(configured.providers);
       for (const provider of apiKeys.keys()) {
@@ -604,6 +640,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         cfg,
         providers: statusProviderIds.size > 0 ? [...statusProviderIds] : undefined,
         allowKeychainPrompt: false,
+        authAliasLookupParams,
       });
 
       // Usage queries usually need refreshable credentials. Keep API-key status
@@ -625,21 +662,25 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         ),
       ];
 
+      const providerUsageRuntime = getProviderUsageRuntimeSnapshot({
+        config: cfg,
+        agentId,
+        agentDir,
+        store,
+      });
       const usageByProvider = readProviderUsageStaleWhileRevalidate({
         agentId,
         agentDir,
+        authStore: providerUsageRuntime.store,
         configRef: cfg,
-        credentialKey: fingerprintProviderUsageCredentials({
-          cfg,
-          directApiKeys: apiKeys,
-          store,
-        }),
+        credentialKey: providerUsageRuntime.credentialKey,
         forceRefresh: refreshRequested,
         providerIds: usageProviderIds,
         now,
       });
 
       const externalProfileIds = new Set(store.runtimeExternalProfileIds ?? []);
+      const externalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
       const logoutProfileIds = new Set(
         Object.entries(store.profiles)
           .filter(
@@ -649,18 +690,29 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           )
           .map(([profileId]) => profileId),
       );
-      const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store);
+      const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
       const providers = authHealth.providers.map((prov) =>
         mapProvider(
           prov,
+          cfg,
+          store,
+          authAliasLookupParams,
           usageByProvider,
           configured.expectsOAuth,
           apiKeys,
           logoutProfileIds,
           configBoundProfileIds,
+          externalProfileIds,
+          externalCliProfileIds,
+          includeProfileIdentity,
         ),
       );
-      const result: ModelAuthStatusResult = { ts: now, providers };
+      const providerCapabilities = buildProviderCapabilities({
+        config: cfg,
+        workspaceDir,
+        metadataSnapshot: preparedSnapshot.metadataSnapshot,
+      });
+      const result: ModelAuthStatusResult = { ts: now, providers, providerCapabilities };
       respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));

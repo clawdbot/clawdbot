@@ -130,7 +130,7 @@ describe("buildCodexLifecycleTerminalMeta", () => {
 });
 
 describe("Codex terminal dynamic-tool release", () => {
-  it("fences unconsumed steering before interrupting a successful yield", async () => {
+  it("completes a successful yield before native interrupt completion", async () => {
     const harness = createTerminalReleaseHarness();
 
     harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
@@ -145,13 +145,17 @@ describe("Codex terminal dynamic-tool release", () => {
       { timeoutMs: 5_000 },
     );
     expect(harness.order.indexOf("cancel")).toBeLessThan(harness.order.indexOf("turn/interrupt"));
-    expect(harness.state.completed).toBe(false);
-    expect(harness.resolveCompletion).not.toHaveBeenCalled();
+    expect(harness.state.completed).toBe(true);
+    expect(harness.resolveCompletion).toHaveBeenCalledOnce();
 
     harness.completeTurn();
-    await vi.waitFor(() => expect(harness.resolveCompletion).toHaveBeenCalledOnce());
+    harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
-    expect(harness.state.completed).toBe(true);
+    expect(harness.request).toHaveBeenCalledOnce();
+    expect(harness.resolveCompletion).toHaveBeenCalledOnce();
   });
 
   it("keeps steering open when the yield result fails", async () => {

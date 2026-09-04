@@ -154,7 +154,7 @@ final class ChatMediaPlaybackCoordinator {
                   self.activeOwner === owner
             else { return }
             owner.handleRemoteCommand(command)
-            self.nowPlayingCenter.publish(owner.nowPlayingMetadata)
+            self.updateNowPlaying(owner)
         }
         self.nowPlayingCenter.publish(owner.nowPlayingMetadata)
     }

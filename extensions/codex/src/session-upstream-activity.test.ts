@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./app-server/client.js";
 import type { CodexTurn } from "./app-server/protocol.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
-import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
+import type {
+  CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
+} from "./session-catalog-types.js";
 import { createChecker } from "./session-upstream-activity.js";
 
 function probe(overrides: Partial<SessionUpstreamProbe> = {}): SessionUpstreamProbe {
@@ -69,12 +72,16 @@ function createActivityChecker(params: {
     },
   } as unknown as OpenClawPluginApi;
   const bindingStore = {
-    read: vi.fn(async () => params.binding),
+    read: vi.fn(() => params.binding),
   } as unknown as CodexAppServerBindingStore;
   return createChecker({
     api,
     bindingStore,
-    control: params.control,
+    control: {
+      forRequest: () => params.control,
+      homesForAgent: () => [],
+      forUpstream: () => params.control,
+    } satisfies CodexSessionCatalogControlFactory,
     getRuntimeConfig: () => undefined,
   });
 }
@@ -192,24 +199,14 @@ describe("Codex upstream activity", () => {
     expect(readThread).toHaveBeenCalledWith("thread-1", false);
   });
 
-  it("treats non-definitive thread/read failures as inconclusive", async () => {
+  it.each([
+    { code: -32603, message: "store hiccup", method: "thread/read" },
+    { code: -32600, message: "some other validation failure", method: "thread/read" },
+    { code: -32600, message: "thread not loaded: thread-other", method: "thread/read" },
+    { code: -32600, message: "thread not loaded: thread-1", method: "thread/resume" },
+  ])("treats non-definitive failures as inconclusive: $method $message", async (error) => {
     const readThread = vi.fn(async () => {
-      throw new CodexAppServerRpcError({ code: -32603, message: "store hiccup" }, "thread/read");
-    });
-    const control = createControl({
-      listTurnPage: async () => ({ data: [] }),
-      readThread,
-    });
-
-    await expect(createActivityChecker({ control })([probe()])).resolves.toEqual([]);
-  });
-
-  it("treats other invalid-request thread/read failures as inconclusive", async () => {
-    const readThread = vi.fn(async () => {
-      throw new CodexAppServerRpcError(
-        { code: -32600, message: "some other validation failure" },
-        "thread/read",
-      );
+      throw new CodexAppServerRpcError(error, error.method);
     });
     const control = createControl({
       listTurnPage: async () => ({ data: [] }),

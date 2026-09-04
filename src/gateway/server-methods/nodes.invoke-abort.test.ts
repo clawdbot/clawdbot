@@ -1,9 +1,10 @@
 /** Ensures caller cancellation composes with, but never replaces, node pairing ownership. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../../infra/node-commands.js";
 import { isNodeWakeLifecycleCurrent } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import { nodeInvokeHandlers } from "./nodes.invoke.js";
-import type { GatewayRequestHandlerOptions } from "./shared-types.js";
+import type { GatewayNodeInvokeStream, GatewayRequestHandlerOptions } from "./shared-types.js";
 
 const mocks = vi.hoisted(() => ({
   captureNodePairingGeneration: vi.fn(async (nodeId: string) => ({
@@ -11,16 +12,22 @@ const mocks = vi.hoisted(() => ({
     key: `generation:${nodeId}:1`,
   })),
   isNodePairingGenerationCurrent: vi.fn(async () => true),
-  isNodeCommandAllowed: vi.fn(() => ({ ok: true as const })),
+  isNodeCommandAllowed: vi.fn((): { ok: true } | { ok: false; reason: string } => ({ ok: true })),
   resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
   applyPluginNodeInvokePolicy: vi.fn(async () => undefined),
-  sanitizeNodeInvokeParamsForForwarding: vi.fn(({ rawParams }: { rawParams: unknown }) => ({
-    ok: true as const,
-    params: rawParams,
-  })),
+  sanitizeNodeInvokeParamsForForwarding: vi.fn(
+    ({
+      rawParams,
+    }: {
+      rawParams: unknown;
+    }): { ok: true; params: unknown } | { ok: false; message: string } => ({
+      ok: true,
+      params: rawParams,
+    }),
+  ),
 }));
 
-vi.mock("../../infra/node-pairing-state.js", () => ({
+vi.mock("../../infra/device-pairing-node-state.js", () => ({
   captureNodePairingGeneration: mocks.captureNodePairingGeneration,
   isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
 }));
@@ -57,7 +64,14 @@ afterEach(() => {
   resetNodeWakeStateForTest();
 });
 
-function startNodeInvoke(options: { invoke: ReturnType<typeof vi.fn>; signal?: AbortSignal }) {
+function startNodeInvoke(options: {
+  invoke: ReturnType<typeof vi.fn>;
+  signal?: AbortSignal;
+  command?: string;
+  config?: Record<string, unknown>;
+  commands?: string[];
+  client?: GatewayRequestHandlerOptions["client"];
+}) {
   const respond = vi.fn();
   const handler = nodeInvokeHandlers["node.invoke"];
   if (!handler) {
@@ -67,21 +81,24 @@ function startNodeInvoke(options: { invoke: ReturnType<typeof vi.fn>; signal?: A
     req: { type: "req", id: "paired-inference-request", method: "node.invoke" },
     params: {
       nodeId: "paired-node",
-      command: "ollama.chat",
+      command: options.command ?? "ollama.chat",
       params: { model: "node-local:small", prompt: "answer locally" },
       timeoutMs: 10_000,
       idempotencyKey: "paired-inference-idempotency-key",
     },
-    client: null,
+    client: options.client ?? null,
     isWebchatConnect: () => false,
     respond,
     context: {
       nodeRegistry: {
-        get: () => session,
-        getForPairingGeneration: () => session,
+        get: () => ({ ...session, commands: options.commands ?? session.commands }),
+        getForPairingGeneration: () => ({
+          ...session,
+          commands: options.commands ?? session.commands,
+        }),
         invoke: options.invoke,
       },
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => options.config ?? {},
       logGateway: { info: vi.fn(), warn: vi.fn() },
     } as unknown as GatewayRequestHandlerOptions["context"],
     ...(options.signal ? { signal: options.signal } : {}),
@@ -89,7 +106,194 @@ function startNodeInvoke(options: { invoke: ReturnType<typeof vi.fn>; signal?: A
   return { invocation, respond };
 }
 
+function createNodeInvokeStreamClient(
+  stream: GatewayNodeInvokeStream,
+  options?: { synthetic?: boolean; owner?: boolean },
+): NonNullable<GatewayRequestHandlerOptions["client"]> {
+  return {
+    connect: {
+      minProtocol: 3,
+      maxProtocol: 3,
+      client: { id: "gateway-client", version: "internal", platform: "node", mode: "backend" },
+      role: "operator",
+      scopes: ["operator.write"],
+    },
+    internal: {
+      ...(options?.synthetic === false ? {} : { syntheticClient: true }),
+      ...(options?.owner === false ? {} : { pluginRuntimeOwnerId: "duplex-fixture" }),
+      nodeInvokeStream: stream,
+    },
+  };
+}
+
 describe("node.invoke caller cancellation", () => {
+  it("carries trusted plugin duplex hooks through the canonical paired dispatch", async () => {
+    let runtimeCurrent = true;
+    const stream = {
+      onProgress: vi.fn(),
+      onDispatchReady: vi.fn(),
+      idleTimeoutMs: 5_000,
+      isRuntimeCurrent: () => runtimeCurrent,
+    };
+    const invoke = vi.fn(
+      async (params: {
+        onProgress?: (chunk: string) => void;
+        onDispatchReady?: (invokeId: string) => void;
+        isDispatchAuthorized?: () => boolean;
+      }) => {
+        params.onDispatchReady?.("paired-stream-invoke");
+        params.onProgress?.("paired-stream-progress");
+        return { ok: true, payload: { delivered: true } };
+      },
+    );
+
+    const { invocation, respond } = startNodeInvoke({
+      invoke,
+      client: createNodeInvokeStreamClient(stream),
+    });
+    await invocation;
+
+    expect(stream.onDispatchReady).toHaveBeenCalledWith("paired-stream-invoke");
+    expect(stream.onProgress).toHaveBeenCalledWith("paired-stream-progress");
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedConnId: "paired-node-connection",
+        expectedPairingGeneration: "generation:paired-node:1",
+        idleTimeoutMs: 5_000,
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ nodeId: "paired-node", command: "ollama.chat" }),
+      undefined,
+    );
+
+    runtimeCurrent = false;
+    expect(invoke.mock.calls[0]?.[0].isDispatchAuthorized?.()).toBe(false);
+  });
+
+  it.each([
+    { name: "network client", synthetic: false },
+    { name: "ownerless synthetic client", owner: false },
+  ])("ignores duplex hooks on an untrusted $name", async (clientOptions) => {
+    const stream = {
+      onProgress: vi.fn(),
+      onDispatchReady: vi.fn(),
+      isRuntimeCurrent: () => false,
+    };
+    const invoke = vi.fn(
+      async (params: {
+        onProgress?: (chunk: string) => void;
+        onDispatchReady?: (invokeId: string) => void;
+        isDispatchAuthorized?: () => boolean;
+      }) => {
+        params.onDispatchReady?.("untrusted-stream-invoke");
+        params.onProgress?.("untrusted-stream-progress");
+        return { ok: true, payload: {} };
+      },
+    );
+
+    const { invocation } = startNodeInvoke({
+      invoke,
+      client: createNodeInvokeStreamClient(stream, clientOptions),
+    });
+    await invocation;
+
+    expect(stream.onDispatchReady).not.toHaveBeenCalled();
+    expect(stream.onProgress).not.toHaveBeenCalled();
+    expect(invoke.mock.calls[0]?.[0].isDispatchAuthorized?.()).toBe(true);
+  });
+
+  it("rejects undeclared commands before trusted duplex hooks receive dispatch", async () => {
+    mocks.isNodeCommandAllowed.mockReturnValueOnce({
+      ok: false,
+      reason: "command not declared by node",
+    });
+    const stream = {
+      onProgress: vi.fn(),
+      onDispatchReady: vi.fn(),
+      isRuntimeCurrent: () => true,
+    };
+    const invoke = vi.fn();
+
+    const { invocation, respond } = startNodeInvoke({
+      invoke,
+      command: "plugin.undeclared",
+      commands: ["ollama.chat"],
+      client: createNodeInvokeStreamClient(stream),
+    });
+    await invocation;
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(stream.onDispatchReady).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("does not support") }),
+    );
+  });
+
+  it("does not bypass system.run approval sanitization for trusted duplex hooks", async () => {
+    mocks.sanitizeNodeInvokeParamsForForwarding.mockReturnValueOnce({
+      ok: false,
+      message: "system.run approval could not be verified",
+    });
+    const stream = {
+      onProgress: vi.fn(),
+      onDispatchReady: vi.fn(),
+      isRuntimeCurrent: () => true,
+    };
+    const invoke = vi.fn();
+
+    const { invocation, respond } = startNodeInvoke({
+      invoke,
+      command: "system.run",
+      commands: ["system.run"],
+      client: createNodeInvokeStreamClient(stream),
+    });
+    await invocation;
+
+    expect(mocks.sanitizeNodeInvokeParamsForForwarding).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(stream.onDispatchReady).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "system.run approval could not be verified" }),
+    );
+  });
+
+  it.each(NODE_WORKER_PRIVATE_COMMANDS)(
+    "rejects private control %s before public policy and dispatch",
+    async (command) => {
+      const invoke = vi.fn();
+      const stream = {
+        onProgress: vi.fn(),
+        onDispatchReady: vi.fn(),
+        isRuntimeCurrent: () => true,
+      };
+      const { invocation, respond } = startNodeInvoke({
+        invoke,
+        command,
+        commands: [command],
+        config: { gateway: { nodes: { commands: { allow: [command] } } } },
+        client: createNodeInvokeStreamClient(stream),
+      });
+
+      await invocation;
+
+      expect(invoke).not.toHaveBeenCalled();
+      expect(mocks.resolveNodeCommandAllowlist).not.toHaveBeenCalled();
+      expect(mocks.applyPluginNodeInvokePolicy).not.toHaveBeenCalled();
+      expect(stream.onDispatchReady).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringContaining("private") }),
+      );
+    },
+  );
+
   it("cancels paired-node work without breaking pairing lifecycle identity", async () => {
     const controller = new AbortController();
     const invoke = vi.fn(

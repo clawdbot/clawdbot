@@ -20,7 +20,7 @@ Signal is a downloadable channel plugin (`@openclaw/signal`). The gateway talks 
 openclaw plugins install @openclaw/signal
 ```
 
-Bare plugin specs try ClawHub first, then npm fallback. Force a source with `openclaw plugins install clawhub:@openclaw/signal` or `npm:@openclaw/signal`. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
+`@openclaw/signal` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
 
 ## Quick setup
 
@@ -83,10 +83,12 @@ Minimal config:
 
 Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. Each named account owns its `transport`; it does not inherit the top-level transport. The top-level transport belongs only to the implicit `default` account. See [Multi-account channels](/gateway/config-channels#multi-account-all-channels) for the shared pattern.
 
+Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
+
 ## What it is
 
 - Deterministic routing: replies always go back to Signal.
-- DMs share the agent's main session; groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
+- DMs share the agent's main session; with default `session.groupScope: "per-group"`, groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
 - By default, Signal may write config updates triggered by `/config set|unset` (requires `commands.config: true`). Disable with `channels.signal.configWrites: false`.
 
 ## Setup path A: link existing Signal account (QR)

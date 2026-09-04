@@ -5,6 +5,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
+import { ExpectedCliError } from "./failure-output.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type GatewayCliDependencies = Parameters<typeof registerGatewayCli>[1];
@@ -156,7 +157,24 @@ describe("gateway-cli coverage", () => {
     await expectGatewayExit(["gateway", "call", "health", "--timeout", "1000ms", "--json"]);
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Gateway call failed: Error: Invalid --timeout");
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("renders gateway request failures without the client error class in human mode", async () => {
+    const error = Object.assign(new Error("invalid audit.activity.list params"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+    });
+    callGateway.mockRejectedValueOnce(error);
+
+    await expectGatewayExit(["gateway", "call", "audit.activity.list"]);
+
+    expect(runtimeErrors.join("\n")).toContain("invalid audit.activity.list params");
+    expect(runtimeErrors.join("\n")).not.toContain("GatewayClientRequestError");
   });
 
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {
@@ -181,8 +199,13 @@ describe("gateway-cli coverage", () => {
     ]);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    const stabilityCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
+    const stabilityCall = firstMockArg(callGateway) as {
+      method?: string;
+      params?: unknown;
+      localPortOverride?: number;
+    };
     expect(stabilityCall?.method).toBe("diagnostics.stability");
+    expect(stabilityCall?.localPortOverride).toBeUndefined();
     expect(stabilityCall?.params).toEqual({
       limit: 5,
       type: "payload.large",
@@ -293,7 +316,58 @@ describe("gateway-cli coverage", () => {
     ]);
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Use --agent or --all-agents, not both");
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: "Use --agent or --all-agents, not both" },
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("preserves expected CLI machine output for ordinary Gateway command failures", async () => {
+    callGateway.mockRejectedValueOnce(
+      new ExpectedCliError({
+        message: "validation failed",
+        humanOutput: "human recovery guidance",
+        machineOutput: "machine recovery guidance\n",
+      }),
+    );
+
+    await expectGatewayExit(["gateway", "call", "health", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: "machine recovery guidance" },
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it.each(["abc", "7d", "1.5", "", "  "])(
+    "rejects malformed usage-cost --days %j",
+    async (days) => {
+      callGateway.mockClear();
+
+      await expectGatewayExit(["gateway", "usage-cost", "--days", days, "--json"]);
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+        ok: false,
+        error: { type: "cli_error", message: expect.stringContaining("Invalid --days") },
+      });
+      expect(runtimeErrors).toHaveLength(0);
+    },
+  );
+
+  it("rejects a malformed health --timeout before calling Gateway", async () => {
+    callGateway.mockClear();
+
+    await expectGatewayExit(["gateway", "health", "--timeout", "abc", "--json"]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+    });
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("writes JSON for gateway health transport failures in JSON mode", async () => {
@@ -490,7 +564,16 @@ describe("gateway-cli coverage", () => {
       fs.writeFileSync(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
 
       await withEnvOverride({ OPENCLAW_STATE_DIR: tempDir }, async () => {
-        await runGatewayCommand(["gateway", "stability", "--bundle", "latest"]);
+        await runGatewayCommand([
+          "gateway",
+          "--port",
+          "19096",
+          "stability",
+          "--bundle",
+          "latest",
+          "--url",
+          "ws://127.0.0.1:19096",
+        ]);
       });
 
       const output = runtimeLogs.join("\n");
@@ -508,7 +591,18 @@ describe("gateway-cli coverage", () => {
     }
   });
 
-  it("writes gateway diagnostics export with a best-effort health snapshot", async () => {
+  it.each([
+    {
+      name: "gateway diagnostics",
+      args: ["gateway", "diagnostics", "export"],
+      timeoutMs: 3000,
+    },
+    {
+      name: "offline stability",
+      args: ["gateway", "--port", "19097", "stability", "--bundle", "latest", "--export"],
+      timeoutMs: 10_000,
+    },
+  ])("writes $name export with a service-owned health snapshot", async ({ args, timeoutMs }) => {
     callGateway.mockClear();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-support-"));
     try {
@@ -516,21 +610,19 @@ describe("gateway-cli coverage", () => {
       await withEnvOverride(
         { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
         async () => {
-          await runGatewayCommand([
-            "gateway",
-            "diagnostics",
-            "export",
-            "--output",
-            outputPath,
-            "--json",
-          ]);
+          await runGatewayCommand([...args, "--output", outputPath, "--json"]);
         },
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const healthCall = firstMockArg(callGateway) as { method?: string; timeoutMs?: number };
+      const healthCall = firstMockArg(callGateway) as {
+        method?: string;
+        timeoutMs?: number;
+        localPortOverride?: number;
+      };
       expect(healthCall?.method).toBe("health");
-      expect(healthCall?.timeoutMs).toBe(3000);
+      expect(healthCall?.timeoutMs).toBe(timeoutMs);
+      expect(healthCall?.localPortOverride).toBeUndefined();
       expect(fs.existsSync(outputPath)).toBe(true);
       const output = runtimeLogs.join("\n");
       expect(output).toContain('"path"');
@@ -549,7 +641,11 @@ describe("gateway-cli coverage", () => {
 
     await expectGatewayExit(["gateway", "diagnostics", "export", flag, value, "--json"]);
 
-    expect(runtimeErrors.join("\n")).toContain(`${flag} must be a positive integer`);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: `${flag} must be a positive integer.` },
+    });
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -627,11 +723,33 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).toContain("--params must be valid JSON.");
   });
 
+  it("renders invalid gateway call params as JSON before calling Gateway", async () => {
+    await expectGatewayExit([
+      "gateway",
+      "call",
+      "system-presence",
+      "--params",
+      "not-json",
+      "--json",
+    ]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: "--params must be valid JSON." },
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it("validates gateway call timeout before opening a transport", async () => {
     callGateway.mockClear();
     await expectGatewayExit(["gateway", "call", "health", "--timeout", "nope", "--json"]);
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Invalid --timeout");
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+    });
+    expect(runtimeErrors).toHaveLength(0);
   });
 });

@@ -1,7 +1,10 @@
 // Normalization Core tests cover string normalization behavior.
 import { describe, expect, it } from "vitest";
 import {
+  containsAsciiControlCharacter,
+  filterStringEntries,
   normalizeAtHashSlug,
+  normalizeCsvOrLooseStringList,
   normalizeHyphenSlug,
   normalizeOptionalTrimmedStringList,
   normalizeSortedUniqueStringEntries,
@@ -18,6 +21,30 @@ import {
 } from "./string-normalization.js";
 
 describe("normalization-core/string-normalization", () => {
+  it.each([
+    { label: "empty", value: "", expected: false },
+    { label: "printable Unicode", value: "fix/a&b λ", expected: false },
+    { label: "C1", value: String.fromCharCode(0x80, 0x9f), expected: false },
+    { label: "NUL", value: `branch${String.fromCharCode(0)}name`, expected: true },
+    { label: "unit separator", value: `branch${String.fromCharCode(0x1f)}`, expected: true },
+    { label: "DEL", value: `branch${String.fromCharCode(0x7f)}name`, expected: true },
+    { label: "line feed", value: "main\n", expected: true },
+  ])("detects only ASCII controls: $label", ({ value, expected }) => {
+    expect(containsAsciiControlCharacter(value)).toBe(expected);
+  });
+
+  it.each([
+    { value: undefined, expected: [] },
+    { value: "value", expected: [] },
+    { value: { 0: "value" }, expected: [] },
+    {
+      value: ["", "  ", 1, "first", null, "first", Object("boxed"), "last\n"],
+      expected: ["", "  ", "first", "first", "last\n"],
+    },
+  ])("filters runtime strings from $value", ({ value, expected }) => {
+    expect(filterStringEntries(value)).toEqual(expected);
+  });
+
   it("normalizes mixed allow-list entries", () => {
     expect(normalizeStringEntries([" a ", 42, "", "  ", "z"])).toEqual(["a", "42", "z"]);
     expect(normalizeStringEntries([" ok ", null, { toString: () => " obj " }])).toEqual([
@@ -67,6 +94,15 @@ describe("normalization-core/string-normalization", () => {
     expect(normalizeTrimmedStringList("first")).toEqual([]);
     expect(normalizeOptionalTrimmedStringList(values)).toEqual(["first", "second"]);
     expect(normalizeOptionalTrimmedStringList(["", 42])).toBeUndefined();
+  });
+
+  it.each([
+    { value: " first, second, , first ", expected: ["first", "second", "first"] },
+    { value: [" first ", 42, "", "  ", 7], expected: ["first", "42", "7"] },
+    { value: null, expected: [] },
+    { value: { value: "first" }, expected: [] },
+  ])("normalizes CSV or loose string-list input", ({ value, expected }) => {
+    expect(normalizeCsvOrLooseStringList(value)).toEqual(expected);
   });
 
   it("normalizes sorted unique trimmed string lists", () => {

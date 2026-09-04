@@ -2,31 +2,17 @@
 import {
   parseStandalonePlainTextToolCallBlocks as parseStandaloneRepairToolCallBlocks,
   stripPlainTextToolCallBlocks as stripRepairToolCallBlocks,
+  type PlainTextToolCallBlock,
+  type PlainTextToolCallParseOptions,
+  type PlainTextToolCallProtectedRange,
 } from "../../packages/tool-call-repair/src/index.js";
 
-/** Plugin-facing plain-text tool call block with source offsets for repair. */
-export type PlainTextToolCallBlock = {
-  /** Parsed JSON arguments object. */
-  arguments: Record<string, unknown>;
-  /** Exclusive end offset of the parsed block. */
-  end: number;
-  /** Tool name parsed from the standalone block. */
-  name: string;
-  /** Original text slice that produced this block. */
-  raw: string;
-  /** Inclusive start offset of the parsed block. */
-  start: number;
-};
+export type {
+  PlainTextToolCallBlock,
+  PlainTextToolCallParseOptions,
+  PlainTextToolCallProtectedRange,
+} from "../../packages/tool-call-repair/src/index.js";
 
-/** Plugin-facing parser options for standalone plain-text tool calls. */
-export type PlainTextToolCallParseOptions = {
-  /** Optional allowlist of tool names that may be accepted. */
-  allowedToolNames?: Iterable<string>;
-  /** Maximum serialized payload size accepted for one parsed call. */
-  maxPayloadBytes?: number;
-};
-
-export type PlainTextToolCallProtectedRange = { end: number; start: number };
 export type PlainTextToolCallStripOptions = {
   /** Resolves literal source ranges that must not be interpreted as tool calls. */
   resolveProtectedRanges?: (text: string) => readonly PlainTextToolCallProtectedRange[];

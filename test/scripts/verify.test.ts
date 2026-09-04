@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 function runVerify(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/verify.mjs", ...args], {
+  return spawnSync(process.execPath, ["--import", "tsx", "scripts/verify.mts", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
@@ -15,7 +15,7 @@ describe("scripts/verify", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: node scripts/verify.mjs");
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/verify.mts");
     expect(result.stdout).not.toContain("CRABBOX_PHASE:");
     expect(result.stdout).not.toContain("[verify]");
   });
@@ -27,7 +27,7 @@ describe("scripts/verify", () => {
       expect(result.status).toBe(2);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(`unknown argument: ${args[0]}`);
-      expect(result.stderr).toContain("Usage: node scripts/verify.mjs");
+      expect(result.stderr).toContain("Usage: node --import tsx scripts/verify.mts");
       expect(result.stderr).not.toContain("CRABBOX_PHASE:");
       expect(result.stderr).not.toContain("[verify]");
     }

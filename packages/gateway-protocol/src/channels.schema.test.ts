@@ -1,7 +1,12 @@
 // Gateway Protocol tests cover channels.schema behavior.
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
-import { ChannelsStatusResultSchema, WebLoginWaitParamsSchema } from "./schema/channels.js";
+import {
+  ChannelsStatusResultSchema,
+  TalkSessionCancelOutputResultSchema,
+  WebLoginStartParamsSchema,
+  WebLoginWaitParamsSchema,
+} from "./schema/channels.js";
 
 /**
  * Channel schema regressions for browser login and status diagnostics.
@@ -31,10 +36,52 @@ describe("WebLoginWaitParamsSchema", () => {
       }),
     ).toBe(false);
   });
+
+  it("accepts an explicit channel and opaque login session key", () => {
+    expect(
+      validate.Check({
+        channel: "openclaw-weixin",
+        sessionKey: "2d3c49c2-5a88-4e90-9a36-264834875ecc",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("WebLoginStartParamsSchema", () => {
+  const validate = Compile(WebLoginStartParamsSchema);
+
+  it("accepts an explicit QR-login channel", () => {
+    expect(validate.Check({ channel: "openclaw-weixin" })).toBe(true);
+  });
+});
+
+describe("TalkSessionCancelOutputResultSchema", () => {
+  const validate = Compile(TalkSessionCancelOutputResultSchema);
+
+  it("accepts only closed cancellation outcomes with an explicit ok field", () => {
+    for (const value of [
+      { ok: true },
+      { ok: true, status: "applied", turnId: "turn-7" },
+      { ok: true, status: "stale" },
+      { ok: true, status: "idle" },
+    ]) {
+      expect(validate.Check(value)).toBe(true);
+    }
+    for (const value of [
+      {},
+      { status: "applied" },
+      { ok: false },
+      { ok: true, status: "unknown" },
+      { ok: true, turnId: "" },
+      { ok: true, extra: true },
+    ]) {
+      expect(validate.Check(value)).toBe(false);
+    }
+  });
 });
 
 describe("ChannelsStatusResultSchema", () => {
-  /** Compiled status validator for channel docking diagnostics. */
+  /** Compiled validator for channel status diagnostics. */
   const validate = Compile(ChannelsStatusResultSchema);
 
   it("accepts gateway event-loop diagnostics emitted by channels.status", () => {

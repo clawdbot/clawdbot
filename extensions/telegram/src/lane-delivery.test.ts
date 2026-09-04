@@ -184,6 +184,35 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.lanes.answer.finalized).toBe(true);
   });
 
+  it("claims an equal visible preview and survives a cleanup-only crash", async () => {
+    const events: string[] = [];
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue(HELLO_FINAL);
+    const harness = createHarness({ answerStream: answer });
+    harness.stopDraftLane.mockImplementationOnce(async () => {
+      events.push("finalize");
+      throw new Error("injected finalization crash");
+    });
+    const onPlatformSendDispatch = vi.fn(async () => {
+      events.push("custody");
+    });
+
+    // The preview text is already on screen: custody must be claimed, and a
+    // cleanup crash must not convert the accepted preview into a send failure.
+    await harness.deliverLaneText({
+      laneName: "answer",
+      text: HELLO_FINAL,
+      payload: { text: HELLO_FINAL },
+      infoKind: "final",
+      onPlatformSendDispatch,
+    });
+
+    expect(events).toEqual(["custody", "finalize"]);
+    expect(answer.update).not.toHaveBeenCalled();
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(harness.lanes.answer.finalized).toBe(true);
+  });
+
   it("streams block and final text through the same lane", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 
@@ -612,6 +641,51 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
+  it("preserves a finalized preview when the late media send fails", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    const mediaError = new Error("media rejected");
+    harness.lanes.answer.hasStreamedMessage = true;
+    harness.sendPayload.mockRejectedValueOnce(mediaError);
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "photo",
+      payload: { text: "photo", mediaUrl: "https://example.com/a.png" },
+      infoKind: "final",
+    });
+
+    expect(result).toMatchObject({
+      kind: "preview-finalized-partial",
+      delivery: {
+        content: "photo",
+        messageId: 999,
+        receipt: { primaryPlatformMessageId: "999" },
+      },
+      error: mediaError,
+    });
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+    expect(harness.answer?.clear).not.toHaveBeenCalled();
+  });
+
+  it("keeps throwing late media failures without a concrete preview receipt", async () => {
+    const answer = createTestDraftStream();
+    const harness = createHarness({ answerStream: answer });
+    const mediaError = new Error("media rejected");
+    answer.sendMayHaveLanded.mockReturnValue(true);
+    harness.lanes.answer.hasStreamedMessage = true;
+    harness.sendPayload.mockRejectedValueOnce(mediaError);
+
+    await expect(
+      harness.deliverLaneText({
+        laneName: "answer",
+        text: "photo",
+        payload: { text: "photo", mediaUrl: "https://example.com/a.png" },
+        infoKind: "final",
+      }),
+    ).rejects.toBe(mediaError);
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
   it("uses normal media final delivery when no preview has streamed", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 
@@ -786,7 +860,7 @@ describe("createLaneTextDeliverer", () => {
     );
   });
 
-  it("keeps inline buttons on late media when the stream button edit fails", async () => {
+  it("does not retry late media when the stream button edit fails", async () => {
     const harness = createHarness({ answerMessageId: 999 });
     harness.lanes.answer.hasStreamedMessage = true;
     harness.editStreamMessage.mockRejectedValueOnce(new Error("400: button rejected"));
@@ -804,49 +878,15 @@ describe("createLaneTextDeliverer", () => {
       buttons,
     });
 
-    expectPreviewFinalized(result);
+    expect(result).toMatchObject({
+      kind: "preview-finalized-partial",
+      delivery: { messageId: 999, receipt: { primaryPlatformMessageId: "999" } },
+      error: expect.objectContaining({ message: "400: button rejected" }),
+    });
     expect(harness.log).toHaveBeenCalledWith(
       "telegram: answer stream button edit failed: Error: 400: button rejected",
     );
-    expectSentPayload(
-      harness,
-      {
-        mediaUrl: "https://example.com/a.png",
-        channelData: { telegram: { buttons, effect: "spark" }, other: true },
-      },
-      true,
-    );
-  });
-
-  it("preserves derived inline buttons on late media when the stream button edit fails", async () => {
-    const harness = createHarness({ answerMessageId: 999 });
-    harness.lanes.answer.hasStreamedMessage = true;
-    harness.editStreamMessage.mockRejectedValueOnce(new Error("400: button rejected"));
-    const buttons = [[{ text: "OK", callback_data: "ok" }]];
-
-    const result = await harness.deliverLaneText({
-      laneName: "answer",
-      text: "photo",
-      payload: {
-        text: "photo",
-        mediaUrl: "https://example.com/a.png",
-        interactive: {
-          blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
-        },
-      },
-      infoKind: "final",
-      buttons,
-    });
-
-    expectPreviewFinalized(result);
-    expectSentPayload(
-      harness,
-      {
-        mediaUrl: "https://example.com/a.png",
-        channelData: { telegram: { buttons } },
-      },
-      true,
-    );
+    expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
   it("records the exact rendered draft pages in Telegram message order", async () => {
@@ -1159,7 +1199,29 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
-  it("keeps the stream delivery when button attachment fails", async () => {
+  it("waits for a concrete streamed tool message before attaching buttons", async () => {
+    const answer = createTestDraftStream();
+    answer.waitForInFlight.mockImplementation(async () => answer.setMessageId(999));
+    const harness = createHarness({ answerStream: answer });
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: HELLO_FINAL,
+      payload: { text: HELLO_FINAL, channelData: { telegram: { buttons } } },
+      infoKind: "tool",
+      buttons,
+    });
+
+    expect(answer.waitForInFlight).toHaveBeenCalledOnce();
+    expect(result.kind).toBe("preview-updated");
+    expect(harness.editStreamMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 999, buttons }),
+    );
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
+  it("reports a finalized preview as partial when button attachment fails", async () => {
     const harness = createHarness({ answerMessageId: 999 });
     const buttons = [[{ text: "OK", callback_data: "ok" }]];
     harness.editStreamMessage.mockRejectedValue(new Error("400: button rejected"));
@@ -1172,9 +1234,15 @@ describe("createLaneTextDeliverer", () => {
       buttons,
     });
 
-    const delivery = expectPreviewFinalized(result);
-    expect(delivery.content).toBe(HELLO_FINAL);
-    expect(delivery.messageId).toBe(999);
+    expect(result).toMatchObject({
+      kind: "preview-finalized-partial",
+      delivery: {
+        content: HELLO_FINAL,
+        messageId: 999,
+        receipt: { primaryPlatformMessageId: "999" },
+      },
+      error: expect.objectContaining({ message: "400: button rejected" }),
+    });
     expect(harness.sendPayload).not.toHaveBeenCalled();
     expect(harness.log).toHaveBeenCalledWith(
       "telegram: answer stream button edit failed: Error: 400: button rejected",

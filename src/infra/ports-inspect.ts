@@ -2,10 +2,10 @@
 import net from "node:net";
 import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { buildPortHints } from "./ports-format.js";
 import {
   parseLsofListenerRecordsByPort,
@@ -384,9 +384,11 @@ async function readUnixListenersFromSs(port: number): Promise<ListenerReadResult
   return { listeners: [], detail: undefined, errors };
 }
 
-async function readUnixListenerSnapshot(): Promise<UnixListenerSnapshot> {
+async function readUnixListenerSnapshot(port?: number): Promise<UnixListenerSnapshot> {
   const lsof = await resolveLsofCommand();
-  const res = await runCommandSafe([lsof, "-nP", "-iTCP", "-sTCP:LISTEN", "-FpFcn"]);
+  // Keep single-port lifecycle checks targeted; batches share one all-port scan.
+  const tcpSelector = port === undefined ? "-iTCP" : `-iTCP:${port}`;
+  const res = await runCommandSafe([lsof, "-nP", tcpSelector, "-sTCP:LISTEN", "-FpFcn"]);
   if (res.code === 0) {
     return {
       recordsByPort: parseLsofListenerRecordsByPort(res.stdout),
@@ -409,60 +411,15 @@ async function readUnixListenerSnapshot(): Promise<UnixListenerSnapshot> {
   return { recordsByPort: new Map(), errors, lsofUnavailable: true };
 }
 
-async function readUnixListenersFromLsof(port: number): Promise<
-  ListenerReadResult & {
-    lsofUnavailable: boolean;
-  }
-> {
-  const lsof = await resolveLsofCommand();
-  const res = await runCommandSafe([lsof, "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFcn"]);
-  if (res.code === 0) {
-    const result = readLsofListenersForPort(parseLsofListenerRecordsByPort(res.stdout), port);
-    await enrichUnixListenerProcessInfo(result.listeners);
-    return { ...result, errors: [], lsofUnavailable: false };
-  }
-
-  const errors: string[] = [];
-  const stderr = res.stderr.trim();
-  if (res.code === 1 && !res.error && !stderr) {
-    return { listeners: [], detail: undefined, errors, lsofUnavailable: false };
-  }
-  if (res.error) {
-    errors.push(res.error);
-  }
-  const detail = [stderr, res.stdout.trim()].filter(Boolean).join("\n");
-  if (detail) {
-    errors.push(detail);
-  }
-  return { listeners: [], detail: undefined, errors, lsofUnavailable: true };
-}
-
 async function readUnixListeners(
   port: number,
   snapshot?: UnixListenerSnapshot,
 ): Promise<ListenerReadResult> {
-  if (snapshot) {
-    if (!snapshot.lsofUnavailable) {
-      const result = readLsofListenersForPort(snapshot.recordsByPort, port);
-      await enrichUnixListenerProcessInfo(result.listeners);
-      return { ...result, errors: snapshot.errors };
-    }
-
-    const ssFallback = await readUnixListenersFromSs(port);
-    if (ssFallback.listeners.length > 0) {
-      return ssFallback;
-    }
-
-    return {
-      listeners: [],
-      detail: undefined,
-      errors: [...snapshot.errors, ...ssFallback.errors],
-    };
-  }
-
-  const lsofResult = await readUnixListenersFromLsof(port);
-  if (!lsofResult.lsofUnavailable) {
-    return lsofResult;
+  const listenerSnapshot = snapshot ?? (await readUnixListenerSnapshot(port));
+  if (!listenerSnapshot.lsofUnavailable) {
+    const result = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
+    await enrichUnixListenerProcessInfo(result.listeners);
+    return { ...result, errors: listenerSnapshot.errors };
   }
   const ssFallback = await readUnixListenersFromSs(port);
   if (ssFallback.listeners.length > 0) {
@@ -471,7 +428,7 @@ async function readUnixListeners(
   return {
     listeners: [],
     detail: undefined,
-    errors: [...lsofResult.errors, ...ssFallback.errors],
+    errors: [...listenerSnapshot.errors, ...ssFallback.errors],
   };
 }
 
@@ -520,18 +477,17 @@ async function resolveWindowsImageName(pid: number): Promise<string | undefined>
     "/FI",
     `PID eq ${pid}`,
     "/FO",
-    "LIST",
+    "CSV",
+    "/NH",
   ]);
   if (res.code !== 0) {
     return undefined;
   }
   for (const rawLine of res.stdout.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!normalizeLowercaseStringOrEmpty(line).startsWith("image name:")) {
-      continue;
+    const match = rawLine.trim().match(/^"([^"]+)","(\d+)",/);
+    if (match?.[1] && match[2] === String(pid)) {
+      return match[1];
     }
-    const value = line.slice("image name:".length).trim();
-    return value || undefined;
   }
   return undefined;
 }

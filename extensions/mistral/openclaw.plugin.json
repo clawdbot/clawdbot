@@ -1,6 +1,5 @@
 {
   "id": "mistral",
-  "icon": "https://cdn.simpleicons.org/mistralai",
   "activation": {
     "onStartup": false
   },
@@ -156,7 +155,7 @@
     }
   ],
   "contracts": {
-    "memoryEmbeddingProviders": ["mistral"],
+    "embeddingProviders": ["mistral"],
     "mediaUnderstandingProviders": ["mistral"],
     "realtimeTranscriptionProviders": ["mistral"]
   },

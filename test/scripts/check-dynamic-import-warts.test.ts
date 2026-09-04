@@ -1,6 +1,6 @@
 // Check Dynamic Import Warts tests cover check dynamic import warts script behavior.
 import { describe, expect, it } from "vitest";
-import { findDynamicImportAdvisories } from "../../scripts/check-dynamic-import-warts.mjs";
+import { findDynamicImportAdvisories } from "../../scripts/check-dynamic-import-warts.mts";
 
 describe("check-dynamic-import-warts", () => {
   it.each([

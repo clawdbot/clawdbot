@@ -71,5 +71,5 @@ flow:
         - assert:
             expr: "!state.getSnapshot().messages.some((message) => message.direction === 'outbound' && String(message.text ?? '').includes(config.blockedMarker))"
             message:
-              expr: "`blocked actor produced a reply; transcript=${formatTransportTranscript(state)}`"
+              expr: "`blocked actor produced a reply; transcript=${recentOutboundSummary(state)}`"
       detailsExpr: outbound.text

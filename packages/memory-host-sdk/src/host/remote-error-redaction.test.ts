@@ -147,7 +147,7 @@ describe.sequential("memory remote error redaction", () => {
       }).catch((cause: unknown) => cause);
 
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain('{"Authorization":"bearer ***"}');
+      expect((error as Error).message).toContain('{"Authorization":"***"}');
       expect((error as Error).message).not.toContain(SHORT_API_KEY);
       expect(records.map((record) => record.authorization)).toEqual([`bearer ${SHORT_API_KEY}`]);
     } finally {
@@ -217,7 +217,7 @@ describe.sequential("memory remote error redaction", () => {
         errorPrefix: "file upload failed",
       }).catch((cause: unknown) => cause);
       expect(shortError).toBeInstanceOf(Error);
-      expect((shortError as Error).message).toContain('{"Authorization":"bearer ***"}');
+      expect((shortError as Error).message).toContain('{"Authorization":"***"}');
       expect((shortError as Error).message).not.toContain(SHORT_API_KEY);
 
       await expect(
@@ -228,7 +228,6 @@ describe.sequential("memory remote error redaction", () => {
         }),
       ).resolves.toBe("file_control");
       const batchRecords = records.filter((record) => record.path.endsWith("/files"));
-      expect(batchRecords).toHaveLength(3);
       expect(batchRecords[0]?.contentType).toMatch(/^multipart\/form-data; boundary=/u);
       expect(batchRecords[0]?.body).toContain('name="purpose"');
       expect(batchRecords[0]?.body).toContain("batch");

@@ -237,7 +237,7 @@ openclaw vault setup \
 ```
 
 Bare target paths apply to `openclaw.json`. Use
-`auth-profiles:<agentId>:<path>` for existing `auth-profiles.json` targets.
+`auth-profiles:<agentId>:<path>` for existing SQLite auth-profile targets.
 The target path must be a registered OpenClaw SecretRef target. The setup
 command does not create arbitrary named secrets in OpenClaw; Vault remains the
 secret store, and OpenClaw stores SecretRefs only on supported config fields.

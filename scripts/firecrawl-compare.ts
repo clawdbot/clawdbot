@@ -43,7 +43,7 @@ function readBoundedResponseText(
   maxBytes = FETCH_HTML_MAX_BYTES,
 ): Promise<string> {
   return readBoundedResponseTextWithLimit(response, label, maxBytes, {
-    createTooLargeError: (message) => new Error(message),
+    createTooLargeError: (message: string) => new Error(message),
     signal,
   });
 }
@@ -174,8 +174,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 }
 
 export const testing = {
-  FETCH_HTML_MAX_BYTES,
   fetchHtml,
-  readBoundedResponseText,
   truncate,
 };

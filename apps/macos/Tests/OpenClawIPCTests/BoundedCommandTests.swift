@@ -4,24 +4,11 @@ import Testing
 @testable import OpenClawDiscovery
 
 struct BoundedCommandTests {
-    @Test func `drains output larger than a process pipe`() async throws {
-        let byteCount = 256 * 1024
-        let output = await BoundedCommand.run(
-            path: "/usr/bin/head",
-            arguments: ["-c", "\(byteCount)", "/dev/zero"],
-            timeout: 1.0)
-
-        let value = try #require(output)
-        #expect(value.utf8.count == byteCount)
-    }
-
     @Test func `force kills and reaps a command that ignores termination`() async throws {
         let pidFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-bounded-command-\(UUID().uuidString).pid")
         defer { try? FileManager.default.removeItem(at: pidFile) }
 
-        let clock = ContinuousClock()
-        let startedAt = clock.now
         // BoundedCommand starts its deadline concurrently with the spawn, so the
         // timeout also bounds `/bin/sh` starting up and publishing its pid. A
         // deadline near spawn latency turns that into a coin flip: under load the
@@ -34,12 +21,22 @@ struct BoundedCommandTests {
                 environment: ["PID_FILE": pidFile.path],
                 timeout: 2.0)
         }
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            Issue.record("timed out waiting for TERM-resistant command cleanup")
+            runTask.cancel()
+        }
+        defer {
+            watchdog.cancel()
+            runTask.cancel()
+        }
 
         let pid = try await Self.waitForPID(in: pidFile)
         let output = await runTask.value
+        watchdog.cancel()
 
         #expect(output == nil)
-        #expect(startedAt.duration(to: clock.now) < .seconds(10))
         #expect(Self.waitUntilGone(pid))
     }
 

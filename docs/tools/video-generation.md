@@ -286,29 +286,31 @@ aggregated error includes the skip reason for each.
 
 ## Model selection
 
-OpenClaw resolves the model in this order:
+For `video_generate`, OpenClaw resolves the model in this order:
 
-1. **`model` tool parameter** - if the agent specifies one in the call.
-2. **`videoGenerationModel.primary`** from config.
-3. **`videoGenerationModel.fallbacks`** in order.
-4. **Auto-detection** - providers that have valid auth, starting with the
-   current default provider, then remaining providers in alphabetical
-   order.
+1. **`model` tool parameter** - when set, only this model is tried.
+2. **`agents.defaults.mediaModels.video.primary`** from config.
+3. **`agents.defaults.mediaModels.video.fallbacks`** in order.
+4. **Auto-detection** - only when neither a primary nor fallback model is
+   configured, using configured provider defaults. The current default provider
+   comes first, then remaining providers in alphabetical order.
 
 If a provider fails, the next candidate is tried automatically. If all
 candidates fail, the error includes details from each attempt.
 
-Automatic fallback across authenticated providers is always enabled. A per-call
-`model` remains authoritative.
+Explicit video model configuration limits fallback to the configured list;
+OpenClaw does not append auto-detected providers.
 
 ```json5
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "google/veo-3.1-fast-generate-preview",
-        fallbacks: ["runway/gen4.5", "qwen/wan2.6-t2v"],
-        timeoutMs: 180000, // optional per-tool provider request timeout override
+      mediaModels: {
+        video: {
+          primary: "google/veo-3.1-fast-generate-preview",
+          fallbacks: ["runway/gen4.5", "qwen/wan2.6-t2v"],
+          timeoutMs: 180000, // optional per-tool provider request timeout override
+        },
       },
     },
   },
@@ -525,9 +527,11 @@ Set the default video-generation model in your OpenClaw config:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "qwen/wan2.6-t2v",
-        fallbacks: ["qwen/wan2.6-r2v-flash"],
+      mediaModels: {
+        video: {
+          primary: "qwen/wan2.6-t2v",
+          fallbacks: ["qwen/wan2.6-r2v-flash"],
+        },
       },
     },
   },

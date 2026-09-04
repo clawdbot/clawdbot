@@ -3,7 +3,6 @@ import SwiftUI
 
 struct CostUsageHistoryMenuView: View {
     let summary: GatewayCostUsageSummary
-    let width: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -13,7 +12,7 @@ struct CostUsageHistoryMenuView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(width: max(1, self.width), alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var header: some View {
@@ -31,7 +30,7 @@ struct CostUsageHistoryMenuView: View {
                     .font(.system(size: 14, weight: .semibold))
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("Last \(self.summary.days)d")
+                Text(String(format: String(localized: "Last %lldd"), self.summary.days))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(totalCost)
@@ -74,7 +73,9 @@ struct CostUsageHistoryMenuView: View {
             return AnyView(EmptyView())
         }
         return AnyView(
-            Text("Partial: \(self.summary.totals.missingCostEntries) entries missing cost")
+            Text(String(
+                format: String(localized: "Partial: %lld entries missing cost"),
+                self.summary.totals.missingCostEntries))
                 .font(.caption2)
                 .foregroundStyle(.secondary))
     }

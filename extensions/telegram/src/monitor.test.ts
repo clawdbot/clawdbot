@@ -1,4 +1,5 @@
 // Telegram tests cover monitor plugin behavior.
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MonitorTelegramOpts = import("./monitor.types.js").MonitorTelegramOpts;
@@ -933,10 +934,11 @@ describe("monitorTelegramProvider (grammY)", () => {
     });
 
     const webhookCall = latestMockCall(startTelegramWebhookSpy, "startTelegramWebhook") as [
-      { host?: string; setStatus?: unknown },
+      { host?: string; ownerAgentId?: string; setStatus?: unknown },
     ];
     const webhookOptions = webhookCall[0];
     expect(webhookOptions?.host).toBe("0.0.0.0");
+    expect(webhookOptions?.ownerAgentId).toBe("main");
     expect(webhookOptions?.setStatus).toBe(setStatus);
     expect(runSpy).not.toHaveBeenCalled();
   });
@@ -1087,17 +1089,3 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).not.toHaveBeenCalled();
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

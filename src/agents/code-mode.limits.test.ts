@@ -1,10 +1,16 @@
 /** Tests Code Mode runtime and output limits. */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { QuickJS } from "quickjs-wasi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { codeModeFailureCode } from "./code-mode-runtime.js";
 import { applyCodeModeCatalog, createCodeModeTools, resolveCodeModeConfig } from "./code-mode.js";
 import {
+  expectOriginalCodeModeMarker,
+  expectCodeModeSharedBudget,
+  pluginToolWithExecute,
   resetCodeModeTestState,
   pluginTool,
   mcpTool,
@@ -12,8 +18,8 @@ import {
   createCodeModeHarness,
   testing,
 } from "./code-mode.test-support.js";
+import { projectMcpCallToolResult } from "./mcp-content.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
-import { jsonResult } from "./tools/common.js";
 
 describe("Code Mode runtime and output limits", () => {
   beforeEach(() => {
@@ -25,7 +31,7 @@ describe("Code Mode runtime and output limits", () => {
     resetCodeModeTestState();
   });
 
-  it("enforces output limits on completed exec calls", async () => {
+  it("bounds oversized values on completed exec calls", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: {
@@ -59,12 +65,14 @@ describe("Code Mode runtime and output limits", () => {
       }),
     );
 
-    expect(details.status).toBe("failed");
-    expect(String(details.error)).toContain("output limit exceeded");
-    expect(details.code).toBe("output_limit_exceeded");
+    expect(details.status).toBe("completed");
+    expect(details.value).toMatchObject({
+      truncated: true,
+      guidance: expect.stringContaining("rerun with narrower args"),
+    });
   });
 
-  it("enforces output limits before suspending runs", async () => {
+  it("bounds oversized output before suspending runs", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: {
@@ -99,13 +107,174 @@ describe("Code Mode runtime and output limits", () => {
       }),
     );
 
-    expect(details.status).toBe("failed");
-    expect(String(details.error)).toContain("output limit exceeded");
-    expect(details.code).toBe("output_limit_exceeded");
+    expect(details.status).toBe("waiting");
+    expect(JSON.stringify(details.output)).toContain("rerun with narrower args");
+    expect(testing.activeRuns.size).toBe(beforeRunCount + 1);
+
+    const completed = resultDetails(
+      await expectDefined(tools[1], "Code Mode wait test invariant").execute(
+        "code-wait-large-suspend",
+        { runId: details.runId },
+      ),
+    );
+    expect(completed.status).toBe("completed");
     expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
-  it("enforces the cumulative output limit across yielded waits", async () => {
+  it.each([
+    { name: "original 1KiB", cap: 1024, firstText: "🦞".repeat(140), lastText: "é".repeat(240) },
+    {
+      name: "default budget",
+      cap: undefined,
+      firstText: "🦞".repeat(9000),
+      lastText: "é".repeat(18000),
+    },
+    {
+      name: "clipped first leg",
+      cap: 1024,
+      firstText: "🦞".repeat(1000),
+      lastText: '\\"\n\té'.repeat(30),
+    },
+  ])(
+    "bounds cumulative original output across yielded waits: $name",
+    async ({ cap, firstText, lastText }) => {
+      const { ctx } = createCodeModeHarness();
+      const config = {
+        tools: { codeMode: { enabled: true, ...(cap ? { maxOutputBytes: cap } : {}) } },
+      };
+      const tools = createCodeModeTools({ ...ctx, config, runtimeConfig: config });
+      applyCodeModeCatalog({ ...ctx, config, tools });
+      const exec = expectDefined(tools[0], "exec");
+      const wait = expectDefined(tools[1], "wait");
+      const original = [
+        { type: "text", text: firstText },
+        { type: "text", text: lastText },
+      ];
+      const first = resultDetails(
+        await exec.execute("cumulative", {
+          code: `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); text(${JSON.stringify(lastText)}); await yield_control(); return true;`,
+        }),
+      );
+      expect(first.status).toBe("waiting");
+      if (Buffer.byteLength(JSON.stringify([original[0]])) > (cap ?? 65536)) {
+        expectOriginalCodeModeMarker((first.output as unknown[])[0], [original[0]]);
+      } else {
+        expect(first.output).toEqual([original[0]]);
+      }
+      const empty = resultDetails(await wait.execute("empty-leg", { runId: first.runId }));
+      expect(empty.status).toBe("waiting");
+      expect(empty.output).toEqual([]);
+      const changed = resultDetails(await wait.execute("new-leg", { runId: first.runId }));
+      expect(changed.status).toBe("waiting");
+      expectOriginalCodeModeMarker((changed.output as unknown[])[0], original);
+      const final = resultDetails(await wait.execute("final", { runId: first.runId }));
+      expect(final.status).toBe("completed");
+      expect(final.value).toBe(true);
+      expectOriginalCodeModeMarker((final.output as unknown[])[0], original);
+      for (const frame of [first, empty, changed, final]) {
+        expectCodeModeSharedBudget(frame, cap ?? 65536);
+      }
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
+
+  it.each(["exec", "wait"])(
+    "preserves output and cancels earlier tools when a %s resume exceeds the snapshot cap",
+    async (mode) => {
+      const { ctx, config, tools } = createCodeModeHarness();
+      const pendingStarted = createDeferred<AbortSignal>();
+      const pending = pluginToolWithExecute(
+        "snapshot_pending",
+        "Pending snapshot fixture",
+        async (_toolCallId, _input, signal) => {
+          const pendingSignal = expectDefined(signal, "pending bridge signal");
+          pendingStarted.resolve(pendingSignal);
+          await new Promise<void>((resolve) => {
+            pendingSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return { content: [], details: true };
+        },
+      );
+      const fixture = pluginToolWithExecute("output_fixture", "Output fixture", async () => {
+        await pendingStarted.promise;
+        return { content: [], details: true };
+      });
+      const fresh = pluginTool("snapshot_fresh", "Fresh snapshot fixture");
+      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, pending, fixture, fresh] });
+      const exec = expectDefined(tools[0], "exec");
+      const wait = expectDefined(tools[1], "wait");
+      const input = {
+        code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}
+          void snapshot_pending({});
+          text("accepted first");
+          await output_fixture({});
+          const retained = new Uint8Array(16 * 1024 * 1024);
+          retained[0] = 7;
+          text("accepted inline");
+          await snapshot_fresh({});
+          return retained[0];`,
+      };
+      const first = mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
+      if (first) {
+        expect(first).toMatchObject({
+          status: "waiting",
+          output: [{ type: "text", text: "delivered" }],
+        });
+      }
+      const result = resultDetails(
+        await (first
+          ? wait.execute("resume", { runId: first.runId })
+          : exec.execute("inline", input)),
+      );
+      expect(result).toMatchObject({ status: "failed", code: "snapshot_limit_exceeded" });
+      expect(pending.execute).toHaveBeenCalledOnce();
+      expect(fixture.execute).toHaveBeenCalledOnce();
+      expect(fresh.execute).not.toHaveBeenCalled();
+      expect((await pendingStarted.promise).aborted).toBe(true);
+      expect(result.output).toEqual([
+        { type: "text", text: "accepted first" },
+        { type: "text", text: "accepted inline" },
+      ]);
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
+
+  it.each(["abort", "restart-safe"])(
+    "shares the output budget with %s diagnostics",
+    async (mode) => {
+      const { ctx } = createCodeModeHarness();
+      const config = { tools: { codeMode: { enabled: true, maxOutputBytes: 1024 } } };
+      const tools = createCodeModeTools({ ...ctx, config, runtimeConfig: config });
+      const controller = new AbortController();
+      const fixture = pluginToolWithExecute("output_fixture", "Output fixture", async () => {
+        controller.abort();
+        return { content: [], details: true };
+      });
+      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, fixture] });
+      const result = resultDetails(
+        await expectDefined(tools[0], "exec").execute(
+          "failure",
+          {
+            code: 'text("🦞".repeat(1000)); await output_fixture({}); return true;',
+            restartSafe: mode === "restart-safe",
+          },
+          controller.signal,
+        ),
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        code: mode === "abort" ? "aborted" : "invalid_input",
+      });
+      expect(fixture.execute).toHaveBeenCalledTimes(mode === "abort" ? 1 : 0);
+      expectOriginalCodeModeMarker((result.output as unknown[])[0], [
+        { type: "text", text: "🦞".repeat(1000) },
+      ]);
+      expectCodeModeSharedBudget(result, 1024);
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
+
+  it("bounds output before auto-draining namespace calls", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: {
@@ -124,64 +293,9 @@ describe("Code Mode runtime and output limits", () => {
       catalogRef,
     };
     const tools = createCodeModeTools(ctx);
-    applyCodeModeCatalog({
-      tools: [...tools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const first = resultDetails(
-      await expectDefined(tools[0], "Code Mode exec test invariant").execute(
-        "code-call-cumulative-output",
-        {
-          code: `
-            text("a".repeat(600));
-            await yield_control("pause");
-            text("b".repeat(600));
-            return "done";
-          `,
-        },
-      ),
+    const executeListIssues = vi.fn(async () =>
+      projectMcpCallToolResult({ content: [{ type: "text", text: '{"ok":true}' }] }),
     );
-
-    expect(first.status).toBe("waiting");
-    expect(first.output).toEqual([{ type: "text", text: "a".repeat(600) }]);
-
-    const second = resultDetails(
-      await expectDefined(tools[1], "Code Mode wait test invariant").execute(
-        "code-wait-cumulative-output",
-        { runId: first.runId },
-      ),
-    );
-
-    expect(second.status).toBe("failed");
-    expect(second.code).toBe("output_limit_exceeded");
-    expect(testing.activeRuns.has(first.runId as string)).toBe(false);
-  });
-
-  it("enforces output limits before auto-draining namespace calls", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const config = {
-      tools: {
-        codeMode: {
-          enabled: true,
-          maxOutputBytes: 1024,
-        },
-      },
-    } as never;
-    const ctx = {
-      config,
-      runtimeConfig: config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    };
-    const tools = createCodeModeTools(ctx);
-    const executeListIssues = vi.fn(async () => jsonResult({ ok: true }));
     const listIssues = mcpTool({
       name: "tickets__list",
       serverName: "tickets",
@@ -206,10 +320,9 @@ describe("Code Mode runtime and output limits", () => {
       ),
     );
 
-    expect(details.status).toBe("failed");
-    expect(String(details.error)).toContain("output limit exceeded");
-    expect(details.code).toBe("output_limit_exceeded");
-    expect(executeListIssues).not.toHaveBeenCalled();
+    expect(details.status).toBe("completed");
+    expect(JSON.stringify(details.output)).toContain("rerun with narrower args");
+    expect(executeListIssues).toHaveBeenCalledOnce();
   });
 
   it("preserves guest output when a run fails", async () => {
@@ -239,23 +352,28 @@ describe("Code Mode runtime and output limits", () => {
     expect(details.bridgeDispatchStarted).toBe(false);
   });
 
-  it("classifies snapshot limit failures", async () => {
-    const config = resolveCodeModeConfig({
-      tools: { codeMode: { enabled: true, maxSnapshotBytes: 1024 } },
-    } as never);
+  it("enforces the exact encoded snapshot byte limit", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const execute = (maxSnapshotBytes = config.maxSnapshotBytes) =>
+      testing.runCodeModeWorker(
+        {
+          kind: "exec",
+          source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
+          config: { ...config, maxSnapshotBytes },
+          catalog: [],
+        },
+        5_000,
+      );
+    const probe = await execute();
+    expect(probe.status).toBe("waiting");
+    if (probe.status !== "waiting") {
+      throw new Error("expected a suspended guest to measure its snapshot");
+    }
+    const encodedBytes = QuickJS.serializeSnapshot(probe.snapshot).byteLength;
 
-    const result = await testing.runCodeModeWorker(
-      {
-        kind: "exec",
-        source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
-        config,
-        catalog: [],
-      },
-      5000,
-    );
-
-    expect(result.status).toBe("failed");
-    expect(result).toMatchObject({
+    expect(await execute(encodedBytes)).toMatchObject({ status: "waiting" });
+    expect(await execute(encodedBytes - 1)).toMatchObject({
+      status: "failed",
       code: "snapshot_limit_exceeded",
       error: "code mode snapshot limit exceeded",
     });
@@ -307,13 +425,13 @@ describe("Code Mode runtime and output limits", () => {
       codeModeFailureCode(new Error("interrupted", { cause: new Error("worker stopped") })),
     ).toBe("timeout");
     expect(
-      testing.normalizeCodeModeWorkerResult({
+      testing.normalizeCodeModeTimeoutResult({
         status: "failed",
         code: "timeout",
         error: "interrupted",
         failurePhase: "guest",
         bridgeDispatchStarted: false,
-        output: [],
+        output: EMPTY_CODE_MODE_OUTPUT,
       }),
     ).toMatchObject({
       code: "timeout",
@@ -321,13 +439,13 @@ describe("Code Mode runtime and output limits", () => {
     });
 
     expect(
-      testing.normalizeCodeModeWorkerResult({
+      testing.normalizeCodeModeTimeoutResult({
         status: "failed",
         code: "internal_error",
         error: "interrupted",
         failurePhase: "guest",
         bridgeDispatchStarted: false,
-        output: [],
+        output: EMPTY_CODE_MODE_OUTPUT,
       }),
     ).toMatchObject({
       code: "internal_error",
@@ -395,7 +513,7 @@ describe("Code Mode runtime and output limits", () => {
     expect(result).toMatchObject({
       status: "failed",
       code: "runtime_unavailable",
-      error: "code mode worker exited with code 0 before returning a result",
+      error: expect.stringContaining("worker exited with code 0"),
     });
   });
 

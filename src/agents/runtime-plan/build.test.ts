@@ -2,7 +2,7 @@
 // auth, transport, tools, prompt, delivery, transcript, and observability.
 import { createParameterFreeTool } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { resetConfigRuntimeState } from "../../config/config.js";
 import {
   prepareProviderExtraParams,
   resolveProviderFollowupFallbackRoute,
@@ -11,7 +11,12 @@ import {
 } from "../../plugins/provider-hook-runtime.js";
 import { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlan } from "./build.js";
 
-const isPluginMetadataSnapshotCompatible = vi.hoisted(() => vi.fn(() => true));
+const resolveProviderIdForAuth = vi.hoisted(() => vi.fn((provider: string) => provider));
+
+vi.mock("../provider-auth-aliases.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../provider-auth-aliases.js")>()),
+  resolveProviderIdForAuth,
+}));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   clearProviderRuntimePluginCacheForTest: vi.fn(),
@@ -29,11 +34,6 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: vi.fn(() => undefined),
   resolveProviderRuntimePluginHandle: vi.fn(() => ({ provider: "openai" })),
   wrapProviderStreamFn: vi.fn(() => undefined),
-}));
-
-vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/plugin-metadata-snapshot.js")>()),
-  isPluginMetadataSnapshotCompatible,
 }));
 
 const gpt54Model = {
@@ -397,6 +397,7 @@ describe("AgentRuntimePlan", () => {
   it("threads prepared tool metadata without discovery", () => {
     const metadataSnapshot = { plugins: [] };
     vi.mocked(resolveProviderRuntimePluginHandle).mockClear();
+    resolveProviderIdForAuth.mockClear();
     const plan = buildAgentRuntimePlan({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -407,25 +408,9 @@ describe("AgentRuntimePlan", () => {
     expect(resolveProviderRuntimePluginHandle).toHaveBeenCalledWith(
       expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
     );
-  });
-
-  it("validates threaded tool metadata against the source config projection", () => {
-    const runtimeConfig = { plugins: { entries: { runtimeOnly: { enabled: true } } } };
-    const sourceConfig = { plugins: { entries: {} } };
-    const metadataSnapshot = { plugins: [] };
-    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-    isPluginMetadataSnapshotCompatible.mockClear();
-
-    buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      config: runtimeConfig,
-      metadataSnapshot,
-    });
-
-    expect(isPluginMetadataSnapshotCompatible).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ config: sourceConfig }),
+    expect(resolveProviderIdForAuth).toHaveBeenCalledWith(
+      "openai",
+      expect.objectContaining({ metadataSnapshot }),
     );
   });
 });

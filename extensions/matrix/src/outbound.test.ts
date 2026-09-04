@@ -157,7 +157,7 @@ describe("matrixOutbound cfg threading", () => {
       expect(result).toMatchObject({
         channel: "matrix",
         messageId: "$last",
-        roomId: "!room:example",
+        target: { kind: "room", id: "!room:example" },
         primaryMessageId: "$first",
         content: "first\nlast",
       });
@@ -529,6 +529,38 @@ describe("matrixOutbound cfg threading", () => {
     expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 1).threadId).toBe("$thread");
   });
 
+  it("preserves durable dispatch ownership across sendPayload media fanout", async () => {
+    const onPlatformSendDispatch = vi.fn();
+
+    await matrixOutbound.sendPayload!({
+      cfg: {} as OpenClawConfig,
+      to: "room:!room:example",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: ["", "file:///tmp/a.png", "   ", "file:///tmp/b.png"],
+      },
+      deliveryQueueId: "queue-1",
+      onPlatformSendDispatch,
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(2);
+    expect(mockOptions(mocks.sendMessageMatrix, "first media", 0)).toMatchObject({
+      mediaUrl: "file:///tmp/a.png",
+      deliveryQueueId: "queue-1",
+      deliveryPartIndex: 0,
+      deliveryPartCount: 2,
+      onPlatformSendDispatch,
+    });
+    expect(mockOptions(mocks.sendMessageMatrix, "second media", 1)).toMatchObject({
+      mediaUrl: "file:///tmp/b.png",
+      deliveryQueueId: "queue-1",
+      deliveryPartIndex: 1,
+      deliveryPartCount: 2,
+      onPlatformSendDispatch,
+    });
+  });
+
   it("combines media payload receipts without inventing replies on later events", async () => {
     const firstReceipt = createMatrixReceipt([
       { messageId: "$image", kind: "media", replyToId: "$reply" },
@@ -707,7 +739,7 @@ describe("matrixOutbound cfg threading", () => {
     expect(result).toEqual({
       channel: "matrix",
       messageId: "evt-1",
-      roomId: "!room:example",
+      target: { kind: "room", id: "!room:example" },
     });
   });
 

@@ -196,7 +196,7 @@ describe("Gateway task and automation RPCs", () => {
             defaults: {
               workspace: workspaceDir,
               skipBootstrap: true,
-              heartbeat: { every: "5m" },
+              heartbeat: { every: "5m", target: "none" },
               model: { primary: provider.modelRef },
               models: {
                 [provider.modelRef]: {
@@ -211,10 +211,9 @@ describe("Gateway task and automation RPCs", () => {
             providers: {
               [provider.providerId]: {
                 ...provider.config,
-                models: provider.config.models.map((model) => ({
-                  ...model,
-                  input: Array.from(model.input),
-                })),
+                models: provider.config.models.map((model) =>
+                  Object.assign({}, model, { input: Array.from(model.input) }),
+                ),
               },
             },
           },
@@ -399,28 +398,41 @@ describe("Gateway task and automation RPCs", () => {
         await expect
           .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
           .toBeGreaterThan(requestsBeforeWake);
-        await expect
-          .poll(
-            async () => {
-              const lastHeartbeat = await client.request<{
-                ts: number;
-                status: string;
-                reason?: string;
-                message?: string;
-                preview?: string;
-              }>("last-heartbeat", {});
-              return (
-                lastHeartbeat.ts >= wakeRequestedAt &&
-                lastHeartbeat.status === "skipped" &&
-                lastHeartbeat.reason === "target-none" &&
-                lastHeartbeat.message ===
-                  "Heartbeat delivery is disabled by configuration (target: none)." &&
-                lastHeartbeat.preview === `Heartbeat handled: ${wakeText}`
-              );
-            },
-            { timeout: 15_000, interval: 50 },
-          )
-          .toBe(true);
+        let observedHeartbeat: {
+          ts: number;
+          status: string;
+          reason?: string;
+          message?: string;
+          preview?: string;
+        } | null = null;
+        try {
+          await expect
+            .poll(
+              async () => {
+                observedHeartbeat = await client.request<{
+                  ts: number;
+                  status: string;
+                  reason?: string;
+                  message?: string;
+                  preview?: string;
+                }>("last-heartbeat", {});
+                return (
+                  observedHeartbeat.ts >= wakeRequestedAt &&
+                  observedHeartbeat.status === "skipped" &&
+                  observedHeartbeat.reason === "target-none" &&
+                  observedHeartbeat.message ===
+                    "Heartbeat delivery is disabled by configuration (target: none)." &&
+                  observedHeartbeat.preview === `Heartbeat handled: ${wakeText}`
+                );
+              },
+              { timeout: 15_000, interval: 50 },
+            )
+            .toBe(true);
+        } catch (error) {
+          throw new Error(`Unexpected last-heartbeat state: ${JSON.stringify(observedHeartbeat)}`, {
+            cause: error,
+          });
+        }
       } finally {
         if (gateway) {
           await disconnectGatewayClient(gateway.client);
@@ -428,7 +440,9 @@ describe("Gateway task and automation RPCs", () => {
         }
         releaseTaskResponse?.();
         providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => providerServer.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          providerServer.close(() => resolve());
+        });
         envSnapshot.restore();
       }
     },

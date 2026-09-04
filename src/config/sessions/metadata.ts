@@ -26,10 +26,6 @@ import {
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
-function isSystemEventProvider(provider?: string): boolean {
-  return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
-}
-
 // Origin updates merge sparse channel metadata without deleting previously known fields.
 const mergeSessionOrigin = (
   existing: SessionOrigin | undefined,
@@ -47,8 +43,7 @@ const mergeSessionOrigin = (
   const nextIsDeliverableChannel =
     nextProvider != null &&
     nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(nextProvider) &&
-    !isSystemEventProvider(nextProvider);
+    !isInternalNonDeliveryChannel(nextProvider);
   const channelChanged =
     existing != null &&
     nextIsDeliverableChannel &&
@@ -60,6 +55,7 @@ const mergeSessionOrigin = (
   if (channelChanged) {
     delete merged.nativeChannelId;
     delete merged.nativeDirectUserId;
+    delete merged.avatar;
     delete merged.accountId;
     delete merged.threadId;
   }
@@ -87,6 +83,9 @@ const mergeSessionOrigin = (
   if (next?.nativeDirectUserId) {
     merged.nativeDirectUserId = next.nativeDirectUserId;
   }
+  if (next?.avatar) {
+    merged.avatar = next.avatar;
+  }
   if (next?.accountId) {
     merged.accountId = next.accountId;
   }
@@ -101,7 +100,7 @@ export function deriveSessionOrigin(
   ctx: MsgContext,
   opts?: { skipSystemEventOrigin?: boolean },
 ): SessionOrigin | undefined {
-  if (opts?.skipSystemEventOrigin && isSystemEventProvider(ctx.Provider)) {
+  if (opts?.skipSystemEventOrigin && ctx.InternalTurnSource !== undefined) {
     return undefined;
   }
   const label = normalizeOptionalString(resolveConversationLabel(ctx));
@@ -118,6 +117,7 @@ export function deriveSessionOrigin(
   );
   const nativeChannelId = normalizeOptionalString(ctx.NativeChannelId);
   const nativeDirectUserId = normalizeOptionalString(ctx.NativeDirectUserId);
+  const avatar = normalizeOptionalString(ctx.ConversationAvatar);
   const accountId = normalizeOptionalString(ctx.AccountId);
   const threadId = ctx.MessageThreadId ?? undefined;
 
@@ -145,6 +145,9 @@ export function deriveSessionOrigin(
   }
   if (nativeDirectUserId) {
     origin.nativeDirectUserId = nativeDirectUserId;
+  }
+  if (avatar) {
+    origin.avatar = avatar;
   }
   if (accountId) {
     origin.accountId = accountId;
@@ -247,8 +250,7 @@ export function deriveSessionMetaPatch(params: {
     const nextOwnsExternalRoute = Boolean(
       nextProvider &&
       nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-      !isInternalNonDeliveryChannel(nextProvider) &&
-      !isSystemEventProvider(nextProvider),
+      !isInternalNonDeliveryChannel(nextProvider),
     );
     const existingRoute = sessionDeliveryRoute(params.existing);
     const existingRouteAccountId =
@@ -286,11 +288,11 @@ export function deriveSessionMetaPatch(params: {
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
-function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
-  if (!context || context.threadId == null) {
-    return context;
+function withoutThread<T extends { threadId?: string | number }>(identity?: T): T | undefined {
+  if (!identity || identity.threadId == null) {
+    return identity;
   }
-  const next: DeliveryContext = { ...context };
+  const next: T = { ...identity };
   delete next.threadId;
   return next;
 }
@@ -344,8 +346,11 @@ export function deriveLastRoutePatch(params: {
   );
   const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
   const fallbackContext = clearThreadFromFallback
-    ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
+    ? withoutThread(deliveryContextFromSession(existing))
     : deliveryContextFromSession(existing);
+  const existingOrigin = sessionDeliveryOrigin(existing);
+  // Explicit thread absence owns both fallbacks, so origin cannot restore a stale thread.
+  const fallbackOrigin = clearThreadFromFallback ? withoutThread(existingOrigin) : existingOrigin;
   const merged = mergeDeliveryContext(mergedInput, fallbackContext);
   const delivery = normalizeSessionDeliveryState({
     route: params.route,
@@ -355,7 +360,7 @@ export function deriveLastRoutePatch(params: {
       accountId: merged?.accountId,
       threadId: merged?.threadId,
     },
-    origin: sessionDeliveryOrigin(existing),
+    origin: fallbackOrigin,
   });
   const nextEntry = existing ? { ...existing, delivery } : ({ delivery } as SessionEntry);
   const metaPatch = ctx

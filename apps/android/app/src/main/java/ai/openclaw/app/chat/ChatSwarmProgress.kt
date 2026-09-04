@@ -43,6 +43,14 @@ data class ChatSwarmGroup(
   val phases: List<ChatSwarmPhase>,
 )
 
+internal data class ChatSwarmSnapshot(
+  val sessionKey: String?,
+  val enabled: Boolean,
+  val groups: List<ChatSwarmGroup>,
+) {
+  fun isAvailableFor(sessionKey: String?): Boolean = enabled && sessionKey != null && this.sessionKey == sessionKey
+}
+
 internal data class ChatSwarmSessionPage(
   val sessions: List<ChatSessionEntry>,
   val totalCount: Int?,
@@ -270,6 +278,7 @@ internal fun buildChatSwarmGroups(
 
 private fun swarmDotStatus(row: ChatSessionEntry): ChatSwarmDotStatus? =
   when {
+    row.status == "queued" -> ChatSwarmDotStatus.Queued
     row.status == "running" || row.hasActiveRun == true -> ChatSwarmDotStatus.Running
     row.status == "done" -> ChatSwarmDotStatus.Done
     row.status == "failed" || row.status == "killed" || row.status == "timeout" -> ChatSwarmDotStatus.Failed

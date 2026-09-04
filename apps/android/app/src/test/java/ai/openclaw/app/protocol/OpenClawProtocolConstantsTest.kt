@@ -17,8 +17,6 @@ class OpenClawProtocolConstantsTest {
   fun generatedCommandGroupsMatchTheirNamespaces() {
     val groups =
       listOf(
-        OpenClawCanvasCommand.NamespacePrefix to OpenClawCanvasCommand.entries.map { it.rawValue },
-        OpenClawCanvasA2UICommand.NamespacePrefix to OpenClawCanvasA2UICommand.entries.map { it.rawValue },
         OpenClawCameraCommand.NamespacePrefix to OpenClawCameraCommand.entries.map { it.rawValue },
         OpenClawSmsCommand.NamespacePrefix to OpenClawSmsCommand.entries.map { it.rawValue },
         OpenClawTalkCommand.NamespacePrefix to OpenClawTalkCommand.entries.map { it.rawValue },

@@ -45,7 +45,9 @@ and help maintainers with guarded repair or automerge flows.
 A positive ClawSweeper result is supporting evidence, not maintainer approval.
 Maintainers still decide whether and when a PR is ready to merge.
 
-ClawSweeper is queue-based. Do not expect an immediate response after opening a
+ClawSweeper is queue-based. When you open a non-draft PR or mark a draft ready
+for review, it posts a short receipt comment right away, but the review itself
+still waits for a queue slot. Do not expect an immediate review after opening a
 PR, pushing a commit, or adding a review request. Label updates after a
 ClawSweeper run can also take time.
 

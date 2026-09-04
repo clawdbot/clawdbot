@@ -14,6 +14,7 @@ import type {
 } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isUnresolvedSecretInputError } from "../../../config/types.secrets.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 
 type ChannelDoctorEntry = {
   id: string;
@@ -65,34 +66,12 @@ export type ChannelDoctorEmptyAllowlistPolicyHooks = {
 };
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
-  if (cfg.plugins?.enabled === false) {
-    return [];
-  }
-  const channels =
-    cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
-      ? cfg.channels
-      : null;
-  if (!channels) {
-    return [];
-  }
-  const channelEntries = channels as Record<string, unknown>;
-  return Object.keys(channels)
-    .filter((channelId) => {
-      if (channelId === "defaults") {
-        return false;
-      }
-      if (isChannelDoctorBlockedByConfig(channelId, cfg)) {
-        return false;
-      }
-      const entry = channelEntries[channelId];
-      return (
-        !entry ||
-        typeof entry !== "object" ||
-        Array.isArray(entry) ||
-        (entry as { enabled?: unknown }).enabled !== false
-      );
-    })
-    .toSorted();
+  return listDoctorConfiguredChannelIds(cfg, {
+    configEntryPolicy: "enabled",
+    skipWhenPluginsDisabled: true,
+    excludeExplicitlyDisabled: true,
+    sort: "codepoint",
+  }).filter((channelId) => !isChannelDoctorBlockedByConfig(channelId, cfg));
 }
 
 function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig): boolean {
@@ -266,6 +245,21 @@ function shouldSkipDefaultEmptyGroupAllowlistWarningForEntries(
   );
 }
 
+function appendChannelDoctorMutation(
+  mutations: ChannelDoctorConfigMutation[],
+  currentCfg: OpenClawConfig,
+  mutation: ChannelDoctorConfigMutation | undefined,
+): OpenClawConfig {
+  if (mutation?.changes.length) {
+    mutations.push(mutation);
+    return mutation.config;
+  }
+  if (mutation?.warnings?.length) {
+    mutations.push({ config: currentCfg, changes: [], warnings: mutation.warnings });
+  }
+  return currentCfg;
+}
+
 /** Build cached empty-allowlist hooks backed by channel doctor adapters. */
 export function createChannelDoctorEmptyAllowlistPolicyHooks(
   context: ChannelDoctorLookupContext,
@@ -320,18 +314,11 @@ export function collectChannelDoctorCompatibilityMutations(
   options: { env?: NodeJS.ProcessEnv } = {},
 ): ChannelDoctorConfigMutation[] {
   const channelIds = collectConfiguredChannelIds(cfg);
-  if (channelIds.length === 0) {
-    return [];
-  }
   const mutations: ChannelDoctorConfigMutation[] = [];
   let nextCfg = cfg;
   for (const entry of listChannelDoctorEntries(channelIds, { cfg, env: options.env })) {
     const mutation = entry.doctor.normalizeCompatibilityConfig?.({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
-      continue;
-    }
-    mutations.push(mutation);
-    nextCfg = mutation.config;
+    nextCfg = appendChannelDoctorMutation(mutations, nextCfg, mutation);
   }
   return mutations;
 }
@@ -349,11 +336,7 @@ export async function collectChannelDoctorStaleConfigMutations(
     env: options.env,
   })) {
     const mutation = await entry.doctor.cleanStaleConfig?.({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
-      continue;
-    }
-    mutations.push(mutation);
-    nextCfg = mutation.config;
+    nextCfg = appendChannelDoctorMutation(mutations, nextCfg, mutation);
   }
   return mutations;
 }
@@ -423,14 +406,7 @@ export async function collectChannelDoctorRepairMutations(params: {
       doctorFixCommand: params.doctorFixCommand,
       ...(params.env ? { env: params.env } : {}),
     });
-    if (!mutation || mutation.changes.length === 0) {
-      if (mutation?.warnings?.length) {
-        mutations.push({ config: nextCfg, changes: [], warnings: mutation.warnings });
-      }
-      continue;
-    }
-    mutations.push(mutation);
-    nextCfg = mutation.config;
+    nextCfg = appendChannelDoctorMutation(mutations, nextCfg, mutation);
   }
   return mutations;
 }

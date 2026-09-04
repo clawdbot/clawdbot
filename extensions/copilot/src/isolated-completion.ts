@@ -9,7 +9,7 @@ import type { CopilotClientPool, PooledClient } from "./runtime.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
 import { buildCopilotAssistantUsage } from "./usage-bridge.js";
 
-type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletion"]>;
+type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
 
@@ -24,6 +24,7 @@ type IsolatedSession = {
 
 type CompletionBoundary = {
   abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   deadlineMs: number;
   timeoutMs: number;
 };
@@ -34,14 +35,6 @@ function startBestEffortCleanup(cleanup: () => Promise<void>): void {
   } catch {
     // Completion outcome wins over best-effort SDK teardown.
   }
-}
-
-function requirePreparedCredential(params: AgentHarnessIsolatedCompletionParams): string {
-  const apiKey = params.auth.apiKey?.trim();
-  if (!apiKey) {
-    throw new Error("[copilot] isolated completion requires the prepared credential");
-  }
-  return apiKey;
 }
 
 function resolveReasoningEffort(
@@ -85,16 +78,14 @@ async function awaitWithinCompletionBoundary<T>(params: {
     throw createTimeoutError(params.boundary.timeoutMs);
   }
 
-  let boundaryWon = false;
   let boundaryError: Error | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const boundary = new Promise<never>((_resolve, reject) => {
     const rejectBoundary = (error: Error) => {
-      if (boundaryWon) {
+      if (boundaryError) {
         return;
       }
-      boundaryWon = true;
       boundaryError = error;
       params.onBoundary?.();
       reject(error);
@@ -111,23 +102,34 @@ async function awaitWithinCompletionBoundary<T>(params: {
       }
     }
   });
+  const assertCurrent = () => {
+    if (boundaryError) {
+      throw boundaryError;
+    }
+    params.boundary.assertCurrent?.();
+  };
   // Start only after the abort listener exists. Pool/session factories may
   // synchronously trip cancellation before returning their promise.
   const operation = Promise.resolve()
     .then(() => {
-      if (boundaryWon) {
-        throw boundaryError ?? createTimeoutError(params.boundary.timeoutMs);
-      }
+      assertCurrent();
       return params.start(remainingMs);
     })
-    .then(async (value) => {
-      if (boundaryWon) {
-        await params.cleanupLate?.(value);
+    .then((value) => {
+      try {
+        assertCurrent();
+        return value;
+      } catch (error) {
+        // Retirement can reject an acquired resource before its caller owns cleanup.
+        startBestEffortCleanup(async () => await params.cleanupLate?.(value));
+        throw error;
       }
-      return value;
     });
   try {
     return await Promise.race([operation, boundary]);
+  } catch (error) {
+    params.boundary.assertCurrent?.();
+    throw error;
   } finally {
     if (timer) {
       clearTimeout(timer);
@@ -172,28 +174,37 @@ export async function runCopilotIsolatedCompletion(
   }
   const boundary: CompletionBoundary = {
     abortSignal: params.abortSignal,
+    assertCurrent: params.assertCurrent,
     deadlineMs: Date.now() + params.timeoutMs,
     timeoutMs: params.timeoutMs,
   };
-  const apiKey = requirePreparedCredential(params);
+  if (params.authorization.owner !== "host") {
+    throw new Error("[copilot] isolated completion requires host-prepared authorization");
+  }
+  const authorization = params.authorization;
+  const { auth, model } = authorization;
+  const apiKey = auth.apiKey?.trim();
+  if (!apiKey) {
+    throw new Error("[copilot] isolated completion requires the prepared credential");
+  }
   const resolvedProvider = resolveCopilotProvider({
     model: {
-      api: params.model.api,
-      id: params.model.id,
-      provider: params.model.provider,
-      baseUrl: params.model.baseUrl,
-      headers: params.model.headers,
-      authHeader: params.model.authHeader,
-      contextTokens: params.model.contextTokens,
-      contextWindow: params.model.contextWindow,
-      maxTokens: params.streamParams?.maxTokens ?? params.model.maxTokens,
+      api: model.api,
+      id: model.id,
+      provider: model.provider,
+      baseUrl: model.baseUrl,
+      headers: model.headers,
+      authHeader: model.authHeader,
+      contextTokens: model.contextTokens,
+      contextWindow: model.contextWindow,
+      maxTokens: params.streamParams?.maxTokens ?? model.maxTokens,
       azureApiVersion:
-        typeof params.model.params?.azureApiVersion === "string"
-          ? params.model.params.azureApiVersion
+        typeof model.params?.azureApiVersion === "string"
+          ? model.params.azureApiVersion
           : undefined,
     },
     resolvedApiKey: apiKey,
-    authProfileId: params.auth.profileId,
+    authProfileId: auth.profileId,
   });
   // Sampling controls are best-effort completion hints. Native Copilot does
   // not expose equivalent SDK fields, while BYOK applies maxTokens above.
@@ -209,8 +220,9 @@ export async function runCopilotIsolatedCompletion(
   const sessionProvider = byokProxy?.provider ?? resolvedProvider;
   const githubAuth = sessionProvider.mode === "github-copilot";
   const copilotHome = resolve(params.agentDir, "copilot");
-  const authProfileId = params.auth.profileId?.trim() || "prepared";
-  const authProfileVersion = params.sourceAuthFingerprint?.trim() || tokenFingerprint(apiKey);
+  const authProfileId = auth.profileId?.trim() || "prepared";
+  const authProfileVersion =
+    authorization.sourceAuthFingerprint?.trim() || tokenFingerprint(apiKey);
   let handle: PooledClient | undefined;
   let session: IsolatedSession | undefined;
   try {
@@ -238,7 +250,7 @@ export async function runCopilotIsolatedCompletion(
     handle = acquiredHandle;
     const sessionConfig: SessionConfig = {
       ...createCopilotIsolatedSessionRestrictions(),
-      model: params.model.id,
+      model: model.id,
       ...(githubAuth ? { gitHubToken: apiKey } : {}),
       ...(sessionProvider.provider ? { provider: sessionProvider.provider } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -287,9 +299,9 @@ export async function runCopilotIsolatedCompletion(
       assistant: {
         role: "assistant",
         content,
-        api: params.model.api,
-        provider: params.model.provider,
-        model: event.data.model ?? params.model.id,
+        api: model.api,
+        provider: model.provider,
+        model: event.data.model ?? model.id,
         stopReason: event.data.toolRequests?.length ? "toolUse" : "stop",
         timestamp: Date.now(),
         usage: buildCopilotAssistantUsage({ fallbackOutputTokens: event.data.outputTokens }),

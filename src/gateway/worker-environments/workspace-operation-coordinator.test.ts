@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 describe("worker workspace operation coordinator", () => {

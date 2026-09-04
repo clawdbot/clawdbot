@@ -6,6 +6,7 @@ import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequ
 import * as ansi from "../../packages/terminal-core/src/ansi.js";
 import { toErrorObject } from "../infra/errors.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { sleep } from "../utils/sleep.js";
 
 // Shared PTY harness utilities for fake-backend and local TUI smoke tests.
 type PtyExitEvent = Parameters<Parameters<IPty["onExit"]>[0]>[0];
@@ -14,6 +15,7 @@ type PtyExitEvent = Parameters<Parameters<IPty["onExit"]>[0]>[0];
 export type PtyRun = {
   cols: number;
   output: () => string;
+  pid: number;
   rows: number;
   visibleOutput: () => string;
   write: (data: string, opts?: { delay?: boolean }) => Promise<void>;
@@ -224,13 +226,6 @@ export function waitFor<T>(params: {
   });
 }
 
-/** Async sleep used to simulate slower PTY typing. */
-export function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function readPositiveIntegerEnv(name: string, env: NodeJS.ProcessEnv = process.env): number | null {
   const value = Number.parseInt(env[name] ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : null;
@@ -376,6 +371,7 @@ export function startPty(
   const run: PtyRun = {
     cols,
     output: () => output,
+    pid: pty.pid,
     rows,
     visibleOutput: () => visibleOutput,
     write: async (data, writeOpts) => await writePtyInput(pty, data, ptyEnv, writeOpts),

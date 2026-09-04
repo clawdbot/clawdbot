@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createRuntimeConfigCapability } from "../../lib/config/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import * as avatarImage from "./avatar-image.ts";
 import { resetIdentityDraft, saveIdentityDraft, selectIdentityAvatar } from "./identity-actions.ts";
 
@@ -100,7 +101,12 @@ describe("agent identity actions", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const runtimeConfig = createRuntimeConfigCapability({
-      snapshot: { client, phase: "connected", sessionKey: "main" },
+      snapshot: {
+        client,
+        phase: "connected",
+        sessionKey: "main",
+        hello: gatewayHelloForMethods(["config.set"]),
+      },
       subscribe: () => () => undefined,
     });
     await runtimeConfig.ensureLoaded();

@@ -22,10 +22,10 @@ export class DiscordGatewayVoiceStateCache {
     this.transitionsByState = new WeakMap();
   }
 
-  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
+  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] | null {
     const states = this.statesByGuild.get(guildId);
     if (!states) {
-      return [];
+      return null;
     }
     const result: APIVoiceState[] = [];
     for (const state of states.values()) {

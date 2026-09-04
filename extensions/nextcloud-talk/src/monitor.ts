@@ -6,8 +6,10 @@ import {
   createAuthRateLimiter,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
+  resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkWebhookHeaders, NextcloudTalkWebhookServerOptions } from "./types.js";
 import { NextcloudTalkWebhookPayloadError } from "./webhook-spool-state.js";
@@ -97,7 +99,21 @@ function readNextcloudTalkWebhookBody(req: IncomingMessage, maxBodyBytes: number
     // body budget bounded even if the operator-configured post-parse limit is larger.
     maxBytes: Math.min(maxBodyBytes, PREAUTH_WEBHOOK_MAX_BODY_BYTES),
     timeoutMs: PREAUTH_WEBHOOK_BODY_TIMEOUT_MS,
+    // Defer destruction so the rejections below reach the backend before the close.
+    destroyOnLimit: false,
   });
+}
+
+async function rejectWebhookRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: number,
+  error: string,
+): Promise<void> {
+  if (res.headersSent) {
+    return;
+  }
+  await sendHttpRequestRejection(req, res, status, JSON.stringify({ error }), "application/json");
 }
 
 export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServerOptions): {
@@ -144,7 +160,10 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         return;
       }
 
-      const clientIp = req.socket.remoteAddress ?? "unknown";
+      const clientIp =
+        resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback) ??
+        req.socket.remoteAddress ??
+        "unknown";
       if (!webhookAuthRateLimiter.check(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE).allowed) {
         res.writeHead(429);
         res.end("Too Many Requests");
@@ -189,11 +208,11 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         writeJsonResponse(res, 200);
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-          writeWebhookError(res, 413, WEBHOOK_ERRORS.payloadTooLarge);
+          await rejectWebhookRequest(req, res, 413, WEBHOOK_ERRORS.payloadTooLarge);
           return;
         }
         if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-          writeWebhookError(res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+          await rejectWebhookRequest(req, res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
           return;
         }
         if (err instanceof NextcloudTalkWebhookPayloadError) {
@@ -226,6 +245,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const stop = async () => {
     stopRequested = true;
     await closeIfListening();
+    webhookAuthRateLimiter.dispose();
   };
 
   const start = (): Promise<void> => {

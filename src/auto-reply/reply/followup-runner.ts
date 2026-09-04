@@ -32,7 +32,6 @@ export function createFollowupRunner(
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
     let admittedRunId: string | undefined;
-    let executionStarted = false;
     let queuedFollowupAdmitted = false;
     const initiallyAborted =
       queued.abortSignal?.aborted === true || queued.queueAbortSignal?.aborted === true;
@@ -79,9 +78,6 @@ export function createFollowupRunner(
       const execution = await executeFollowupTurn({
         turn,
         defaults,
-        onExecutionStarted: () => {
-          executionStarted = true;
-        },
         onToolResult: async (payload, identity) => {
           await deliverFollowupDecision({
             decision: { kind: "deliver", payloads: [payload] },
@@ -103,6 +99,9 @@ export function createFollowupRunner(
           });
         },
       });
+      // A closed execution result is terminal queue work. Commit consumption
+      // before accounting/delivery so their failures cannot replay model or tool effects.
+      disposition = { kind: "consumed" };
       try {
         await execution.progress.drain();
       } catch (error) {
@@ -119,11 +118,15 @@ export function createFollowupRunner(
         await defaults.opts?.onObservedReplyDelivery?.();
       }
       const accounting = await accountFollowupTurn({ turn, defaults, execution });
+      const deliveryOpts = {
+        ...defaults.opts,
+        commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
+      };
       const decision = resolveFollowupDeliveryDecision({
         turn,
         execution: execution.execution,
         accounting,
-        opts: defaults.opts,
+        opts: deliveryOpts,
       });
       await deliverFollowupDecision({
         decision,
@@ -132,7 +135,6 @@ export function createFollowupRunner(
         runId: execution.execution.runId,
         runFollowup,
       });
-      disposition = { kind: "consumed" };
     } catch (error) {
       if (error instanceof FollowupRunDeferredError) {
         disposition = { kind: "deferred", reason: error.message };
@@ -141,15 +143,11 @@ export function createFollowupRunner(
         operation.result.code === "aborted_by_user"
       ) {
         disposition = { kind: "consumed" };
-      } else if (executionStarted) {
-        // There is no durable post-execution resume record yet. Requeueing the prompt
-        // here can duplicate persisted turns and external tool side effects. Preserve
-        // the terminal failure through complete() rather than reporting success.
+      } else if (disposition.kind === "consumed") {
         defaultRuntime.error?.(
-          `followup queue: execution failed after start; refusing replay: ${formatErrorMessage(error)}`,
+          `followup queue: terminal handling failed after execution; refusing replay: ${formatErrorMessage(error)}`,
         );
         operation?.fail("run_failed", error);
-        disposition = { kind: "consumed" };
       } else {
         disposition = { kind: "retry", error };
       }

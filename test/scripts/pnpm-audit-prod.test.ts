@@ -2,8 +2,10 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { describe, expect, it, vi } from "vitest";
 import {
+  collectAllResolvedPackagesFromLockfile,
   collectProdResolvedPackagesFromLockfile,
   createBulkAdvisoryPayload,
   fetchBulkAdvisories,
@@ -16,6 +18,49 @@ import {
 } from "../../scripts/pre-commit/pnpm-audit-prod.mjs";
 
 describe("pnpm-audit-prod", () => {
+  it("keeps toolchain snapshots separate from production while auditing both documents", () => {
+    const lockfile = `---
+lockfileVersion: '9.0'
+importers:
+  .:
+    packageManagerDependencies:
+      pnpm: {specifier: 12.0.0, version: 12.0.0}
+snapshots:
+  pnpm@12.0.0:
+    optionalDependencies:
+      native: 2.0.0
+  native@2.0.0: {}
+  shared@1.0.0:
+    dependencies:
+      tool-only: 1.0.0
+  tool-only@1.0.0: {}
+---
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      shared: {version: 1.0.0}
+snapshots:
+  shared@1.0.0: {}
+`;
+    expect(createBulkAdvisoryPayload(collectProdResolvedPackagesFromLockfile(lockfile))).toEqual({
+      shared: ["1.0.0"],
+    });
+    expect(createBulkAdvisoryPayload(collectAllResolvedPackagesFromLockfile(lockfile))).toEqual({
+      native: ["2.0.0"],
+      pnpm: ["12.0.0"],
+      shared: ["1.0.0"],
+      "tool-only": ["1.0.0"],
+    });
+    expect(() => collectAllResolvedPackagesFromLockfile(`${lockfile}\n---\n`)).toThrow();
+    const brokenApplication = lockfile.replace(
+      "  shared@1.0.0: {}",
+      "  shared@1.0.0:\n    dependencies:\n      native: 2.0.0",
+    );
+    expect(() => collectProdResolvedPackagesFromLockfile(brokenApplication)).toThrow(
+      "Unable to resolve pnpm snapshot",
+    );
+  });
   it("parses explicit audit severity flags", () => {
     expect(parseArgs(["--min-severity", "critical"])).toEqual({ minSeverity: "critical" });
     expect(parseArgs(["--audit-level=moderate"])).toEqual({ minSeverity: "moderate" });
@@ -268,30 +313,119 @@ snapshots:
     },
   );
 
-  it("aborts stalled bulk advisory requests", async () => {
-    let signal: AbortSignal | undefined;
+  it("retries a timed-out bulk advisory request with a fresh request lifecycle", async () => {
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn(((_url, init) => {
+      const signal = init?.signal;
+      if (signal) {
+        signals.push(signal);
+      }
+      if (signals.length === 2) {
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch);
+
+    await expect(
+      fetchBulkAdvisories({
+        payload: { axios: ["1.0.0"] },
+        timeoutMs: 5,
+        fetchImpl,
+      }),
+    ).resolves.toEqual({});
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+  });
+
+  it("stops after two timed-out bulk advisory requests", async () => {
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn(((_url, init) => {
+      const signal = init?.signal;
+      if (signal) {
+        signals.push(signal);
+      }
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch);
     const request = fetchBulkAdvisories({
       payload: { axios: ["1.0.0"] },
       timeoutMs: 5,
-      fetchImpl: ((_url, init) => {
-        signal = init?.signal ?? undefined;
-        return new Promise((_resolve, reject) => {
-          signal?.addEventListener(
-            "abort",
-            () =>
-              reject(
-                toLintErrorObject(signal?.reason ?? new Error("aborted"), "Non-Error rejection"),
-              ),
-            {
-              once: true,
-            },
-          );
-        });
-      }) as typeof fetch,
+      fetchImpl,
     });
 
     await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
-    expect(signal?.aborted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it("does not retry an untagged error with the timeout message", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("Bulk advisory request exceeded timeout of 5ms");
+    });
+
+    await expect(
+      fetchBulkAdvisories({
+        payload: { axios: ["1.0.0"] },
+        timeoutMs: 5,
+        fetchImpl,
+      }),
+    ).rejects.toThrow("Bulk advisory request exceeded timeout of 5ms");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      caseName: "HTTP failures",
+      responseBodyMaxBytes: undefined,
+      response: () =>
+        new Response("registry failure", { status: 500, statusText: "Internal Error" }),
+      expectedError: /Bulk advisory request failed \(500 Internal Error\)/u,
+    },
+    {
+      caseName: "invalid JSON",
+      responseBodyMaxBytes: undefined,
+      response: () => new Response("{", { status: 200 }),
+      expectedError: /JSON/u,
+    },
+    {
+      caseName: "empty bodies",
+      responseBodyMaxBytes: undefined,
+      response: () => new Response("", { status: 200 }),
+      expectedError: /Bulk advisory response body was empty/u,
+    },
+    {
+      caseName: "oversized bodies",
+      responseBodyMaxBytes: 4,
+      response: () => new Response("12345", { status: 200 }),
+      expectedError: /Bulk advisory response body exceeded 4 bytes/u,
+    },
+  ])("does not retry $caseName", async ({ responseBodyMaxBytes, response, expectedError }) => {
+    const fetchImpl = vi.fn(async () => response());
+
+    await expect(
+      fetchBulkAdvisories({
+        payload: { axios: ["1.0.0"] },
+        ...(responseBodyMaxBytes ? { responseBodyMaxBytes } : {}),
+        fetchImpl,
+      }),
+    ).rejects.toThrow(expectedError);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("clamps oversized bulk advisory request timers before scheduling", async () => {
@@ -321,43 +455,49 @@ snapshots:
   });
 
   it("cancels stalled successful bulk advisory response bodies on request timeout", async () => {
-    let cancelled = false;
-    const body = new ReadableStream({
-      pull() {
-        return new Promise(() => {});
-      },
-      cancel() {
-        cancelled = true;
-      },
-    });
+    let cancellations = 0;
     const request = fetchBulkAdvisories({
       payload: { axios: ["1.0.0"] },
       timeoutMs: 5,
-      fetchImpl: async () => new Response(body, { status: 200 }),
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            pull() {
+              return new Promise(() => {});
+            },
+            cancel() {
+              cancellations += 1;
+            },
+          }),
+          { status: 200 },
+        ),
     });
 
     await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
-    expect(cancelled).toBe(true);
+    expect(cancellations).toBe(2);
   });
 
   it("cancels stalled failed bulk advisory response bodies on request timeout", async () => {
-    let cancelled = false;
-    const body = new ReadableStream({
-      pull() {
-        return new Promise(() => {});
-      },
-      cancel() {
-        cancelled = true;
-      },
-    });
+    let cancellations = 0;
     const request = fetchBulkAdvisories({
       payload: { axios: ["1.0.0"] },
       timeoutMs: 5,
-      fetchImpl: async () => new Response(body, { status: 500, statusText: "Internal Error" }),
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            pull() {
+              return new Promise(() => {});
+            },
+            cancel() {
+              cancellations += 1;
+            },
+          }),
+          { status: 500, statusText: "Internal Error" },
+        ),
     });
 
     await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
-    expect(cancelled).toBe(true);
+    expect(cancellations).toBe(2);
   });
 
   it("bounds successful bulk advisory response bodies", async () => {
@@ -420,11 +560,13 @@ snapshots:
     await expect(request).rejects.toThrow(/Bulk advisory response body was empty/u);
   });
 
-  it("returns a failing exit code when bulk advisories include high severity findings", async () => {
-    const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-prod-"));
-    await writeFile(
-      path.join(tempDir, "pnpm-lock.yaml"),
-      `lockfileVersion: '9.0'
+  it.each([false, true])(
+    "reports npm-only coverage with the audit outcome (blocked %s)",
+    async (blocked) => {
+      const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-prod-"));
+      await writeFile(
+        path.join(tempDir, "pnpm-lock.yaml"),
+        `lockfileVersion: '9.0'
 
 importers:
   .:
@@ -435,67 +577,76 @@ importers:
 snapshots:
   axios@1.0.0: {}
 `,
-      "utf8",
-    );
+        "utf8",
+      );
 
-    try {
-      const stdoutChunks: string[] = [];
-      const stderrChunks: string[] = [];
-      const exitCode = await runPnpmAuditProd({
-        rootDir: tempDir,
-        fetchImpl: async () =>
-          new Response(
-            JSON.stringify({
-              axios: [
-                {
-                  id: "GHSA-test",
-                  severity: "high",
-                  title: "test issue",
-                  vulnerable_versions: "<=1.0.0",
-                  url: "https://github.com/advisories/GHSA-test",
+      try {
+        const stdoutChunks: string[] = [];
+        const stderrChunks: string[] = [];
+        const exitCode = await runPnpmAuditProd({
+          rootDir: tempDir,
+          fetchImpl: async (input) => {
+            const url =
+              input instanceof URL ? input.href : input instanceof Request ? input.url : input;
+            expect(url).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
+            return new Response(
+              JSON.stringify(
+                blocked
+                  ? {
+                      axios: [
+                        {
+                          id: "GHSA-test",
+                          severity: "high",
+                          title: "test issue",
+                          vulnerable_versions: "<=1.0.0",
+                          url: "https://github.com/advisories/GHSA-test",
+                        },
+                      ],
+                    }
+                  : {},
+              ),
+              {
+                status: 200,
+                headers: {
+                  "content-type": "application/json",
                 },
-              ],
-            }),
-            {
-              status: 200,
-              headers: {
-                "content-type": "application/json",
               },
+            );
+          },
+          stdout: {
+            write(chunk: string) {
+              stdoutChunks.push(chunk);
+              return true;
             },
-          ),
-        stdout: {
-          write(chunk: string) {
-            stdoutChunks.push(chunk);
-            return true;
-          },
-        } as NodeJS.WriteStream,
-        stderr: {
-          write(chunk: string) {
-            stderrChunks.push(chunk);
-            return true;
-          },
-        } as NodeJS.WriteStream,
-      });
+          } as NodeJS.WriteStream,
+          stderr: {
+            write(chunk: string) {
+              stderrChunks.push(chunk);
+              return true;
+            },
+          } as NodeJS.WriteStream,
+        });
 
-      expect(exitCode).toBe(1);
-      expect(stdoutChunks).toStrictEqual([]);
-      expect(stderrChunks.join("")).toContain("Found 1 high or higher advisories");
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
+        expect(exitCode).toBe(blocked ? 1 : 0);
+        if (blocked) {
+          expect(stdoutChunks).toStrictEqual([]);
+          expect(stderrChunks.join("")).toContain(
+            "Found 1 high or higher advisories from npm bulk",
+          );
+          expect(stderrChunks.join("")).toContain("upstream repository advisories not checked");
+        } else {
+          expect(stderrChunks).toStrictEqual([]);
+          expect(stdoutChunks.join("")).toContain(
+            "No matching high or higher advisories returned by npm bulk",
+          );
+          expect(stdoutChunks.join("")).toContain(
+            "Upstream repository advisories were not checked",
+          );
+          expect(stdoutChunks.join("")).toContain("not comprehensive vulnerability clearance");
+        }
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

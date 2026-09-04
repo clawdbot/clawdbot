@@ -1,7 +1,7 @@
 // Control UI tests cover plugin mutations serialized behind pending config drafts.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,12 +13,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "plugins-config-mutation",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("plugins-config-mutation");
+  }
+});
 
 function configResponse(fallback: string | undefined, workboardEnabled: boolean, hash: string) {
   const config = {
@@ -52,7 +52,7 @@ const workboardDisabled = {
   id: "workboard",
   name: "Workboard",
   description: "Plan and track work",
-  origin: "bundled",
+  origin: "global",
   installed: true,
   enabled: false,
   state: "disabled",
@@ -67,7 +67,7 @@ const workboardEnabled = {
 };
 
 suite.define(() => {
-  it("drains a pending draft before enabling a plugin and refreshes the result", async () => {
+  it("drains a pending draft before re-enabling an accepted external plugin without review", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -113,7 +113,6 @@ suite.define(() => {
         const workboardRow = page.locator('[data-plugin-id="workboard"]');
         await workboardRow.waitFor();
         if (captureUiProofEnabled) {
-          await mkdir(uiProofArtifactDir, { recursive: true });
           await workboardRow.screenshot({
             animations: "disabled",
             path: path.join(uiProofArtifactDir, "00-before-enable.png"),
@@ -146,6 +145,8 @@ suite.define(() => {
         });
 
         await workboardRow.getByRole("button", { name: "Disable", exact: true }).waitFor();
+        expect(await gateway.getRequests("plugins.inspect")).toHaveLength(0);
+        expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBeGreaterThanOrEqual(2);

@@ -7,7 +7,7 @@ import { createPluginStateKeyedStoreForTests as createPluginStateKeyedStore } fr
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import type { PersistedWorkboardCard } from "./src/persistence-types.js";

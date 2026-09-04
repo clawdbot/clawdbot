@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { runAndroidSigningCommandSync } from "./lib/android-release-signing-process.mjs";
-import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const rootDir = resolveRepoRoot(import.meta.url);
 const defaultManifestPath = path.join(rootDir, "apps", "android", "Config", "ReleaseSigning.json");
@@ -99,8 +100,23 @@ function requireString(value, key) {
   return value.trim();
 }
 
+function requireGradlePropertyNames(value) {
+  if (
+    !Array.isArray(value) ||
+    !value.every((name) => typeof name === "string") ||
+    value.length !== requiredPropertyNames.length ||
+    !requiredPropertyNames.every((name) => value.includes(name))
+  ) {
+    throw new Error(
+      `Android release signing manifest must list Gradle properties: ${requiredPropertyNames.join(", ")}.`,
+    );
+  }
+  return value;
+}
+
 function readManifest(manifestPath) {
-  const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const value = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const parsed = isRecord(value) ? value : {};
   const manifest = {
     signingRepo: requireString(parsed.signingRepo, "signingRepo"),
     signingBranch: requireString(parsed.signingBranch, "signingBranch"),
@@ -115,18 +131,8 @@ function readManifest(manifestPath) {
     ),
     apkCertificateSha256: requireString(parsed.apkCertificateSha256, "apkCertificateSha256"),
     materializedRoot: requireString(parsed.materializedRoot, "materializedRoot"),
-    gradlePropertyNames: parsed.gradlePropertyNames,
+    gradlePropertyNames: requireGradlePropertyNames(parsed.gradlePropertyNames),
   };
-
-  if (
-    !Array.isArray(manifest.gradlePropertyNames) ||
-    manifest.gradlePropertyNames.length !== requiredPropertyNames.length ||
-    !requiredPropertyNames.every((name) => manifest.gradlePropertyNames.includes(name))
-  ) {
-    throw new Error(
-      `Android release signing manifest must list Gradle properties: ${requiredPropertyNames.join(", ")}.`,
-    );
-  }
   if (!/^[a-f0-9]{64}$/u.test(manifest.apkCertificateSha256)) {
     throw new Error(
       "Android release signing manifest apkCertificateSha256 must be 64 lowercase hex digits.",
@@ -472,6 +478,6 @@ try {
     throw new Error(`Unknown mode: ${options.mode}`);
   }
 } catch (error) {
-  process.stderr.write(`${error.message}\n`);
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);
 }

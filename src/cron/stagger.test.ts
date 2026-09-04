@@ -1,4 +1,5 @@
 // Cron stagger tests cover deterministic schedule spreading across jobs.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { normalizeCronStaggerMs, resolveCronStaggerMs } from "./stagger.js";
 
@@ -40,6 +41,7 @@ describe("cron stagger helpers", () => {
     expect(normalizeCronStaggerMs("abc")).toBeUndefined();
     expect(normalizeCronStaggerMs("1e3")).toBeUndefined();
     expect(normalizeCronStaggerMs("0x10")).toBeUndefined();
+    expect(normalizeCronStaggerMs(MAX_DATE_TIMESTAMP_MS + 1)).toBeUndefined();
     expect(normalizeCronStaggerMs(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
   });
 

@@ -1,4 +1,5 @@
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -226,7 +227,7 @@ export class GoogleLiveToolOwner {
     try {
       this.options.sendResult(callId, call.name, result);
     } catch (error) {
-      this.options.failConnection(error instanceof Error ? error.message : String(error));
+      this.options.failConnection(formatUiError(error));
       return false;
     }
     this.pendingCalls.delete(callId);

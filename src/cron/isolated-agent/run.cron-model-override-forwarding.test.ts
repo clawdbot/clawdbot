@@ -1,9 +1,19 @@
 // Cron model override forwarding tests cover passing overrides into agent runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
+import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import {
-  clearCliSessionMock,
+  runFallbackModelAttempt,
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import {
   clearFastTestEnv,
+  classifyEmbeddedAgentRunResultForModelFallbackMock,
   getCliSessionBindingMock,
   ensureAgentWorkspaceMock,
   isCliProviderMock,
@@ -26,7 +36,6 @@ import {
   restoreFastTestEnv,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
-  setCliSessionBindingMock,
   runCliAgentMock,
 } from "./run.test-harness.js";
 
@@ -100,16 +109,6 @@ function captureModelFallbackRun(provider = "google", model = "gemini-2.0-flash"
     },
   );
   return captured;
-}
-
-function createDeferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
@@ -191,6 +190,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(result.status).toBe("ok");
     expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
       config: callerConfig,
+      readOnly: true,
       allowGatewaySubagentBinding: true,
     });
     expect(ensureAgentWorkspaceMock).toHaveBeenCalledWith(
@@ -234,9 +234,11 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
   it("passes the cron payload model to the embedded agent runner", async () => {
     // Use passthrough so runEmbeddedAgentMock actually gets called
     mockRunCronFallbackPassthrough();
-    runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "summary done" }],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    runEmbeddedAgentMock.mockImplementation(async () => {
+      return {
+        payloads: [{ text: "summary done" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      };
     });
 
     const result = await runCronIsolatedAgentTurn(makeParams());
@@ -245,6 +247,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     const embeddedCall = firstMockArg(runEmbeddedAgentMock);
     expect(embeddedCall.provider).toBe("google");
     expect(embeddedCall.model).toBe("gemini-2.0-flash");
+    expect(embeddedCall).not.toHaveProperty("taskRunId");
   });
 
   it("forwards isolated cron execution phase updates from embedded runs", async () => {
@@ -361,6 +364,9 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
 
   it("clears stale CLI bindings when cron CLI replacement is unflushed", async () => {
     isCliProviderMock.mockReturnValue(true);
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "claude-cli", model: "claude-opus-4-6" },
+    });
     mockRunCronFallbackPassthrough();
     const cronSession = makeCronSession({
       sessionEntry: makeCronSessionEntry({
@@ -392,52 +398,112 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     );
 
     expect(result.status).toBe("ok");
-    expect(clearCliSessionMock).toHaveBeenCalledWith(cronSession.sessionEntry, "claude-cli");
+    expect(cronSession.sessionEntry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(cronSession.sessionEntry.cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "codex-session",
+    });
   });
 
-  it("persists complete CLI bindings after cron runs", async () => {
-    isCliProviderMock.mockReturnValue(true);
-    mockRunCronFallbackPassthrough();
-    const cronSession = makeCronSession({
-      sessionEntry: makeCronSessionEntry(),
-      isNewSession: false,
-    });
-    resolveCronSessionMock.mockReturnValue(cronSession);
-    const cliSessionBinding = {
-      sessionId: "fresh-cli-session",
-      reseedReceipt: {
-        version: 1 as const,
-        promptHash: "a".repeat(64),
-        localSessionId: cronSession.sessionEntry.sessionId,
-        userTurnDisposition: "persisted",
-      },
-    };
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "summary done" }],
-      meta: {
-        agentMeta: {
-          provider: "claude-cli",
-          model: "claude-opus-4-6",
-          sessionId: "fresh-cli-session",
-          cliSessionBinding,
-          usage: { input: 10, output: 20 },
+  it.each(["accepted", "rejected", "rejected-clear"])(
+    "settles %s CLI continuity before cron fallback",
+    async (outcome) => {
+      isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
+      resolveAllowedModelRefMock.mockReturnValue({
+        ref: { provider: "claude-cli", model: "claude-opus-4-6" },
+      });
+      classifyEmbeddedAgentRunResultForModelFallbackMock.mockImplementation(
+        classifyEmbeddedAgentRunResultForModelFallback,
+      );
+      mockRunCronFallbackPassthrough();
+      const cronSession = makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          cliSessionBindings: { "claude-cli": { sessionId: "previous-cli-session" } },
+        }),
+        isNewSession: false,
+      });
+      resolveCronSessionMock.mockReturnValue(cronSession);
+      const localSessionId = cronSession.sessionEntry.sessionId;
+      const cliSessionBinding = {
+        sessionId: "fresh-cli-session",
+        reseedReceipt: {
+          version: 1 as const,
+          promptHash: "a".repeat(64),
+          localSessionId: cronSession.sessionEntry.sessionId,
+          userTurnDisposition: "persisted",
         },
-      },
-    });
+      };
+      const acceptedResult = {
+        payloads: [{ text: "summary done" }],
+        meta: {
+          durationMs: 1,
+          executionTrace: { runner: "cli" },
+          agentMeta: {
+            provider: "claude-cli",
+            model: "claude-opus-4-6",
+            sessionId: "fresh-cli-session",
+            cliSessionBinding,
+            usage: { input: 10, output: 20 },
+          },
+        },
+      };
+      const candidateResult =
+        outcome === "accepted"
+          ? acceptedResult
+          : buildCliRunResult({
+              context: buildPreparedCliRunContext(),
+              output: { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+              effectiveCliSessionId: "fresh-cli-session",
+              bindingFlushOk: outcome !== "rejected-clear",
+              usedHistoryPrompt: false,
+              userTurnHandled: true,
+              sessionBindingDisabled: false,
+              preparedContextAgentMeta: {},
+            });
+      runCliAgentMock.mockResolvedValueOnce(candidateResult);
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (
+          params: TestModelFallbackRunnerParams & {
+            classifyResult: typeof classifyEmbeddedAgentRunResultForModelFallback;
+          },
+        ) => {
+          const first = await runInitialModelFallbackAttempt(params);
+          if (outcome === "accepted") {
+            return { result: first, provider: params.provider, model: params.model, attempts: [] };
+          }
+          expect(
+            params.classifyResult({
+              provider: params.provider,
+              model: params.model,
+              result: first,
+            }),
+          ).toMatchObject({ code: "generic_external_run_failure" });
+          const result = await runFallbackModelAttempt(
+            params,
+            "google",
+            "gemini-2.0-flash",
+            "format",
+          );
+          return { result, provider: "google", model: "gemini-2.0-flash", attempts: [] };
+        },
+      );
 
-    const result = await runCronIsolatedAgentTurn(
-      makeParams({
-        job: makeJob({ sessionTarget: "session:existing-cron-session" }),
-      }),
-    );
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          job: makeJob({ sessionTarget: "session:existing-cron-session" }),
+        }),
+      );
 
-    expect(result.status).toBe("ok");
-    expect(setCliSessionBindingMock).toHaveBeenCalledWith(
-      cronSession.sessionEntry,
-      "claude-cli",
-      cliSessionBinding,
-    );
-  });
+      expect(result.status).toBe("ok");
+      expect(cronSession.sessionEntry.sessionId).toBe(localSessionId);
+      expect(cronSession.sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual(
+        outcome === "accepted"
+          ? cliSessionBinding
+          : outcome === "rejected-clear"
+            ? undefined
+            : { sessionId: "previous-cli-session" },
+      );
+    },
+  );
 
   it("validates cron thinking with catalog reasoning metadata", async () => {
     resolveAllowedModelRefMock.mockImplementation(() => ({
@@ -624,9 +690,9 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       isNewSession: true,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      const result = await run("openai", "gpt-5.5");
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "openai", "gpt-5.5", "unknown");
       return {
         result,
         provider: "openai",
@@ -699,9 +765,9 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       isNewSession: true,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      await run(provider, model);
-      const result = await run("openai", "gpt-5.6-sol");
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+      await runInitialModelFallbackAttempt(params);
+      const result = await runFallbackModelAttempt(params, "openai", "gpt-5.6-sol", "unknown");
       return {
         result,
         provider: "openai",

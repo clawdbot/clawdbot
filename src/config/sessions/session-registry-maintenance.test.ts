@@ -3,8 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
+import { readSessionArchiveContentSync } from "./archive-compression.js";
+import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
+import {
+  appendTranscriptEventSync,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "./session-accessor.js";
 import { runSessionRegistryMaintenanceForStore } from "./session-registry-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
@@ -17,6 +26,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   await fixtureSuite.cleanup();
 });
 
@@ -42,6 +53,23 @@ function resolveRequiredSqlitePath(storePath: string): string {
   return sqlitePath;
 }
 
+async function listDeletedArchiveFiles(root: string): Promise<string[]> {
+  const archives: string[] = [];
+  const walk = async (dir: string) => {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (isRetainedSessionTranscriptArchiveName(entry.name)) {
+        archives.push(fullPath);
+      }
+    }
+  };
+  await walk(root);
+  return archives;
+}
+
 describe("runSessionRegistryMaintenanceForStore", () => {
   it("summarizes a missing store without creating it", async () => {
     const dir = await fixtureSuite.createCaseDir("missing-store");
@@ -49,6 +77,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     const sqlitePath = resolveRequiredSqlitePath(storePath);
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -71,6 +100,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     const sqlitePath = resolveRequiredSqlitePath(storePath);
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: false,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -94,6 +124,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: false,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -120,6 +151,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(["running-job"]),
@@ -143,6 +175,69 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     ).toEqual(sessionEntry("recent-run", now));
   });
 
+  it("archives the transcript when pruning stale cron-run sessions", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:done-job:run:old-run";
+    const sessionId = "run-1";
+    const storePath = await createStore({
+      [sessionKey]: sessionEntry(sessionId, now - 8 * DAY_MS),
+    });
+    appendTranscriptEventSync(
+      { sessionKey, sessionId, storePath },
+      { type: "proof-event", data: "cron transcript must survive pruning" },
+    );
+
+    const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
+      apply: true,
+      retentionMs: 7 * DAY_MS,
+      runningCronJobIds: new Set(),
+      storePath,
+    });
+
+    expect(result).toEqual({
+      beforeCount: 1,
+      afterCount: 0,
+      preservedRunning: 0,
+      pruned: 1,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    const archives = await listDeletedArchiveFiles(path.dirname(storePath));
+    expect(archives).toHaveLength(1);
+    expect(readSessionArchiveContentSync(archives[0] ?? "")).toContain(
+      "cron transcript must survive pruning",
+    );
+    await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual([]);
+  });
+
+  it("does not write transcript archives during preview", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:done-job:run:old-run";
+    const sessionId = "run-1";
+    const storePath = await createStore({
+      [sessionKey]: sessionEntry(sessionId, now - 8 * DAY_MS),
+    });
+    appendTranscriptEventSync(
+      { sessionKey, sessionId, storePath },
+      { type: "proof-event", data: "cron transcript must survive preview" },
+    );
+
+    const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
+      apply: false,
+      retentionMs: 7 * DAY_MS,
+      runningCronJobIds: new Set(),
+      storePath,
+    });
+
+    expect(result.pruned).toBe(1);
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeDefined();
+    await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toHaveLength(
+      1,
+    );
+    expect(await listDeletedArchiveFiles(path.dirname(storePath))).toStrictEqual([]);
+  });
+
   it("applies pruning to stale cron-run descendant rows", async () => {
     const now = Date.now();
     const staleParentKey = "agent:main:cron:done-job:run:old-run";
@@ -159,6 +254,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(["running-job"]),
@@ -193,6 +289,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     const result = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),
@@ -223,6 +320,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
 
     try {
       const activeResult = await runSessionRegistryMaintenanceForStore({
+        agentId: "main",
         apply: true,
         retentionMs: 7 * DAY_MS,
         runningCronJobIds: new Set(),
@@ -235,6 +333,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     }
 
     const releasedResult = await runSessionRegistryMaintenanceForStore({
+      agentId: "main",
       apply: true,
       retentionMs: 7 * DAY_MS,
       runningCronJobIds: new Set(),

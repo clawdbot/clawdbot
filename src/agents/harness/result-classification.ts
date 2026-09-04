@@ -6,7 +6,7 @@
  */
 import type {
   AgentHarness,
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
 } from "./types.js";
 
@@ -14,7 +14,7 @@ import type {
 export function applyAgentHarnessResultClassification(
   harness: Pick<AgentHarness, "id" | "classify">,
   result: AgentHarnessAttemptResult,
-  params: AgentHarnessAttemptParams,
+  params: AgentHarnessAttemptParamsV2,
 ): AgentHarnessAttemptResult {
   if (!harness.classify) {
     return { ...result, agentHarnessId: harness.id };

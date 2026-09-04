@@ -1,20 +1,18 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
-  createNewerSqliteSchemaVersionError,
-  readSqliteUserVersion,
-} from "../infra/sqlite-user-version.js";
+  prepareSqliteReadOnlyLocationSync,
+  prepareSqliteReadOnlyLocationSyncInProcess,
+} from "../infra/sqlite-readonly-location.js";
+import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
-  assertOpenClawStateDatabaseFreshOpenAllowed,
-  evictOpenClawStateDatabaseAfterCorruption,
-  getOpenClawStateDatabaseIfOpen,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
+} from "./openclaw-state-db-contract.js";
+import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type OpenClawStateReadOnlyDatabase = {
@@ -40,24 +38,14 @@ function existingPathOrUndefined(pathname: string): string | undefined {
   }
 }
 
-function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
-  const userVersion = readSqliteUserVersion(db);
-  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
-      "OpenClaw state database",
-      pathname,
-      userVersion,
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
-  }
-}
-
 function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions,
   pathname: string,
 ): ReusedOpenClawStateReadOnlyDatabase<T> {
-  const opened = getOpenClawStateDatabaseIfOpen(options);
+  const opened = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(
+    resolveReadOnlyPath(options),
+  );
   if (!opened || opened.db.isTransaction) {
     return { reused: false };
   }
@@ -66,10 +54,10 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
     // is checked on the next physical open so hot reads do not poll metadata.
     // A newer build can migrate this file while the handle stays open, so the
     // forward-compatibility gate still runs before any reused read.
-    assertSupportedSchemaVersion(opened.db, pathname);
+    assertSupportedStateSchemaVersion(opened.db, pathname);
     return { reused: true, value: operation(opened) };
   } catch (error) {
-    evictOpenClawStateDatabaseAfterCorruption(opened, error);
+    openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(opened, error);
     throw error;
   }
 }
@@ -78,12 +66,17 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions,
   pathname: string,
+  location = pathname,
 ): T {
-  assertOpenClawStateDatabaseFreshOpenAllowed(options);
-  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  const env = options.env ?? process.env;
+  openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+    resolveReadOnlyPath(options),
+    env,
+  );
+  const db = openNodeSqliteDatabase(location, { readOnly: true });
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedSchemaVersion(db, pathname);
+    assertSupportedStateSchemaVersion(db, pathname);
     return operation({ db, path: pathname });
   } finally {
     clearNodeSqliteKyselyCacheForDatabase(db);
@@ -131,4 +124,38 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
         { ...options, path: existingPath },
         existingPath,
       );
+}
+
+/** Read existing shared state without creating or updating its SQLite sidecars. */
+export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  const pathname = resolveReadOnlyPath(options);
+  const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, options, pathname);
+  if (reused.reused) {
+    return reused.value;
+  }
+  const existingPath = existingPathOrUndefined(pathname);
+  if (existingPath === undefined) {
+    return undefined;
+  }
+  // In-process preparation is safe only when this process holds no writable
+  // handle. Otherwise closing the snapshot source can drop the writer's POSIX locks.
+  const prepare = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(
+    resolveReadOnlyPath(options),
+  )
+    ? prepareSqliteReadOnlyLocationSync
+    : prepareSqliteReadOnlyLocationSyncInProcess;
+  const prepared = prepare(existingPath);
+  try {
+    return withFreshOpenClawStateDatabaseReadOnly(
+      operation,
+      { ...options, path: existingPath },
+      existingPath,
+      prepared.location,
+    );
+  } finally {
+    prepared.cleanup();
+  }
 }

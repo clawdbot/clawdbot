@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import nodePath from "node:path";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   OTEL_EXPORTER_OTLP_CERTIFICATE_ENV,
@@ -15,7 +16,7 @@ import type {
 
 export function normalizeEndpoint(endpoint?: string): string | undefined {
   const trimmed = endpoint?.trim();
-  return trimmed ? trimmed.replace(/\/+$/, "") : undefined;
+  return trimmed || undefined;
 }
 
 const SIGNAL_QUALIFIED_OTLP_PATH_PATTERN = /\/v1\/(traces|metrics|logs)$/iu;
@@ -29,12 +30,12 @@ function appendOrReplaceSignalPath(value: string, path: string): string {
 
 function resolveSharedOtelUrl(endpoint: string, path: string): string {
   const endpointWithoutQueryOrFragment = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
-  const matchedSignal = endpointWithoutQueryOrFragment
-    .replace(/\/+$/u, "")
-    .match(SIGNAL_QUALIFIED_OTLP_PATH_PATTERN)?.[1];
+  // Trim path separators here, never slash bytes belonging to a collector query.
+  const base = endpointWithoutQueryOrFragment.replace(/\/+$/u, "");
+  const matchedSignal = base.match(SIGNAL_QUALIFIED_OTLP_PATH_PATTERN)?.[1];
   const requestedSignal = path.slice(path.lastIndexOf("/") + 1);
   if (matchedSignal?.toLowerCase() === requestedSignal.toLowerCase()) {
-    return endpoint;
+    return endpoint === endpointWithoutQueryOrFragment ? base : endpoint;
   }
   if (/[?#]/u.test(endpoint)) {
     const url = new URL(endpoint);
@@ -44,11 +45,6 @@ function resolveSharedOtelUrl(endpoint: string, path: string): string {
   return appendOrReplaceSignalPath(endpoint, path);
 }
 
-function normalizeSignalEndpoint(endpoint?: string): string | undefined {
-  const trimmed = endpoint?.trim();
-  return trimmed || undefined;
-}
-
 export function resolveSignalOtelUrl(params: {
   signalEndpoint?: string;
   signalEnvEndpoint?: string;
@@ -56,7 +52,7 @@ export function resolveSignalOtelUrl(params: {
   endpoint?: string;
   path: string;
 }): string | undefined {
-  const signalEndpoint = normalizeSignalEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint);
+  const signalEndpoint = normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint);
   const endpoint = signalEndpoint ?? params.endpoint;
   // OTLP parses nonblank env values verbatim even when explicit config takes precedence.
   const signalEnvEndpoint = params.signalEnvEndpoint?.trim() ? params.signalEnvEndpoint : undefined;
@@ -199,49 +195,6 @@ export function errorCategory(err: unknown): string {
   }
 }
 
-function collectNestedErrorCandidates(err: unknown): unknown[] {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current == null || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
-    if (Array.isArray(current)) {
-      for (const item of current) {
-        if (item != null && !seen.has(item)) {
-          queue.push(item);
-        }
-      }
-      continue;
-    }
-    if (typeof current !== "object") {
-      continue;
-    }
-
-    const record = current as Record<string, unknown>;
-    for (const nested of [record.cause, record.reason, record.original, record.error]) {
-      if (nested != null && !seen.has(nested)) {
-        queue.push(nested);
-      }
-    }
-    if (Array.isArray(record.errors)) {
-      for (const nested of record.errors) {
-        if (nested != null && !seen.has(nested)) {
-          queue.push(nested);
-        }
-      }
-    }
-  }
-
-  return candidates;
-}
-
 function readErrorName(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -259,7 +212,17 @@ export function readErrorCode(err: unknown): string | number | undefined {
 }
 
 export function findOtlpExporterError(reason: unknown): object | undefined {
-  for (const candidate of collectNestedErrorCandidates(reason)) {
+  for (const candidate of collectErrorGraphCandidates(reason, (current) =>
+    Array.isArray(current)
+      ? current
+      : [
+          current.cause,
+          current.reason,
+          current.original,
+          current.error,
+          ...(Array.isArray(current.errors) ? current.errors : []),
+        ],
+  )) {
     if (
       readErrorName(candidate) === "OTLPExporterError" &&
       candidate &&

@@ -1,10 +1,12 @@
 // Covers synchronous extra security audit aggregation.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectSmallModelRiskFindings,
 } from "./audit-extra.summary.js";
+import { collectSecretsInConfigFindings } from "./audit-extra.sync.js";
 
 vi.mock("../plugins/web-search-credential-presence.js", () => ({
   hasConfiguredWebSearchCredential: () => false,
@@ -17,6 +19,19 @@ function requireFirstFinding<T>(findings: readonly T[], label: string): T {
   }
   return finding;
 }
+
+describe("collectSecretsInConfigFindings", () => {
+  it("distinguishes an unresolved password from byte-identical literal text", () => {
+    const config = {
+      gateway: { auth: { password: "${GATEWAY_PASSWORD}" } },
+    } satisfies OpenClawConfig;
+    setConfigResolutionFacts(config, new Set(["gateway.auth.password"]));
+    expect(collectSecretsInConfigFindings(config)).toHaveLength(0);
+
+    setConfigResolutionFacts(config, new Set());
+    expect(collectSecretsInConfigFindings(config)).toHaveLength(1);
+  });
+});
 
 describe("collectAttackSurfaceSummaryFindings", () => {
   it.each([

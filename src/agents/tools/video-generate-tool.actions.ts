@@ -12,7 +12,7 @@ import {
   buildVideoGenerationTaskStatusText,
   findActiveVideoGenerationTaskForSession,
   findDuplicateGuardVideoGenerationTaskForSession,
-} from "../video-generation-task-status.js";
+} from "../media-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
   createMediaGenerateTaskActions,
@@ -133,7 +133,8 @@ export const {
   createDuplicateGuardResult: createVideoGenerateDuplicateGuardResult,
 } = createMediaGenerateTaskActions({
   inactiveText: "No active video generation task is currently running for this session.",
-  findActiveTask: findActiveVideoGenerationTaskForSession,
+  findActiveTask: (sessionKey, agentId) =>
+    findActiveVideoGenerationTaskForSession(sessionKey, { agentId }),
   findDuplicateTask: (sessionKey, request) =>
     findDuplicateGuardVideoGenerationTaskForSession(sessionKey, request),
   buildStatusText: buildVideoGenerationTaskStatusText,

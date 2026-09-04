@@ -68,6 +68,7 @@ async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
     accountId: ctx.accountId,
     to: ctx.to,
     text,
+    isError: ctx.payload.isError,
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
   };
@@ -218,12 +219,71 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
         await startQaGatewayAccount(QA_CHANNEL_ID, qaChannelRuntimeMeta.label, ctx);
       },
     },
+    threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const requested = parseQaTarget(target, {
+          defaultChatType: toolContext.currentChatType ?? "channel",
+        });
+        return [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+          (currentTarget) => {
+            if (!currentTarget) {
+              return false;
+            }
+            const current = parseQaTarget(currentTarget, {
+              defaultChatType: toolContext.currentChatType ?? requested.chatType,
+            });
+            return (
+              current.chatType === requested.chatType &&
+              current.conversationId === requested.conversationId &&
+              (!requested.threadId ||
+                requested.threadId === current.threadId ||
+                requested.threadId === toolContext.currentThreadTs)
+            );
+          },
+        );
+      },
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const currentMessagingTarget = context.To?.trim() || undefined;
+        const chatType =
+          context.ChatType === "direct" ||
+          context.ChatType === "group" ||
+          context.ChatType === "channel"
+            ? context.ChatType
+            : undefined;
+        const parsedTarget = currentMessagingTarget
+          ? parseQaTarget(currentMessagingTarget, {
+              defaultChatType: chatType ?? "channel",
+            })
+          : undefined;
+        const nativeChannelId = context.NativeChannelId?.trim() || undefined;
+        const currentThreadTs =
+          context.MessageThreadId != null
+            ? String(context.MessageThreadId)
+            : parsedTarget?.threadId;
+        return {
+          // Implicit actions need a typed root; embedding To's thread would
+          // bypass topLevel/threadId:null opt-outs.
+          currentChannelId: parsedTarget
+            ? buildQaTarget({
+                chatType: parsedTarget.chatType,
+                conversationId: nativeChannelId || parsedTarget.conversationId,
+              })
+            : nativeChannelId,
+          currentChatType: chatType ?? parsedTarget?.chatType,
+          currentMessagingTarget,
+          currentThreadTs,
+          ...(currentThreadTs ? { replyToMode: "all" as const } : {}),
+          hasRepliedRef,
+        };
+      },
+    },
     actions: qaChannelMessageActions,
     message: qaChannelMessageAdapter,
   },
   outbound: {
     base: {
       deliveryMode: "direct",
+      sendTextOnlyErrorPayloads: true,
       sendPayload: async (ctx) => {
         const result = await sendQaChannelMessagePayload(ctx);
         return { channel: QA_CHANNEL_ID, messageId: result.messageId };

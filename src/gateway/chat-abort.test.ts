@@ -8,7 +8,6 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
-  abortTrackedChatRunById,
   boundInFlightRunSnapshotForChatHistory,
   isChatStopCommandText,
   registerChatAbortController,
@@ -70,7 +69,7 @@ function createOps(params: {
   Object.assign(chatRunState.getOrCreate(runId), {
     ...(buffer !== undefined ? { buffer, deltaLastBroadcastText: buffer } : {}),
     deltaSentAt: Date.now(),
-    deltaLastBroadcastLen: buffer?.length ?? 0,
+    assistantScope: { itemId: "assistant-1", prefix: "" },
     agentText: {
       assistant: {
         lastSentAt: Date.now(),
@@ -379,7 +378,7 @@ describe("registerChatAbortController", () => {
     expect(registration.entry?.registrationCleanupRequested).toBe(true);
   });
 
-  it("force-cleans registrations when dispatch fails before lifecycle starts", () => {
+  it("cleans registrations when dispatch fails before lifecycle starts", () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const registration = registerChatAbortController({
       chatAbortControllers,
@@ -389,7 +388,7 @@ describe("registerChatAbortController", () => {
       timeoutMs: 60_000,
     });
 
-    registration.cleanup({ force: true });
+    registration.cleanup();
 
     expect(chatAbortControllers.has("run-before-dispatch")).toBe(false);
   });
@@ -485,7 +484,7 @@ describe("abortChatRunById", () => {
     expectRunAborted({ result, entry, ops, runId });
     expect(ops.chatRunState.runs.get(runId)?.buffer).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.deltaSentAt).toBeUndefined();
-    expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastLen).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.assistantScope).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastText).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
@@ -594,7 +593,7 @@ describe("abortChatRunById", () => {
       name: "preserves default-agent global delivery through tracked maintenance aborts",
       runId: "run-tracked-global",
       createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
-      abort: abortTrackedChatRunById,
+      abort: abortChatRunById,
     },
   ]) {
     it(testCase.name, () => {
@@ -606,6 +605,8 @@ describe("abortChatRunById", () => {
       expect(result).toEqual({ aborted: true });
       const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
       expect(payload.agentId).toBe("main");
+      const delivery = { sessionKeys: ["agent:main:global", "global"] };
+      expect(ops.broadcast).toHaveBeenCalledWith("chat", payload, delivery);
       expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
       expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
     });
@@ -684,7 +685,7 @@ describe("abortChatRunsForProvider", () => {
       authProviderId: "openrouter",
     });
     const result = abortChatRunsForProvider(ops, {
-      cfg: {},
+      cfg: { agents: { list: [{ id: "main" }, { id: "writer" }] } },
       providerId: "openrouter",
       stopReason: "auth-revoked",
     });
@@ -712,7 +713,7 @@ describe("abortChatRunsForProvider", () => {
     ops.chatAbortControllers.set("run-main", mainEntry);
 
     const result = abortChatRunsForProvider(ops, {
-      cfg: { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } },
+      cfg: { agents: { list: [{ id: "main" }, { id: "writer" }] } },
       providerId: "openrouter",
       agentId: "writer",
       stopReason: "auth-revoked",

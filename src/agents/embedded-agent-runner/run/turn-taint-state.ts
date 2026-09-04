@@ -1,8 +1,8 @@
 import type { ToolOutcomeObservation } from "../../agent-tools.before-tool-call.js";
 
 /** Sticky current-turn taint shared by retries and runtime-specific tool owners. */
-export function createAgentTurnTaintState() {
-  let tainted = false;
+export function createAgentTurnTaintState(initiallyTainted = false) {
+  let tainted = initiallyTainted;
   return {
     observe(observation: ToolOutcomeObservation): void {
       if (!observation.presentationOnly && observation.resultContentSource === "network") {

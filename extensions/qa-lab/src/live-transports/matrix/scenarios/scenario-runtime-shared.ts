@@ -647,6 +647,9 @@ export async function runNoReplyExpectedScenario(params: {
       ].join("\n"),
     );
   }
+  if (!observedTriggerEvent) {
+    throw new Error("Matrix no-reply observation did not observe the trigger event");
+  }
   advanceMatrixQaActorCursor({
     actorId: params.actorId,
     syncState: params.syncState,

@@ -73,7 +73,6 @@ describe("plugin loader records", () => {
         webFetchProviders: ["kitchen-sink-web-fetch-provider"],
         webSearchProviders: ["kitchen-sink-web-search-provider"],
         migrationProviders: ["kitchen-sink-migration-provider"],
-        memoryEmbeddingProviders: ["kitchen-sink-memory-provider"],
       },
       configSchema: false,
     });
@@ -91,7 +90,6 @@ describe("plugin loader records", () => {
     expect(record.webFetchProviderIds).toEqual(["kitchen-sink-web-fetch-provider"]);
     expect(record.webSearchProviderIds).toEqual(["kitchen-sink-web-search-provider"]);
     expect(record.migrationProviderIds).toEqual(["kitchen-sink-migration-provider"]);
-    expect(record.memoryEmbeddingProviderIds).toEqual(["kitchen-sink-memory-provider"]);
   });
 
   it.each([
@@ -121,6 +119,68 @@ describe("plugin loader records", () => {
       error,
       logPrefix: "",
       diagnosticMessagePrefix: "",
+    });
+
+    expect(record.error).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "names the install path when a missing module sits on the error cause",
+      error: new Error("import failed", {
+        cause: Object.assign(new Error("Cannot find module 'discord-api-types/v10'"), {
+          code: "MODULE_NOT_FOUND",
+        }),
+      }),
+      expected: "install @openclaw/discord (Error: import failed)",
+    },
+    {
+      name: "keeps unrelated failures verbatim",
+      error: new Error("boom"),
+      expected: "Error: boom",
+    },
+    {
+      name: "survives a nested throwing code accessor without rethrowing",
+      error: new Error("wrapped", {
+        cause: Object.defineProperty(new Error("nested"), "code", {
+          get(): never {
+            throw new Error("code exploded");
+          },
+        }),
+      }),
+      expected: "Error: wrapped",
+    },
+    {
+      name: "survives a throwing cause accessor without rethrowing",
+      error: Object.defineProperty(new Error("hostile"), "cause", {
+        get(): never {
+          throw new Error("cause exploded");
+        },
+      }),
+      expected: "Error: hostile",
+    },
+  ])("$name", ({ error, expected }) => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "discord",
+      source: "/tmp/discord/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+
+    recordPluginError({
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      registry,
+      record,
+      seenIds: new Map(),
+      pluginId: record.id,
+      origin: record.origin,
+      phase: "load",
+      error,
+      logPrefix: "",
+      diagnosticMessagePrefix: "",
+      missingDependencyHint: "install @openclaw/discord",
     });
 
     expect(record.error).toBe(expected);

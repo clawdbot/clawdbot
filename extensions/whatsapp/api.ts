@@ -42,10 +42,8 @@ export {
 export {
   type ActiveWebListener,
   type ActiveWebSendOptions,
-  type LegacyFlatWebInboundMessage,
   type WebInboundCallbackMessage,
   type WebInboundMessage,
-  type WebInboundMessageInput,
   type WebListenerCloseReason,
   type WhatsAppStructuredContactContext,
 } from "./src/inbound/types.js";
@@ -63,7 +61,6 @@ export {
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./src/normalize-target.js";
-export { testing as whatsappAccessControlTesting } from "./src/inbound/access-control.js";
 export {
   startWhatsAppQaDriverSession,
   type WhatsAppQaDriverObservedMessage,

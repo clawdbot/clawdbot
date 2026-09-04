@@ -1,4 +1,5 @@
 // Read-only diagnostics for Windows LAN Gateway reachability.
+import { safeParseJson } from "@openclaw/normalization-core";
 import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
 import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
 
@@ -246,11 +247,7 @@ function parseJsonPayload(stdout: string): unknown {
   if (!trimmed) {
     return null;
   }
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return null;
-  }
+  return safeParseJson(trimmed) ?? null;
 }
 
 function stringField(row: Record<string, unknown>, key: string): string {

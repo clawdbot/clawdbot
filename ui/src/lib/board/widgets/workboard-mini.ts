@@ -1,14 +1,11 @@
 import { html, type TemplateResult } from "lit";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
-import { WORKBOARD_STATUSES, type WorkboardCard } from "../../workboard/types.ts";
-import type { BoardViewWidget } from "../view-types.ts";
+import { workboardCardBoardId } from "../../workboard/board-filter.ts";
+import { WORKBOARD_STATUSES } from "../../workboard/types.ts";
+import type { BoardWidget } from "../types.ts";
 import type { PluginBoardWidgetRenderer } from "./index.ts";
 import { WorkboardWidgetElement } from "./workboard-widget.ts";
-
-function cardBoardId(card: WorkboardCard): string {
-  return card.metadata?.automation?.boardId ?? "default";
-}
 
 class OpenClawWorkboardMiniWidget extends WorkboardWidgetElement {
   override render(): TemplateResult {
@@ -27,7 +24,9 @@ class OpenClawWorkboardMiniWidget extends WorkboardWidgetElement {
     // cards created with an explicit board id and renders an all-zero widget.
     const boardId = this.readStringProp("boardId");
     const limit = Math.min(10, this.readPositiveIntegerProp("limit", 5));
-    const cards = boardId ? this.cards.filter((card) => cardBoardId(card) === boardId) : this.cards;
+    const cards = boardId
+      ? this.cards.filter((card) => workboardCardBoardId(card) === boardId)
+      : this.cards;
     const topCards = cards
       .filter((card) => card.status === "ready" || card.status === "running")
       .toSorted(
@@ -58,20 +57,22 @@ class OpenClawWorkboardMiniWidget extends WorkboardWidgetElement {
           )}
         </div>
         <div class="workboard-widget-mini__cards">
-          ${topCards.length > 0
-            ? topCards.map(
-                (card) => html`
-                  <div class="workboard-widget-mini__card">
-                    <span
-                      class=${`workboard-widget__status workboard-widget__status--${card.status}`}
-                    >
-                      ${t(`workboard.status.${card.status}`)}
-                    </span>
-                    <strong>${card.title}</strong>
-                  </div>
-                `,
-              )
-            : html`<p class="workboard-widget__state">${t("workboard.widget.noActiveCards")}</p>`}
+          ${
+            topCards.length > 0
+              ? topCards.map(
+                  (card) => html`
+                    <div class="workboard-widget-mini__card">
+                      <span
+                        class=${`workboard-widget__status workboard-widget__status--${card.status}`}
+                      >
+                        ${t(`workboard.status.${card.status}`)}
+                      </span>
+                      <strong>${card.title}</strong>
+                    </div>
+                  `,
+                )
+              : html`<p class="workboard-widget__state">${t("workboard.widget.noActiveCards")}</p>`
+          }
         </div>
       </section>
     `;
@@ -85,15 +86,18 @@ if (!customElements.get("openclaw-workboard-mini-widget")) {
 export const renderWorkboardMiniWidget: PluginBoardWidgetRenderer = ({
   widget,
   sessionKey,
+  active,
   requestUpdate,
 }: {
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   sessionKey: string;
+  active: boolean;
   requestUpdate: () => void;
 }) => html`
   <openclaw-workboard-mini-widget
     .widget=${widget}
     .sessionKey=${sessionKey}
+    .active=${active}
     .hostRequestUpdate=${requestUpdate}
   ></openclaw-workboard-mini-widget>
 `;

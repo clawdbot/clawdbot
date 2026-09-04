@@ -41,6 +41,20 @@ vi.mock("../../commands/agent.js", () => ({
   agentCommandFromIngress: agentIngressMocks.agentCommandFromIngress,
 }));
 
+vi.mock("../../agents/prepared-model-runtime.js", () => ({
+  acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
+    release: vi.fn(),
+    snapshot: {},
+  })),
+  loadPublishedGatewayReplyDispatchRuntime: vi.fn(async ({ agentId }: { agentId: string }) => ({
+    agentId,
+    agentDir: configMocks.workspaceDir,
+    config: configMocks.getRuntimeConfig(),
+    pluginGeneration: { pluginMetadataSnapshot: {} },
+    workspaceDir: configMocks.workspaceDir,
+  })),
+}));
+
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {},
 }));
@@ -131,6 +145,7 @@ describe("agent handler session create events", () => {
         expect(call?.[1]?.reason).toBe("create");
         expect(call?.[2]).toEqual(new Set(["conn-1"]));
         expect(call?.[3]).toEqual({
+          agentId: "main",
           dropIfSlow: true,
           sessionKeys: ["agent:main:subagent:create-test"],
         });

@@ -1,4 +1,4 @@
-import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
@@ -6,37 +6,58 @@ import { resolveDelegationCapability } from "../../delegation-capability.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import { appendIncognitoSystemPrompt } from "../../incognito-system-prompt.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
+import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
+import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
+import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
+import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
-import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
-import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
-import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-tool-policy.js";
-import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import {
-  EMBEDDED_RUN_LANE_HEARTBEAT_MS,
-  EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
-} from "./lane-runtime.js";
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
+import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+import {
+  resolveSandboxSkillRuntimeInputs,
+  mapSandboxSkillUsagePaths,
+  remapSkillReferencePaths,
+} from "../sandbox-skills.js";
+import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
+import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
+import { resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
+import { runEmbeddedAttemptWithBackend } from "./backend.js";
+import type {
+  EmbeddedRunAttemptInternalParams,
+  RunEmbeddedAgentInternalParams,
+} from "./internal-params.js";
+import type { createEmbeddedRunLaneController } from "./lane-controller.js";
+import type { PreparedNativeSessionRuntime } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
+import type { CodeModeRecoveryState } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
-type InternalRunParams = RunEmbeddedAgentParams & {
+type InternalRunParams = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
   systemAgentTool?: SystemAgentToolOptions;
 };
 
 type AttemptRuntime = {
+  contextEngineAgentId?: string;
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   workspaceDir: string;
+  bootstrapWorkspaceDir?: string;
   isCanonicalWorkspace: boolean;
   agentDir: string;
   preparedModelRuntime?: EmbeddedRunAttemptParams["preparedModelRuntime"];
   contextEngine?: EmbeddedRunAttemptParams["contextEngine"];
   contextTokenBudget?: number;
+  authoredContextTokenCap?: number;
   contextWindowInfo?: EmbeddedRunAttemptParams["contextWindowInfo"];
   prompt: string;
   provider: string;
@@ -45,6 +66,7 @@ type AttemptRuntime = {
   fallbackActive: boolean;
   fallbackReason: string | null;
   agentHarnessId: string;
+  nativeSessionRuntime?: PreparedNativeSessionRuntime;
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   runtimePlan: AgentRuntimePlan;
   model: EmbeddedRunAttemptParams["model"];
@@ -76,15 +98,15 @@ type AttemptTranscriptOwnership =
     }
   | {
       kind: "runtime-target";
-      sessionTarget?: ContextEngineSessionTarget;
+      sessionTarget?: AgentRunSessionTarget;
     };
 
 type AttemptControl = {
   lifecycleGeneration: string;
   pluginHarnessOwnsTransport: boolean;
-  laneTaskAbortController: AbortController;
-  laneTaskReleaseController: AbortController;
-  noteLaneTaskProgress: () => void;
+  createAttemptControls: ReturnType<
+    typeof createEmbeddedRunLaneController
+  >["createAttemptControls"];
   onToolOutcome: ToolOutcomeObserver;
   isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: (toolCallId?: string) => number;
@@ -103,6 +125,10 @@ type AttemptControl = {
 
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
+  codeModeRecovery?: Exclude<CodeModeRecoveryState, { kind: "idle" }>;
+  permissionChange?: EmbeddedRunAttemptParams["permissionChange"];
+  /** Run-owned start timestamp captured before admission; projected on recovery. */
+  runStartedAtMs: number;
   runtime: AttemptRuntime;
   transcriptOwnership: AttemptTranscriptOwnership;
   control: AttemptControl;
@@ -112,69 +138,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
   maxBeforeAgentFinalizeRevisions: number;
 }): Promise<{
   rawAttempt: Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
-  cancellationRequested: boolean;
   preparedAttempt: EmbeddedRunAttemptParams;
 }> {
   const { params, runtime, control } = input;
   const observeToolTerminal = createToolTerminalObserver(params.runId);
   const attemptAbortController = new AbortController();
   control.setPostCompactionAbortController(attemptAbortController);
-  const parentAbortSignal = params.abortSignal;
-  const relayParentAbort = (): void => {
-    control.laneTaskAbortController.abort(parentAbortSignal?.reason);
-    attemptAbortController.abort(parentAbortSignal?.reason);
-  };
-  if (parentAbortSignal?.aborted) {
-    relayParentAbort();
-  } else {
-    parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
-  }
-
-  // Native attempts start the heartbeat only after their own timeout watchdog
-  // is armed, keeping preflight inside the requested deadline.
-  let progressInterval: ReturnType<typeof setInterval> | undefined;
-  const stopLaneProgressHeartbeat = () => {
-    if (progressInterval) {
-      clearInterval(progressInterval);
-      progressInterval = undefined;
-    }
-    attemptAbortController.signal.removeEventListener("abort", stopLaneProgressHeartbeat);
-  };
-  const startLaneProgressHeartbeat = () => {
-    if (progressInterval || attemptAbortController.signal.aborted) {
-      return;
-    }
-    progressInterval = setInterval(
-      () => control.noteLaneTaskProgress(),
-      EMBEDDED_RUN_LANE_HEARTBEAT_MS,
-    );
-    progressInterval.unref?.();
-    attemptAbortController.signal.addEventListener("abort", stopLaneProgressHeartbeat, {
-      once: true,
-    });
-  };
-
-  // Timeout recovery can continue after an attempt returns, but a native
-  // transport that ignores its timeout releases the lane after one grace.
-  let timeoutReleaseTimer: ReturnType<typeof setTimeout> | undefined;
-  const clearAttemptTimeoutRelease = () => {
-    if (timeoutReleaseTimer) {
-      clearTimeout(timeoutReleaseTimer);
-      timeoutReleaseTimer = undefined;
-    }
-  };
-  const armAttemptTimeoutRelease = (reason: Error) => {
-    if (timeoutReleaseTimer) {
-      return;
-    }
-    timeoutReleaseTimer = setTimeout(
-      () => control.laneTaskReleaseController.abort(reason),
-      EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
-    );
-    timeoutReleaseTimer.unref?.();
-  };
-
-  let cancellationRequested = false;
   const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
     prompt: runtime.prompt,
     transcriptPrompt: params.transcriptPrompt,
@@ -185,11 +154,28 @@ export async function dispatchEmbeddedRunAttempt(input: {
     modelMaxTokens: runtime.model.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
-  const promptMedia = await preparePluginHarnessPromptImages({
-    runParams: params,
-    runtime,
-    pluginHarnessOwnsTransport: control.pluginHarnessOwnsTransport,
-  });
+  const pluginWorkspace = control.pluginHarnessOwnsTransport
+    ? await resolveAttemptWorkspaceSandbox({
+        ...params,
+        agentId: runtime.agentId,
+        cwd: undefined,
+        sessionId: runtime.sessionId,
+        sessionKey: runtime.sessionKey,
+        workspaceDir: runtime.workspaceDir,
+      })
+    : undefined;
+  const promptMedia = pluginWorkspace
+    ? await prepareEmbeddedAttemptPromptExecution({
+        attempt: { ...params, model: runtime.model },
+        mediaOwnerAgentId: pluginWorkspace.sessionAgentId,
+        effectiveFsWorkspaceOnly: pluginWorkspace.effectiveFsWorkspaceOnly,
+        effectiveWorkspace: pluginWorkspace.effectiveWorkspace,
+        prompt: "",
+        sandbox: pluginWorkspace.sandbox,
+        skipPromptSubmission: false,
+        pluginHarness: true,
+      })
+    : { images: params.images, imageOrder: params.imageOrder, media: params.media };
   // Plugin harnesses own their tool materialization, so the host cannot attest
   // a message tool. Finalize conservatively instead of leaking phantom guidance.
   const pluginHarnessPrompt =
@@ -200,23 +186,95 @@ export async function dispatchEmbeddedRunAttempt(input: {
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
-  const attemptParams: EmbeddedRunAttemptParams = {
+  const pluginSandbox = control.pluginHarnessOwnsTransport
+    ? ((await resolveSessionPlacementSandbox({
+        agentId: runtime.agentId,
+        config: params.config,
+        sessionId: runtime.sessionId,
+        sessionKey: runtime.sessionKey,
+        workspaceDir: runtime.workspaceDir,
+      })) ?? pluginWorkspace?.sandbox)
+    : undefined;
+  if (!params.admittedRunContext) {
+    throw new Error("embedded attempt reached dispatch without an admitted run context");
+  }
+  const admittedRunContext = params.admittedRunContext;
+  if (params.permissionMode) {
+    // Attempts narrow this shared run-owned policy before recovery can reuse it.
+    params.execOverrides ??= {};
+    params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
+  }
+  const incognitoSystemPrompt = appendIncognitoSystemPrompt({
+    agentId: runtime.agentId,
+    extraSystemPrompt: params.extraSystemPrompt,
+    sessionKey: params.sessionKey,
+    storePath: params.sessionTarget?.storePath,
+  });
+  const extraSystemPrompt = await appendProgressCardSystemPrompt({
+    agentId: runtime.agentId,
+    authProfileId: runtime.authProfileId,
+    config: params.config,
+    extraSystemPrompt: incognitoSystemPrompt,
+    modelId: runtime.modelId,
+    provider: runtime.provider,
+    sessionKey: params.sessionKey,
+    toolsAllow: params.toolsAllow,
+  });
+  let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
+  let skillReferencePaths: import("../../../skills/types.js").SkillUsagePath[] | undefined;
+  if (
+    pluginSandbox?.enabled &&
+    !pluginSandbox.readOnlyResourceMounts?.length &&
+    skillsSnapshot?.librarySelections?.length
+  ) {
+    const prepared = resolveSandboxSkillRuntimeInputs({
+      sandbox: pluginSandbox,
+      skillsAnchorWorkspace: runtime.bootstrapWorkspaceDir ?? runtime.workspaceDir,
+      skillsSnapshot,
+    });
+    skillsSnapshot = prepared.skillsSnapshot;
+    skillReferencePaths = mapSandboxSkillUsagePaths({
+      paths: pluginSandbox.skillUsagePaths,
+      skillsWorkspaceDir: prepared.skillsWorkspaceDir,
+      skillsPromptWorkspaceDir: prepared.skillsPromptWorkspaceDir,
+    });
+  }
+  const attemptControls = control.createAttemptControls({
+    admittedRunContext,
+    abortSignal: attemptAbortController.signal,
+    onAbort: () => {
+      if (!params.abortSignal?.aborted) {
+        params.replyOperation?.abortByUser();
+      }
+    },
+  });
+  const attemptParams: EmbeddedRunAttemptInternalParams = {
+    permissionChange: input.permissionChange,
+    admittedRunContext: params.admittedRunContext,
+    startedAtMs: input.runStartedAtMs,
+    contextEngineAgentId: runtime.contextEngineAgentId,
+    ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
     sandboxSessionKey: params.sandboxSessionKey,
+    sandboxAgentId: params.sandboxAgentId,
     trigger: params.trigger,
     memoryFlushWritePath: params.memoryFlushWritePath,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
     toolBindings: params.toolBindings,
+    // Preserve the Gateway's tri-state capability; undefined hides both GitHub tools.
+    githubPublicationAvailable: params.githubPublicationAvailable,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
+    conversationRoutePeerId: params.conversationRoutePeerId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
+    conversationToolPolicy: params.conversationToolPolicy,
     messageActionTurnCapability: params.messageActionTurnCapability,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
@@ -245,7 +303,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
       : { sessionTarget: input.transcriptOwnership.sessionTarget }),
     trajectoryRecorder: runtime.trajectoryRecorder,
     workspaceDir: runtime.workspaceDir,
+    bootstrapWorkspaceDir: runtime.bootstrapWorkspaceDir,
     cwd: params.cwd,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
     agentDir: runtime.agentDir,
     preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
@@ -254,12 +315,20 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(runtime.contextEngine
       ? {
           contextEngine: runtime.contextEngine,
-          contextTokenBudget: runtime.contextTokenBudget,
           contextWindowInfo: runtime.contextWindowInfo,
         }
       : {}),
-    skillsSnapshot: params.skillsSnapshot,
-    prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+    ...(runtime.contextTokenBudget === undefined
+      ? {}
+      : { contextTokenBudget: runtime.contextTokenBudget }),
+    ...(runtime.authoredContextTokenCap === undefined
+      ? {}
+      : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
+    skillsSnapshot,
+    prompt: remapSkillReferencePaths(
+      pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+      skillReferencePaths,
+    ),
     transcriptPrompt:
       pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
         ? preparedExecApprovalContinuation.prompt
@@ -267,9 +336,13 @@ export async function dispatchEmbeddedRunAttempt(input: {
     finalizePromptForResolvedTools:
       pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    // The outer run-loop owns the begun lease; the inner attempt reports only
+    // the accepted candidate boundary to that owner.
+    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
+    explicitSkillSelections: params.explicitSkillSelections,
     images: promptMedia.images,
     imageOrder: promptMedia.imageOrder,
     media: promptMedia.media,
@@ -290,6 +363,17 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentHarnessId: runtime.agentHarnessId,
     agentHarnessRuntimeOverride: runtime.agentHarnessId,
     modelSelectionLocked: params.modelSelectionLocked,
+    ...(runtime.nativeSessionRuntime
+      ? {
+          expectedSessionRuntimeOwnership: {
+            model: "native",
+            auth: runtime.nativeSessionRuntime.auth,
+            ...(runtime.nativeSessionRuntime.auth === "host"
+              ? { modelRef: runtime.nativeSessionRuntime.modelRef }
+              : {}),
+          },
+        }
+      : {}),
     ...(runtime.captureRuntimeArtifact ? { captureRuntimeArtifact: true } : {}),
     ...(runtime.expectedRuntimeArtifact
       ? { expectedRuntimeArtifact: runtime.expectedRuntimeArtifact }
@@ -298,6 +382,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
       ? {
           agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
             requesterSessionKey: params.sessionKey,
+            gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
           }),
         }
       : {}),
@@ -342,21 +427,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     runId: params.runId,
     lifecycleGeneration: control.lifecycleGeneration,
-    abortSignal: attemptAbortController.signal,
-    onAttemptTimeoutArmed: control.pluginHarnessOwnsTransport
-      ? undefined
-      : startLaneProgressHeartbeat,
-    onAttemptTimeout: control.pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
-    onAttemptAbort: () => {
-      cancellationRequested = true;
-      if (!params.abortSignal?.aborted) {
-        params.replyOperation?.abortByUser();
-      }
-      if (!control.pluginHarnessOwnsTransport) {
-        stopLaneProgressHeartbeat();
-        control.laneTaskAbortController.abort();
-      }
-    },
+    abortSignal: attemptControls.abortSignal,
+    onAttemptDeadlineChanged: attemptControls.onAttemptDeadlineChanged,
+    onAttemptTimeout: attemptControls.onAttemptTimeout,
+    onAttemptAbort: attemptControls.onAttemptAbort,
     replyOperation: params.replyOperation,
     shouldEmitToolResult: params.shouldEmitToolResult,
     shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -374,18 +448,17 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onAgentEvent: control.onAgentEvent,
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
+    onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
+    onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt: appendIncognitoSystemPrompt({
-      agentId: runtime.agentId,
-      extraSystemPrompt: params.extraSystemPrompt,
-      sessionKey: params.sessionKey,
-      storePath: params.sessionTarget?.storePath,
-    }),
+    extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
     scheduledToolPolicy: params.scheduledToolPolicy,
+    cronCreatorAuthorityCapability: params.cronCreatorAuthorityCapability,
+    cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
@@ -398,14 +471,25 @@ export async function dispatchEmbeddedRunAttempt(input: {
     bootstrapContextMode: params.bootstrapContextMode,
     bootstrapContextRunKind: params.bootstrapContextRunKind,
     jobId: params.jobId,
+    scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
+    scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
+    toolExecutionAllow: params.toolExecutionAllow,
+    // Authorized prompt enrichment needs the exact prepared turn policy identity.
+    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    sessionPersistence: params.sessionPersistence,
+    // The host loop settles all completed counts, including default/SDK runs.
+    compactionCountOwner: "caller",
+    onContextAccountingEvent: params.onContextAccountingEvent,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
+    codeModeRecovery: input.codeModeRecovery,
     forceRestartSafeTools: params.forceRestartSafeTools,
     forceCodeModeTools: params.forceCodeModeTools,
+    codeModeOverride: params.codeModeOverride,
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
     forceHeartbeatTool: params.forceHeartbeatTool,
@@ -424,15 +508,31 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onUserMessagePersisted: control.onUserMessagePersisted,
     onUserMessagePersistenceInvalidated: control.onUserMessagePersistenceInvalidated,
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   };
-  const rawAttempt = await runEmbeddedAttemptWithBackend(attemptParams)
+  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: attemptParams.admittedRunContext,
+    agentId: runtime.agentId,
+    sessionKey: runtime.sessionKey,
+    turnSourceChannel: params.messageChannel ?? params.messageProvider,
+    turnSourceLocal:
+      !params.messageChannel &&
+      !params.messageProvider &&
+      params.cronCreatorAuthorityCapability?.callerOrigin.kind === "local"
+        ? true
+        : undefined,
+    turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+    turnSourceAccountId: params.agentAccountId,
+    turnSourceThreadId: params.currentThreadTs,
+  });
+  const rawAttempt = await withGatewayToolCallerIdentity(callerIdentity, () =>
+    runEmbeddedAttemptWithBackend(attemptParams, runtime.nativeSessionRuntime),
+  )
     .catch((err: unknown): never => {
       throw control.getPostCompactionAbortError() ?? err;
     })
     .finally(() => {
-      clearAttemptTimeoutRelease();
-      stopLaneProgressHeartbeat();
-      parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
+      attemptControls.close();
       control.clearPostCompactionAbortController(attemptAbortController);
     });
 
@@ -440,5 +540,5 @@ export async function dispatchEmbeddedRunAttempt(input: {
   if (postCompactionAbortError) {
     throw postCompactionAbortError;
   }
-  return { rawAttempt, cancellationRequested, preparedAttempt: attemptParams };
+  return { rawAttempt, preparedAttempt: attemptParams };
 }

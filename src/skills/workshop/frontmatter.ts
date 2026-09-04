@@ -1,11 +1,21 @@
 // Workshop frontmatter helpers parse generated skill metadata before saving drafts.
 import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
-import { parseFrontmatter } from "../loading/frontmatter.js";
+import { parseSkillFrontmatter } from "../loading/frontmatter.js";
+import type { SkillProposalRecord } from "./types.js";
 
 type ProposalFrontmatter = {
   name: string;
   description: string;
 };
+
+export function resolveSkillProposalName(
+  kind: SkillProposalRecord["kind"],
+  target: Pick<SkillProposalRecord["target"], "skillName" | "skillKey">,
+): string {
+  // New skills use the normalized key as their name; updates retain the live
+  // frontmatter name, which may differ from the metadata key.
+  return kind === "create" ? target.skillKey : target.skillName;
+}
 
 // JSON strings are valid YAML scalars and avoid ad hoc escaping.
 function yamlScalar(value: string): string {
@@ -54,7 +64,7 @@ export function renderProposalMarkdown(params: {
 }
 
 export function readProposalFrontmatter(content: string): ProposalFrontmatter | null {
-  const frontmatter = parseFrontmatter(content);
+  const frontmatter = parseSkillFrontmatter(content);
   const name = frontmatter.name?.trim();
   const description = frontmatter.description?.trim();
   const status = frontmatter.status?.trim().toLowerCase();

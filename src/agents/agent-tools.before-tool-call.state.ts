@@ -102,6 +102,16 @@ export function consumeBatchAdmittedToolCall(toolCallId: string, runId?: string)
   return admitted;
 }
 
+/** Release exact batch-admission markers for prepared calls suppressed by steering. */
+export function releaseBatchAdmittedToolCalls(
+  toolCallIds: readonly string[],
+  runId?: string,
+): void {
+  for (const toolCallId of toolCallIds) {
+    batchAdmittedToolCallIds.delete(buildAdjustedParamsKey({ runId, toolCallId }));
+  }
+}
+
 /** Remove unused batch-admission markers when their embedded run ends. */
 export function clearBatchAdmittedToolCallsForRun(runId: string): void {
   const prefix = `${runId}:`;

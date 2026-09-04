@@ -14,42 +14,8 @@ enum SystemAgentDraft: String, Decodable {
     }
 }
 
-@MainActor
-@Observable
-final class OnboardingSystemAgentChatState {
-    var chat = SystemAgentOnboardingChatModel()
-    var isPresented = false
-    @ObservationIgnored private var startTask: Task<Void, Never>?
-
-    @discardableResult
-    func presentAndStart() -> Task<Void, Never> {
-        self.isPresented = true
-        if let startTask {
-            return startTask
-        }
-        let chat = self.chat
-        let task = Task { await chat.startIfNeeded() }
-        self.startTask = task
-        return task
-    }
-
-    func waitForStartIfNeeded() async {
-        let task = self.startTask
-        await task?.value
-    }
-
-    func resetForGatewayChange() {
-        self.isPresented = false
-        self.startTask?.cancel()
-        self.startTask = nil
-        self.chat.invalidate()
-        self.chat = SystemAgentOnboardingChatModel()
-    }
-}
-
-/// Onboarding talks to OpenClaw over the gateway `openclaw.chat` RPC.
-/// The conversation is available after structured setup establishes working
-/// inference, so the model-backed helper can answer reliably.
+/// Settings talks to OpenClaw over the gateway `openclaw.chat` RPC after
+/// inference is configured, so the model-backed helper can answer reliably.
 @MainActor
 @Observable
 final class SystemAgentOnboardingChatModel {

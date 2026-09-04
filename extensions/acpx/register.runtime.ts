@@ -6,11 +6,10 @@ import {
   getAcpRuntimeBackend,
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
-  type AcpRuntime,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { createLazyAcpRuntimeProxy } from "./src/runtime-proxy.js";
+import { createLazyAcpRuntimeProxy, type CompleteAcpRuntime } from "./src/runtime-proxy.js";
 
 const ACPX_BACKEND_ID = "acpx";
 
@@ -23,17 +22,17 @@ type CreateAcpxRuntimeServiceParams = Omit<InnerAcpxRuntimeServiceParams, "backe
 type DeferredServiceState = {
   ctx: OpenClawPluginServiceContext | null;
   lifecycleRevision: number;
-  ownedRuntime: AcpRuntime | null;
+  ownedRuntime: CompleteAcpRuntime | null;
   params: CreateAcpxRuntimeServiceParams;
-  realRuntime: AcpRuntime | null;
+  realRuntime: CompleteAcpRuntime | null;
   realService: OpenClawPluginService | null;
-  startPromise: Promise<AcpRuntime> | null;
+  startPromise: Promise<CompleteAcpRuntime> | null;
   stopPromise: Promise<void> | null;
 };
 
 const loadServiceModule = createLazyRuntimeModule(() => import("./src/service.js"));
 
-function unregisterOwnedRuntime(runtime: AcpRuntime | null): void {
+function unregisterOwnedRuntime(runtime: CompleteAcpRuntime | null): void {
   if (runtime && getAcpRuntimeBackend(ACPX_BACKEND_ID)?.runtime === runtime) {
     unregisterAcpRuntimeBackend(ACPX_BACKEND_ID);
   }
@@ -42,8 +41,8 @@ function unregisterOwnedRuntime(runtime: AcpRuntime | null): void {
 async function startRealService(
   state: DeferredServiceState,
   lifecycleRevision: number,
-  deferredRuntime: AcpRuntime,
-): Promise<AcpRuntime> {
+  deferredRuntime: CompleteAcpRuntime,
+): Promise<CompleteAcpRuntime> {
   if (state.lifecycleRevision !== lifecycleRevision || !state.ctx) {
     throw new Error("ACPX runtime service is not started");
   }
@@ -55,7 +54,7 @@ async function startRealService(
   }
   const ctx = state.ctx;
   state.startPromise = (async () => {
-    let publishedRuntime: AcpRuntime | null = null;
+    let publishedRuntime: CompleteAcpRuntime | null = null;
     const { createAcpxRuntimeService: createAcpxRuntimeServiceLocal } = await loadServiceModule();
     const service = createAcpxRuntimeServiceLocal({
       ...state.params,
@@ -105,9 +104,12 @@ async function startRealService(
   }
 }
 
-function createDeferredRuntime(state: DeferredServiceState, lifecycleRevision: number): AcpRuntime {
-  const deferredRuntime: AcpRuntime = createLazyAcpRuntimeProxy(
-    (): Promise<AcpRuntime> => startRealService(state, lifecycleRevision, deferredRuntime),
+function createDeferredRuntime(
+  state: DeferredServiceState,
+  lifecycleRevision: number,
+): CompleteAcpRuntime {
+  const deferredRuntime: CompleteAcpRuntime = createLazyAcpRuntimeProxy(
+    (): Promise<CompleteAcpRuntime> => startRealService(state, lifecycleRevision, deferredRuntime),
   );
   return deferredRuntime;
 }

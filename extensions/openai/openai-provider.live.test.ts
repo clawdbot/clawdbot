@@ -28,6 +28,17 @@ type LiveModelCase = {
 
 function resolveLiveModelCase(modelId: string): LiveModelCase {
   switch (modelId) {
+    case "gpt-6-astra":
+      return {
+        modelId,
+        templateId: "gpt-5.6-sol",
+        templateName: "GPT-5.6 Sol",
+        cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
+      };
     case "gpt-5.6":
     case "gpt-5.6-sol":
     case "gpt-5.6-terra":
@@ -201,8 +212,14 @@ describeLive("buildOpenAIProvider live", () => {
         model: normalized?.id ?? liveCase.modelId,
         instructions: "Return exactly OK and no other text.",
         input: "Return exactly OK.",
-        max_output_tokens: 64,
-        ...(liveCase.reasoning ? { reasoning: { effort: "none" as const } } : {}),
+        max_output_tokens: liveCase.modelId === "gpt-6-astra" ? 256 : 64,
+        ...(liveCase.reasoning
+          ? {
+              reasoning: {
+                effort: liveCase.modelId === "gpt-6-astra" ? ("low" as const) : ("none" as const),
+              },
+            }
+          : {}),
         text: { verbosity: liveCase.textVerbosity },
       });
 

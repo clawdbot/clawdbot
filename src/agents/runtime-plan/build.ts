@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Builds prepared runtime plans consumed by embedded agent runs. A plan
  * centralizes provider hooks, auth, tool schema policy, transcript policy,
@@ -5,13 +6,8 @@
  */
 import type { TSchema } from "typebox";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import {
-  isPluginMetadataSnapshotCompatible,
-  resolvePluginMetadataSnapshot,
-} from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveProviderRuntimePluginHandle,
@@ -46,9 +42,7 @@ function formatResolvedRef(params: { provider: string; modelId: string }): strin
 }
 
 function asOpenClawConfig(value: unknown): OpenClawConfig | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as OpenClawConfig)
-    : undefined;
+  return asOptionalRecord(value) as OpenClawConfig | undefined;
 }
 
 function asProviderRuntimeModel(
@@ -61,21 +55,10 @@ type RuntimePlanMetadataParams = BuildAgentRuntimeDeliveryPlanParams & {
   metadataSnapshot?: BuildAgentRuntimePlanParams["metadataSnapshot"];
 };
 
-function resolveCompatibleMetadataSnapshot(
+function resolvePreparedMetadataSnapshot(
   params: RuntimePlanMetadataParams,
-  config: OpenClawConfig | undefined = asOpenClawConfig(params.config),
 ): PluginMetadataSnapshot | undefined {
-  const metadataSnapshot = params.metadataSnapshot as PluginMetadataSnapshot | undefined;
-  return metadataSnapshot &&
-    metadataSnapshot.pluginIds === undefined &&
-    isPluginMetadataSnapshotCompatible({
-      snapshot: metadataSnapshot,
-      config,
-      env: process.env,
-      workspaceDir: params.workspaceDir,
-    })
-    ? metadataSnapshot
-    : undefined;
+  return params.metadataSnapshot as PluginMetadataSnapshot | undefined;
 }
 
 function resolvePreparedProviderRuntimeHandle(
@@ -92,7 +75,7 @@ function resolvePreparedProviderRuntimeHandle(
       prepared: true;
     };
   }
-  const compatibleMetadataSnapshot = resolveCompatibleMetadataSnapshot(params);
+  const metadataSnapshot = resolvePreparedMetadataSnapshot(params);
   return {
     ...resolveProviderRuntimePluginHandle({
       provider: params.provider,
@@ -100,7 +83,7 @@ function resolvePreparedProviderRuntimeHandle(
       config: asOpenClawConfig(params.config),
       workspaceDir: params.workspaceDir,
       env: process.env,
-      ...(compatibleMetadataSnapshot ? { pluginMetadataSnapshot: compatibleMetadataSnapshot } : {}),
+      ...(metadataSnapshot ? { pluginMetadataSnapshot: metadataSnapshot } : {}),
     }),
     modelId: params.modelId,
     prepared: true,
@@ -156,21 +139,10 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
   const model = asProviderRuntimeModel(params.model);
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
   const transport = params.resolvedTransport;
-  const toolPlanningConfig = config ? projectConfigOntoRuntimeSourceSnapshot(config) : undefined;
-  const toolPlanningMetadataSnapshot = resolveCompatibleMetadataSnapshot(
-    params,
-    toolPlanningConfig,
-  );
+  const toolPlanningMetadataSnapshot = resolvePreparedMetadataSnapshot(params);
   const preparedPlanning = toolPlanningMetadataSnapshot
     ? { metadataSnapshot: toolPlanningMetadataSnapshot }
-    : {
-        loadMetadataSnapshot: () =>
-          resolvePluginMetadataSnapshot({
-            config: toolPlanningConfig,
-            ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-            env: process.env,
-          }),
-      };
+    : undefined;
   const providerRuntimeHandleForPlugins = resolvePreparedProviderRuntimeHandle(params);
   const auth =
     params.preparedAuthPlan ??
@@ -185,6 +157,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       modelRoute: params.modelRoute,
       config,
       workspaceDir: params.workspaceDir,
+      metadataSnapshot: toolPlanningMetadataSnapshot,
       harnessId: params.harnessId,
       harnessRuntime: params.harnessRuntime,
       allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,

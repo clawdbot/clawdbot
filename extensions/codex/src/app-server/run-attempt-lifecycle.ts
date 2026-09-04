@@ -5,7 +5,7 @@ import {
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
   runAgentEndSideEffects,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";

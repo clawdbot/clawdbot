@@ -11,7 +11,7 @@ const runModelsAuthLoginFlowMock = vi.hoisted(() => vi.fn());
 const updateSessionEntryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/models/auth.js", () => ({
-  runModelsAuthLoginFlow: (opts: unknown) => runModelsAuthLoginFlowMock(opts),
+  runModelsAuthLoginFlowCore: (opts: unknown) => runModelsAuthLoginFlowMock(opts),
 }));
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
@@ -63,7 +63,7 @@ function buildLoginParams(
     { workspaceDir: "/tmp/openclaw-login-test" },
   );
   params.sessionKey = overrides.sessionKey ?? "agent:main:slack:channel:C123";
-  params.agentId = overrides.agentId;
+  params.agentId = overrides.agentId ?? params.agentId;
   params.command = {
     ...params.command,
     channel: "slack",

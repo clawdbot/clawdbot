@@ -17,6 +17,7 @@ import type {
   GatewayServiceEnv,
   GatewayServiceRenderArgs,
 } from "./service-types.js";
+import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 export function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -24,6 +25,14 @@ export function resolveTaskName(env: GatewayServiceEnv): string {
     return override;
   }
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
+}
+
+// Keeps the service gateway's stdin off the (possibly hidden) console so TTY
+// heuristics fail closed for permission prompts (#112173).
+const STDIN_NUL_REDIRECT = "< NUL";
+
+function stripStdinNulRedirect(commandLine: string): string {
+  return commandLine.replace(/\s*<\s*NUL\s*$/i, "");
 }
 
 export function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
@@ -148,6 +157,10 @@ export function buildScheduledTaskXml(params: {
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
     <Priority>7</Priority>
   </Settings>
   <Actions Context="Author">
@@ -184,17 +197,6 @@ export function resolveTaskUser(env: GatewayServiceEnv): string | null {
     return `${domain}\\${username}`;
   }
   return username;
-}
-
-export function resolveSchtasksCreateUser(
-  env: GatewayServiceEnv,
-  taskUser: string | null,
-): string | null {
-  // Workgroup tasks stay XML user-scoped, but omit /RU so schtasks binds the caller.
-  if (normalizeLowercaseStringOrEmpty(env.USERDOMAIN) === "workgroup") {
-    return null;
-  }
-  return taskUser;
 }
 
 export function shouldUseHiddenWindowsTaskLauncher(env: GatewayServiceEnv): boolean {
@@ -240,7 +242,9 @@ export async function readScheduledTaskCommand(
         workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
         continue;
       }
-      commandLine = line;
+      // Generated launchers redirect stdin so a hidden service console never
+      // presents as interactive (#112173); the redirection is not an argument.
+      commandLine = stripStdinNulRedirect(line);
       break;
     }
     if (!commandLine) {
@@ -248,7 +252,11 @@ export async function readScheduledTaskCommand(
     }
     const hasEnvironment = Object.keys(environment).length > 0;
     return {
-      programArguments: parseCmdScriptCommandLine(commandLine),
+      // The task-only outer process owns the Job Object; diagnostics and lifecycle
+      // controls must compare against its inner Gateway child, which omits this flag.
+      programArguments: parseCmdScriptCommandLine(commandLine).filter(
+        (argument) => argument !== WINDOWS_TASK_SUPERVISOR_FLAG,
+      ),
       ...(workingDirectory ? { workingDirectory } : {}),
       ...(hasEnvironment ? { environment } : {}),
       ...(hasEnvironment
@@ -282,13 +290,29 @@ export function buildTaskScript({
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
-      if (!value || key.toUpperCase() === "PATH") {
+      // `set "NODE_OPTIONS="` clears inherited flags before the Node command runs.
+      if (
+        value === undefined ||
+        (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
+        key.toUpperCase() === "PATH"
+      ) {
         continue;
       }
       lines.push(renderCmdSetAssignment(key, value));
     }
   }
-  lines.push(programArguments.map(quoteCmdScriptArg).join(" "));
+  // Redirect stdin from NUL: a Scheduled Task console (even hidden via the
+  // VBS launcher) still hands the gateway real console handles, so
+  // `process.stdin.isTTY` reports true and interactive permission prompts
+  // block forever on a console no one can see (#112173). With stdin at NUL
+  // the gateway and its workers correctly take non-interactive paths.
+  const commandArguments =
+    environment?.OPENCLAW_SERVICE_KIND === "gateway"
+      ? [...programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
+      : programArguments;
+  lines.push(
+    `${commandArguments.map((argument) => quoteCmdScriptArg(argument)).join(" ")} ${STDIN_NUL_REDIRECT}`,
+  );
   return `${lines.join("\r\n")}\r\n`;
 }
 
@@ -330,7 +354,7 @@ export function buildHiddenLauncherScript(params: {
     lines.push(`' ${trimmedDescription}`);
   }
   lines.push(
-    `CreateObject("WScript.Shell").Run ${quoteVbsRunCommand(params.scriptPath)}, 0, False`,
+    `WScript.Quit CreateObject("WScript.Shell").Run(${quoteVbsRunCommand(params.scriptPath)}, 0, True)`,
   );
   return `${lines.join("\r\n")}\r\n`;
 }

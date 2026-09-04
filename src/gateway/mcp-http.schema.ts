@@ -21,7 +21,7 @@ export type McpToolSchemaEntry = {
 
 function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description" | "parameters") {
   try {
-    return (tool as unknown as Record<typeof key, unknown>)[key];
+    return tool[key];
   } catch {
     return undefined;
   }
@@ -45,7 +45,7 @@ function readLoopbackToolDescription(tool: McpLoopbackTool): string | undefined 
 function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unknown> | undefined {
   let value;
   try {
-    value = (tool as unknown as { parameters?: unknown }).parameters;
+    value = tool.parameters;
   } catch {
     return undefined;
   }

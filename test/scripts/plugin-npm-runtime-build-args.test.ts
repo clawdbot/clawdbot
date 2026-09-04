@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseArgs as parseBulkBuildArgs } from "../../scripts/check-plugin-npm-runtime-builds.mjs";
-import { listMissingPackageStaticAssetSources } from "../../scripts/lib/plugin-npm-runtime-assets.mjs";
-import { parseArgs as parseSingleBuildArgs } from "../../scripts/lib/plugin-npm-runtime-build.mjs";
+import { parseArgs as parseBulkBuildArgs } from "../../scripts/check-plugin-npm-runtime-builds.mts";
+import { listMissingPackageStaticAssetSources } from "../../scripts/lib/plugin-npm-runtime-assets.mts";
+import { parseArgs as parseSingleBuildArgs } from "../../scripts/lib/plugin-npm-runtime-build.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -32,6 +32,24 @@ describe("plugin npm runtime build args", () => {
       help: true,
       packageDir: "",
     });
+  });
+
+  it("selects preparation without compilation only when explicitly requested", () => {
+    for (const args of [
+      ["--prepare-native-import", "extensions/slack"],
+      ["extensions/slack", "--prepare-native-import"],
+      ["--", "--prepare-native-import", "extensions/slack"],
+    ]) {
+      expect(parseSingleBuildArgs(args)).toEqual({
+        packageDir: "extensions/slack",
+        prepareNativeImport: true,
+      });
+    }
+    expect(() => parseSingleBuildArgs(["--prepare-native-import"])).toThrow(/usage:/u);
+    expect(() => parseSingleBuildArgs(["--prepare-native-import", "--unknown"])).toThrow(/usage:/u);
+    expect(() =>
+      parseSingleBuildArgs(["--prepare-native-import", "extensions/slack", "extra"]),
+    ).toThrow(/unexpected/u);
   });
 
   it("rejects missing or option-looking package targets", () => {

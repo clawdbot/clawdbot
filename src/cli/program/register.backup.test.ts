@@ -5,6 +5,12 @@ import { registerBackupCommand } from "./register.backup.js";
 
 const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
+  backupGitCreateCommand: vi.fn(),
+  backupGitInitCommand: vi.fn(),
+  backupGitLogCommand: vi.fn(),
+  backupGitRestoreCommand: vi.fn(),
+  backupGitVerifyCommand: vi.fn(),
+  backupRestoreCommand: vi.fn(),
   backupSqliteCreateCommand: vi.fn(),
   backupSqliteListCommand: vi.fn(),
   backupSqliteRestoreCommand: vi.fn(),
@@ -18,6 +24,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const backupCreateCommand = mocks.backupCreateCommand;
+const backupGitLogCommand = mocks.backupGitLogCommand;
+const backupRestoreCommand = mocks.backupRestoreCommand;
 const backupSqliteCreateCommand = mocks.backupSqliteCreateCommand;
 const backupSqliteListCommand = mocks.backupSqliteListCommand;
 const backupSqliteRestoreCommand = mocks.backupSqliteRestoreCommand;
@@ -27,6 +35,18 @@ const runtime = mocks.runtime;
 
 vi.mock("../../commands/backup.js", () => ({
   backupCreateCommand: mocks.backupCreateCommand,
+}));
+
+vi.mock("../../commands/backup-git.js", () => ({
+  backupGitCreateCommand: mocks.backupGitCreateCommand,
+  backupGitInitCommand: mocks.backupGitInitCommand,
+  backupGitLogCommand: mocks.backupGitLogCommand,
+  backupGitRestoreCommand: mocks.backupGitRestoreCommand,
+  backupGitVerifyCommand: mocks.backupGitVerifyCommand,
+}));
+
+vi.mock("../../commands/backup-restore.js", () => ({
+  backupRestoreCommand: mocks.backupRestoreCommand,
 }));
 
 vi.mock("../../commands/backup-verify.js", () => ({
@@ -54,6 +74,12 @@ describe("registerBackupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     backupCreateCommand.mockResolvedValue(undefined);
+    mocks.backupGitCreateCommand.mockResolvedValue(undefined);
+    mocks.backupGitInitCommand.mockResolvedValue(undefined);
+    backupGitLogCommand.mockResolvedValue(undefined);
+    mocks.backupGitRestoreCommand.mockResolvedValue(undefined);
+    mocks.backupGitVerifyCommand.mockResolvedValue(undefined);
+    backupRestoreCommand.mockResolvedValue(undefined);
     backupSqliteCreateCommand.mockResolvedValue(undefined);
     backupSqliteListCommand.mockResolvedValue(undefined);
     backupSqliteRestoreCommand.mockResolvedValue(undefined);
@@ -111,6 +137,37 @@ describe("registerBackupCommand", () => {
     const options = expectForwardedOptions(backupVerifyCommand);
     expect(options.archive).toBe("/tmp/openclaw-backup.tar.gz");
     expect(options.json).toBe(true);
+  });
+
+  it("runs whole-archive restore with forwarded options", async () => {
+    await runCli([
+      "backup",
+      "restore",
+      "/tmp/openclaw-backup.tar.gz",
+      "--target",
+      "/tmp/restored-openclaw",
+      "--json",
+    ]);
+
+    const options = expectForwardedOptions(backupRestoreCommand);
+    expect(options).toEqual({
+      archive: "/tmp/openclaw-backup.tar.gz",
+      target: "/tmp/restored-openclaw",
+      json: true,
+    });
+  });
+
+  it.each(["1oops", "1.5"])("rejects partial Git log limit %s", async (limit) => {
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+    registerBackupCommand(program);
+
+    await expect(
+      program.parseAsync(
+        ["backup", "git", "log", "--repository", "/tmp/backups", "--limit", limit],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("--limit must be a positive integer.");
+    expect(backupGitLogCommand).not.toHaveBeenCalled();
   });
 
   it("registers the SQLite snapshot command group", () => {

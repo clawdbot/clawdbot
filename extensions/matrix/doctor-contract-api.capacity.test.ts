@@ -14,7 +14,7 @@ import {
   resetPluginStateStoreForTests,
   setMaxPluginStateEntriesPerPluginForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import {

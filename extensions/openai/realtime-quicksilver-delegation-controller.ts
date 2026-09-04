@@ -1,5 +1,7 @@
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceAgentConsultRunner } from "openclaw/plugin-sdk/realtime-voice";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { RawData } from "ws";
 import {
   buildOpenAIQuicksilverDelegationPrompt,
@@ -27,6 +29,7 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   getSocket: () => OpenAIQuicksilverSocket | undefined;
   isCanceledError?: (error: unknown) => boolean;
   logger: Pick<PluginLogger, "debug" | "warn">;
+  onError?: (error: Error) => void;
   onFatalError: (error: Error) => void;
   onSessionStarted?: (expiresAt: number | undefined) => void;
   onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
@@ -35,22 +38,8 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   signal: AbortSignal;
 };
 
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
 function shortFailureReason(error: unknown): string {
-  return toError(error).message.replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
-}
-
-function decodeTextFrame(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return data.toString("utf8");
+  return formatErrorMessage(error).replaceAll(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
 }
 
 function readWireEventType(payload: string): string | undefined {
@@ -66,19 +55,29 @@ function readWireEventType(payload: string): string | undefined {
 export class OpenAIQuicksilverDelegationController {
   private activeDelegationId: string | undefined;
   private consultController: AbortController | undefined;
+  private readonly onSessionAbort = () => {
+    const reason = this.options.signal.reason;
+    this.stop(reason instanceof Error ? reason : new Error("GPT-Live session stopped"));
+  };
   private partialTranscriptRole: "user" | "assistant" | undefined;
   private pendingDelegation: PendingDelegation | undefined;
   private stopped = false;
   private transcript: OpenAIQuicksilverTranscriptEntry[] = [];
 
-  constructor(private readonly options: OpenAIQuicksilverDelegationControllerOptions) {}
+  constructor(private readonly options: OpenAIQuicksilverDelegationControllerOptions) {
+    if (options.signal.aborted) {
+      this.onSessionAbort();
+    } else {
+      options.signal.addEventListener("abort", this.onSessionAbort, { once: true });
+    }
+  }
 
   handleFrame(data: RawData, isBinary: boolean): void {
     if (isBinary) {
       this.fail(new Error("OpenAI GPT-Live sideband returned an unexpected binary frame"));
       return;
     }
-    const payload = decodeTextFrame(data);
+    const payload = rawDataToString(data);
     if (this.options.onWireEventType) {
       const eventType = readWireEventType(payload);
       if (eventType) {
@@ -113,6 +112,8 @@ export class OpenAIQuicksilverDelegationController {
       this.options.logger.warn(error.message);
       if (event.fatalAuth) {
         this.options.onFatalError(error);
+      } else {
+        this.options.onError?.(error);
       }
       return;
     }
@@ -134,11 +135,17 @@ export class OpenAIQuicksilverDelegationController {
     if (this.stopped) {
       return;
     }
-    this.stopped = true;
-    this.pendingDelegation = undefined;
-    this.activeDelegationId = undefined;
+    this.markStopped();
     this.consultController?.abort(reason);
     this.consultController = undefined;
+  }
+
+  /** Releases sideband ownership without canceling work already accepted by the host. */
+  detach(): void {
+    if (this.stopped) {
+      return;
+    }
+    this.markStopped();
   }
 
   private appendTranscript(
@@ -192,9 +199,10 @@ export class OpenAIQuicksilverDelegationController {
     const controller = new AbortController();
     this.consultController = controller;
     this.activeDelegationId = delegation.id;
-    const signal = AbortSignal.any([this.options.signal, controller.signal]);
-    void this.runDelegation(delegation, signal)
-      .catch((error: unknown) => this.fail(toError(error)))
+    void this.runDelegation(delegation, controller.signal)
+      .catch((error: unknown) =>
+        this.fail(toErrorObject(error, "OpenAI GPT-Live delegation failed")),
+      )
       .finally(() => {
         if (this.consultController !== controller) {
           return;
@@ -208,6 +216,15 @@ export class OpenAIQuicksilverDelegationController {
           this.activeDelegationId = undefined;
         }
       });
+  }
+
+  private markStopped(): void {
+    this.stopped = true;
+    this.options.signal.removeEventListener("abort", this.onSessionAbort);
+    this.pendingDelegation = undefined;
+    this.activeDelegationId = undefined;
+    this.partialTranscriptRole = undefined;
+    this.transcript = [];
   }
 
   private async runDelegation(delegation: PendingDelegation, signal: AbortSignal): Promise<void> {

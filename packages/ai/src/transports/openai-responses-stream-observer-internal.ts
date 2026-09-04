@@ -53,6 +53,7 @@ export async function* adaptResponsesStream(
 export async function* observeResponsesStream<TEvent>(
   stream: AsyncIterable<TEvent>,
   model: Model,
+  requestStartedAt?: number,
 ): AsyncGenerator<TEvent> {
   const startedAt = Date.now();
   const eventTypes = new Map<string, number>();
@@ -66,7 +67,9 @@ export async function* observeResponsesStream<TEvent>(
       if (eventCount === 1) {
         emitModelTransportDebug(
           log,
-          `[responses] first_event provider=${model.provider} api=${model.api} model=${model.id} elapsedMs=${Date.now() - startedAt} type=${type}`,
+          `[responses] first_event provider=${model.provider} api=${model.api} model=${model.id} ` +
+            `elapsedMs=${Date.now() - (requestStartedAt ?? startedAt)} ` +
+            `headersToEventMs=${Date.now() - startedAt} type=${type}`,
         );
       }
       if (debugMode === "peek" && eventCount <= 5) {

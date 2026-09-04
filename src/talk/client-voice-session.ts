@@ -3,7 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
+  publishTranscriptUpdate,
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
@@ -150,18 +151,21 @@ function recordClientVoiceToolEffect(event: TrustedToolExecutionEvent): void {
 
 function ensureToolEffectSubscription(): void {
   unsubscribeToolEffects ??= onTrustedToolExecutionEvent(recordClientVoiceToolEffect);
-  unsubscribeRunCompletion ??= onTrustedInternalDiagnosticEvent((event) => {
-    if (event.type !== "run.completed") {
-      return;
-    }
-    const binding = voiceSessionByRunId.get(event.runId);
-    if (!binding) {
-      return;
-    }
-    voiceSessionByRunId.delete(event.runId);
-    releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, event.runId);
-    mutationDigestDeliveryOwner.retry(binding);
-  });
+  unsubscribeRunCompletion ??= onTrustedInternalDiagnosticEvent(
+    (event) => {
+      if (event.type !== "run.completed") {
+        return;
+      }
+      const binding = voiceSessionByRunId.get(event.runId);
+      if (!binding) {
+        return;
+      }
+      voiceSessionByRunId.delete(event.runId);
+      releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, event.runId);
+      mutationDigestDeliveryOwner.retry(binding);
+    },
+    { include: ["run.completed"] },
+  );
 }
 
 /** Create a call record or resume the same open call across transport restarts. */
@@ -226,6 +230,7 @@ export function createOrResumeClientVoiceSession(params: {
 export function resolveClientVoiceAgentSessionId(params: {
   agentId: string;
   sessionKey: string;
+  storePath?: string;
 }): string | undefined {
   return loadSessionEntryReadOnly(params)?.sessionId?.trim() || undefined;
 }
@@ -234,25 +239,37 @@ export function resolveClientVoiceAgentSessionId(params: {
 export async function ensureClientVoiceAgentSessionEntry(params: {
   agentId: string;
   sessionKey: string;
+  storePath?: string;
   deadlineAt?: number;
+  assertCommitAllowed?: () => void;
+  creation?: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
 }): Promise<string> {
-  const created = await patchSessionEntry(
+  const created = await patchSessionEntryCore(
     params,
     (_entry, context) => {
-      // Browser credentials can be short-lived. Check at the authoritative
-      // write boundary so a queued write cannot create an unusable empty chat.
-      if (params.deadlineAt !== undefined && Date.now() >= params.deadlineAt) {
-        throw new Error("Realtime browser session expired during startup; try again");
-      }
       if (context.existingEntry?.sessionId) {
         return null;
       }
       if (context.existingEntry) {
         return { sessionId: randomUUID() };
       }
-      return buildSessionCreationStamp({ via: "talk", actor: { type: "human" } });
+      return buildSessionCreationStamp({
+        via: "talk",
+        actor: params.creation?.actor ?? { type: "human", source: "unknown" },
+        sandbox: params.creation?.sandbox,
+      });
     },
-    { fallbackEntry: mergeSessionEntry(undefined, {}) },
+    {
+      fallbackEntry: mergeSessionEntry(undefined, {}),
+      assertCommitAllowed: () => {
+        // Provider startup can end while this write is queued or being prepared.
+        // Revalidate at commit so it cannot leave an unusable empty chat.
+        params.assertCommitAllowed?.();
+        if (params.deadlineAt !== undefined && Date.now() >= params.deadlineAt) {
+          throw new Error("Realtime browser session expired during startup; try again");
+        }
+      },
+    },
   );
   if (!created?.sessionId) {
     throw new Error(`agent session could not be initialized (${params.sessionKey})`);
@@ -288,6 +305,20 @@ export function registerClientVoiceConsultRun(params: {
     },
     { agentId: params.agentId },
   );
+  const previousBinding = voiceSessionByRunId.get(params.runId);
+  if (
+    previousBinding &&
+    (previousBinding.agentId !== params.agentId ||
+      previousBinding.voiceSessionId !== params.voiceSessionId)
+  ) {
+    // A run ID has one authoritative voice scope. Replacing it must retire the
+    // prior scope's post-close grant or completion can no longer find that owner.
+    releaseClientVoiceConfirmationRun(
+      previousBinding.agentId,
+      previousBinding.voiceSessionId,
+      params.runId,
+    );
+  }
   voiceSessionByRunId.set(params.runId, {
     agentId: params.agentId,
     voiceSessionId: params.voiceSessionId,
@@ -416,6 +447,7 @@ function transcriptFailureKey(entryId: string): string {
 function appendVoiceTranscript(params: {
   agentId: string;
   sessionKey: string;
+  sessionTarget: { sessionKey: string; storePath?: string };
   voiceSessionId: string;
   origin: "client" | "relay";
   entryId: string;
@@ -451,10 +483,10 @@ function appendVoiceTranscript(params: {
       ) {
         throw new Error("voice transcript persistence has too many unresolved entries");
       }
-      const sessionEntry = loadSessionEntryReadOnly({
-        agentId: normalized.agentId,
-        sessionKey: normalized.sessionKey,
-      });
+      // Voice ownership keeps the original key; transcript storage uses the target
+      // prepared before main/global aliases lose their selected agent identity.
+      const sessionTarget = { ...normalized.sessionTarget, agentId: normalized.agentId };
+      const sessionEntry = loadSessionEntryReadOnly(sessionTarget);
       if (!sessionEntry?.sessionId) {
         throw new Error(`agent session not found (${normalized.sessionKey})`);
       }
@@ -477,12 +509,8 @@ function appendVoiceTranscript(params: {
         },
         { agentId: normalized.agentId },
       );
-      await appendTranscriptMessage(
-        {
-          agentId: normalized.agentId,
-          sessionId: sessionEntry.sessionId,
-          sessionKey: normalized.sessionKey,
-        },
+      const appended = await appendTranscriptMessage(
+        { ...sessionTarget, sessionId: sessionEntry.sessionId },
         {
           ...(normalized.config ? { config: normalized.config } : {}),
           eventId: `voice:${normalized.voiceSessionId}:${normalized.entryId}`,
@@ -495,6 +523,13 @@ function appendVoiceTranscript(params: {
           now: timestamp,
         },
       );
+      // Publish the committed row before fallible bookkeeping; a retry can deduplicate it.
+      if (appended.appended) {
+        await publishTranscriptUpdate(
+          { ...sessionTarget, sessionId: sessionEntry.sessionId },
+          { message: appended.message, messageId: appended.messageId },
+        );
+      }
       runOpenClawAgentWriteTransaction(
         (database) => {
           const current = readRecordInTransaction(database, normalized.voiceSessionId);
@@ -534,6 +569,14 @@ export function appendClientVoiceTranscript(
   params: Omit<Parameters<typeof appendVoiceTranscript>[0], "origin">,
 ): Promise<void> {
   return appendVoiceTranscript({ ...params, origin: "client" });
+}
+
+/** Wait for the accepted transcript/effect prefix without closing the logical call. */
+export async function flushClientVoiceSessionWrites(params: {
+  agentId: string;
+  voiceSessionId: string;
+}): Promise<void> {
+  await voiceSessionOperations.flush(operationKey(params.agentId, params.voiceSessionId));
 }
 
 /** Append one finalized relay-owned transcript item idempotently. */

@@ -1,20 +1,22 @@
 # Docs Guide
 
-This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
+This directory owns docs authoring, published link rules, and docs i18n policy.
 
-## Mintlify Rules
+## Published Link Rules
 
-- Docs are hosted on Mintlify (`https://docs.openclaw.ai`).
+- Docs are published to `https://docs.openclaw.ai` from the `openclaw/docs` mirror.
 - Internal doc links in `docs/**/*.md` must stay root-relative with no `.md` or `.mdx` suffix (example: `[Config](/gateway/configuration)`).
 - Section cross-references should use anchors on root-relative paths (example: `[Hooks](/gateway/configuration-reference#hooks)`).
-- Doc headings should avoid em dashes and apostrophes because Mintlify anchor generation is brittle there.
-- README and other GitHub-rendered docs should keep absolute docs URLs so links work outside Mintlify.
+- Anchor IDs come from the shared publishing parser in `scripts/lib/docs-markdown.mjs`; verify them with `pnpm docs:check-links:anchors`, not Mintlify's independent checker. Published heading IDs stay stable; compatibility aliases never replace an existing target.
+- Use an explicit `<a id="stable-section-name" />` for a durable section link when heading wording may change. Keep existing named anchors when reorganizing content.
+- README and other GitHub-rendered docs should keep absolute docs URLs so links work outside the docs site.
 - Docs content must stay generic: no personal device names, hostnames, or local paths; use placeholders like `user@gateway-host`.
 
 ## Docs Content Rules
 
 - For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime order or auto-detection order.
 - Keep bundled plugin naming consistent with the repo-wide plugin terminology rules in the root `AGENTS.md`.
+- JSON5/JSON config fences that look like whole `openclaw.json` documents are schema-validated in CI with `pnpm docs:check-config-examples`; deliberately partial or legacy snippets opt out with `validate=false` in the fence info string.
 - Generated docs, never hand-edit: `docs/plugins/reference/**`, `docs/plugins/reference.md`, and `docs/plugins/plugin-inventory.md` come from `pnpm plugins:inventory:gen`; `docs/maturity/**` from `pnpm maturity:render`.
 - The public and packaged docs map is generated from `pnpm docs:list --headings` during publishing and packaging. Keep only the small source stub at `docs/docs_map.md`; never commit the expanded heading mirror.
 

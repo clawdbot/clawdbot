@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -7,7 +8,7 @@ import type {
   MemorySearchResult,
 } from "../../memory-host-sdk/host/types.js";
 import { resolveMemorySearchStaleness } from "../../memory-host-sdk/host/types.js";
-import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
+import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -107,12 +108,26 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agentId"));
       return;
     }
-    const agentId = requestedAgentId ?? resolveDefaultAgentId(cfg);
-    let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManager>>;
+    let agentId = requestedAgentId;
+    if (!agentId) {
+      try {
+        agentId = resolveDefaultAgentId(cfg, {
+          surface: "memory search",
+          hint: "Pass agentId to select a configured agent.",
+        });
+      } catch (error) {
+        if (!(error instanceof AgentSelectionRequiredError)) {
+          throw error;
+        }
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
+    }
+    let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManagerCore>>;
     try {
       // Use the transient CLI lifecycle so request cleanup cannot close a shared manager.
       // manager.search owns the same lazy/on-search sync behavior as the existing CLI path.
-      acquired = await getActiveMemorySearchManager({
+      acquired = await getActiveMemorySearchManagerCore({
         cfg,
         agentId,
         purpose: "cli",

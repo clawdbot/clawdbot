@@ -3,12 +3,13 @@
  * Combines provider plugin replay hooks with core transport fallbacks so chat
  * history sanitization, tool IDs, thinking blocks, and turn validation align.
  */
+import { bindsClaudeThinkingPrefix } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
-import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
+import { shouldDropClaudeThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { isGoogleModelApi } from "./embedded-agent-helpers/google.js";
@@ -27,6 +28,7 @@ export type TranscriptPolicy = {
   preserveNativeAnthropicToolUseIds: boolean;
   repairToolUseResultPairing: boolean;
   preserveSignatures: boolean;
+  appendOnlyRuntimeContext?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
@@ -65,6 +67,17 @@ export function shouldAllowProviderOwnedThinkingReplay(params: {
   );
 }
 
+/**
+ * Bedrock Converse still requires strict role alternation, so only the direct
+ * Messages API keeps consecutive user turns separate under append-only replay.
+ */
+export function shouldMergeConsecutiveUserTurns(
+  policy: Pick<TranscriptPolicy, "appendOnlyRuntimeContext">,
+  modelApi?: string | null,
+): boolean {
+  return !(policy.appendOnlyRuntimeContext && modelApi === "anthropic-messages");
+}
+
 const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",
   sanitizeToolCallIds: false,
@@ -73,6 +86,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   preserveNativeAnthropicToolUseIds: false,
   repairToolUseResultPairing: true,
   preserveSignatures: false,
+  appendOnlyRuntimeContext: false,
   sanitizeThoughtSignatures: undefined,
   dropThinkingBlocks: false,
   dropReasoningFromHistory: false,
@@ -153,7 +167,15 @@ function buildUnownedProviderTransportReplayFallback(params: {
           toolCallIdMode: "strict" as const,
         }
       : {}),
-    ...(isAnthropic ? { preserveSignatures: true } : {}),
+    ...(isAnthropic
+      ? {
+          preserveSignatures: true,
+          appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
+            id: modelId,
+            params: params.model?.params,
+          }),
+        }
+      : {}),
     ...(isGoogle
       ? {
           sanitizeThoughtSignatures: {
@@ -162,8 +184,8 @@ function buildUnownedProviderTransportReplayFallback(params: {
           },
         }
       : {}),
-    ...(isAnthropic && modelId.includes("claude")
-      ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) }
+    ...(isAnthropic && shouldDropClaudeThinkingBlocks(modelId, params.model)
+      ? { dropThinkingBlocks: true }
       : {}),
     ...(isAnthropic && modelDisablesReasoningEffort(params.model)
       ? { dropThinkingBlocks: true }
@@ -240,6 +262,9 @@ function mergeTranscriptPolicy(
     ...(typeof policy.preserveSignatures === "boolean"
       ? { preserveSignatures: policy.preserveSignatures }
       : {}),
+    ...(typeof policy.appendOnlyRuntimeContext === "boolean"
+      ? { appendOnlyRuntimeContext: policy.appendOnlyRuntimeContext }
+      : {}),
     ...(policy.sanitizeThoughtSignatures
       ? { sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures }
       : {}),
@@ -289,6 +314,10 @@ function resolveTranscriptPolicyCacheKey(params: {
     provider: params.provider,
     modelApi: params.modelApi ?? "",
     modelId: params.modelId ?? "",
+    canonicalModelId:
+      typeof params.model?.params?.canonicalModelId === "string"
+        ? params.model.params.canonicalModelId
+        : "",
     dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
     preservesReasoningContentReplay: params.model?.reasoning === true,
     workspaceDir: params.workspaceDir ?? "",

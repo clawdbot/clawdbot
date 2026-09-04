@@ -8,7 +8,7 @@ import {
   getTaskById,
 } from "./runtime-internal.js";
 
-export async function cancelDetachedTaskRunById(params: {
+export async function cancelDetachedTaskRunByIdCore(params: {
   cfg: OpenClawConfig;
   taskId: string;
   reason?: string;

@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../../helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../../helpers/temp-dir.js";
+import { writeJsonFile } from "../../../helpers/temp-repo.js";
 
 const CLAWHUB_CHECK = resolve("scripts/plugin-clawhub-release-check.ts");
 const NPM_CHECK = resolve("scripts/plugin-npm-release-check.ts");

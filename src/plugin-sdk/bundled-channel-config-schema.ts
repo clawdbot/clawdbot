@@ -10,7 +10,7 @@ import { z, type ZodObject, type ZodOptional, type ZodType } from "zod";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
   createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore,
 } from "./facade-loader.js";
 
 export {
@@ -66,7 +66,7 @@ function loadBundledConfigSchema<TOutput extends object>(
   dirName: string,
   exportName: string,
 ): BundledObjectConfigSchema<TOutput> {
-  const schema = loadBundledPluginPublicSurfaceModuleSync<BundledConfigSchemaModule<TOutput>>({
+  const schema = loadBundledPluginPublicSurfaceModuleSyncCore<BundledConfigSchemaModule<TOutput>>({
     dirName,
     artifactBasename: "config-api.js",
   })[exportName];

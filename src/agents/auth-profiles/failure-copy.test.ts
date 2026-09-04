@@ -3,56 +3,54 @@
  * Verifies actionable recovery hints, transient-copy suppression, provider
  * naming, and diagnostic cause handling.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 const LOGIN_HINT_SENTINEL = "<<login-hint-for-provider>>";
 
-vi.mock("../provider-auth-recovery-hint.js", () => ({
-  buildProviderAuthRecoveryHint: (params: { provider: string }) =>
-    `${LOGIN_HINT_SENTINEL}:${params.provider}`,
-}));
+import { FAILOVER_REASONS, type FailoverReason } from "../failover/signal.js";
+import { renderAuthProfileFailoverCopy } from "../failover/user-copy.js";
 
-import type { FailoverReason } from "../embedded-agent-helpers/types.js";
-import { formatAuthProfileFailureMessage } from "./failure-copy.js";
+const formatAuthProfileFailureMessage = (
+  params: Parameters<typeof renderAuthProfileFailoverCopy>[0],
+) =>
+  renderAuthProfileFailoverCopy({
+    ...params,
+    recoveryHint: `${LOGIN_HINT_SENTINEL}:${params.provider}`,
+  });
 
 const PROVIDER = "openai-codex";
 
-const REASONS_WITH_RECOVERY: readonly FailoverReason[] = [
-  "auth",
-  "session_expired",
-  "auth_permanent",
-  "billing",
-];
-const REASONS_WITHOUT_RECOVERY: readonly FailoverReason[] = [
-  "rate_limit",
-  "overloaded",
-  "timeout",
-  "server_error",
-  "model_not_found",
-  "format",
-];
+const RECOVERY_BY_REASON = {
+  auth: true,
+  auth_permanent: true,
+  format: false,
+  rate_limit: false,
+  overloaded: false,
+  billing: true,
+  server_error: false,
+  timeout: false,
+  tls_certificate: false,
+  context_overflow: true,
+  model_not_found: false,
+  session_expired: true,
+  empty_response: true,
+  no_error_details: true,
+  unclassified: true,
+  unknown: true,
+} satisfies Record<FailoverReason, boolean>;
 
-describe("formatAuthProfileFailureMessage", () => {
+describe("renderAuthProfileFailoverCopy", () => {
   describe("recovery-hint dispatch", () => {
-    it("includes the login command for reasons the user can act on", () => {
-      for (const reason of REASONS_WITH_RECOVERY) {
+    it("dispatches the login command for every failover reason", () => {
+      for (const reason of FAILOVER_REASONS) {
         const message = formatAuthProfileFailureMessage({
           reason,
           provider: PROVIDER,
           allInCooldown: true,
         });
-        expect(message, `reason=${reason}`).toContain(`${LOGIN_HINT_SENTINEL}:${PROVIDER}`);
-      }
-    });
-
-    it("omits the login command for transient cooldown reasons", () => {
-      for (const reason of REASONS_WITHOUT_RECOVERY) {
-        const message = formatAuthProfileFailureMessage({
-          reason,
-          provider: PROVIDER,
-          allInCooldown: true,
-        });
-        expect(message, `reason=${reason}`).not.toContain(LOGIN_HINT_SENTINEL);
+        expect(message.includes(LOGIN_HINT_SENTINEL), `reason=${reason}`).toBe(
+          RECOVERY_BY_REASON[reason],
+        );
       }
     });
   });
@@ -66,11 +64,7 @@ describe("formatAuthProfileFailureMessage", () => {
     });
 
     it("always mentions the provider name", () => {
-      for (const reason of [
-        ...REASONS_WITH_RECOVERY,
-        ...REASONS_WITHOUT_RECOVERY,
-        "unknown",
-      ] as const) {
+      for (const reason of FAILOVER_REASONS) {
         const message = formatAuthProfileFailureMessage({
           reason,
           provider: PROVIDER,
@@ -83,14 +77,14 @@ describe("formatAuthProfileFailureMessage", () => {
 
   describe("cause handling", () => {
     it("returns the cause text verbatim when the reason has no actionable copy", () => {
-      const cause = new Error("upstream provider returned 502");
+      const causeText = "upstream provider returned 502";
       const message = formatAuthProfileFailureMessage({
         reason: "unknown",
         provider: PROVIDER,
         allInCooldown: false,
-        cause,
+        causeText,
       });
-      expect(message).toBe(cause.message);
+      expect(message).toBe(causeText);
     });
 
     it("appends a diagnostic suffix when the cause adds detail beyond the description", () => {
@@ -98,7 +92,7 @@ describe("formatAuthProfileFailureMessage", () => {
         reason: "auth",
         provider: PROVIDER,
         allInCooldown: false,
-        cause: new Error("invalid_grant"),
+        causeText: "invalid_grant",
       });
       expect(message).toContain("(invalid_grant)");
     });
@@ -118,7 +112,7 @@ describe("formatAuthProfileFailureMessage", () => {
         reason: "auth",
         provider: PROVIDER,
         allInCooldown: false,
-        cause: new Error(description),
+        causeText: description,
       });
       expect(withDuplicateCause).toBe(withoutCause);
     });

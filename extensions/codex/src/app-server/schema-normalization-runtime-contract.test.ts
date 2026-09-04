@@ -2,13 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   createParameterFreeTool,
   createPermissiveTool,
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CodexThreadStartParams } from "./protocol.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -24,6 +25,7 @@ let tempDir: string;
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
   return {
+    hostCapabilities: createCodexTestHostCapabilities(),
     prompt: "hello",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -53,7 +55,6 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
     codeModeOnly: false,
     loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
-    turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
@@ -76,7 +77,8 @@ function threadStartResult(threadId = "thread-1", serviceTier: string | null = n
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.146.1",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,

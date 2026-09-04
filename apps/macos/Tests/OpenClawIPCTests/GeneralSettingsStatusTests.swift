@@ -3,6 +3,19 @@ import Testing
 
 @MainActor
 struct GeneralSettingsStatusTests {
+    @Test func `local profile conflict outranks connected state`() {
+        let status = GeneralStatusPresentation.resolve(
+            mode: .local,
+            isPaused: true,
+            controlState: .connected,
+            localFailure: "Profile p2380 cannot use Gateway port 55636")
+
+        #expect(status.title == "OpenClaw needs attention")
+        #expect(status.subtitle.contains("55636"))
+        #expect(status.tone == .attention)
+        #expect(status.showsConnectionAction)
+    }
+
     @Test func `connected remote gateway is healthy`() {
         let status = GeneralStatusPresentation.resolve(
             mode: .remote,

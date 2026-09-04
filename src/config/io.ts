@@ -10,7 +10,6 @@ export {
   clearConfigCache,
   getRuntimeConfig,
   loadConfig,
-  preserveConfigSnapshotAsClobbered,
   promoteConfigSnapshotToLastKnownGood,
   readBestEffortConfig,
   readBestEffortConfigSnapshot,

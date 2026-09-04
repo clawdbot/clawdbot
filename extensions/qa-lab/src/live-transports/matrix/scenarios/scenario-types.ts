@@ -72,6 +72,8 @@ type MatrixQaScenarioArtifacts = {
   reactionEventId?: string;
   reactionTargetEventId?: string;
   redactionEventId?: string;
+  redactionTargetEventId?: string;
+  redactionCount?: number;
   reply?: MatrixQaReplyArtifact;
   replies?: Array<{
     eventId: string;

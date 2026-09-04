@@ -3,23 +3,21 @@
  */
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
+import { isCliTerminalStopCode } from "../../failover-error.js";
 
 /** Failover action selected for one embedded run failure decision point. */
+type ContinueNormalDecision = { action: "continue_normal" };
+type ProfileDecision = {
+  action: "rotate_profile" | "surface_error";
+  reason: FailoverReason | null;
+};
+type ModelFallbackDecision = { action: "fallback_model"; reason: FailoverReason };
+type ErrorPayloadDecision = { action: "return_error_payload" };
 type RunFailoverDecision =
-  | {
-      action: "continue_normal";
-    }
-  | {
-      action: "rotate_profile" | "surface_error";
-      reason: FailoverReason | null;
-    }
-  | {
-      action: "fallback_model";
-      reason: FailoverReason;
-    }
-  | {
-      action: "return_error_payload";
-    };
+  | ContinueNormalDecision
+  | ProfileDecision
+  | ModelFallbackDecision
+  | ErrorPayloadDecision;
 
 export type RetryLimitFailoverDecision = Extract<
   RunFailoverDecision,
@@ -151,7 +149,7 @@ export function mergeRetryFailoverReason(params: {
   failoverReason: FailoverReason | null;
   timedOut?: boolean;
 }): FailoverReason | null {
-  return params.failoverReason ?? (params.timedOut ? "timeout" : null) ?? params.previous;
+  return params.failoverReason ?? params.previous ?? (params.timedOut ? "timeout" : null);
 }
 
 export function resolveRunFailoverDecision(
@@ -181,9 +179,9 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   }
 
   if (params.stage === "prompt") {
-    if (params.failoverCode === "cli_max_turns") {
-      // A CLI may have completed tool actions before reaching this terminal
-      // limit. Replaying against another profile/model could repeat effects.
+    if (isCliTerminalStopCode(params.failoverCode)) {
+      // Plugin-harness errors can propagate arbitrary string codes through failover-error normalization;
+      // normal CLI paths are protected in model-fallback-runner instead.
       return {
         action: "surface_error",
         reason: params.failoverReason,

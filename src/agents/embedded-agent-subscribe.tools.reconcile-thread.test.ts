@@ -5,7 +5,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
-} from "./embedded-agent-subscribe.tools.js";
+} from "./embedded-agent-messaging-extraction.js";
 
 const PARTIAL_RESULT_PROVIDER = "partialthreadprovider";
 

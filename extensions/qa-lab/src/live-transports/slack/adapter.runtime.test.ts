@@ -1,8 +1,9 @@
 // Qa Lab tests cover Slack live adapter message reconciliation.
-import type { FetchFunction } from "@slack/web-api";
+
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
 import { testing } from "./adapter.runtime.js";
+import type { SlackQaFetchFunction as FetchFunction } from "./slack-live.contracts.js";
 
 describe("Slack live adapter reconciliation", () => {
   it("aborts an in-flight observer fetch when the adapter stops", async () => {

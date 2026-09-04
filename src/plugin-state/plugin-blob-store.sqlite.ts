@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -277,7 +278,7 @@ function deleteExpiredNamespace(
 }
 
 function totalBytes(rows: readonly { size_bytes: number | bigint }[]): number {
-  return rows.reduce((total, row) => total + Number(row.size_bytes), 0);
+  return rows.reduce((total, row) => total + sqliteNumber(row.size_bytes), 0);
 }
 
 function limitError(message: string, env?: NodeJS.ProcessEnv): PluginBlobStoreError {
@@ -303,7 +304,7 @@ function assertProjectedLimits(params: {
   const pluginRows = selectStoredDescriptors(params.db, {
     pluginId: params.write.pluginId,
   });
-  const previousBytes = params.existing ? Number(params.existing.size_bytes) : 0;
+  const previousBytes = params.existing ? sqliteNumber(params.existing.size_bytes) : 0;
   const rowDelta = params.existing ? 0 : 1;
   if (namespaceRows.length + rowDelta > params.write.maxEntries) {
     throw limitError("Plugin blob namespace reached its stored row limit.", params.write.env);
@@ -354,7 +355,7 @@ function deleteOldestUntilWithinLimits(params: {
     }
     namespaceKeysToDelete.push(row.entry_key);
     namespaceCount -= 1;
-    namespaceBytes -= Number(row.size_bytes);
+    namespaceBytes -= sqliteNumber(row.size_bytes);
   }
   if (
     namespaceCount > params.write.maxEntries ||
@@ -394,7 +395,7 @@ function deleteOldestUntilWithinLimits(params: {
     }
     pluginKeysToDelete.push(row.entry_key);
     pluginCount -= 1;
-    pluginBytes -= Number(row.size_bytes);
+    pluginBytes -= sqliteNumber(row.size_bytes);
   }
   if (
     pluginCount > MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN ||

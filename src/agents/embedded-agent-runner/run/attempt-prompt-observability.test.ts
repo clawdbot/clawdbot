@@ -43,7 +43,7 @@ vi.mock("../../../trajectory/runtime.js", () => ({
 }));
 vi.mock("../logger.js", () => ({ log: hoisted.log }));
 
-import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-observability.js";
+import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 
 type PromptObservabilityInput = Parameters<typeof observeEmbeddedAttemptPrompt>[0];
 

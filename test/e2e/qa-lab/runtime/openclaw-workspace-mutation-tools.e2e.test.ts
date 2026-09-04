@@ -24,8 +24,7 @@ function textOf(result: Awaited<ReturnType<AnyAgentTool["execute"]>>): string {
 }
 
 test("OpenClaw applies and edits exact workspace bytes while rejecting escapes", async () => {
-  // Resolve once so macOS /var and /private/var aliases cannot skew workspace checks.
-  const root = await fs.realpath(tempDirs.make("openclaw-workspace-mutation-"));
+  const root = tempDirs.make("openclaw-workspace-mutation-");
   const workspace = path.join(root, "workspace");
   const sentinel = path.join(root, "outside-sentinel");
   await fs.mkdir(workspace);
@@ -87,7 +86,8 @@ test("OpenClaw applies and edits exact workspace bytes while rejecting escapes",
     path: ARTIFACT,
     edits: [{ oldText: "state: DRAFT", newText: "state: FINAL" }],
   });
-  expect(textOf(edited)).toBe(`Successfully replaced 1 block(s) in ${ARTIFACT}.`);
+  const artifactPath = path.join(workspace, ARTIFACT);
+  expect(textOf(edited)).toBe(`Successfully replaced 1 block(s) in ${artifactPath}.`);
   expect(edited.details).toMatchObject({
     changed: true,
     firstChangedLine: 3,
@@ -101,8 +101,8 @@ test("OpenClaw applies and edits exact workspace bytes while rejecting escapes",
   expect(details.diff).toBe(
     [" 1 # Workspace mutation", " 2 ", "-3 state: DRAFT", "+3 state: FINAL"].join("\n"),
   );
-  expect(details.patch).toContain(`--- ${ARTIFACT}`);
-  expect(details.patch).toContain(`+++ ${ARTIFACT}`);
+  expect(details.patch).toContain(`--- ${artifactPath}`);
+  expect(details.patch).toContain(`+++ ${artifactPath}`);
   expect(details.patch).toContain("-state: DRAFT\n+state: FINAL");
   const finalBytes = await fs.readFile(path.join(workspace, ARTIFACT), "utf8");
   expect(finalBytes).toBe(FINAL);

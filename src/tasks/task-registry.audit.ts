@@ -8,7 +8,7 @@ import {
   type TaskAuditSummary,
 } from "./task-registry.audit.shared.js";
 import type { TaskRecord } from "./task-registry.types.js";
-import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./task-retention.js";
+import { resolveEffectiveTaskCleanupAfter } from "./task-retention.js";
 
 type TaskAuditOptions = {
   now?: number;
@@ -24,7 +24,7 @@ export type RetainedLostTaskAuditSummary = {
 
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
-export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
+export type { TaskAuditFinding, TaskAuditSummary };
 
 let taskAuditTaskProvider: () => TaskRecord[] = () => [];
 
@@ -134,9 +134,7 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
     if (task.status === "lost") {
       const effectiveCleanupAfter = resolveEffectiveTaskCleanupAfter(task);
       const retainedUntilCleanup =
-        typeof task.cleanupAfter === "number" &&
-        effectiveCleanupAfter !== undefined &&
-        effectiveCleanupAfter > now;
+        typeof task.cleanupAfter === "number" && effectiveCleanupAfter > now;
       findings.push(
         createFinding({
           severity: retainedUntilCleanup ? "warn" : "error",
@@ -167,8 +165,7 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
       task.status !== "lost" &&
       task.status !== "queued" &&
       task.status !== "running" &&
-      typeof task.cleanupAfter !== "number" &&
-      resolveTaskCleanupAfter(task) !== undefined
+      typeof task.cleanupAfter !== "number"
     ) {
       findings.push(
         createFinding({
@@ -196,7 +193,6 @@ function isRetainedLostTaskAuditFinding(finding: TaskAuditFinding, now = Date.no
     finding.code === "lost" &&
     finding.task.status === "lost" &&
     typeof finding.task.cleanupAfter === "number" &&
-    typeof cleanupAfter === "number" &&
     cleanupAfter > now
   );
 }
@@ -238,10 +234,7 @@ export function summarizeRetainedLostTaskAuditFindings(
     }
     count += 1;
     const cleanupAfter = resolveEffectiveTaskCleanupAfter(finding.task);
-    if (
-      typeof cleanupAfter === "number" &&
-      (nextCleanupAfter === undefined || cleanupAfter < nextCleanupAfter)
-    ) {
+    if (nextCleanupAfter === undefined || cleanupAfter < nextCleanupAfter) {
       nextCleanupAfter = cleanupAfter;
     }
   }

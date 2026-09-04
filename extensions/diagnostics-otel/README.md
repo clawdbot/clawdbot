@@ -14,7 +14,7 @@ Restart the Gateway after installing or updating the plugin.
 
 ## Configure
 
-Enable the plugin and set the OTLP endpoint in `plugins.entries.diagnostics-otel.config`.
+Enable the plugin, set `diagnostics.otel.enabled` to `true`, and set the collector URL in `diagnostics.otel.endpoint`.
 
 The full config surface, metric names, span names, and collector examples live in the docs:
 

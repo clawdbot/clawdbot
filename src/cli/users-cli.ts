@@ -75,5 +75,3 @@ export function registerUsersCli(program: Command) {
 
   applyParentDefaultHelpAction(users);
 }
-
-export const testApi = { writeUsersList };

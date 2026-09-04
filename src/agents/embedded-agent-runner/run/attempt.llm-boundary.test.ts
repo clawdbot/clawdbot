@@ -4,13 +4,13 @@ import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-conte
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { resolveUserTranscriptMessages } from "./attempt-history.js";
 import {
   installRuntimeContextMessageForPrompt,
   installModelPromptTransform,
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForLlmBoundary,
-} from "./attempt.llm-boundary.js";
-import { resolveUserTranscriptMessages } from "./attempt.user-message-boundary.js";
+} from "./attempt-llm-boundary.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 describe("normalizeMessagesForLlmBoundary", () => {
@@ -959,8 +959,8 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(modelInput[2]).toMatchObject({
       customType: "openclaw.runtime-context",
     });
-    expect(modelInput[2]?.content).toContain(
-      "Use it to continue answering the active user request now.",
+    expect(modelInput[2]?.content).toBe(
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\ncurrent runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     );
     // User messages are form-canonicalized from array to plain string.
     expect(modelInput[0]?.content).toBe("old ask");

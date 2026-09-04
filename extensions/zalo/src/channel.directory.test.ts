@@ -8,6 +8,11 @@ import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 
 describe("zalo directory", () => {
+  it("distinguishes user ids from group ids", () => {
+    expect(zaloPlugin.messaging?.inferTargetChatType?.({ to: "user:123" })).toBe("direct");
+    expect(zaloPlugin.messaging?.inferTargetChatType?.({ to: "group:456" })).toBe("group");
+  });
+
   const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
   const directory = expectDirectorySurface(zaloPlugin.directory);
 

@@ -1,13 +1,13 @@
 // Together tests cover together plugin behavior.
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it } from "vitest";
 import { TOGETHER_BASE_URL, TOGETHER_MODEL_CATALOG } from "./models.js";
 
 const TOGETHER_KEY = process.env.TOGETHER_API_KEY ?? "";
-const LIVE = ["LIVE", "OPENCLAW_LIVE_TEST", "TOGETHER_LIVE_TEST"].some((name) => {
-  const value = process.env[name]?.trim().toLowerCase();
-  return value === "1" || value === "true" || value === "yes" || value === "on";
-});
+const LIVE = ["LIVE", "OPENCLAW_LIVE_TEST", "TOGETHER_LIVE_TEST"].some((name) =>
+  isTruthyEnvValue(process.env[name]),
+);
 const TOGETHER_LIVE_TIMEOUT_MS = 45_000;
 
 const describeLive = LIVE && TOGETHER_KEY ? describe : describe.skip;

@@ -153,6 +153,31 @@ describe("GatewayPageController", () => {
     ).toBe(false);
   });
 
+  it("keeps route data current through metadata clones within one hello epoch", () => {
+    const client = {} as GatewayBrowserClient;
+    const hello = {} as NonNullable<ApplicationGatewaySnapshot["hello"]>;
+    const firstSnapshot = { ...snapshot(client, "connected"), hello };
+    const current = createGateway(firstSnapshot);
+    const host = createHost();
+    const controller = new GatewayPageController(host.host, {
+      getGateway: () => current.gateway,
+    });
+    host.connect();
+    const routeData = {
+      gateway: current.gateway,
+      gatewaySnapshot: firstSnapshot,
+    };
+
+    current.publish({ ...firstSnapshot });
+    expect(controller.isRouteDataCurrent(routeData)).toBe(true);
+
+    current.publish({
+      ...firstSnapshot,
+      hello: {} as NonNullable<ApplicationGatewaySnapshot["hello"]>,
+    });
+    expect(controller.isRouteDataCurrent(routeData)).toBe(false);
+  });
+
   it("can reconnect after the host detaches", () => {
     const current = createGateway(snapshot({} as GatewayBrowserClient, "connected"));
     const host = createHost();

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadChannelConfigSurfaceModule } from "../../scripts/load-channel-config-surface.ts";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 function createDemoModule(repoRoot: string, filename: string, source: string): string {
   const packageRoot = path.join(repoRoot, "extensions", "demo");
@@ -20,7 +20,7 @@ function createDemoModule(repoRoot: string, filename: string, source: string): s
 
 describe("loadChannelConfigSurfaceModule", () => {
   it("loads TypeScript through plugin SDK aliases", async () => {
-    await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+    await withTestDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
       const modulePath = createDemoModule(
         repoRoot,
         "config-schema.ts",
@@ -43,7 +43,7 @@ describe("loadChannelConfigSurfaceModule", () => {
   });
 
   it("wraps a raw config schema loaded natively", async () => {
-    await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+    await withTestDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
       const modulePath = createDemoModule(
         repoRoot,
         "config-schema.mjs",
@@ -65,7 +65,7 @@ describe("loadChannelConfigSurfaceModule", () => {
   });
 
   it("returns null without a config schema export", async () => {
-    await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+    await withTestDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
       const modulePath = createDemoModule(
         repoRoot,
         "config-schema.mjs",
@@ -77,7 +77,7 @@ describe("loadChannelConfigSurfaceModule", () => {
   });
 
   it("rejects invalid module source", async () => {
-    await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+    await withTestDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
       const modulePath = createDemoModule(repoRoot, "config-schema.ts", "export const = ;");
 
       await expect(loadChannelConfigSurfaceModule(modulePath)).rejects.toThrow();

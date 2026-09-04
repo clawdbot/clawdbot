@@ -1,10 +1,12 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 /**
  * Extracts visible delivery evidence from embedded-agent run results.
  */
-import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import { collectMediaUrlsFromRecord, hasVisibleAgentPayload } from "./message-visibility.js";
-export { hasVisibleAgentPayload } from "./message-visibility.js";
+export { hasExplicitlyVisibleAgentPayload, hasVisibleAgentPayload } from "./message-visibility.js";
 
 /**
  * Helpers for deciding whether an embedded run produced user-visible or outbound effects.
@@ -19,6 +21,7 @@ export type AgentDeliveryEvidence = {
   deliveryStatus?: {
     status?: unknown;
     errorMessage?: unknown;
+    reason?: unknown;
     payloadOutcomes?: unknown;
   };
   didSendViaMessagingTool?: unknown;
@@ -85,6 +88,16 @@ export function hasCompletedSourceReplyDeliveryEvidence(
   );
 }
 
+/** Returns whether messaging-tool evidence completes the current source reply. */
+export function hasCompletedMessagingToolDeliveryEvidence(
+  result: AgentDeliveryEvidence & SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
+): boolean {
+  return (
+    resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
+    hasMessagingToolDeliveryEvidence(result)
+  );
+}
+
 /** Returns whether delivery evidence completes the current interactive turn. */
 export function hasCompletedTerminalDeliveryEvidence(
   result: AgentDeliveryEvidence & SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
@@ -97,16 +110,17 @@ export function hasCompletedTerminalDeliveryEvidence(
   );
 }
 
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 function hasNonEmptyArray(value: unknown): boolean {
   return Array.isArray(value) && value.length > 0;
 }
 
-function hasNonEmptyStringArray(value: unknown): boolean {
-  return Array.isArray(value) && value.some(hasNonEmptyString);
+function hasAcceptedSessionSpawnEvidence(value: unknown): boolean {
+  return Array.isArray(value)
+    ? value.some((entry) => {
+        const spawn = asOptionalRecord(entry);
+        return hasNonEmptyString(spawn?.runId) && hasNonEmptyString(spawn?.childSessionKey);
+      })
+    : false;
 }
 
 function collectStringValues(value: unknown, output: Set<string>) {
@@ -338,19 +352,34 @@ export function hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
   });
 }
 
-/** Returns whether any automatic payload was sent or may have committed before failure. */
-export function hasPayloadOutcomeSendEvidence(
+/** Preserve batch send evidence and policy reasons hidden by the first suppressed payload. */
+export function getAutomaticDeliveryEvidence(
   result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
-): boolean {
-  return (
-    getPayloadDeliveryOutcomes(result)?.some((outcome) => {
-      if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
-        return false;
-      }
-      const record = outcome as Record<string, unknown>;
-      return normalizeEvidenceStatus(record.status) === "sent" || record.sentBeforeError === true;
-    }) === true
-  );
+): { mayHaveSent: boolean; suppressionReason?: string } {
+  let suppressionReason =
+    normalizeEvidenceStatus(result.deliveryStatus?.status) === "suppressed" &&
+    typeof result.deliveryStatus?.reason === "string"
+      ? result.deliveryStatus.reason
+      : undefined;
+  let mayHaveSent =
+    normalizeEvidenceStatus(result.deliveryStatus?.status) === "partial_failed" ||
+    suppressionReason === "adapter_returned_no_identity";
+  for (const outcome of getPayloadDeliveryOutcomes(result) ?? []) {
+    const record = asOptionalRecord(outcome);
+    const status = normalizeEvidenceStatus(record?.status);
+    mayHaveSent ||=
+      status === "sent" ||
+      record?.sentBeforeError === true ||
+      (status === "suppressed" && record?.reason === "adapter_returned_no_identity");
+    if (
+      status === "suppressed" &&
+      typeof record?.reason === "string" &&
+      (!suppressionReason || suppressionReason === "no_visible_payload")
+    ) {
+      suppressionReason = record.reason;
+    }
+  }
+  return { mayHaveSent, suppressionReason };
 }
 
 function hasPositiveNumber(value: unknown): boolean {
@@ -513,8 +542,17 @@ export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence
     // metadata exists, it owns visibility so blank sends cannot suppress recovery.
     (result.didSendViaMessagingTool === true &&
       !hasGranularMessagingToolDeliveryEvidence(result)) ||
-    (Array.isArray(result.acceptedSessionSpawns) &&
-      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasAcceptedSessionSpawnEvidence(result.acceptedSessionSpawns) ||
+    hasPositiveNumber(result.successfulCronAdds)
+  );
+}
+
+/** Returns whether committed non-messaging resource effects make replay unsafe. */
+function hasCommittedNonMessagingOutboundDeliveryEvidence(
+  result: Pick<AgentDeliveryEvidence, "acceptedSessionSpawns" | "successfulCronAdds">,
+): boolean {
+  return (
+    hasAcceptedSessionSpawnEvidence(result.acceptedSessionSpawns) ||
     hasPositiveNumber(result.successfulCronAdds)
   );
 }
@@ -523,9 +561,7 @@ export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence
 export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
-    (Array.isArray(result.acceptedSessionSpawns) &&
-      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
-    hasPositiveNumber(result.successfulCronAdds)
+    hasCommittedNonMessagingOutboundDeliveryEvidence(result)
   );
 }
 

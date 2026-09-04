@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   resolveEffectiveEnableState,
@@ -47,12 +48,14 @@ import {
   resolveManifestOwnerBasePolicyBlock,
 } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import {
   resolveCanonicalDistRuntimeSource,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
+import { prefersBuiltPluginArtifacts } from "./plugin-runtime-artifact-selection.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
 import {
   clearActiveDegradedPlugin,
@@ -118,6 +121,7 @@ export function loadRuntimePluginCandidate(params: {
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
         activationSource: context.activationSource,
         autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
       });
@@ -144,6 +148,7 @@ export function loadRuntimePluginCandidate(params: {
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
         activationSource: context.activationSource,
       });
   const entry = context.normalized.entries[policyId];
@@ -203,6 +208,11 @@ export function loadRuntimePluginCandidate(params: {
       record,
       message,
     });
+  const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+    pluginId,
+    packageName: candidate.packageName,
+    packageBuild: candidate.packageManifest?.build,
+  });
   if (blockUntrustedLocalScopedChannelSetupImport) {
     record.status = "disabled";
     record.error =
@@ -215,13 +225,18 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
+  const preferBuiltPluginArtifacts = prefersBuiltPluginArtifacts(
+    context.artifactPreference,
+    candidate.origin,
+  );
   const runtimeCandidateEntry = resolvePluginRuntimeArtifact({
     pluginId,
     entryKind: "runtime",
     source: candidate.source,
     rootDir: pluginRoot,
     origin: candidate.origin,
-    preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
+    preferBuiltPluginArtifacts,
+    sourcePreferred: manifestRecord.sourcePreferred,
     packageManifest: candidate.packageManifest,
     registry,
   });
@@ -232,7 +247,8 @@ export function loadRuntimePluginCandidate(params: {
         source: manifestRecord.setupSource,
         rootDir: pluginRoot,
         origin: candidate.origin,
-        preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
+        preferBuiltPluginArtifacts,
+        sourcePreferred: manifestRecord.sourcePreferred,
         packageManifest: candidate.packageManifest,
         registry,
       })
@@ -333,9 +349,13 @@ export function loadRuntimePluginCandidate(params: {
     }
   }
   const validatedConfig = validatePluginConfig({
+    origin: candidate.origin,
     schema: manifestRecord.configSchema,
     cacheKey: manifestRecord.schemaCacheKey,
     value: entry?.config,
+    sourceValue: manifestRecord.configContracts?.secretInputs
+      ? context.activationSource.plugins.entries[policyId]?.config
+      : undefined,
   });
   if (!validatedConfig.ok) {
     params.logger.error(
@@ -410,6 +430,7 @@ export function loadRuntimePluginCandidate(params: {
       error,
       logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
       diagnosticMessagePrefix: "failed to load plugin: ",
+      missingDependencyHint,
     });
     moduleLoadFailed = true;
     return;
@@ -488,17 +509,6 @@ export function loadRuntimePluginCandidate(params: {
       record.memorySlotSelected = true;
     }
   }
-  if (registrationPlan.runFullActivationOnlyRegistrations) {
-    if (definition?.reload) {
-      params.registryBuilder.registerReload(record, definition.reload);
-    }
-    for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
-      params.registryBuilder.registerNodeHostCommand(record, nodeHostCommand);
-    }
-    for (const collector of definition?.securityAuditCollectors ?? []) {
-      params.registryBuilder.registerSecurityAuditCollector(record, collector);
-    }
-  }
   if (params.validateOnly) {
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);
@@ -516,6 +526,21 @@ export function loadRuntimePluginCandidate(params: {
       pushPluginLoadError(formatMissingPluginRegisterError(mod, context.env));
     }
     return;
+  }
+  // Node-host commands register in every load mode: the node host resolves its
+  // registry without activation (loadPluginRegistryHandle), and each command is
+  // already availability-gated per invocation. Gating them on full activation
+  // silently strips static registrations like browser.proxy from headless nodes.
+  for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
+    params.registryBuilder.registerNodeHostCommand(record, nodeHostCommand);
+  }
+  if (registrationPlan.runFullActivationOnlyRegistrations) {
+    if (definition?.reload) {
+      params.registryBuilder.registerReload(record, definition.reload);
+    }
+    for (const collector of definition?.securityAuditCollectors ?? []) {
+      params.registryBuilder.registerSecurityAuditCollector(record, collector);
+    }
   }
   const api = params.registryBuilder.createApi(record, {
     config: context.cfg,
@@ -556,6 +581,7 @@ export function loadRuntimePluginCandidate(params: {
       error,
       logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
       diagnosticMessagePrefix: "plugin failed during register: ",
+      missingDependencyHint,
       ...(error instanceof PluginDashboardDeclarationError
         ? { diagnosticCode: "dashboard-declaration-invalid" }
         : {}),
@@ -577,20 +603,8 @@ function recordBundleDiagnostics(params: {
 }): void {
   const unsupportedCapabilities = (params.record.bundleCapabilities ?? []).filter(
     (capability) =>
-      capability !== "skills" &&
-      capability !== "mcpServers" &&
-      capability !== "settings" &&
-      !(
-        (capability === "commands" ||
-          capability === "agents" ||
-          capability === "outputStyles" ||
-          capability === "lspServers") &&
-        (params.record.bundleFormat === "claude" || params.record.bundleFormat === "cursor")
-      ) &&
-      !(
-        capability === "hooks" &&
-        (params.record.bundleFormat === "codex" || params.record.bundleFormat === "claude")
-      ),
+      !params.record.bundleFormat ||
+      !isBundleCapabilitySupported(params.record.bundleFormat, capability),
   );
   for (const capability of unsupportedCapabilities) {
     params.registry.diagnostics.push({

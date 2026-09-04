@@ -4,9 +4,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolvePluginCapabilityProvider,
   resolvePluginCapabilityProviders,
+  type CapabilityProviderFor,
 } from "./capability-provider-runtime.js";
 
-type EmbeddingProviderCapabilityKey = "embeddingProviders" | "memoryEmbeddingProviders";
+type EmbeddingProviderCapabilityKey = "embeddingProviders";
 type RegisteredAdapterEntry<TAdapter> = {
   adapter: TAdapter;
 };
@@ -29,16 +30,18 @@ export function resolveRuntimeEmbeddingProviderLookupIds(params: {
 }
 
 /** Lists registered and plugin-contributed embedding provider adapters for a capability key. */
-export function listRuntimeEmbeddingProviderAdapters<TAdapter extends { id: string }>(params: {
-  key: EmbeddingProviderCapabilityKey;
+export function listRuntimeEmbeddingProviderAdapters<
+  K extends EmbeddingProviderCapabilityKey,
+>(params: {
+  key: K;
   cfg?: OpenClawConfig;
-  registered: TAdapter[];
-}): TAdapter[] {
+  registered: CapabilityProviderFor<K>[];
+}): CapabilityProviderFor<K>[] {
   const merged = new Map(params.registered.map((adapter) => [adapter.id, adapter]));
   const capabilityAdapters = resolvePluginCapabilityProviders({
     key: params.key,
     cfg: params.cfg,
-  }) as unknown as TAdapter[];
+  });
   for (const adapter of capabilityAdapters) {
     if (!merged.has(adapter.id)) {
       merged.set(adapter.id, adapter);
@@ -48,12 +51,16 @@ export function listRuntimeEmbeddingProviderAdapters<TAdapter extends { id: stri
 }
 
 /** Resolves one embedding provider adapter from registered providers before plugin capabilities. */
-export function getRuntimeEmbeddingProviderAdapter<TAdapter extends { id: string }>(params: {
-  key: EmbeddingProviderCapabilityKey;
+export function getRuntimeEmbeddingProviderAdapter<
+  K extends EmbeddingProviderCapabilityKey,
+>(params: {
+  key: K;
   cfg?: OpenClawConfig;
   lookupIds: string[];
-  getRegisteredProvider: (id: string) => RegisteredAdapterEntry<TAdapter> | undefined;
-}): TAdapter | undefined {
+  getRegisteredProvider: (
+    id: string,
+  ) => RegisteredAdapterEntry<CapabilityProviderFor<K>> | undefined;
+}): CapabilityProviderFor<K> | undefined {
   // Resolve each exact id before trying the next configured alias. Otherwise a
   // registered alias can shadow a plugin-owned adapter for the requested id.
   for (const candidateId of params.lookupIds) {
@@ -65,7 +72,7 @@ export function getRuntimeEmbeddingProviderAdapter<TAdapter extends { id: string
       key: params.key,
       providerId: candidateId,
       cfg: params.cfg,
-    }) as TAdapter | undefined;
+    });
     if (provider) {
       return provider;
     }

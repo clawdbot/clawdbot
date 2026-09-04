@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 // Canonical shared-SQLite store for APNs device and relay registrations.
 import type { Insertable, Selectable } from "kysely";
+import { z } from "zod";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -218,114 +219,62 @@ export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null
   return null;
 }
 
-function normalizeDirectRegistration(
-  record: Partial<DirectApnsRegistration> & { nodeId?: unknown; token?: unknown },
-): DirectApnsRegistration | null {
-  if (typeof record.nodeId !== "string" || typeof record.token !== "string") {
-    return null;
-  }
-  const nodeId = normalizeApnsNodeId(record.nodeId);
-  const token = normalizeApnsToken(record.token);
-  const topic = normalizeApnsTopic(typeof record.topic === "string" ? record.topic : "");
-  const environment = normalizeApnsEnvironment(record.environment);
-  const updatedAtMs =
-    typeof record.updatedAtMs === "number" &&
-    Number.isSafeInteger(record.updatedAtMs) &&
-    record.updatedAtMs >= 0
-      ? record.updatedAtMs
-      : null;
-  if (
-    !isValidApnsNodeId(nodeId) ||
-    !isValidApnsTopic(topic) ||
-    !isLikelyApnsToken(token) ||
-    !environment ||
-    updatedAtMs === null
-  ) {
-    return null;
-  }
-  return {
-    nodeId,
-    transport: "direct",
-    token,
-    topic,
-    environment,
-    updatedAtMs,
-  };
-}
-
-function normalizeRelayRegistration(
-  record: Partial<RelayApnsRegistration> & {
-    nodeId?: unknown;
-    relayHandle?: unknown;
-    sendGrant?: unknown;
-  },
-  normalizeOrigin: (value: unknown) => string | undefined,
-): RelayApnsRegistration | null {
-  if (
-    typeof record.nodeId !== "string" ||
-    typeof record.relayHandle !== "string" ||
-    typeof record.sendGrant !== "string" ||
-    typeof record.installationId !== "string"
-  ) {
-    return null;
-  }
-  const nodeId = normalizeApnsNodeId(record.nodeId);
-  const relayHandle = normalizeRelayHandle(record.relayHandle);
-  const sendGrant = record.sendGrant.trim();
-  const installationId = normalizeInstallationId(record.installationId);
-  const topic = normalizeApnsTopic(typeof record.topic === "string" ? record.topic : "");
-  const environment = normalizeApnsEnvironment(record.environment);
-  const distribution = normalizeDistribution(record.distribution);
-  const relayOrigin = normalizeOrigin(record.relayOrigin);
-  const updatedAtMs =
-    typeof record.updatedAtMs === "number" &&
-    Number.isSafeInteger(record.updatedAtMs) &&
-    record.updatedAtMs >= 0
-      ? record.updatedAtMs
-      : null;
-  if (
-    !isValidApnsNodeId(nodeId) ||
-    !isValidRelayIdentifier(relayHandle) ||
-    !isValidRelayIdentifier(sendGrant, MAX_SEND_GRANT_LENGTH) ||
-    !isValidRelayIdentifier(installationId) ||
-    !isValidApnsTopic(topic) ||
-    !environment ||
-    distribution !== "official" ||
-    updatedAtMs === null
-  ) {
-    return null;
-  }
-  return {
-    nodeId,
-    transport: "relay",
-    relayHandle,
-    sendGrant,
-    installationId,
-    topic,
-    environment,
-    distribution,
-    updatedAtMs,
-    ...(relayOrigin ? { relayOrigin } : {}),
-    tokenDebugSuffix: normalizeTokenDebugSuffix(record.tokenDebugSuffix),
-  };
-}
+const apnsNodeIdSchema = z.string().transform(normalizeApnsNodeId).refine(isValidApnsNodeId);
+const apnsTopicSchema = z.string().transform(normalizeApnsTopic).refine(isValidApnsTopic);
+const apnsEnvironmentSchema = z
+  .unknown()
+  .transform(normalizeApnsEnvironment)
+  .pipe(z.enum(["sandbox", "production"]));
+const apnsUpdatedAtSchema = z
+  .number()
+  .refine(Number.isSafeInteger)
+  .refine((value) => value >= 0);
+const directApnsRegistrationSchema = z.object({
+  nodeId: apnsNodeIdSchema,
+  transport: z.string().transform(normalizeLowercaseStringOrEmpty).pipe(z.literal("direct")),
+  token: z.string().transform(normalizeApnsToken).refine(isLikelyApnsToken),
+  topic: apnsTopicSchema,
+  environment: apnsEnvironmentSchema,
+  updatedAtMs: apnsUpdatedAtSchema,
+});
+const relayApnsRegistrationSchema = z.object({
+  nodeId: apnsNodeIdSchema,
+  transport: z.string().transform(normalizeLowercaseStringOrEmpty).pipe(z.literal("relay")),
+  relayHandle: z.string().transform(normalizeRelayHandle).refine(isValidRelayIdentifier),
+  sendGrant: z
+    .string()
+    .transform((value) => value.trim())
+    .refine((value) => isValidRelayIdentifier(value, MAX_SEND_GRANT_LENGTH)),
+  installationId: z.string().transform(normalizeInstallationId).refine(isValidRelayIdentifier),
+  topic: apnsTopicSchema,
+  environment: apnsEnvironmentSchema,
+  distribution: z.unknown().transform(normalizeDistribution).pipe(z.literal("official")),
+  updatedAtMs: apnsUpdatedAtSchema,
+  relayOrigin: z.unknown().optional(),
+  tokenDebugSuffix: z.unknown().optional().transform(normalizeTokenDebugSuffix),
+});
+const canonicalApnsRegistrationSchema = z.union([
+  directApnsRegistrationSchema,
+  relayApnsRegistrationSchema,
+]);
 
 function normalizeCanonicalApnsRegistrationWithRelayOrigin(
   record: unknown,
   normalizeOrigin: (value: unknown) => string | undefined,
 ): ApnsRegistration | null {
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
+  const result = canonicalApnsRegistrationSchema.safeParse(record);
+  if (!result.success) {
     return null;
   }
-  const candidate = record as Record<string, unknown>;
-  const transport = normalizeLowercaseStringOrEmpty(candidate.transport);
-  if (transport === "relay") {
-    return normalizeRelayRegistration(candidate as Partial<RelayApnsRegistration>, normalizeOrigin);
+  if (result.data.transport === "direct") {
+    return result.data;
   }
-  if (transport === "direct") {
-    return normalizeDirectRegistration(candidate as Partial<DirectApnsRegistration>);
-  }
-  return null;
+  const relayOrigin = normalizeOrigin(result.data.relayOrigin);
+  const { relayOrigin: _rawRelayOrigin, ...registration } = result.data;
+  return {
+    ...registration,
+    ...(relayOrigin ? { relayOrigin } : {}),
+  };
 }
 
 /** Normalizes one canonical registration with an explicit transport discriminator. */

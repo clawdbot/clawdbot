@@ -1,13 +1,12 @@
 // Resolves the OpenClaw package root from runtime and package metadata.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getPluginCache } from "../plugins/plugin-cache.js";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
 
 const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
-const packageNameCache = new Map<string, string | null>();
-const packageRootCache = new Map<string, string | null>();
-const packageRootsCache = new Map<string, string[]>();
-const argv1CandidateCache = new Map<string, string[]>();
+
+type PackageRootOptions = { cwd?: string; argv1?: string; moduleUrl?: string };
 
 function parsePackageName(raw: string): string | null {
   const parsed = JSON.parse(raw) as { name?: unknown };
@@ -15,6 +14,7 @@ function parsePackageName(raw: string): string | null {
 }
 
 async function readPackageName(dir: string): Promise<string | null> {
+  const packageNameCache = getPluginCache().sdk.packageNames;
   const packageJsonPath = path.join(path.resolve(dir), "package.json");
   if (packageNameCache.has(packageJsonPath)) {
     return packageNameCache.get(packageJsonPath) ?? null;
@@ -30,6 +30,7 @@ async function readPackageName(dir: string): Promise<string | null> {
 }
 
 function readPackageNameSync(dir: string): string | null {
+  const packageNameCache = getPluginCache().sdk.packageNames;
   const packageJsonPath = path.join(path.resolve(dir), "package.json");
   if (packageNameCache.has(packageJsonPath)) {
     return packageNameCache.get(packageJsonPath) ?? null;
@@ -85,6 +86,7 @@ function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string
 }
 
 function candidateDirsFromArgv1(argv1: string): string[] {
+  const argv1CandidateCache = getPluginCache().sdk.argvDirectories;
   const cacheKey = path.resolve(argv1);
   const cached = argv1CandidateCache.get(cacheKey);
   if (cached) {
@@ -118,25 +120,26 @@ function candidateDirsFromArgv1(argv1: string): string[] {
   return [...deduped];
 }
 
-export async function resolveOpenClawPackageRoot(opts: {
-  cwd?: string;
-  argv1?: string;
-  moduleUrl?: string;
-}): Promise<string | null> {
+export async function resolveOpenClawPackageRoot(opts: PackageRootOptions): Promise<string | null> {
   const candidates = buildCandidates(opts);
   const cacheKey = createPackageRootCacheKey(candidates);
-  if (packageRootCache.has(cacheKey)) {
-    return packageRootCache.get(cacheKey) ?? null;
+  const searches = getPluginCache().sdk.packageSearches;
+  const cached = searches.get(cacheKey);
+  if (cached?.all) {
+    return cached.all[0] ?? null;
+  }
+  if (cached?.first !== undefined) {
+    return cached.first;
   }
   for (const candidate of candidates) {
     const found = await findPackageRoot(candidate);
     if (found) {
-      packageRootCache.set(cacheKey, found);
+      searches.set(cacheKey, { ...searches.get(cacheKey), first: found });
       return found;
     }
   }
 
-  packageRootCache.set(cacheKey, null);
+  searches.set(cacheKey, { ...searches.get(cacheKey), first: null });
   return null;
 }
 
@@ -145,14 +148,11 @@ export async function resolveOpenClawPackageRoot(opts: {
 // pick the first root that actually contains it: an installed package root can resolve first but
 // omit files the npm allowlist drops (e.g. scripts/), so stopping at root[0] would skip a valid
 // source-checkout cwd that still has them.
-export function resolveOpenClawPackageRootsSync(opts: {
-  cwd?: string;
-  argv1?: string;
-  moduleUrl?: string;
-}): string[] {
+export function resolveOpenClawPackageRootsSync(opts: PackageRootOptions): string[] {
   const candidates = buildCandidates(opts);
   const cacheKey = createPackageRootCacheKey(candidates);
-  const cached = packageRootsCache.get(cacheKey);
+  const searches = getPluginCache().sdk.packageSearches;
+  const cached = searches.get(cacheKey)?.all;
   if (cached) {
     return [...cached];
   }
@@ -165,19 +165,35 @@ export function resolveOpenClawPackageRootsSync(opts: {
       roots.push(found);
     }
   }
-  packageRootsCache.set(cacheKey, roots);
+  searches.set(cacheKey, { all: roots });
   return [...roots];
 }
 
-export function resolveOpenClawPackageRootSync(opts: {
-  cwd?: string;
-  argv1?: string;
-  moduleUrl?: string;
-}): string | null {
-  return resolveOpenClawPackageRootsSync(opts)[0] ?? null;
+export function resolveOpenClawPackageRootSync(opts: PackageRootOptions): string | null {
+  const candidates = buildCandidates(opts);
+  const cacheKey = createPackageRootCacheKey(candidates);
+  const searches = getPluginCache().sdk.packageSearches;
+  const cached = searches.get(cacheKey);
+  if (cached?.all) {
+    return cached.all[0] ?? null;
+  }
+  if (cached?.first !== undefined) {
+    return cached.first;
+  }
+  for (const candidate of candidates) {
+    const found = findPackageRootSync(candidate);
+    if (found) {
+      // Cache only the selected root; Doctor may still request the complete inventory.
+      searches.set(cacheKey, { first: found });
+      return found;
+    }
+  }
+
+  searches.set(cacheKey, { first: null });
+  return null;
 }
 
-function buildCandidates(opts: { cwd?: string; argv1?: string; moduleUrl?: string }): string[] {
+function buildCandidates(opts: PackageRootOptions): string[] {
   const candidates: string[] = [];
 
   if (opts.moduleUrl) {

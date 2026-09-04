@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { PairedDevice } from "./index.ts";
 import {
-  buildNodesInventory,
+  buildDeviceInventory,
   findGatewayPresence,
   listStaleInventoryEntries,
   listUnpairedPresence,
@@ -18,18 +18,29 @@ function device(overrides: Partial<PairedDevice> & { deviceId: string }): Paired
   };
 }
 
-function firstGroup(groups: ReturnType<typeof buildNodesInventory>) {
-  return expectDefined(groups[0], "first node inventory group");
+function firstGroup(groups: ReturnType<typeof buildDeviceInventory>) {
+  return expectDefined(groups[0], "first device inventory group");
 }
 
-describe("buildNodesInventory", () => {
+const hostStats = {
+  cpuCount: 24,
+  loadAverage: [3.2, 2.8, 2.4],
+  memoryTotalBytes: 192 * 1024 ** 3,
+  memoryFreeBytes: 41 * 1024 ** 3,
+  diskTotalBytes: 2 * 1024 ** 4,
+  diskAvailableBytes: 1.2 * 1024 ** 4,
+  updatedAtMs: 1_700_000_000_000,
+};
+
+describe("buildDeviceInventory", () => {
   it("joins device records with node catalog rows by id", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [
         device({
           deviceId: "node-1",
           displayName: "megaclaw",
           roles: ["operator", "node"],
+          connected: true,
           lastSeenAtMs: 1_000,
         }),
       ],
@@ -37,13 +48,16 @@ describe("buildNodesInventory", () => {
         {
           nodeId: "node-1",
           displayName: "megaclaw",
-          connected: true,
+          connected: false,
           paired: true,
           caps: ["screen"],
           commands: ["system.run"],
           version: "2026.6.11",
           coreVersion: "2026.7.2",
+          workerSlots: { total: 2, available: 1 },
+          workerBundle: { status: "installed", version: "2026.8.9" },
           uiVersion: "19.5",
+          hostStats,
         },
       ],
     });
@@ -52,15 +66,110 @@ describe("buildNodesInventory", () => {
     const entry = firstGroup(groups).primary;
     expect(entry.id).toBe("node-1");
     expect(entry.connected).toBe(true);
+    expect(entry.node?.connected).toBe(false);
     expect(entry.roles).toEqual(["operator", "node"]);
     expect(entry.version).toBe("2026.6.11");
     expect(entry.node?.caps).toEqual(["screen"]);
     expect(entry.node?.coreVersion).toBe("2026.7.2");
     expect(entry.node?.uiVersion).toBe("19.5");
+    expect(entry.node?.workerSlots).toEqual({ total: 2, available: 1 });
+    expect(entry.node?.workerBundle).toEqual({ status: "installed", version: "2026.8.9" });
+    expect(entry.node?.hostStats).toEqual(hostStats);
+  });
+
+  it("preserves host stats when optional load and disk inputs are absent", () => {
+    const stats = {
+      cpuCount: 8,
+      memoryTotalBytes: 16 * 1024 ** 3,
+      memoryFreeBytes: 4 * 1024 ** 3,
+      updatedAtMs: 1_700_000_000_000,
+    };
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [{ nodeId: "node-1", hostStats: stats }],
+    });
+
+    expect(firstGroup(groups).primary.node?.hostStats).toEqual(stats);
+  });
+
+  it.each([
+    ["missing fields", {}],
+    ["numeric strings", { ...hostStats, cpuCount: "24" }],
+    ["zero cores", { ...hostStats, cpuCount: 0 }],
+    ["fractional cores", { ...hostStats, cpuCount: 1.5 }],
+    ["nonfinite memory", { ...hostStats, memoryTotalBytes: Number.POSITIVE_INFINITY }],
+    ["negative memory", { ...hostStats, memoryFreeBytes: -1 }],
+    [
+      "free memory exceeds total",
+      { ...hostStats, memoryFreeBytes: hostStats.memoryTotalBytes + 1 },
+    ],
+    ["incomplete load tuple", { ...hostStats, loadAverage: [3.2, 2.8] }],
+    ["invalid load average", { ...hostStats, loadAverage: [3.2, Number.NaN, 2.4] }],
+    ["negative load average", { ...hostStats, loadAverage: [-1, 2.8, 2.4] }],
+    ["zero disk size", { ...hostStats, diskTotalBytes: 0 }],
+    ["free disk exceeds total", { ...hostStats, diskAvailableBytes: hostStats.diskTotalBytes + 1 }],
+    ["missing timestamp", { ...hostStats, updatedAtMs: undefined }],
+  ])("drops malformed host stats (%s) while retaining the node", (_description, stats) => {
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [{ nodeId: "node-1", connected: true, hostStats: stats }],
+    });
+
+    expect(firstGroup(groups).primary.node).toMatchObject({ nodeId: "node-1", connected: true });
+    expect(firstGroup(groups).primary.node?.hostStats).toBeUndefined();
+  });
+
+  it("preserves a valid missing worker bundle status", () => {
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [
+        {
+          nodeId: "node-1",
+          connected: true,
+          paired: true,
+          workerBundle: { status: "missing" },
+        },
+      ],
+    });
+
+    expect(firstGroup(groups).primary.node?.workerBundle).toEqual({ status: "missing" });
+  });
+
+  it("drops malformed worker bundle status instead of exposing private fields", () => {
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [
+        {
+          nodeId: "node-1",
+          connected: true,
+          paired: true,
+          workerBundle: {
+            status: "installed",
+            version: "2026.8.9",
+            bundleHash: "a".repeat(64),
+          },
+        },
+      ],
+    });
+
+    expect(firstGroup(groups).primary.node?.workerBundle).toBeUndefined();
+  });
+
+  it.each([
+    { total: 0, available: 0 },
+    { total: 2, available: 3 },
+    { total: 2, available: 1, busy: 1 },
+  ])("drops malformed worker slot summaries: $total/$available", (workerSlots) => {
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [{ nodeId: "node-1", connected: true, paired: true, workerSlots }],
+    });
+
+    expect(firstGroup(groups).primary.node?.workerSlots).toBeUndefined();
   });
 
   it("joins presence case-insensitively and prefers its display metadata", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [device({ deviceId: "NODE-1", displayName: "megaclaw", platform: "linux" })],
       nodes: [
         {
@@ -93,7 +202,7 @@ describe("buildNodesInventory", () => {
   });
 
   it("does not let one disconnect beacon override server-computed connectivity", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [
         device({
           deviceId: "browser-1",
@@ -109,7 +218,7 @@ describe("buildNodesInventory", () => {
   });
 
   it("prefers operatorLabel over displayName clientId and deviceId for display name", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [
         device({
           deviceId: "dev-label",
@@ -143,7 +252,7 @@ describe("buildNodesInventory", () => {
   });
 
   it("groups duplicate pairings by display name with the freshest entry first", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [
         device({ deviceId: "old-1", displayName: "MacBook", lastSeenAtMs: 1_000 }),
         device({ deviceId: "new-1", displayName: "MacBook", lastSeenAtMs: 3_000 }),
@@ -158,7 +267,7 @@ describe("buildNodesInventory", () => {
   });
 
   it("prefers connected entries as group primary over fresher offline ones", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [
         device({ deviceId: "offline-1", displayName: "megaclaw", lastSeenAtMs: 9_000 }),
         device({
@@ -176,7 +285,7 @@ describe("buildNodesInventory", () => {
   });
 
   it("groups anonymous records by client identity and keeps unknown ids separate", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [
         device({ deviceId: "cli-1", clientId: "cli", clientMode: "cli", lastSeenAtMs: 2_000 }),
         device({ deviceId: "cli-2", clientId: "cli", clientMode: "cli", lastSeenAtMs: 1_000 }),
@@ -197,7 +306,7 @@ describe("buildNodesInventory", () => {
   });
 
   it("keeps legacy node-only rows and marks them with the node role", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [],
       nodes: [{ nodeId: "legacy-1", displayName: "clawmac", paired: true, connected: false }],
     });
@@ -208,7 +317,7 @@ describe("buildNodesInventory", () => {
   });
 
   it("flags silent trusted-cidr and ssh-verified pairings as auto-approved", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [
         device({ deviceId: "cli-1", clientId: "cli", approvedVia: "silent" }),
         device({ deviceId: "cidr-1", displayName: "megaclaw", approvedVia: "trusted-cidr" }),
@@ -227,7 +336,7 @@ describe("buildNodesInventory", () => {
 
 describe("listStaleInventoryEntries", () => {
   it("treats server-reported device connectivity as live for operator-only entries", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [
         device({
           deviceId: "cli-new",
@@ -260,7 +369,7 @@ describe("listStaleInventoryEntries", () => {
   });
 
   it("lists offline auto-approved duplicates only", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [
         device({
           deviceId: "new-1",
@@ -313,7 +422,7 @@ describe("findGatewayPresence", () => {
 
 describe("listUnpairedPresence", () => {
   it("returns only live beacons with no inventory row", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [device({ deviceId: "node-1", displayName: "megaclaw" })],
       nodes: [],
     });
@@ -336,7 +445,7 @@ describe("listUnpairedPresence", () => {
 
 describe("resolveInventoryRemoval", () => {
   it("routes node-role entries through node removal", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [device({ deviceId: "node-1", roles: ["node"], displayName: "megaclaw" })],
       nodes: [],
     });
@@ -347,7 +456,7 @@ describe("resolveInventoryRemoval", () => {
   });
 
   it("routes mixed-role entries through node and device removal", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [
         device({ deviceId: "mixed-1", roles: ["operator", "node"], displayName: "MacBook" }),
       ],
@@ -360,7 +469,7 @@ describe("resolveInventoryRemoval", () => {
   });
 
   it("routes operator-only entries through device removal", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [device({ deviceId: "op-1", roles: ["operator"] })],
       nodes: [],
     });
@@ -371,7 +480,7 @@ describe("resolveInventoryRemoval", () => {
   });
 
   it("routes legacy node-only rows through node removal", () => {
-    const groups = buildNodesInventory({
+    const groups = buildDeviceInventory({
       paired: [],
       nodes: [{ nodeId: "legacy-1", paired: true }],
     });

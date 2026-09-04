@@ -118,6 +118,84 @@ jobs:
           permission-issues: write
           permission-pull-requests: read
 
+      - name: Create target PR acknowledgement token
+        id: pr_ack_token
+        if: >-
+          ${{
+            github.event_name == 'pull_request_target' &&
+            (
+              github.event.action == 'ready_for_review' ||
+              (github.event.action == 'opened' && github.event.pull_request.draft == false)
+            ) &&
+            env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true'
+          }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      - name: Acknowledge received pull request
+        if: >-
+          ${{
+            github.event_name == 'pull_request_target' &&
+            (
+              github.event.action == 'ready_for_review' ||
+              (github.event.action == 'opened' && github.event.pull_request.draft == false)
+            ) &&
+            env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true'
+          }}
+        continue-on-error: true
+        env:
+          ACK_TOKEN: ${{ steps.pr_ack_token.outputs.token }}
+          TARGET_REPO: ${{ github.repository }}
+          ITEM_NUMBER: ${{ github.event.pull_request.number }}
+          SOURCE_ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ACK_TOKEN" ]; then
+            echo "::notice::Skipping ClawSweeper pull request acknowledgement because no target credential is configured."
+            exit 0
+          fi
+          has_ack_marker() {
+            jq -e \
+              --arg marker_prefix "clawsweeper-pr-ack:" \
+              --arg marker_suffix " item=$ITEM_NUMBER -->" \
+              'any(.[]; (.body // "") as $body | ($body | contains($marker_prefix)) and ($body | contains($marker_suffix)))' \
+              <<< "$1" >/dev/null
+          }
+          comments="$(GH_TOKEN="$ACK_TOKEN" gh api \
+            "repos/$TARGET_REPO/issues/$ITEM_NUMBER/comments?per_page=100")"
+          if has_ack_marker "$comments"; then
+            echo "ClawSweeper pull request acknowledgement already exists."
+            exit 0
+          fi
+          # opened and ready_for_review can fire seconds apart for the same
+          # pull request, and both runs can list comments before either
+          # acknowledgement is visible. Wait, then recheck right before
+          # posting; a superseding run cancels this one while it sleeps.
+          sleep 15
+          comments="$(GH_TOKEN="$ACK_TOKEN" gh api \
+            "repos/$TARGET_REPO/issues/$ITEM_NUMBER/comments?per_page=100")"
+          if has_ack_marker "$comments"; then
+            echo "ClawSweeper pull request acknowledgement already exists."
+            exit 0
+          fi
+          ack_body="$(printf '%s\n' \
+            "<!-- clawsweeper-pr-ack:$SOURCE_ACTION item=$ITEM_NUMBER -->" \
+            "🦞👀" \
+            "ClawSweeper picked this up." \
+            "" \
+            "Pull request received. I will update this pull request when review starts.")"
+          ack_payload="$(jq -nc --arg body "$ack_body" '{body:$body}')"
+          GH_TOKEN="$ACK_TOKEN" gh api \
+            "repos/$TARGET_REPO/issues/$ITEM_NUMBER/comments" \
+            --method POST \
+            --input - <<< "$ack_payload"
+
       - name: Dispatch GitHub activity to ClawSweeper
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -211,6 +289,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           TARGET_REPO: ${{ github.repository }}
+          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
           ITEM_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
           ITEM_KIND: ${{ github.event_name == 'pull_request_target' && 'pull_request' || 'issue' }}
           SOURCE_EVENT: ${{ github.event_name }}
@@ -221,14 +300,52 @@ jobs:
             exit 0
           fi
           . "$RUNNER_TEMP/github-api-backoff.sh"
+          ingress_fingerprint="$(node <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+          const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+          const pullRequest = event.pull_request && typeof event.pull_request === "object"
+            ? event.pull_request
+            : {};
+          const headSha = String(pullRequest.head?.sha || "").trim().toLowerCase();
+          const updatedAt = String(pullRequest.updated_at || "").trim();
+          if (
+            process.env.ITEM_KIND !== "pull_request" ||
+            !/^[0-9a-f]{40}$/.test(headSha) ||
+            !updatedAt
+          ) {
+            process.stdout.write("");
+          } else {
+            process.stdout.write(
+              crypto
+                .createHash("sha256")
+                .update(
+                  JSON.stringify({
+                    version: 1,
+                    target_repo: String(process.env.TARGET_REPO || "").toLowerCase(),
+                    item_number: Number(process.env.ITEM_NUMBER),
+                    action: String(process.env.SOURCE_ACTION || ""),
+                    head_sha: headSha,
+                    updated_at: updatedAt,
+                    body: typeof pullRequest.body === "string" ? pullRequest.body : "",
+                    label: String(event.label?.name || ""),
+                  }),
+                )
+                .digest("hex"),
+            );
+          }
+          NODE
+          )"
           payload="$(jq -nc \
             --arg target_repo "$TARGET_REPO" \
+            --arg target_branch "$TARGET_BRANCH" \
             --argjson item_number "$ITEM_NUMBER" \
             --arg item_kind "$ITEM_KIND" \
             --arg source_event "$SOURCE_EVENT" \
             --arg source_action "$SOURCE_ACTION" \
+            --arg ingress_fingerprint "$ingress_fingerprint" \
             --argjson supersedes_in_progress "$SUPERSEDES_IN_PROGRESS" \
-            '{event_type:"clawsweeper_item",client_payload:{target_repo:$target_repo,item_number:$item_number,item_kind:$item_kind,source_event:$source_event,source_action:$source_action,supersedes_in_progress:$supersedes_in_progress}}')"
+            '{event_type:"clawsweeper_item",client_payload:({target_repo:$target_repo,target_branch:$target_branch,item_number:$item_number,item_kind:$item_kind,source_event:$source_event,source_action:$source_action,supersedes_in_progress:$supersedes_in_progress} + (if $ingress_fingerprint != "" then {ingress_route:"target_dispatcher",ingress_fingerprint:$ingress_fingerprint} else {} end))}')"
           if gh_api_with_retry repos/openclaw/clawsweeper/dispatches \
             --method POST \
             --input - <<< "$payload"; then

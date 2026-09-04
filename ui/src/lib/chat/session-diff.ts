@@ -29,8 +29,9 @@ export function parseSessionDiffPatch(
   let inHunk = false;
   let oldNo = 0;
   let newNo = 0;
-  // Next expected old-file line after the previous hunk; drives gap counts.
+  // Next expected lines after the previous hunk; drive inter-hunk gap coordinates.
   let oldNext: number | undefined;
+  let newNext: number | undefined;
   const rawLines = patch.replace(/\r\n/g, "\n").split("\n");
   if (rawLines.at(-1) === "") {
     rawLines.pop();
@@ -42,7 +43,15 @@ export function parseSessionDiffPatch(
       const newStart = Number.parseInt(hunk[2] ?? "", 10);
       const gap = oldNext === undefined ? oldStart - 1 : oldStart - oldNext;
       if (gap > 0) {
-        lines.push({ kind: "skip", text: formatGap(gap) });
+        lines.push({
+          kind: "skip",
+          text: formatGap(gap),
+          gap: {
+            oldStart: oldNext ?? oldStart - gap,
+            newStart: newNext ?? newStart - gap,
+            count: gap,
+          },
+        });
       }
       oldNo = oldStart;
       newNo = newStart;
@@ -69,6 +78,7 @@ export function parseSessionDiffPatch(
       newNo += 1;
     }
     oldNext = oldNo;
+    newNext = newNo;
   }
   return { lines, truncated };
 }

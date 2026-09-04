@@ -1,4 +1,5 @@
 // Configure wizard Gateway port, bind, auth, and Tailscale prompts.
+import { parseIpAddressOrCidr } from "@openclaw/net-policy/ip";
 import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import {
   normalizeOptionalString,
@@ -9,6 +10,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
+import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
 import {
@@ -17,9 +19,11 @@ import {
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
+import { isLoopbackAddress, isTrustedProxyAddress } from "../gateway/net.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { t } from "../wizard/i18n/index.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, password, select, text } from "./configure.shared.js";
 import {
@@ -145,17 +149,8 @@ export async function promptGatewayConfig(
     }
   }
 
-  let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
     note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
-    tailscaleResetOnExit = guardCancel(
-      await confirm({
-        message: "Reset Tailscale serve/funnel on exit?",
-        initialValue: false,
-      }),
-      runtime,
-      1,
-    );
   }
 
   if (tailscaleMode !== "off" && bind !== "loopback") {
@@ -169,22 +164,19 @@ export async function promptGatewayConfig(
   }
 
   // trusted-proxy + loopback is valid when the reverse proxy runs on the same
-  // host (e.g. cloudflared, nginx, Caddy). trustedProxies must include 127.0.0.1.
+  // host, with the loopback source in trustedProxies and allowLoopback consent.
   if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
     note(
       "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",
       "Note",
     );
     tailscaleMode = "off";
-    tailscaleResetOnExit = false;
   }
 
   let gatewayToken: SecretInput | undefined;
   let gatewayTokenForCalls: string | undefined;
   let gatewayPassword: string | undefined;
-  let trustedProxyConfig:
-    | { userHeader: string; requiredHeaders?: string[]; allowUsers?: string[] }
-    | undefined;
+  let trustedProxyConfig: GatewayTrustedProxyConfig | undefined;
   let trustedProxies: string[] | undefined;
   let next = cfg;
 
@@ -314,22 +306,52 @@ export async function promptGatewayConfig(
       await text({
         message: "Trusted proxy IPs (comma-separated)",
         placeholder: "10.0.1.10,192.168.1.5",
-        validate: (value) => {
-          if (!normalizeOptionalString(value)) {
-            return "At least one trusted proxy IP is required";
-          }
-          return undefined;
-        },
+        validate: (value) =>
+          (value ?? "").split(",").every((address) => parseIpAddressOrCidr(address))
+            ? undefined
+            : "Enter comma-separated IPv4 or IPv6 addresses or CIDR ranges (e.g. 10.0.0.1, ::1, 10.0.0.0/24); no empty entries.",
       }),
       runtime,
       1,
     );
     trustedProxies = normalizeStringEntries(trustedProxiesRaw.split(","));
 
+    const existingProxy =
+      cfg.gateway?.auth?.mode === "trusted-proxy" ? cfg.gateway.auth.trustedProxy : undefined;
+    let allowLoopback = existingProxy?.allowLoopback;
+    // The base covers subnets within loopback; representative peers cover ranges containing it.
+    // Use runtime matching too, including its mapped IPv4 and exact IPv6 zone semantics.
+    if (
+      trustedProxies.some((address) => {
+        const base = parseIpAddressOrCidr(address)?.[0].toString();
+        return [base, "127.0.0.1", "::1"].some(
+          (peer) => isLoopbackAddress(peer) && isTrustedProxyAddress(peer, [address]),
+        );
+      })
+    ) {
+      const title = t("wizard.gateway.trustedProxyLoopbackTitle");
+      note(t("wizard.gateway.trustedProxyLoopbackWarning"), title);
+      allowLoopback =
+        guardCancel(
+          await confirm({
+            message: t("wizard.gateway.trustedProxyAllowLoopback"),
+            initialValue: allowLoopback === true,
+          }),
+          runtime,
+          1,
+        ) || undefined;
+      if (!allowLoopback) {
+        note(t("wizard.gateway.trustedProxyLoopbackRefused"), title);
+      }
+    }
+
     trustedProxyConfig = {
+      // Retain unprompted policy, including device enrollment, on same-mode reruns.
+      ...existingProxy,
       userHeader: normalizeOptionalString(userHeader) ?? "",
       requiredHeaders: requiredHeaders.length > 0 ? requiredHeaders : undefined,
       allowUsers: allowUsers.length > 0 ? allowUsers : undefined,
+      allowLoopback,
     };
   }
 
@@ -354,7 +376,6 @@ export async function promptGatewayConfig(
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,
-        resetOnExit: tailscaleResetOnExit,
       },
     },
   };

@@ -25,7 +25,7 @@ const PRIVATE_USE_START = 0xe000;
 const PRIVATE_USE_END = 0xf8ff;
 const MAX_PRIVATE_MARKDOWN_UNWRAP_PASSES = 32;
 // Mirror the private shared plain-text HTML grammar to inspect every destructive removal stage.
-const PLAIN_TEXT_HTML_TAG_RE = /<\/?[a-z][a-z0-9_-]*\b[^>]*>/gi;
+const PLAIN_TEXT_HTML_TAG_RE = /<\/?[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>/gi;
 const PRIVATE_PROVIDER_TAG_NAMES = [
   "think",
   "thinking",

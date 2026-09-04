@@ -10,7 +10,7 @@ import type {
 } from "@openclaw/llm-core";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
-import { getInternalBeforeToolBatch } from "./internal-hooks.js";
+import { attachInternalSyncSteeringGetter, getInternalBeforeToolBatch } from "./internal-hooks.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import {
@@ -146,7 +146,7 @@ export interface AgentOptions {
     context: PrepareNextTurnContext,
     signal?: AbortSignal,
   ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
-  /** Queue drain mode for steering messages injected before the next assistant response. */
+  /** Queue drain mode for steering messages applied before the next unstarted tool or model turn. */
   steeringMode?: QueueMode;
   /** Queue drain mode for follow-up messages injected after the agent would otherwise stop. */
   followUpMode?: QueueMode;
@@ -164,6 +164,10 @@ export interface AgentOptions {
 
 class PendingMessageQueue {
   private messages: AgentMessage[] = [];
+  // Drained messages stay owned here until message_end commits them.
+  // A failed run restores them ahead of messages accepted later.
+  private inFlight: AgentMessage[] = [];
+  private cancelled = new WeakSet<AgentMessage>();
   public mode: QueueMode;
 
   constructor(mode: QueueMode) {
@@ -179,23 +183,51 @@ class PendingMessageQueue {
   }
 
   drain(): AgentMessage[] {
-    if (this.mode === "all") {
-      const drained = this.messages.slice();
-      this.messages = [];
-      return drained;
-    }
+    const count = this.mode === "all" ? this.messages.length : 1;
+    const drained = this.messages.splice(0, count);
+    this.inFlight.push(...drained);
+    return drained;
+  }
 
-    // one-at-a-time preserves later queued messages for subsequent loop turns.
-    const first = this.messages[0];
-    if (!first) {
-      return [];
+  commit(message: AgentMessage): void {
+    this.cancelled.delete(message);
+    const index = this.inFlight.indexOf(message);
+    if (index >= 0) {
+      this.inFlight.splice(index, 1);
     }
-    this.messages = this.messages.slice(1);
-    return [first];
+  }
+
+  restore(): void {
+    this.messages = [...this.inFlight, ...this.messages];
+    this.inFlight = [];
+  }
+
+  cancelFirst(predicate: (message: AgentMessage) => boolean): AgentMessage | undefined {
+    const pendingIndex = this.messages.findIndex(predicate);
+    if (pendingIndex >= 0) {
+      return this.messages.splice(pendingIndex, 1)[0];
+    }
+    const inFlightIndex = this.inFlight.findIndex(predicate);
+    if (inFlightIndex < 0) {
+      return undefined;
+    }
+    const message = this.inFlight.splice(inFlightIndex, 1)[0];
+    if (message) {
+      // The loop may already hold this object after draining; retain a cancellation
+      // fact until its next injection checkpoint so it cannot outlive queue ownership.
+      this.cancelled.add(message);
+    }
+    return message;
+  }
+
+  consumeCancellation(message: AgentMessage): boolean {
+    return this.cancelled.delete(message);
   }
 
   clear(): void {
     this.messages = [];
+    this.inFlight = [];
+    this.cancelled = new WeakSet<AgentMessage>();
   }
 }
 
@@ -330,9 +362,17 @@ export class Agent {
     return this.followUpQueue.mode;
   }
 
-  /** Queue a message to be injected after the current assistant turn finishes. */
+  /**
+   * Queue a message for the active run. Running tools finish, while sequential
+   * tail calls or a parallel batch that has not launched yet are skipped.
+   */
   steer(message: AgentMessage): void {
     this.steeringQueue.enqueue(message);
+  }
+
+  /** Cancel the first matching steering message, including one already drained for injection. */
+  cancelSteeringMessage(predicate: (message: AgentMessage) => boolean): AgentMessage | undefined {
+    return this.steeringQueue.cancelFirst(predicate);
   }
 
   /** Queue a message to run only after the agent would otherwise stop. */
@@ -388,8 +428,7 @@ export class Agent {
     this.mutableState.pendingToolCalls = new Set<string>();
     this.mutableState.errorMessage = undefined;
     this.toolLoopRecoveryState.criticalToolLoopSeen = false;
-    this.clearFollowUpQueue();
-    this.clearSteeringQueue();
+    this.clearAllQueues();
   }
 
   /** Start a new prompt from text, a single message, or a batch of messages. */
@@ -498,6 +537,17 @@ export class Agent {
 
   private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
     let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
+    const drainSteeringMessages = () => {
+      if (skipInitialSteeringPoll) {
+        skipInitialSteeringPoll = false;
+        return [];
+      }
+      return this.steeringQueue.drain();
+    };
+    const getSteeringMessages = attachInternalSyncSteeringGetter(
+      async () => drainSteeringMessages(),
+      drainSteeringMessages,
+    );
     return {
       model: this.mutableState.model,
       thinkingLevel: this.mutableState.thinkingLevel,
@@ -530,14 +580,11 @@ export class Agent {
       convertToLlm: this.convertToLlm,
       transformContext: this.transformContext,
       getApiKey: this.getApiKey,
-      getSteeringMessages: async () => {
-        if (skipInitialSteeringPoll) {
-          skipInitialSteeringPoll = false;
-          return [];
-        }
-        return this.steeringQueue.drain();
-      },
+      getSteeringMessages,
       getFollowUpMessages: async () => this.followUpQueue.drain(),
+      consumeQueuedMessageCancellation: (message) =>
+        this.steeringQueue.consumeCancellation(message) ||
+        this.followUpQueue.consumeCancellation(message),
     };
   }
 
@@ -579,6 +626,8 @@ export class Agent {
   }
 
   private finishRun(): void {
+    this.steeringQueue.restore();
+    this.followUpQueue.restore();
     this.mutableState.isStreaming = false;
     this.mutableState.streamingMessage = undefined;
     this.mutableState.pendingToolCalls = new Set<string>();
@@ -611,6 +660,8 @@ export class Agent {
       case "message_end":
         this.mutableState.streamingMessage = undefined;
         this.mutableState.messages.push(event.message);
+        this.steeringQueue.commit(event.message);
+        this.followUpQueue.commit(event.message);
         break;
 
       case "tool_execution_start": {

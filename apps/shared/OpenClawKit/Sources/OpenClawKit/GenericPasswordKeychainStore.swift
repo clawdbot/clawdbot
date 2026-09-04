@@ -24,8 +24,12 @@ public enum GenericPasswordKeychainStore {
         }
     }
 
-    public static func loadString(service: String, account: String) -> String? {
-        guard let data = self.loadData(service: service, account: account) else { return nil }
+    public static func loadString(
+        service: String,
+        account: String,
+        accessGroup: String? = nil) -> String?
+    {
+        guard let data = self.loadData(service: service, account: account, accessGroup: accessGroup) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
@@ -34,9 +38,16 @@ public enum GenericPasswordKeychainStore {
         _ value: String,
         service: String,
         account: String,
+        accessGroup: String? = nil,
         accessible: CFString = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly) -> Bool
     {
-        switch self.saveStringResult(value, service: service, account: account, accessible: accessible) {
+        switch self.saveStringResult(
+            value,
+            service: service,
+            account: account,
+            accessGroup: accessGroup,
+            accessible: accessible)
+        {
         case .success: true
         case .failure: false
         }
@@ -46,6 +57,7 @@ public enum GenericPasswordKeychainStore {
         _ value: String,
         service: String,
         account: String,
+        accessGroup: String? = nil,
         accessible: CFString = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly)
         -> Result<Void, MutationError>
     {
@@ -53,14 +65,19 @@ public enum GenericPasswordKeychainStore {
             Data(value.utf8),
             service: service,
             account: account,
+            accessGroup: accessGroup,
             accessible: accessible,
             updateItem: { SecItemUpdate($0, $1) },
             addItem: { SecItemAdd($0, nil) })
     }
 
     @discardableResult
-    public static func delete(service: String, account: String) -> Bool {
-        switch self.deleteResult(service: service, account: account) {
+    public static func delete(
+        service: String,
+        account: String,
+        accessGroup: String? = nil) -> Bool
+    {
+        switch self.deleteResult(service: service, account: account, accessGroup: accessGroup) {
         case .success: true
         case .failure: false
         }
@@ -68,11 +85,13 @@ public enum GenericPasswordKeychainStore {
 
     public static func deleteResult(
         service: String,
-        account: String) -> Result<Void, MutationError>
+        account: String,
+        accessGroup: String? = nil) -> Result<Void, MutationError>
     {
         self.deleteResult(
             service: service,
             account: account,
+            accessGroup: accessGroup,
             deleteItem: { SecItemDelete($0) })
     }
 
@@ -86,8 +105,8 @@ public enum GenericPasswordKeychainStore {
         return status == errSecSuccess || status == errSecItemNotFound
     }
 
-    private static func loadData(service: String, account: String) -> Data? {
-        var query = self.baseQuery(service: service, account: account)
+    private static func loadData(service: String, account: String, accessGroup: String?) -> Data? {
+        var query = self.baseQuery(service: service, account: account, accessGroup: accessGroup)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -101,11 +120,12 @@ public enum GenericPasswordKeychainStore {
         _ data: Data,
         service: String,
         account: String,
+        accessGroup: String? = nil,
         accessible: CFString,
         updateItem: (CFDictionary, CFDictionary) -> OSStatus,
         addItem: (CFDictionary) -> OSStatus) -> Result<Void, MutationError>
     {
-        let query = self.baseQuery(service: service, account: account)
+        let query = self.baseQuery(service: service, account: account, accessGroup: accessGroup)
         let updates: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: accessible,
@@ -141,20 +161,32 @@ public enum GenericPasswordKeychainStore {
     static func deleteResult(
         service: String,
         account: String,
+        accessGroup: String? = nil,
         deleteItem: (CFDictionary) -> OSStatus) -> Result<Void, MutationError>
     {
-        let status = deleteItem(self.baseQuery(service: service, account: account) as CFDictionary)
+        let status = deleteItem(self.baseQuery(
+            service: service,
+            account: account,
+            accessGroup: accessGroup) as CFDictionary)
         guard status != errSecSuccess, status != errSecItemNotFound else {
             return .success(())
         }
         return .failure(MutationError(operation: .delete, status: status))
     }
 
-    private static func baseQuery(service: String, account: String) -> [String: Any] {
-        [
+    private static func baseQuery(
+        service: String,
+        account: String,
+        accessGroup: String?) -> [String: Any]
+    {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
+        if let accessGroup {
+            query[kSecAttrAccessGroup as String] = accessGroup
+        }
+        return query
     }
 }

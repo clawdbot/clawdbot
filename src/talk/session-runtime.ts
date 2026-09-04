@@ -6,9 +6,11 @@ import type {
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
+  RealtimeVoiceCloseOptions,
   RealtimeVoiceCloseReason,
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceProviderConfig,
+  RealtimeVoiceResponseOutcome,
   RealtimeVoiceRole,
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
@@ -36,7 +38,7 @@ export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignor
 export type RealtimeVoiceBridgeSession = {
   bridge: RealtimeVoiceBridge;
   acknowledgeMark(markName?: string): void;
-  close(): void;
+  close(options?: RealtimeVoiceCloseOptions): void;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
@@ -56,6 +58,8 @@ export type RealtimeVoiceBridgeSession = {
 export type RealtimeVoiceBridgeSessionParams = {
   provider: RealtimeVoiceProviderPlugin;
   cfg?: OpenClawConfig;
+  /** Host-selected agent scope for provider auth and agent-owned bridge state. */
+  agentId?: string;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
@@ -69,6 +73,9 @@ export type RealtimeVoiceBridgeSessionParams = {
   tools?: RealtimeVoiceTool[];
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
+  onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
+  /** Admit a host-requested response before the provider can complete it synchronously. */
+  onResponseRequest?: () => void;
   onToolCall?: (
     event: RealtimeVoiceToolCallEvent,
     session: RealtimeVoiceBridgeSession,
@@ -99,6 +106,16 @@ export function createRealtimeVoiceBridgeSession(
     }
     return bridgeRef.current;
   };
+  const requestResponse = (send: (() => void) | undefined) => {
+    if (!isAdmitting() || !send) {
+      return;
+    }
+    params.onResponseRequest?.();
+    // Admission callbacks can close the session before the provider receives the request.
+    if (isAdmitting()) {
+      send();
+    }
+  };
   // The provider may call callbacks during createBridge(); keep the public session facade
   // stable while blocking use until the bridge object has actually been returned.
   const session: RealtimeVoiceBridgeSession = {
@@ -106,13 +123,13 @@ export function createRealtimeVoiceBridgeSession(
       return requireBridge();
     },
     acknowledgeMark: (markName) => requireBridge().acknowledgeMark(markName),
-    close: () => {
+    close: (options) => {
       if (phase === "disposed") {
         return;
       }
       const bridge = requireBridge();
       phase = "disposed";
-      bridge.close();
+      bridge.close(options);
     },
     connect: () => {
       if (phase === "disposed") {
@@ -133,7 +150,12 @@ export function createRealtimeVoiceBridgeSession(
         requireBridge().sendAudio(audio);
       }
     },
-    sendUserMessage: (text) => requireBridge().sendUserMessage?.(text),
+    sendUserMessage: (text) => {
+      if (text.trim()) {
+        const bridge = requireBridge();
+        requestResponse(bridge.sendUserMessage?.bind(bridge, text));
+      }
+    },
     handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
     setMediaTimestamp: (ts) => requireBridge().setMediaTimestamp(ts),
     submitToolResult: (callId, result, options) => {
@@ -143,7 +165,10 @@ export function createRealtimeVoiceBridgeSession(
       }
       return bridge.submitToolResult(callId, result, options);
     },
-    triggerGreeting: (instructions) => requireBridge().triggerGreeting?.(instructions),
+    triggerGreeting: (instructions) => {
+      const bridge = requireBridge();
+      requestResponse(bridge.triggerGreeting?.bind(bridge, instructions));
+    },
   };
   // Session inactivity is the shared admission boundary for both audio directions.
   // Provider and transport callbacks may still race after close, but cannot retain new audio.
@@ -162,6 +187,7 @@ export function createRealtimeVoiceBridgeSession(
   };
   const bridge = params.provider.createBridge({
     cfg: params.cfg,
+    agentId: params.agentId,
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
     instructions: params.instructions,
@@ -195,6 +221,7 @@ export function createRealtimeVoiceBridgeSession(
     },
     onTranscript: params.onTranscript,
     onEvent: params.onEvent,
+    onResponseDone: params.onResponseDone,
     onToolCall: (event) => {
       if (!bridgeRef.current || !isAdmitting()) {
         return;
@@ -213,9 +240,11 @@ export function createRealtimeVoiceBridgeSession(
         return;
       }
       if (params.triggerGreetingOnReady) {
-        bridgeRef.current.triggerGreeting?.(params.initialGreetingInstructions);
+        session.triggerGreeting(params.initialGreetingInstructions);
       }
-      params.onReady?.(session);
+      if (isAdmitting()) {
+        params.onReady?.(session);
+      }
     },
     onError: params.onError,
     onClose: (reason) => {

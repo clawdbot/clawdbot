@@ -72,7 +72,7 @@ function createOptions(
 }
 
 async function runChannelsStart(running: boolean) {
-  const startChannel = vi.fn();
+  const startChannel = vi.fn(async () => new Map([["default-account", { status: "handed-off" }]]));
   const respond = vi.fn();
 
   await expectDefined(
@@ -124,6 +124,7 @@ describe("channelsHandlers channels.start", () => {
         channel: "whatsapp",
         accountId: "default-account",
         started: true,
+        outcome: { status: "handed-off" },
       },
       undefined,
     );
@@ -139,6 +140,7 @@ describe("channelsHandlers channels.start", () => {
         channel: "whatsapp",
         accountId: "default-account",
         started: false,
+        outcome: { status: "handed-off" },
       },
       undefined,
     );
@@ -174,19 +176,17 @@ describe("channelsHandlers channels.stop", () => {
           context: {
             getRuntimeConfig: mocks.getRuntimeConfig,
             stopChannel,
-            getRuntimeSnapshot: vi.fn(
-              (): ChannelRuntimeSnapshot => ({
-                channels: {},
-                channelAccounts: {
-                  whatsapp: {
-                    "default-account": {
-                      accountId: "default-account",
-                      running: false,
-                    },
+            getRuntimeSnapshot: vi.fn((): ChannelRuntimeSnapshot => ({
+              channels: {},
+              channelAccounts: {
+                whatsapp: {
+                  "default-account": {
+                    accountId: "default-account",
+                    running: false,
                   },
                 },
-              }),
-            ),
+              },
+            })),
           } as unknown as GatewayRequestHandlerOptions["context"],
         },
       ),

@@ -10,15 +10,25 @@ vi.mock("./doctor-bootstrap-size.js", () => ({
 }));
 
 vi.mock("./doctor-auth-flat-profiles.js", () => ({
+  collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map()),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
+    detected: [],
     changes: [],
+    configOwnerMigrationApplied: false,
     warnings: [],
   }),
-  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => cfg),
+  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+  })),
 }));
 
 vi.mock("./doctor-auth-legacy-oauth.js", () => ({
-  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
+  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
+    config: cfg,
+    retiredProfileCleanupPlans: [],
+  })),
 }));
 
 vi.mock("./doctor-auth-oauth-sidecar.js", () => ({
@@ -28,6 +38,10 @@ vi.mock("./doctor-auth-oauth-sidecar.js", () => ({
 vi.mock("./doctor-browser.js", () => ({
   detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
     changes: [],
     warnings: [],
   }),
@@ -110,10 +124,6 @@ vi.mock("./doctor-security.js", () => ({
 
 vi.mock("./doctor-install-policy.js", () => ({
   noteInstallPolicyHealth: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("./doctor-session-locks.js", () => ({
-  noteSessionLockHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-session-transcripts.js", () => ({

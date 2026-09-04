@@ -9,7 +9,6 @@ import {
   MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
   resolveConnectChallengeTimeoutMs,
 } from "../../packages/gateway-client/src/timeouts.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 
 describe("gateway handshake timeouts", () => {
@@ -75,20 +74,6 @@ describe("gateway handshake timeouts", () => {
     expect(resolvePreauthHandshakeTimeoutMs({ env: {} })).toBe(
       DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
     );
-  });
-
-  test("caps preauth handshake timeout env and config values to the safe timer range", () => {
-    expect(
-      resolvePreauthHandshakeTimeoutMs({
-        env: { OPENCLAW_HANDSHAKE_TIMEOUT_MS: "3000000000" },
-      }),
-    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-    expect(
-      resolvePreauthHandshakeTimeoutMs({
-        env: {},
-        configuredTimeoutMs: 3_000_000_000,
-      }),
-    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
   });
 
   test("resolves preauth handshake timeout from the test-only env before config", () => {

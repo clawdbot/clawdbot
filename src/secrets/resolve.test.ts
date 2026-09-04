@@ -2,19 +2,28 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   killPidIfAlive,
-  readPidFile,
+  waitForPidFile,
   waitForPidToExit,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
-import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import {
+  withMockedWindowsAclVerificationUnavailable,
+  withMockedWindowsPlatform,
+} from "../test-utils/vitest-spies.js";
+import {
+  describeSecretResolutionError,
+  describeSecretResolutionOperatorDiagnostic,
+  describeSecretResolutionOperatorRecovery,
+} from "./resolve-errors.js";
 import {
   isMissingSecretRefResolutionError,
+  isProviderScopedSecretResolutionError,
   resolveSecretRefString,
   resolveSecretRefValue,
   resolveSecretRefValues,
@@ -428,6 +437,7 @@ describe("secret ref resolver", () => {
     const scriptPath = await writeForkingNoOutputScript(root);
     const pidPath = path.join(root, "forked.pid");
     let childPid: number | undefined;
+    let resultPromise: Promise<string> | undefined;
     const nativeSetTimeout = globalThis.setTimeout;
     const noOutputTimeouts: Array<() => void> = [];
     const setTimeoutSpy = vi
@@ -441,23 +451,37 @@ describe("secret ref resolver", () => {
       });
 
     try {
-      const resultPromise = resolveExecSecret(scriptPath, {
+      resultPromise = resolveExecSecret(scriptPath, {
         env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-        // Preserve production-like startup headroom; the test fires the
-        // re-armed timer only after the readiness byte arrives.
         noOutputTimeoutMs: 1_000,
         timeoutMs: 10_000,
       });
-      await vi.waitFor(() => {
-        expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
-      });
-      childPid = await readPidFile(pidPath);
+      const resultErrorPromise = resultPromise.catch((error: unknown) => error);
+      childPid = await waitForPidFile(pidPath);
+      await vi.waitFor(
+        () => {
+          expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+        },
+        { timeout: 5_000 },
+      );
       noOutputTimeouts.at(-1)?.();
-      await expect(resultPromise).rejects.toThrow('Exec provider "execmain" produced no output');
+      const error = await resultErrorPromise;
+
+      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+      if (!isProviderScopedSecretResolutionError(error)) {
+        throw new Error("expected a provider-scoped no-output error");
+      }
+      expect(error).toMatchObject({
+        code: "SECRET_PROVIDER_UNAVAILABLE",
+        source: "exec",
+        provider: "execmain",
+        message: 'Exec provider "execmain" produced no output for 1000ms.',
+      });
       expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
     } finally {
       setTimeoutSpy.mockRestore();
       killPidIfAlive(childPid);
+      await resultPromise?.catch(() => {});
     }
   });
 
@@ -793,13 +817,14 @@ describe("secret ref resolver", () => {
   });
 
   it("fails closed on Windows when file provider ACL source is unknown", async () => {
-    await withMockedWindowsPlatform(async () => {
-      const dir = await createCaseDir("win-acl");
-      const filePath = path.join(dir, "secrets.json");
-      await writeSecureFile(filePath, '{"token":"abc123"}');
+    const dir = await createCaseDir("win-acl");
+    await withMockedWindowsAclVerificationUnavailable(
+      path.join(dir, "missing-windows-system-root"),
+      async () => {
+        const filePath = path.join(dir, "secrets.json");
+        await writeSecureFile(filePath, '{"token":"abc123"}');
 
-      await expect(
-        resolveSecretRefString(
+        const error = await resolveSecretRefString(
           { source: "file", provider: "filemain", id: "/token" },
           {
             config: {
@@ -810,16 +835,135 @@ describe("secret ref resolver", () => {
               },
             },
           },
-        ),
-      ).rejects.toThrow(/ACL verification unavailable on Windows/);
+        ).catch((caught: unknown) => caught);
+
+        expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+        if (!isProviderScopedSecretResolutionError(error)) {
+          return;
+        }
+        expect(error.code).toBe("SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE");
+        expect(describeSecretResolutionError(error)).toBe("secret provider failed");
+        expect(describeSecretResolutionOperatorDiagnostic(error)).toBe(
+          "Windows path security could not be verified",
+        );
+        expect(describeSecretResolutionOperatorRecovery(error)).toBe(
+          "Restore Windows path security verification, or use an existing secret file whose owner and ACLs OpenClaw can verify",
+        );
+      },
+    );
+  });
+
+  it("keeps a missing Windows file provider path as a generic failure", async () => {
+    await withMockedWindowsPlatform(async () => {
+      const dir = await createCaseDir("win-file-missing");
+      const filePath = path.join(dir, "missing.json");
+      const error = await resolveSecretRefString(
+        { source: "file", provider: "filemain", id: "/token" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                filemain: createFileProviderConfig(filePath),
+              },
+            },
+          },
+        },
+      ).catch((caught: unknown) => caught);
+
+      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+      if (!isProviderScopedSecretResolutionError(error)) {
+        return;
+      }
+      expect(error.code).toBe("SECRET_PROVIDER_UNAVAILABLE");
+      expect(describeSecretResolutionError(error)).toBe("secret provider failed");
+      expect(describeSecretResolutionOperatorDiagnostic(error)).toBeUndefined();
+      expect(describeSecretResolutionOperatorRecovery(error)).toBeUndefined();
     });
   });
 
   it("fails closed on Windows when exec provider ACL source is unknown", async () => {
+    const dir = await createCaseDir("win-exec-acl");
+    await withMockedWindowsAclVerificationUnavailable(
+      path.join(dir, "missing-windows-system-root"),
+      async () => {
+        const markerPath = path.join(dir, "executed");
+        const commandPath = path.join(dir, "resolver.sh");
+        await writeSecureFile(
+          commandPath,
+          ["#!/bin/sh", `touch ${JSON.stringify(markerPath)}`].join("\n"),
+          0o700,
+        );
+
+        const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
+
+        expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+        if (!isProviderScopedSecretResolutionError(error)) {
+          return;
+        }
+        expect(error.code).toBe("SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE");
+        expect(describeSecretResolutionError(error)).toBe("secret provider failed");
+        expect(describeSecretResolutionOperatorDiagnostic(error)).toBe(
+          "Windows path security could not be verified",
+        );
+        expect(describeSecretResolutionOperatorRecovery(error)).toBe(
+          "Restore Windows path security verification, or use an existing provider command whose owner and ACLs OpenClaw can verify",
+        );
+        await expect(fs.access(markerPath)).rejects.toThrow();
+      },
+    );
+  });
+
+  it("keeps a missing Windows exec provider path as a generic failure", async () => {
     await withMockedWindowsPlatform(async () => {
-      await expect(resolveExecSecret(execProtocolV1ScriptPath)).rejects.toThrow(
-        /Move the command to a path whose ACLs OpenClaw can verify; there is no provider-level bypass/,
+      const dir = await createCaseDir("win-exec-missing");
+      const commandPath = path.join(dir, "missing-resolver");
+      const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
+
+      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+      if (!isProviderScopedSecretResolutionError(error)) {
+        return;
+      }
+      expect(error.code).toBe("SECRET_PROVIDER_UNAVAILABLE");
+      expect(describeSecretResolutionError(error)).toBe("secret provider failed");
+      expect(describeSecretResolutionOperatorDiagnostic(error)).toBeUndefined();
+      expect(describeSecretResolutionOperatorRecovery(error)).toBeUndefined();
+    });
+  });
+
+  it("keeps a failed Windows exec permission restat as a generic failure", async () => {
+    await withMockedWindowsPlatform(async () => {
+      const dir = await createCaseDir("win-exec-restat");
+      const markerPath = path.join(dir, "executed");
+      const commandPath = path.join(dir, "resolver.sh");
+      await writeSecureFile(
+        commandPath,
+        ["#!/bin/sh", `touch ${JSON.stringify(markerPath)}`].join("\n"),
+        0o700,
       );
+
+      const originalLstat = fs.lstat.bind(fs);
+      let commandPathStats = 0;
+      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        if (String(args[0]) === commandPath && ++commandPathStats === 2) {
+          throw Object.assign(new Error("provider command disappeared"), { code: "ENOENT" });
+        }
+        return await originalLstat(...args);
+      });
+      try {
+        const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
+
+        expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+        if (!isProviderScopedSecretResolutionError(error)) {
+          return;
+        }
+        expect(error.code).toBe("SECRET_PROVIDER_UNAVAILABLE");
+        expect(describeSecretResolutionError(error)).toBe("secret provider failed");
+        expect(describeSecretResolutionOperatorDiagnostic(error)).toBeUndefined();
+        expect(describeSecretResolutionOperatorRecovery(error)).toBeUndefined();
+        await expect(fs.access(markerPath)).rejects.toThrow();
+      } finally {
+        lstatSpy.mockRestore();
+      }
     });
   });
 });

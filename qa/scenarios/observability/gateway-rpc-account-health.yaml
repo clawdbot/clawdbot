@@ -23,6 +23,7 @@ scenario:
     - test/e2e/qa-lab/runtime/gateway-rpc-account-health.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-rpc-account-health.ts
     summary: Starts a real QA bus and CLI Gateway child, performs authenticated health and status RPCs, and patches one account through config CAS and hot reload.
     args:

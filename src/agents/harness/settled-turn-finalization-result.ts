@@ -1,6 +1,7 @@
 import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
 import { resolveFinalAssistantVisibleText } from "../embedded-agent-runner/run/helpers.js";
+import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type {
   AgentHarnessAttemptResult,
   AgentHarnessSettledTurnFinalizationResult,
@@ -62,7 +63,7 @@ export function resolveSettledTurnFinalizationText(
 ): string {
   const text = resolveFinalAssistantVisibleText(result.assistant);
   if (!text || isSilentReplyText(text)) {
-    throw new Error("Settled-turn finalization completed without a visible answer");
+    throw new EmptySettledTurnFinalizationError(result);
   }
   return text;
 }

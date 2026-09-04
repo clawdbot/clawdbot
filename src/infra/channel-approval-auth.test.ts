@@ -1,6 +1,7 @@
 // Tests channel approval authorization and sender validation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createResolvedApproverActionAuthAdapter } from "../plugin-sdk/approval-auth-helpers.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 
@@ -39,7 +40,7 @@ describe("resolveApprovalCommandAuthorization", () => {
           approvalKind,
         }: {
           action: "approve";
-          approvalKind: "exec" | "plugin";
+          approvalKind: ChannelApprovalKind;
         }) =>
           approvalKind === "plugin"
             ? { authorized: false, reason: "plugin denied" }

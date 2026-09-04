@@ -5,8 +5,11 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { describe, expect, it } from "vitest";
 import { VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS } from "./api.js";
 import plugin from "./index.js";
-import { DOUBAO_CODING_MODEL_CATALOG, DOUBAO_MODEL_CATALOG } from "./models.js";
-import { VOLCENGINE_PROVIDER_CATALOG } from "./models.js";
+import {
+  DOUBAO_CODING_MODEL_CATALOG,
+  DOUBAO_MODEL_CATALOG,
+  VOLCENGINE_PROVIDER_CATALOG,
+} from "./models.js";
 
 describe("volcengine plugin", () => {
   it("preserves both provider-owned static catalogs and paired ordering", async () => {

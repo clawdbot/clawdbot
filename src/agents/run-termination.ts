@@ -1,4 +1,4 @@
-import { isFailoverError, isTimeoutError } from "./failover-error.js";
+import { isFailoverError, isTimeoutError } from "./failover/error.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 
 /**
@@ -12,8 +12,10 @@ const AGENT_RUN_ABORTED_STOP_REASON = "aborted" as const;
 /** Error text used for aborted agent runs. */
 export const AGENT_RUN_ABORTED_ERROR = "agent run aborted" as const;
 export const AGENT_RUN_RESTART_ABORT_STOP_REASON = "restart" as const;
+export const AGENT_RUN_SUPERSEDED_STOP_REASON = "superseded" as const;
 /** Error text used for agent runs aborted by a gateway restart. */
 export const AGENT_RUN_RESTART_ABORT_ERROR = "agent run aborted for restart" as const;
+export const AGENT_RUN_SUPERSEDED_ERROR = "agent run superseded by a newer session writer" as const;
 
 /**
  * Transports copy this code onto the persisted assistant message via
@@ -21,6 +23,7 @@ export const AGENT_RUN_RESTART_ABORT_ERROR = "agent run aborted for restart" as 
  * free-form provider error text.
  */
 export const AGENT_RUN_RESTART_ABORT_ERROR_CODE = "OPENCLAW_RESTART_ABORT";
+const AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE = "AGENT_RUN_SUPERSEDED_ABORT";
 const AGENT_RUN_DIRECT_ABORT_ERROR_CODE = "OPENCLAW_DIRECT_ABORT";
 
 export function createAgentRunDirectAbortError(): Error {
@@ -30,10 +33,16 @@ export function createAgentRunDirectAbortError(): Error {
   return error;
 }
 
+function hasAgentRunAbortCode(value: unknown, code: string): boolean {
+  try {
+    return value instanceof Error && "code" in value && value.code === code;
+  } catch {
+    return false;
+  }
+}
+
 export function isAgentRunDirectAbortReason(value: unknown): boolean {
-  return (
-    value instanceof Error && "code" in value && value.code === AGENT_RUN_DIRECT_ABORT_ERROR_CODE
-  );
+  return hasAgentRunAbortCode(value, AGENT_RUN_DIRECT_ABORT_ERROR_CODE);
 }
 
 export function createAgentRunRestartAbortError(): Error {
@@ -43,14 +52,19 @@ export function createAgentRunRestartAbortError(): Error {
   return error;
 }
 
+export function createAgentRunSupersededAbortError(): Error {
+  const error = new Error(AGENT_RUN_SUPERSEDED_ERROR) as Error & { code: string };
+  error.name = "AbortError";
+  error.code = AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE;
+  return error;
+}
+
 export function isAgentRunRestartAbortReason(value: unknown): boolean {
-  try {
-    return (
-      value instanceof Error && "code" in value && value.code === AGENT_RUN_RESTART_ABORT_ERROR_CODE
-    );
-  } catch {
-    return false;
-  }
+  return hasAgentRunAbortCode(value, AGENT_RUN_RESTART_ABORT_ERROR_CODE);
+}
+
+export function isAgentRunSupersededAbortReason(value: unknown): boolean {
+  return hasAgentRunAbortCode(value, AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE);
 }
 
 export function throwAgentRunRestartAbortReason(value: unknown): void {
@@ -121,6 +135,10 @@ export function resolveAgentRunErrorLifecycleFields(
   const abortFields = resolveAgentRunAbortLifecycleFields(signal);
   if (abortFields.aborted) {
     return abortFields;
+  }
+  // A run-owned controller can stop work without aborting its caller's signal.
+  if (isAgentRunDirectAbortReason(error)) {
+    return { aborted: true, stopReason: "aborted" };
   }
   if (!isProviderTimeoutError(error)) {
     return {};

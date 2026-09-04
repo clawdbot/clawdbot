@@ -1,4 +1,5 @@
 // Normalizes MCP config records into canonical runtime shape.
+import { normalizeLowercaseStringOrEmpty as normalizeMcpString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../utils.js";
 
 type ConfigMcpServers = Record<string, Record<string, unknown>>;
@@ -10,10 +11,6 @@ const CLI_MCP_TYPE_TO_OPENCLAW_TRANSPORT: Record<string, OpenClawMcpHttpTranspor
   sse: "sse",
   stdio: "stdio",
 };
-
-function normalizeMcpString(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 /** Maps CLI-native MCP type aliases to OpenClaw HTTP transport names. */
 export function resolveOpenClawMcpTransportAlias(

@@ -1,14 +1,21 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import android.content.Context
+import android.os.Looper
+import android.speech.SpeechRecognizer
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -21,6 +28,13 @@ import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 class VoiceWakeRuntimeTest {
+  private var runtimeUnderTest: NodeRuntime? = null
+
+  @After
+  fun closeRuntime() {
+    runtimeUnderTest?.let(::closeNodeRuntimeTestFixture)
+  }
+
   @Test
   fun disconnectedSaveDoesNotCreateLocalOverride() {
     val runtime = createTestRuntime()
@@ -173,7 +187,7 @@ class VoiceWakeRuntimeTest {
       )
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     prefs.setVoiceWakeEnabled(true)
-    val runtime = NodeRuntime(app, prefs, mode = NodeRuntimeMode.ScreenshotFixture)
+    val runtime = NodeRuntime(app, prefs, mode = NodeRuntimeMode.ScreenshotFixture).also { runtimeUnderTest = it }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
     writeField(runtime, "connectedEndpoint", endpoint)
 
@@ -218,6 +232,43 @@ class VoiceWakeRuntimeTest {
     assertTrue(runtime.setCameraAudioCaptureActive(false))
   }
 
+  @Test
+  fun reassertingActiveTalkDoesNotInvalidateItsTerminalOwner() {
+    val runtime = createTestRuntime()
+    shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val manager = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    readField<MutableStateFlow<VoiceCaptureMode>>(runtime, "_voiceCaptureMode").value = VoiceCaptureMode.TalkMode
+    readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value = true
+    readField<MutableStateFlow<Boolean>>(manager, "_isEnabled").value = true
+    val notification = readField<() -> ((() -> Boolean) -> Unit)>(manager, "captureRelayStopNotification").invoke()
+
+    runtime.setTalkModeEnabled(true)
+    readField<MutableStateFlow<Boolean>>(manager, "_isEnabled").value = false
+    notification { true }
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+  }
+
+  @Test
+  fun stoppingNativePttKeepsMicOwnedUntilMainDestroysTheRetiredRecognizer() =
+    runBlocking {
+      val runtime = createTestRuntime()
+      val manager = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+      val recognizer = SpeechRecognizer.createSpeechRecognizer(RuntimeEnvironment.getApplication())
+      writeField(manager, "recognizer", recognizer)
+      writeField(manager, "activePttCaptureId", "native-ptt")
+
+      withContext(Dispatchers.Default) { runtime.setTalkModeEnabled(false) }
+      assertFalse(shadowOf(recognizer).isDestroyed)
+      assertFalse("Off must retain the native recognizer while Main cleanup is queued", runtime.tryAcquireVoiceNoteMic())
+      shadowOf(Looper.getMainLooper()).idle()
+      withTimeout(5_000) {
+        while (!runtime.tryAcquireVoiceNoteMic()) delay(10)
+      }
+      assertTrue(shadowOf(recognizer).isDestroyed)
+      runtime.releaseVoiceNoteMic()
+    }
+
   private fun createTestRuntime(): NodeRuntime {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =
@@ -225,7 +276,7 @@ class VoiceWakeRuntimeTest {
         "openclaw.node.voicewake.runtime.test.${UUID.randomUUID()}",
         Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also { runtimeUnderTest = it }
   }
 
   private fun seedConnectedRuntime(runtime: NodeRuntime): GatewayEndpoint {

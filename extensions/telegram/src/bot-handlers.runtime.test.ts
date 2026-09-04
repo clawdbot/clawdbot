@@ -1,57 +1,47 @@
-// Telegram tests cover bot handlers plugin behavior.
-import { describe, expect, it } from "vitest";
-import {
-  buildTelegramInboundDebounceConversationKey,
-  buildTelegramInboundDebounceKey,
-} from "./bot-handlers.debounce-key.js";
+// Telegram tests cover bot handler registration behavior.
+import { Bot } from "grammy";
+import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
+import { describe, expect, it, vi } from "vitest";
+import { defaultTelegramBotDeps } from "./bot-deps.js";
+import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 
-describe("buildTelegramInboundDebounceKey", () => {
-  it("uses the resolved account id instead of literal default when provided", () => {
-    expect(
-      buildTelegramInboundDebounceKey({
-        accountId: "work",
-        conversationKey: "12345",
-        senderId: "67890",
-        debounceLane: "default",
-      }),
-    ).toBe("telegram:work:12345:67890:default");
-  });
+describe("registerTelegramHandlers", () => {
+  it("registers middleware in transport order", () => {
+    const bot = new Bot("123456:handler-registration-test");
+    const on = vi.spyOn(bot, "on");
+    const params: RegisterTelegramHandlerParams = {
+      cfg: {},
+      accountId: "default",
+      ownerAgentId: "main",
+      bot,
+      mediaMaxBytes: 1,
+      opts: { token: "tok" },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      telegramCfg: {},
+      telegramDeps: defaultTelegramBotDeps,
+      resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
+      resolveGroupActivation: () => undefined,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({}),
+      shouldSkipUpdate: () => false,
+      processMessage: vi.fn<RegisterTelegramHandlerParams["processMessage"]>(),
+      logger: getChildLogger({ module: "telegram/handler-registration-test" }),
+    };
 
-  it("falls back to literal default only when account id is actually absent", () => {
-    expect(
-      buildTelegramInboundDebounceKey({
-        accountId: undefined,
-        conversationKey: "12345",
-        senderId: "67890",
-        debounceLane: "forward",
-      }),
-    ).toBe("telegram:default:12345:67890:forward");
-  });
+    registerTelegramHandlers(params);
 
-  it("keeps direct topic thread ids in the conversation key", () => {
-    const topic100 = buildTelegramInboundDebounceConversationKey({ chatId: 7, threadId: 100 });
-    const topic200 = buildTelegramInboundDebounceConversationKey({ chatId: 7, threadId: 200 });
-
-    expect(topic100).toBe("7:topic:100");
-    expect(topic200).toBe("7:topic:200");
-    expect(
-      buildTelegramInboundDebounceKey({
-        accountId: "default",
-        conversationKey: topic100,
-        senderId: "42",
-        debounceLane: "default",
-      }),
-    ).not.toBe(
-      buildTelegramInboundDebounceKey({
-        accountId: "default",
-        conversationKey: topic200,
-        senderId: "42",
-        debounceLane: "default",
-      }),
-    );
-  });
-
-  it("uses the chat id as the conversation key when no thread is present", () => {
-    expect(buildTelegramInboundDebounceConversationKey({ chatId: 7 })).toBe("7");
+    expect(on.mock.calls.map(([trigger]) => trigger)).toEqual([
+      "my_chat_member",
+      "message_reaction",
+      "poll",
+      "poll_answer",
+      "callback_query",
+      "message:migrate_to_chat_id",
+      "message",
+      "edited_message",
+      "channel_post",
+      "edited_channel_post",
+    ]);
   });
 });

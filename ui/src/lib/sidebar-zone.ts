@@ -24,6 +24,7 @@ export function reconcileSidebarZone(
   workboardBoards: readonly SidebarWorkboardBoard[] = [],
   workboardEnabled = false,
   workboardBoardsReady = false,
+  workboardParentVisible = false,
 ): { entries: SidebarZoneEntry[]; sidebarEntries: string[] } {
   const pinnedKeys = new Set(pinnedSessions.map((session) => session.key));
   const validRouteSet = new Set(validRoutes);
@@ -42,6 +43,14 @@ export function reconcileSidebarZone(
       continue;
     }
     if (entry.type === "route") {
+      if (entry.route === "workboard") {
+        seen.add(canonicalKey);
+        canonical.push(canonicalKey);
+        if (workboardParentVisible) {
+          entries.push(entry);
+        }
+        continue;
+      }
       if (!validRouteSet.has(entry.route)) {
         continue;
       }
@@ -51,14 +60,13 @@ export function reconcileSidebarZone(
       continue;
     }
     if (entry.type === "workboard") {
-      if (!workboardEnabled) {
-        continue;
-      }
       seen.add(canonicalKey);
       canonical.push(canonicalKey);
-      // An unloaded catalog cannot distinguish deletion from startup. Preserve
-      // the slot but render nothing until the active plugin returns its ids.
-      if (!workboardBoardsReady) {
+      // Disabled reads exactly like startup: the runtime config snapshot is
+      // unloaded until the gateway answers, so a zone write in that window
+      // would erase every persisted pin. Preserve the slot, render nothing;
+      // only a loaded catalog that positively lacks the id deletes below.
+      if (!workboardEnabled || !workboardBoardsReady) {
         continue;
       }
       if (!validBoardIds.has(entry.boardId)) {

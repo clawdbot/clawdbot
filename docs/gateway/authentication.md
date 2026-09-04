@@ -13,7 +13,7 @@ This page covers **model provider** authentication (API keys, OAuth, Claude CLI 
 OpenClaw supports OAuth and API keys for model providers. For an always-on gateway host, an API key is the most predictable option; subscription/OAuth flows work too when they match your provider account model.
 
 - Full OAuth flow and storage layout: [/concepts/oauth](/concepts/oauth)
-- SecretRef-based auth (`env`/`file`/`exec` providers): [Secrets Management](/gateway/secrets)
+- SecretRef-based auth (`env`/`file`/`exec`/`store` providers): [Secrets Management](/gateway/secrets)
 - Credential eligibility/reason codes used by `models status --probe`: [Auth Credential Semantics](/auth-credential-semantics)
 
 ## Recommended setup: API key (any provider)
@@ -56,9 +56,9 @@ claude auth status --text
 openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
-This is two steps: log Claude Code into Anthropic on the host, then tell OpenClaw to route Anthropic model selection through the local `claude-cli` backend and store the matching OpenClaw auth profile.
+This is two steps: log Claude Code into Anthropic on the host, then tell OpenClaw to route Anthropic models through the local `claude-cli` backend.
 
-At run time OpenClaw treats a reused Claude CLI login as Claude's own credential: it verifies the host's current `claude` login matches the selected profile's account and then lets the `claude` subprocess authenticate natively, so Claude keeps refreshing its own login during runs. OpenClaw never forwards a copied token for this path. If the host login is missing or belongs to a different account, the run fails before spawn with the exact re-authentication commands. OpenClaw-managed credentials (Anthropic OAuth login profiles, setup tokens, API keys) are still delivered to the subprocess directly and refreshed by OpenClaw where applicable.
+OpenClaw never reads, stores, refreshes, or forwards the native login tokens. The installed `claude` process reads and refreshes its own login. `CLAUDE_CONFIG_DIR` selects a separate Claude login when set on the Gateway process. OpenClaw-managed setup tokens and API keys remain separate credentials.
 
 The gateway service must resolve `claude` on `PATH`. If a deployment needs a
 nonstandard executable path, register a wrapper through a

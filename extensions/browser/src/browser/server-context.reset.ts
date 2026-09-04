@@ -9,8 +9,7 @@ import {
   assertProfileLifecycleContext,
   beginProfileTransition,
 } from "./server-context.lifecycle.js";
-import type { BrowserServerState } from "./server-context.types.js";
-import type { ProfileRuntimeState } from "./server-context.types.js";
+import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
 import { movePathToTrash } from "./trash.js";
 
 type ResetDeps = {

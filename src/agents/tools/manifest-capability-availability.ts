@@ -4,6 +4,7 @@
  * Combines plugin contracts, availability, config signals, auth profiles, env candidates, and base URL guards.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
@@ -70,18 +71,6 @@ function listCapabilityAuthSignals(params: {
   );
 }
 
-function isPluginAvailableForCapability(params: {
-  snapshot: CapabilityMetadataSnapshot;
-  plugin: PluginManifestRecord;
-  config?: OpenClawConfig;
-}): boolean {
-  return isManifestPluginAvailableForControlPlane({
-    snapshot: params.snapshot,
-    plugin: params.plugin,
-    config: params.config,
-  });
-}
-
 function hasAvailableCapabilityPlugin(
   params: {
     snapshot: CapabilityMetadataSnapshot;
@@ -92,21 +81,16 @@ function hasAvailableCapabilityPlugin(
   if (params.config?.plugins?.enabled === false) {
     return false;
   }
-  for (const plugin of params.snapshot.plugins) {
-    if (
-      !isPluginAvailableForCapability({
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return params.snapshot.plugins.some(
+    (plugin) =>
+      isManifestPluginAvailableForControlPlane({
         snapshot: params.snapshot,
         plugin,
         config: params.config,
-      })
-    ) {
-      continue;
-    }
-    if (accepts(plugin)) {
-      return true;
-    }
-  }
-  return false;
+        normalizedConfig,
+      }) && accepts(plugin),
+  );
 }
 
 function hasConfiguredCapabilityProviderSignal(params: {

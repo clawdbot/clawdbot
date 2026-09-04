@@ -51,8 +51,7 @@ function resolveProviderBlockStreamingCoalesce(params: {
     return undefined;
   }
   const channelsConfig = cfg.channels as Record<string, unknown> | undefined;
-  const providerCfg =
-    channelsConfig?.[providerKey] ?? (cfg as Record<string, unknown>)[providerKey];
+  const providerCfg = channelsConfig?.[providerKey];
   if (!providerCfg || typeof providerCfg !== "object") {
     return undefined;
   }

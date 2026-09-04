@@ -27,6 +27,15 @@ const cfg = {
   },
 } as OpenClawConfig;
 
+describe("tlon target classification", () => {
+  it("distinguishes ships from group nests", () => {
+    expect(tlonPlugin.messaging?.inferTargetChatType?.({ to: "~sampel-palnet" })).toBe("direct");
+    expect(
+      tlonPlugin.messaging?.inferTargetChatType?.({ to: "chat/~sampel-palnet/operators" }),
+    ).toBe("group");
+  });
+});
+
 describe("tlon channel message adapter", () => {
   beforeEach(() => {
     mocks.sendText.mockReset();

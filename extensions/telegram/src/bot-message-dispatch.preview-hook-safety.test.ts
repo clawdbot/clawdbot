@@ -17,6 +17,45 @@ function registerHooks(...hooks: string[]) {
 }
 
 describeTelegramDispatch("Telegram provider preview hook safety", () => {
+  it.each([
+    {
+      label: "streaming is off",
+      streamMode: "off",
+      telegramCfg: {},
+    },
+    {
+      label: "partial tool progress is off",
+      streamMode: "partial",
+      telegramCfg: { streaming: { preview: { toolProgress: false } } },
+    },
+    {
+      label: "progress tool progress is off",
+      streamMode: "progress",
+      telegramCfg: { streaming: { progress: { toolProgress: false } } },
+    },
+  ] as const)(
+    "suppresses standalone tool progress when $label",
+    async ({ streamMode, telegramCfg }) => {
+      await dispatchWithContext({ context: createContext(), streamMode, telegramCfg });
+
+      expectDispatchParams({
+        replyOptions: expect.objectContaining({ suppressToolProgressMessages: true }),
+      });
+    },
+  );
+
+  it("allows verbose progress when progress rendering is enabled", async () => {
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { progress: { toolProgress: true } } },
+    });
+
+    expectDispatchParams({
+      replyOptions: expect.objectContaining({ suppressToolProgressMessages: false }),
+    });
+  });
+
   it("preserves answer previews when no hooks are registered", async () => {
     await dispatchWithContext({ context: createContext() });
 
@@ -46,6 +85,7 @@ describeTelegramDispatch("Telegram provider preview hook safety", () => {
         replyOptions: expect.objectContaining({
           onPartialReply: undefined,
           disableBlockStreaming: undefined,
+          forceToolResultProgress: false,
         }),
       });
     },

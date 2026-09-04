@@ -12,7 +12,7 @@ import {
   normalizeOptionalSecretInput,
   type OpenClawConfig,
   type SecretInput,
-  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-onboard";
@@ -32,17 +32,6 @@ type PixVerseAuthResult = {
   configPatch: OpenClawConfig;
   notes: string[];
 };
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
-}
 
 function normalizePixVerseRegion(value: unknown): PixVerseApiRegion | undefined {
   const region = normalizeOptionalString(value)?.toLowerCase();
@@ -155,6 +144,7 @@ async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerse
         : ctx.secretInputMode,
     config: ctx.config,
     env: ctx.env,
+    workspaceDir: ctx.workspaceDir,
     expectedProviders: [PIXVERSE_PROVIDER_ID],
     provider: PIXVERSE_PROVIDER_ID,
     envLabel: "PIXVERSE_API_KEY",

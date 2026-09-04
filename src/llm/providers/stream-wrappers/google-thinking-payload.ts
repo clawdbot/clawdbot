@@ -1,3 +1,4 @@
+import { googleFlashSupportsMinimalThinking } from "@openclaw/ai/transports";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
@@ -81,10 +82,11 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
   if (!isGoogleGemini3FlashModel(params.modelId)) {
     return undefined;
   }
+  const minimalLevel = googleFlashSupportsMinimalThinking(params.modelId) ? "MINIMAL" : "LOW";
   switch (params.thinkingLevel) {
     case "off":
     case "minimal":
-      return "MINIMAL";
+      return minimalLevel;
     case "low":
       return "LOW";
     case "medium":
@@ -105,7 +107,7 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     return undefined;
   }
   if (params.thinkingBudget <= 0) {
-    return "MINIMAL";
+    return minimalLevel;
   }
   if (params.thinkingBudget <= 2048) {
     return "LOW";

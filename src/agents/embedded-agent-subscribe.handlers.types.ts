@@ -24,7 +24,11 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedAgentSessionParams,
 } from "./embedded-agent-subscribe.types.js";
-import type { ThinkingTagStreamState } from "./embedded-agent-utils.js";
+import type {
+  createAssistantVisibleStreamText,
+  ThinkingTagStreamState,
+} from "./embedded-agent-utils.js";
+import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -46,26 +50,39 @@ type EmbeddedSubscribeLogger = {
 /** Per-tool metadata tracked between tool start/update/end events. */
 export type ToolCallSummary = {
   meta?: string;
+  commandBearing: boolean;
   instanceReplaySafe: boolean;
   replaySafe: boolean;
   mutatingAction: boolean;
-  actionFingerprint?: string;
-  fileTarget?: import("./tool-mutation.js").FileTarget;
+  ownerKey?: string;
 };
 
 /** User-visible assistant stream payload emitted to subscribers. */
-type AssistantStreamData = {
+export type AssistantStreamData = {
   text: string;
   delta: string;
   replace?: true;
   mediaUrls?: string[];
+  managedMediaUrls?: string[];
   phase?: AssistantPhase;
+  itemId?: string;
 };
 
-/** Deferred assistant stream event plus whether it should emit partial replies. */
-type AssistantStreamDelivery = {
-  data: AssistantStreamData;
-  emitPartialReply: boolean;
+/** Incremental tag and Markdown parsing state, owned by one stream lane. */
+export type StreamBlockState = {
+  thinking: boolean;
+  final: boolean;
+  /** The reply buffer already contains the phase-aware visible projection. */
+  textIsVisible?: true;
+  inlineCode?: InlineCodeState;
+  fence?: FenceScanState;
+  reasoningInlineCode?: InlineCodeState;
+  reasoningFence?: FenceScanState;
+  reasoningPendingFenceFragment?: string;
+  finalInlineCode?: InlineCodeState;
+  finalFence?: FenceScanState;
+  pendingFenceFragment?: string;
+  pendingTagFragment?: string;
 };
 
 /** Mutable subscription state shared by embedded-agent event handlers. */
@@ -73,17 +90,30 @@ export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{
     toolName?: string;
+    toolCallId?: string;
     meta?: string;
     replaySafe?: boolean;
     isError?: boolean;
+    terminate?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    codeModeSuspended?: boolean;
   }>;
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
+  liveEditDiffStateById: Map<
+    string,
+    {
+      added: number;
+      removed: number;
+      emittedAdded: number;
+      emittedRemoved: number;
+      lastCheckedAtMs: number;
+    }
+  >;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
@@ -94,6 +124,7 @@ export type EmbeddedAgentSubscribeState = {
   assistantTurnCount: number;
   lastToolError?: ToolErrorSummary;
   latestMcpAppChannelView?: McpAppChannelView;
+  latestMcpConnectAction?: McpConnectAction;
 
   blockReplyBreak: "text_end" | "message_end";
   reasoningMode: ReasoningLevel;
@@ -102,57 +133,52 @@ export type EmbeddedAgentSubscribeState = {
   streamReasoning: boolean;
 
   deltaBuffer: string;
+  /** Raw text received for the current native block, independent of snapshot separators. */
+  streamBlockText: string;
+  /** Start of this native block in the reply chunker's source, before Markdown rewriting. */
+  streamBlockOffset: number;
   /** Scanner state shares deltaBuffer's lifecycle so each provider byte is parsed once. */
   thinkingTagStream: ThinkingTagStreamState;
-  blockBuffer: string;
-  blockState: {
-    thinking: boolean;
-    final: boolean;
-    inlineCode: InlineCodeState;
-    fence?: FenceScanState;
-    reasoningInlineCode?: InlineCodeState;
-    reasoningFence?: FenceScanState;
-    reasoningPendingFenceFragment?: string;
-    finalInlineCode?: InlineCodeState;
-    finalFence?: FenceScanState;
-    pendingFenceFragment?: string;
-    pendingTagFragment?: string;
+  /**
+   * True while the buffered stream text belongs to an explicit commentary
+   * item (e.g. the Responses API "commentary" phase). Commentary is routed to
+   * a separate lane by the normal stream path, so the run-budget timeout
+   * flush must skip it too: flushing the raw deltaBuffer without this marker
+   * would publish reasoning/commentary bytes as assistant text.
+   */
+  deltaBufferIsCommentary: boolean;
+  /** Whether timeout settlement committed visible text for this message. */
+  hasFlushedPartialText: boolean;
+  blockState: StreamBlockState & { inlineCode: InlineCodeState };
+  partialBlockState: StreamBlockState & { inlineCode: InlineCodeState };
+  assistantStream?: {
+    raw: string;
+    text: string;
+    projection?: {
+      kind: "raw" | "delivery" | "final";
+      projector: ReturnType<typeof createAssistantVisibleStreamText>;
+    };
   };
-  partialBlockState: {
-    thinking: boolean;
-    final: boolean;
-    inlineCode: InlineCodeState;
-    fence?: FenceScanState;
-    reasoningInlineCode?: InlineCodeState;
-    reasoningFence?: FenceScanState;
-    reasoningPendingFenceFragment?: string;
-    finalInlineCode?: InlineCodeState;
-    finalFence?: FenceScanState;
-    pendingFenceFragment?: string;
-    pendingTagFragment?: string;
-  };
-  lastStreamedAssistant?: string;
-  lastStreamedAssistantCleaned?: string;
-  emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;
   deferBlockReplyDelivery: boolean;
   deferredBlockReplies: BlockReplyPayload[];
-  deferredAssistantEvents: AssistantStreamDelivery[];
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
+  /** Physical message boundary; assistantMessageIndex also advances between content blocks. */
+  assistantMessageStartIndex: number;
   lastAssistantStreamContentIndex?: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
+  lastAssistantTextContentIndex?: number;
+  lastAssistantTextItemId?: string;
   lastAssistantTextNormalized?: string;
   lastAssistantTextTrimmed?: string;
   assistantTextBaseline: number;
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
-  pendingAssistantUsage?: NormalizedUsage;
-  assistantUsageCommitted: boolean;
 
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;
@@ -188,12 +214,16 @@ export type EmbeddedAgentSubscribeState = {
   pendingToolMediaAttachments?: ReplyMediaAttachment[];
   /** Per-URL local-media trust; keys are normalized pending media URLs. */
   pendingToolMediaTrustByUrl: Map<string, boolean>;
+  /** Exact media URLs whose owning built-in tool contract requires source delivery. */
+  toolAutoDeliveryMediaUrls: Set<string>;
   pendingToolAudioAsVoice: boolean;
+  pendingToolMediaDeliveryFailed: boolean;
   hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
+  /** Media selection belongs to message_end; only voice/reply intent waits for a block. */
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
-    "mediaUrls" | "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
+    "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
   >;
   deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;
@@ -206,51 +236,41 @@ export type EmbeddedAgentSubscribeContext = {
   state: EmbeddedAgentSubscribeState;
   log: EmbeddedSubscribeLogger;
   blockChunking?: BlockReplyChunking;
-  blockChunker: EmbeddedBlockChunker | null;
+  blockChunker: EmbeddedBlockChunker;
   hookRunner?: HookRunner;
   builtinToolNames?: ReadonlySet<string>;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
   noteLastAssistant: (msg: AgentMessage) => void;
-  noteCompletedAssistant: (msg: AgentMessage) => void;
 
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
-  emitToolSummary: (toolName?: string, meta?: string) => void;
+  emitToolSummary: (
+    toolName: string | undefined,
+    meta: string | undefined,
+    commandBearing: boolean,
+  ) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
-  stripBlockTags: (
-    text: string,
-    state: {
-      thinking: boolean;
-      final: boolean;
-      inlineCode?: InlineCodeState;
-      fence?: FenceScanState;
-      reasoningInlineCode?: InlineCodeState;
-      reasoningFence?: FenceScanState;
-      reasoningPendingFenceFragment?: string;
-      finalInlineCode?: InlineCodeState;
-      finalFence?: FenceScanState;
-      pendingFenceFragment?: string;
-      pendingTagFragment?: string;
-    },
-    options?: { final?: boolean },
-  ) => string;
+  stripBlockTags: (text: string, state: StreamBlockState, options?: { final?: boolean }) => string;
   emitBlockChunk: (
     text: string,
-    options?: { assistantMessageIndex?: number; final?: boolean },
+    options?: {
+      assistantMessageIndex?: number;
+      final?: boolean;
+      finalReply?: ReplyDirectiveParseResult;
+    },
   ) => void;
   flushBlockReplyBuffer: (options?: {
     assistantMessageIndex?: number;
     final?: boolean;
+    finalReply?: ReplyDirectiveParseResult;
   }) => void | Promise<void>;
   emitReasoningStream: (text: string) => void;
-  consumeReplyDirectives: (
-    text: string,
-    options?: { final?: boolean },
-  ) => ReplyDirectiveParseResult | null;
   consumePartialReplyDirectives: (
     text: string,
     options?: { final?: boolean },
   ) => ReplyDirectiveParseResult | null;
+  resetBlockReplyDirectives: () => void;
+  resetPartialReplyDirectives: () => void;
   resetAssistantMessageState: (nextAssistantTextBaseline: number) => void;
   resetForCompactionRetry: () => void;
   finalizeAssistantTexts: (args: {
@@ -264,8 +284,7 @@ export type EmbeddedAgentSubscribeContext = {
   noteCompactionRetry: () => void;
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
-  recordAssistantUsage: (usage: unknown) => void;
-  commitAssistantUsage: () => void;
+  captureModelEvent: (evt: AgentSessionEvent) => void;
   incrementCompactionCount: () => void;
   noteCompactionTokensAfter: (value: unknown) => void;
   getUsageTotals: () => NormalizedUsage | undefined;
@@ -274,15 +293,15 @@ export type EmbeddedAgentSubscribeContext = {
   getLastCompactionTokensAfter: () => number | undefined;
   emitAssistantStreamData: (
     data: AssistantStreamData,
-    options?: { emitPartialReply?: boolean },
+    options?: { emitPartialReply?: boolean; finalMessage?: boolean },
   ) => void;
   emitBlockReply: (
     payload: BlockReplyPayload,
     options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => void;
-  flushDeferredAssistantEvents: () => void;
+  flushAssistantStream: () => void;
   flushDeferredBlockReplies: () => void;
-  clearDeferredAssistantEvents: () => void;
+  clearAssistantStream: () => void;
   clearDeferredBlockReplies: () => void;
 };
 
@@ -307,13 +326,17 @@ type ToolHandlerParams = Pick<
   | "sessionKey"
   | "currentChannelId"
   | "currentMessagingTarget"
+  | "currentAccountId"
   | "currentThreadId"
   | "currentMessageId"
   | "replyToMode"
   | "hasRepliedRef"
   | "sessionId"
   | "agentId"
+  | "coreBuiltinToolNames"
   | "replaySafeToolNames"
+  | "codeModeExecToolNames"
+  | "sideEffectToolOwners"
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"
@@ -327,16 +350,20 @@ type ToolHandlerState = Pick<
   | "acceptedSessionSpawns"
   | "toolSummaryById"
   | "execLiveUpdateStateById"
+  | "liveEditDiffStateById"
   | "itemActiveIds"
   | "itemStartedCount"
   | "itemCompletedCount"
   | "lastToolError"
   | "latestMcpAppChannelView"
+  | "latestMcpConnectAction"
   | "pendingMessagingTargets"
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
+  | "pendingToolMediaAttachments"
   | "pendingToolMediaTrustByUrl"
+  | "toolAutoDeliveryMediaUrls"
   | "pendingToolAudioAsVoice"
   | "deterministicApprovalPromptPending"
   | "hadDeterministicSideEffect"
@@ -365,13 +392,12 @@ export type ToolHandlerContext = {
   flushBlockReplyBuffer: () => void | Promise<void>;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
-  emitToolSummary: (toolName?: string, meta?: string) => void;
+  emitToolSummary: (
+    toolName: string | undefined,
+    meta: string | undefined,
+    commandBearing: boolean,
+  ) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   trimMessagingToolSent: () => void;
   consumeToolSendReceipt?: (toolCallId: string) => unknown;
 };
-
-export type EmbeddedAgentSubscribeEvent =
-  | AgentSessionEvent
-  | { type: string; [k: string]: unknown }
-  | { type: "message_start"; message: AgentMessage };

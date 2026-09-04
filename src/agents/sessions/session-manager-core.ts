@@ -1,8 +1,12 @@
 import {
   loadTranscriptEventsSync,
   replaceTranscriptEventsSync,
+  type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import {
+  readSessionTranscriptBoundedActiveContextCore,
+  type SessionTranscriptBoundedActiveContext,
+} from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
@@ -12,7 +16,7 @@ import {
   parseParentLinkedOpaqueEntry,
   partitionSessionFileEntries,
 } from "./session-manager-codec.js";
-import { createSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -23,6 +27,11 @@ import type {
 } from "./session-manager-types.js";
 
 export type SessionManagerPersistenceTarget = SessionTranscriptRuntimeTarget;
+export type SessionManagerBoundedContextLimits = { maxBytes: number; maxEvents: number };
+export type SessionManagerBoundedContext = Pick<
+  SessionTranscriptBoundedActiveContext,
+  "activeLeafEntryId" | "opaqueParents" | "firstKeptRanges" | "boundaryCount"
+> & { limits: SessionManagerBoundedContextLimits };
 
 export class SessionManagerCore {
   migrated = false;
@@ -32,6 +41,7 @@ export class SessionManagerCore {
   protected opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
   protected byId: Map<string, SessionEntry> = new Map();
   protected opaqueParentsById: Map<string, string | null> = new Map();
+  private boundedFirstKeptById = new Map<string, string>();
   protected logicalParentsById: Map<string, string | null> = new Map();
   protected invalidLeafControlIds: Set<string> = new Set();
   protected labelsById: Map<string, string> = new Map();
@@ -40,39 +50,66 @@ export class SessionManagerCore {
   protected appendParentId: string | null = null;
   protected appendMode: "side" | undefined;
   protected pendingDeliberateAppend = false;
-  protected promptReleasedSideBranchParentId: string | null | undefined;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
+  protected boundedContextLimits: SessionManagerBoundedContextLimits | undefined;
+  protected boundedContextIncomplete = false;
+  protected persistedBoundaryCount: number | undefined;
 
   constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
+    boundedContext?: SessionManagerBoundedContext,
   ) {
     this.cwd = cwd;
     this.persistenceTarget = persistenceTarget;
+    this.boundedContextLimits = boundedContext?.limits;
+    this.boundedContextIncomplete = boundedContext !== undefined;
+    this.persistedBoundaryCount = boundedContext?.boundaryCount;
     if (persistenceTarget || loadedEntries) {
-      this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? []);
+      this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? [], boundedContext);
     } else {
       this.newSession();
     }
   }
 
   setSessionTarget(target: SessionManagerPersistenceTarget): void {
-    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const bounded = this.boundedContextLimits
+      ? readSessionTranscriptBoundedActiveContextCore(target, this.boundedContextLimits)
+      : undefined;
+    const entries = (bounded?.events ?? loadTranscriptEventsSync(target)) as FileEntry[];
+    this.boundedContextIncomplete = bounded !== undefined;
+    this.persistedBoundaryCount = bounded?.boundaryCount;
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    this.setLoadedSessionTarget(target, entries);
+    this.setLoadedSessionTarget(target, entries, bounded);
     if (header?.cwd) {
       this.cwd = header.cwd;
     }
   }
 
+  /** Active-only loads can omit sibling rows even when they fit the context limits. */
+  protected ensureCompletePersistedHistory(): void {
+    if (!this.persistenceTarget || !this.boundedContextIncomplete) {
+      return;
+    }
+    const limits = this.boundedContextLimits;
+    this.boundedContextLimits = undefined;
+    this.setSessionTarget(this.persistenceTarget);
+    this.boundedContextLimits = limits;
+  }
+
   protected setLoadedSessionTarget(
     target: SessionManagerPersistenceTarget | undefined,
     entries: FileEntry[],
+    bounded?: Pick<
+      SessionTranscriptBoundedActiveContext,
+      "activeLeafEntryId" | "opaqueParents" | "firstKeptRanges"
+    >,
   ): void {
+    this.boundedFirstKeptById.clear();
     const partitioned = partitionSessionFileEntries(entries);
     // Only a physically empty transcript may initialize lazily. Opaque persisted rows still need
     // a canonical header, or runtime would silently replace malformed history with a fresh session.
@@ -92,12 +129,31 @@ export class SessionManagerCore {
     this.persistenceTarget = target ? { ...target } : undefined;
     this.fileEntries = partitioned.fileEntries;
     this.opaqueFileEntries = partitioned.opaqueEntries;
-    this.sessionId = header?.id ?? target?.sessionId ?? createSessionId();
+    this.sessionId = header?.id ?? target?.sessionId ?? createManagedSessionId();
     this.migrated = migrateToCurrentVersion(
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
     );
     this.buildIndex();
+    if (bounded) {
+      for (const [id, parentId] of bounded.opaqueParents) {
+        this.opaqueParentsById.set(id, parentId);
+      }
+      this.appendParentId = bounded.activeLeafEntryId;
+      for (const [boundaryId, range] of bounded.firstKeptRanges) {
+        // An empty retained slice starts at the boundary itself, never at an
+        // earlier ancestor. Opaque entries do not become model-context cut points.
+        let firstKeptEntryId = boundaryId;
+        for (let index = range.startIndex; index < range.endIndex; index++) {
+          const entry = partitioned.fileEntriesByOriginalIndex[index];
+          if (isIndexedSessionEntry(entry)) {
+            firstKeptEntryId = entry.id;
+            break;
+          }
+        }
+        this.boundedFirstKeptById.set(boundaryId, firstKeptEntryId);
+      }
+    }
   }
 
   reloadPersistedTranscript(): void {
@@ -116,7 +172,7 @@ export class SessionManagerCore {
   }
 
   private initializeSession(options?: NewSessionOptions): string | undefined {
-    this.sessionId = options?.id ?? this.persistenceTarget?.sessionId ?? createSessionId();
+    this.sessionId = options?.id ?? this.persistenceTarget?.sessionId ?? createManagedSessionId();
     this.migrated = false;
     const timestamp = new Date().toISOString();
     const header: SessionHeader = {
@@ -131,6 +187,7 @@ export class SessionManagerCore {
     this.opaqueFileEntries = [];
     this.byId.clear();
     this.opaqueParentsById.clear();
+    this.boundedFirstKeptById.clear();
     this.logicalParentsById.clear();
     this.invalidLeafControlIds.clear();
     this.labelsById.clear();
@@ -139,7 +196,6 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
-    this.promptReleasedSideBranchParentId = undefined;
     return this.persistenceTarget ? this.sessionId : undefined;
   }
 
@@ -195,7 +251,6 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
-    this.promptReleasedSideBranchParentId = undefined;
     let opaqueIndex = 0;
     let latestResetId: string | undefined;
     const resetDescendantIds = new Set<string>();
@@ -231,10 +286,6 @@ export class SessionManagerCore {
           this.leafId = effectiveLeafState.leafId;
           this.appendParentId = effectiveLeafState.appendParentId;
           this.appendMode = effectiveLeafState.appendMode;
-          this.promptReleasedSideBranchParentId =
-            effectiveLeafState.appendMode === "side"
-              ? effectiveLeafState.appendParentId
-              : undefined;
           opaqueIndex += 1;
           continue;
         }
@@ -249,9 +300,6 @@ export class SessionManagerCore {
             resetDescendantIds.add(link.id);
           }
           this.appendParentId = link.id;
-          if (this.promptReleasedSideBranchParentId !== undefined) {
-            this.promptReleasedSideBranchParentId = link.id;
-          }
         }
         opaqueIndex += 1;
       }
@@ -296,11 +344,9 @@ export class SessionManagerCore {
       this.appendParentId = entry.id;
       if (isSessionTranscriptSideAppendEntry(entry)) {
         this.appendMode = "side";
-        this.promptReleasedSideBranchParentId = entry.id;
       } else {
         this.leafId = entry.id;
         this.appendMode = undefined;
-        this.promptReleasedSideBranchParentId = undefined;
       }
       if (entry.type === "label") {
         if (entry.label) {
@@ -334,6 +380,13 @@ export class SessionManagerCore {
     let normalized = parentId === entry.parentId ? entry : { ...entry, parentId };
     if (normalized.parentId === normalized.id) {
       normalized = { ...normalized, parentId: null };
+    }
+    const boundedFirstKept = this.boundedFirstKeptById.get(normalized.id);
+    if (
+      boundedFirstKept !== undefined &&
+      (normalized.type === "compaction" || normalized.type === "reset")
+    ) {
+      normalized = { ...normalized, firstKeptEntryId: boundedFirstKept };
     }
     if (
       (normalized.type === "compaction" || normalized.type === "reset") &&
@@ -426,9 +479,7 @@ export class SessionManagerCore {
   ): SessionLeafControl {
     return {
       type: "leaf",
-      id: generateSessionEntryId({
-        has: (id) => this.byId.has(id) || this.opaqueParentsById.has(id),
-      }),
+      id: generateSessionEntryId(),
       parentId,
       timestamp: new Date().toISOString(),
       targetId: this.leafId,
@@ -521,7 +572,6 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
-    this.promptReleasedSideBranchParentId = undefined;
   }
 
   protected replacePersistedTranscript(options?: {

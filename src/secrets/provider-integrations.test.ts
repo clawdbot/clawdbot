@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -69,7 +69,7 @@ function loadTestRegistry(
   idHint: string,
   origin: PluginOrigin = "global",
 ): PluginManifestRegistry {
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryCore({
     candidates: [createCandidate(rootDir, idHint, origin)],
   });
 }
@@ -255,7 +255,7 @@ describe("secret provider integration presets", () => {
       },
     });
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       candidates: [
         createCandidate(rootDir, "long-integration-secrets"),
         createCandidate(longPluginRootDir, longPluginId),
@@ -303,7 +303,7 @@ describe("secret provider integration presets", () => {
       },
     });
 
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       candidates: [createCandidate(rootDir, "disabled-secrets", "global")],
       config: {
         plugins: {
@@ -355,7 +355,7 @@ describe("secret provider integration presets", () => {
         },
       },
     };
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       candidates: [createCandidate(rootDir, "openai", "global")],
       config,
     });
@@ -543,7 +543,7 @@ describe("secret provider integration presets", () => {
         },
       },
     };
-    const registry = loadPluginManifestRegistry({
+    const registry = loadPluginManifestRegistryCore({
       candidates: [createCandidate(rootDir, "revoked-secrets", "global")],
       config,
     });

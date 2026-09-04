@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import type {
@@ -89,8 +90,7 @@ function createSandboxTempDir(hostEnv: BaselineHostEnv): string {
 function assertWorkdirInsideWorkspace(workspaceDir: string, workdir: string): string {
   const workspace = realpathForExistingPath(workspaceDir, "sandbox workspace");
   const candidate = realpathForPotentialPath(workdir);
-  const relative = path.relative(workspace, candidate);
-  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+  if (isPathInside(workspace, candidate)) {
     return candidate;
   }
   throw new Error(
@@ -106,7 +106,7 @@ function resolveWorkdirInsideWorkspace(workspaceDir: string, workdir: string): s
       return candidate;
     }
   } catch (err) {
-    if (isNodeError(err) && err.code === "ENOENT") {
+    if (isMissingPathError(err)) {
       throw new Error(`MXC sandbox workdir ${workdir} does not exist.`, { cause: err });
     }
     throw err;
@@ -118,7 +118,7 @@ function realpathForExistingPath(value: string, label: string): string {
   try {
     return realpathSync(path.resolve(value));
   } catch (err) {
-    if (isNodeError(err) && err.code === "ENOENT") {
+    if (isMissingPathError(err)) {
       throw new Error(`MXC ${label} ${value} does not exist.`, { cause: err });
     }
     throw err;
@@ -130,7 +130,7 @@ function realpathForPotentialPath(value: string): string {
   try {
     return realpathSync(resolved);
   } catch (err) {
-    if (!isNodeError(err) || err.code !== "ENOENT") {
+    if (!isMissingPathError(err)) {
       throw err;
     }
     const parent = path.dirname(resolved);
@@ -143,6 +143,13 @@ function realpathForPotentialPath(value: string): string {
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
+}
+
+// ENOTDIR means a parent component is a file, so the path can never resolve to a
+// directory. Classifying it alongside ENOENT keeps validateWorkdir's "return null
+// for unusable workdirs" contract intact instead of leaking a raw filesystem error.
+function isMissingPathError(err: unknown): boolean {
+  return isNodeError(err) && (err.code === "ENOENT" || err.code === "ENOTDIR");
 }
 
 function buildMxcLauncherOptions(config: MxcConfig, usePty: boolean): MxcLauncherOptions {
@@ -194,6 +201,17 @@ export function createMxcSandboxBackendHandle(params: {
     runtimeId: params.runtimeId,
     runtimeLabel: params.runtimeId,
     workdir: params.workdir,
+    workdirValidation: "backend",
+    async validateWorkdir(workdir) {
+      try {
+        return resolveWorkdirInsideWorkspace(params.workdir, workdir);
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("MXC sandbox workdir")) {
+          return null;
+        }
+        throw err;
+      }
+    },
     capabilities: {},
 
     async buildExecSpec({ command, workdir, env, usePty }): Promise<SandboxBackendExecSpec> {

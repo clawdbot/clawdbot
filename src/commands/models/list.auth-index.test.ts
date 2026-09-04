@@ -12,6 +12,7 @@ const externalCliMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => ["openai"],
   resolveExternalCliAuthProfiles: externalCliMocks.resolveExternalCliAuthProfiles,
 }));
 
@@ -286,15 +287,10 @@ describe("createModelListAuthIndex", () => {
   );
 
   it("uses explicit synthetic refs without loading plugin metadata", () => {
-    const metadataSnapshot = {
-      registrySource: "persisted",
-      plugins: [],
-    } as unknown as PluginMetadataSnapshot;
     const index = createTestModelListAuthIndex({
       cfg: {},
       authStore: emptyStore,
       env: {},
-      metadataSnapshot,
       syntheticAuthProviderRefs: ["codex"],
       routeResolverFactory: dualRouteResolverFactory,
     });

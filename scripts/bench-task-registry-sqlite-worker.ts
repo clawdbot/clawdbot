@@ -1,6 +1,7 @@
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { DB as OpenClawStateKyselyDatabase } from "../src/state/openclaw-state-db.generated.js";
 import {
   WORKER_RESULT_SENTINEL,
@@ -10,6 +11,7 @@ import {
   type RetainedMemoryMetrics,
   type WorkerResult,
 } from "./bench-task-registry-sqlite.js";
+import { classifyBoundedUnsignedDecimal } from "./lib/arg-utils.mts";
 
 type WorkerOptions = {
   size: number;
@@ -43,14 +45,14 @@ type TaskRegistryQueryApi = Pick<
 >;
 
 function parseInteger(raw: string | undefined, flag: string, min: number, max: number): number {
-  if (!raw || !/^\d+$/u.test(raw)) {
+  const result = classifyBoundedUnsignedDecimal(raw, min, max);
+  if (result.kind === "syntax") {
     throw new Error(`${flag} must be an integer`);
   }
-  const value = Number(raw);
-  if (value < min || value > max) {
+  if (result.kind !== "value") {
     throw new Error(`${flag} must be between ${min} and ${max}`);
   }
-  return value;
+  return result.value;
 }
 
 function parseOptions(argv: string[]): WorkerOptions {
@@ -411,10 +413,6 @@ async function runBenchmark(options: WorkerOptions): Promise<WorkerResult> {
   };
 }
 
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -448,7 +446,7 @@ async function main(): Promise<void> {
     }
   }
   if (failure) {
-    throw toError(failure);
+    throw toErrorObject(failure, "Task registry SQLite benchmark failed");
   }
   if (!result) {
     throw new Error("benchmark worker completed without a result");

@@ -28,7 +28,7 @@ type PayloadLogEvent = {
   modelApi?: string | null;
   workspaceDir?: string;
   payload?: unknown;
-  usage?: Record<string, unknown>;
+  usage?: unknown;
   error?: string;
   payloadDigest?: string;
 };
