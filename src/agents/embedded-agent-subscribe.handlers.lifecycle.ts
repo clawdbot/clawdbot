@@ -14,9 +14,9 @@ import {
 } from "./embedded-agent-error-observation.js";
 import {
   classifyAssistantFailoverReason,
-  formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers.js";
+import { resolveAssistantErrorPresentation } from "./embedded-agent-helpers/error-text.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { hasAttemptTerminalState } from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
 import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
@@ -153,7 +153,7 @@ export function handleAgentEnd(
     const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
       providerOwner: ctx.params.providerOwner ?? null,
     });
-    const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
+    const presentation = resolveAssistantErrorPresentation(lastAssistant, {
       cfg: ctx.params.config,
       sessionKey: ctx.params.sessionKey,
       agentId: ctx.params.agentId,
@@ -166,27 +166,33 @@ export function handleAgentEnd(
       providerOwner: ctx.params.providerOwner,
     });
     const safeErrorText =
-      buildTextObservationFields(errorText, {
+      buildTextObservationFields(presentation.text, {
         provider: lastAssistant.provider,
       }).textPreview ?? GENERIC_ASSISTANT_ERROR_TEXT;
     lifecycleErrorText = safeErrorText;
     // Lifecycle events also reach clients, so log-only diagnostics must not leave here.
-    errorObservation = projectChatErrorDetail({
-      provider: lastAssistant.provider,
-      model: lastAssistant.model,
-      failoverReason,
-      ...observedError,
-      httpStatus: observedError.httpCode ? Number(observedError.httpCode) : undefined,
-    });
+    errorObservation =
+      presentation.attribution === "runtime"
+        ? undefined
+        : projectChatErrorDetail({
+            provider: lastAssistant.provider,
+            model: lastAssistant.model,
+            failoverReason,
+            ...observedError,
+            httpStatus: observedError.httpCode ? Number(observedError.httpCode) : undefined,
+          });
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
     const rawErrorConsoleSuffix =
+      presentation.attribution === "provider" &&
       safeRawErrorPreview &&
       !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
         ? ` rawError=${safeRawErrorPreview}`
         : "";
+    const providerConsoleContext =
+      presentation.attribution === "provider" ? ` model=${safeModel} provider=${safeProvider}` : "";
     ctx.log.warn("embedded run agent end", {
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
@@ -197,7 +203,7 @@ export function handleAgentEnd(
       model: lastAssistant.model,
       provider: lastAssistant.provider,
       ...observedError,
-      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
+      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true${providerConsoleContext} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
   } else {
     ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);

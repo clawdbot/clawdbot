@@ -33,8 +33,10 @@ import {
   appendInterruptedTurnMessage,
   createFailureMessage,
   createInterruptedTurnMessage,
+  createRunFailureContext,
   isTurnHandoffAbort,
   normalizeCoreContextMessages,
+  startRunProviderStream,
 } from "./turn-interruption.js";
 import type {
   ToolResultContentSource,
@@ -220,9 +222,18 @@ function streamAgentRun(
   signal?: AbortSignal,
 ): EventStream<AgentEvent, AgentMessage[]> {
   const stream = createAgentStream();
-  void run((event) => stream.push(event))
+  const failureContext = createRunFailureContext((event) => stream.push(event));
+  void run(failureContext.emit)
     .then((messages) => stream.end(messages))
-    .catch((error: unknown) => pushLoopFailure(stream, config, error, signal));
+    .catch((error: unknown) => {
+      const failureMessage = failureContext.createMessage(
+        config.model,
+        error,
+        signal?.aborted === true,
+      );
+      pushLoopFailure(stream, failureMessage, signal);
+    })
+    .finally(() => failureContext.dispose());
   return stream;
 }
 
@@ -269,17 +280,14 @@ function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
 
 function pushLoopFailure(
   stream: EventStream<AgentEvent, AgentMessage[]>,
-  config: AgentLoopConfig,
-  error: unknown,
+  failureMessage: AssistantMessage,
   signal: AbortSignal | undefined,
 ): void {
-  const aborted = signal?.aborted === true;
-  const failureMessage = createFailureMessage(config.model, error, aborted);
   stream.push({ type: "message_start", message: failureMessage });
   stream.push({ type: "message_end", message: failureMessage });
   stream.push({ type: "turn_end", message: failureMessage, toolResults: [] });
   const messages: AgentMessage[] = [failureMessage];
-  if (aborted && !isTurnHandoffAbort(signal)) {
+  if (failureMessage.stopReason === "aborted" && !isTurnHandoffAbort(signal)) {
     const interruption = createInterruptedTurnMessage();
     messages.push(interruption);
     stream.push({ type: "message_start", message: interruption });
@@ -565,11 +573,13 @@ async function streamAssistantResponse(
   const resolvedApiKey =
     (config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
 
-  const response = await streamFunction(config.model, llmContext, {
-    ...config,
-    apiKey: resolvedApiKey,
-    signal,
-  });
+  const response = await startRunProviderStream(emit, () =>
+    streamFunction(config.model, llmContext, {
+      ...config,
+      apiKey: resolvedApiKey,
+      signal,
+    }),
+  );
 
   let partialMessage: AssistantMessage | null = null;
   let addedPartial = false;
