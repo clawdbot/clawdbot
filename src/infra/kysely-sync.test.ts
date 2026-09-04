@@ -1,7 +1,7 @@
 // Covers the compile-only Kysely facade used by sync node:sqlite helpers.
 import { spawnSync } from "node:child_process";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
-import { CompiledQuery, sql, type Generated } from "kysely";
+import { sql, type Generated } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "./kysely-sync-cache-state.js";
@@ -70,7 +70,7 @@ describe("kysely sync helpers", () => {
     database.exec("insert into items (id, name) values (1, 'Ada')");
     database.exec("pragma user_version = 42");
     const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
-    const pragma = { compile: () => CompiledQuery.raw("pragma user_version") };
+    const pragma = { compile: () => sql`pragma user_version`.compile(db) };
 
     expect(executeSqliteQuerySync(database, pragma).rows).toEqual([{ user_version: 42 }]);
     expect([...iterateSqliteQuerySync(database, pragma)]).toEqual([{ user_version: 42 }]);
