@@ -146,6 +146,13 @@ enum GatewayWebSocketTestSupport {
         return obj["id"] as? String
     }
 
+    static func requestMethod(from message: URLSessionWebSocketTask.Message) -> String? {
+        guard let obj = requestFrameObject(from: message), (obj["type"] as? String) == "req" else {
+            return nil
+        }
+        return obj["method"] as? String
+    }
+
     private static func requestFrameObject(from message: URLSessionWebSocketTask.Message) -> [String: Any]? {
         let data: Data? = switch message {
         case let .data(d): d
@@ -197,6 +204,7 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private var connectRequestID: String?
     private var sendCount = 0
     private var receiveCount = 0
+    private var callbackReceiveCount = 0
     private var cancelCount = 0
     private var pendingReceiveHandler: (@Sendable (ReceiveResult) -> Void)?
     private var pendingInboundFrames: [ReceiveResult] = []
@@ -221,6 +229,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     func snapshotSendCount() -> Int {
         self.lock.withLock { self.sendCount }
+    }
+
+    func snapshotCallbackReceiveCount() -> Int {
+        self.lock.withLock { self.callbackReceiveCount }
     }
 
     func resume() {
@@ -271,6 +283,7 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
         completionHandler: @escaping @Sendable (ReceiveResult) -> Void)
     {
         let queued = self.lock.withLock { () -> ReceiveResult? in
+            self.callbackReceiveCount += 1
             guard !self.pendingInboundFrames.isEmpty else {
                 self.pendingReceiveHandler = completionHandler
                 return nil

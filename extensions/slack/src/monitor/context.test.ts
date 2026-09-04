@@ -1,6 +1,7 @@
 // Slack tests cover context plugin behavior.
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setSlackRuntime } from "../runtime.js";
@@ -679,6 +680,33 @@ describe("createSlackMonitorContext Agent View state", () => {
 });
 
 describe("Slack session status and titles", () => {
+  it("records the routed owner before status exposes native events, scoped to its workspace", async () => {
+    const route = resolveAgentRoute({
+      cfg: {},
+      channel: "slack",
+      peer: { kind: "group", id: "G123" },
+    });
+    const apiCall = vi.fn(async () => {
+      expect(ctx.getSlackSessionRoute("G123", "10.000", eventScope)).toEqual(route);
+      expect(ctx.getSlackSessionRoute("G123", "10.000")).toBeUndefined();
+      expect(
+        ctx.getSlackSessionRoute("G123", "10.000", { ...eventScope, teamId: "T_OTHER" }),
+      ).toBeUndefined();
+      return { ok: true };
+    });
+    const client = { apiCall } as unknown as App["client"];
+    const ctx = createTestContext({ appClient: client });
+    const eventScope = { teamId: "T_EXPECTED", client };
+    await ctx.setSlackSessionStatus({
+      channelId: "G123",
+      threadTs: "10.000",
+      status: "processing",
+      route,
+      eventScope,
+    });
+    expect(apiCall).toHaveBeenCalledOnce();
+  });
+
   it.each(["processing", "active", "suspended"] as const)(
     "writes %s only for a thread",
     async (status) => {

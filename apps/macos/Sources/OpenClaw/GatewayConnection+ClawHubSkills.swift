@@ -3,10 +3,6 @@ import OpenClawKit
 import OpenClawProtocol
 
 extension GatewayConnection {
-    func skillsStatus() async throws -> SkillsStatusReport {
-        try await self.requestDecoded(method: .skillsStatus)
-    }
-
     func skillsInstall(
         name: String,
         installId: String,

@@ -611,7 +611,7 @@ setInterval(() => {}, 1_000);
   });
 
   it.each<{
-    snapshot: "empty" | "live" | "failed" | "zombie";
+    snapshot: "empty" | "live" | "failed" | "zombie" | "zombie-leader";
     afterSnapshot: string | null;
     expected: ReturnType<typeof inspectManagedProcessGroup>;
     policy?: Parameters<typeof inspectManagedProcessGroup>[1]["errorPolicy"];
@@ -625,6 +625,7 @@ setInterval(() => {}, 1_000);
     { snapshot: "live", afterSnapshot: null, expected: "live" },
     { snapshot: "failed", afterSnapshot: null, expected: "live" },
     { snapshot: "zombie", afterSnapshot: null, expected: "dead" },
+    { snapshot: "zombie-leader", afterSnapshot: null, expected: "live" },
     { snapshot: "empty", afterSnapshot: "EPERM", expected: "live" },
     {
       snapshot: "empty",
@@ -659,14 +660,27 @@ setInterval(() => {}, 1_000);
         }
         return true;
       });
-      const ps = vi.spyOn(childProcess, "spawnSync").mockImplementation(() => {
+      const ps = vi.spyOn(childProcess, "spawnSync").mockImplementation((...call) => {
         inspected = true;
+        // Mirror /proc reporting: without -L, ps collapses a pthread_exit leader
+        // with a live sibling thread into one Z process row; -L exposes the thread.
+        const threadRows = Array.isArray(call[1]) && call[1].includes("-L");
+        const stdout =
+          snapshot === "zombie-leader"
+            ? threadRows
+              ? "12345 Z\n12345 S\n"
+              : "12345 Z\n"
+            : snapshot === "zombie"
+              ? "12345 Z\n"
+              : snapshot === "live"
+                ? "12345 S\n"
+                : "";
         return {
           pid: 12346,
           output: [],
           signal: null,
           status: snapshot === "empty" ? 1 : 0,
-          stdout: snapshot === "zombie" ? "12345 Z\n" : snapshot === "live" ? "12345 S\n" : "",
+          stdout,
           stderr: "",
           ...(snapshot === "failed" ? { error: new Error("ps unavailable") } : {}),
         };

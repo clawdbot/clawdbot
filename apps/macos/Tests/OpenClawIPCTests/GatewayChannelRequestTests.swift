@@ -100,6 +100,7 @@ struct GatewayChannelRequestTests {
                 return received
             })
         #expect(received == ["1:agent.wait completed", "2:chat.history reply", "3:connection lost"])
+        #expect(socket.snapshotCallbackReceiveCount() == 3)
     }
 
     @Test(arguments: RequestCompletion.allCases)

@@ -1474,7 +1474,7 @@ packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	7
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
-packages/ai/src/providers/openai-tool-schema-compat.ts	7
+packages/ai/src/providers/openai-tool-schema-compat.ts	6
 packages/ai/src/providers/openai-tool-schema.ts	7
 packages/ai/src/providers/schema-keyword-strip.ts	2
 packages/ai/src/providers/simple-options.ts	1
@@ -2029,7 +2029,7 @@ src/agents/tools/conversation-tools.ts	3
 src/agents/tools/cron-tool-context.ts	1
 src/agents/tools/cron-tool-schema.ts	1
 src/agents/tools/cron-tool-write.ts	2
-src/agents/tools/cron-tool.ts	13
+src/agents/tools/cron-tool.ts	10
 src/agents/tools/dashboard-tool.ts	3
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	5

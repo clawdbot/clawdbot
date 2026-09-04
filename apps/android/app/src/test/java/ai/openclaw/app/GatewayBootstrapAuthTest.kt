@@ -727,7 +727,7 @@ class GatewayBootstrapAuthTest {
     val (runtime, prefs) = createNeutralizedRuntime()
     armSavedActiveManualGateway(prefs)
     val endpoint = gatewayEndpoint()
-    runtime.connect(endpoint)
+    runBlocking { assertTrue(runtime.connectSwitchingGateway(endpoint)) }
 
     runtime.setCameraEnabled(true)
 
@@ -756,7 +756,7 @@ class GatewayBootstrapAuthTest {
     shadowOf(app).denyPermissions(Manifest.permission.CAMERA)
     val (runtime, prefs) = createNeutralizedRuntime()
     armSavedActiveManualGateway(prefs)
-    runtime.connect(gatewayEndpoint())
+    runBlocking { assertTrue(runtime.connectSwitchingGateway(gatewayEndpoint())) }
     val original = waitForDesiredConnection(runtime, "nodeSession")
 
     runtime.refreshNodePermissionSurface()
