@@ -37,7 +37,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/discord/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
-  "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],
+  "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
   "extensions/memory-core/index.ts": ["before_agent_reply", "before_prompt_build"],
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/onepassword/index.ts": ["before_tool_call", "tool_result_persist"],
@@ -56,7 +56,6 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     "api.runtime.config?.current?.() ?? api.config",
   ],
   "extensions/memory-core/src/dreaming.ts": [
-    'params.reason === "runtime"',
     "resolveMemoryDreamingPluginConfig(startupCfg)",
     "api.runtime.config?.current?.() ?? api.config",
   ],
