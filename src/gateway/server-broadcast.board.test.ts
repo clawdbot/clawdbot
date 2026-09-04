@@ -4,17 +4,22 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   deleteSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { boardStore } from "./board-store.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import { createBoardHandlers } from "./server-methods/board.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
@@ -23,6 +28,7 @@ import {
   invalidateSessionSharingSnapshot,
   resolveSessionSharingTarget,
 } from "./session-sharing.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 
 type RecordingSocket = {
@@ -163,6 +169,155 @@ describe("board event scope guards", () => {
     expect(visible.socket.events).toEqual(["board.changed"]);
     expect(canReceiveSessionEvent).toHaveBeenCalledTimes(2);
   });
+});
+
+describe("board event session ownership", () => {
+  it.each(["global", "per-sender"] as const)(
+    "delivers board events only to the canonical draft owner in %s mode",
+    async (scope) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const cfg: OpenClawConfig = {
+          ...rolePolicyConfig(),
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          session: { scope },
+          tools: { exec: { mode: "ask" } },
+        };
+        setRuntimeConfigSnapshot(cfg, cfg);
+        const targets = [
+          { sessionKey: "global", agentId: "work", label: "raw-owner" },
+          { sessionKey: "agent:work:global", agentId: "work", label: "ordinary-owner" },
+          { sessionKey: "global", agentId: "main", label: "other-agent-owner" },
+        ];
+        const peers = targets.map(({ label }) => {
+          const peer = makeClient(label, "operator", ["operator.read"]);
+          Object.assign(peer.client, roleClient("view", label));
+          return peer;
+        });
+        for (const [index, target] of targets.entries()) {
+          await upsertSessionEntryCore(target, {
+            sessionId: target.label,
+            label: target.label,
+            updatedAt: 1,
+            visibility: "draft",
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: peers[index]!.client.authenticatedUserProfile!.profileId,
+            },
+          });
+        }
+        invalidateSessionSharingSnapshot();
+        const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+          clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+          canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
+            canReceiveSessionEventForClient({ cfg, client, sessionKeys, agentId, event, payload }),
+        });
+        const handlers = createBoardHandlers(boardStore);
+        const context = {
+          broadcast,
+          broadcastToConnIds,
+          getRuntimeConfig: () => cfg,
+          getSessionEventSubscriberConnIds: () => new Set(peers.map(({ client }) => client.connId)),
+          chatAbortControllers: new Map(),
+          resolveGatewayContext: (): GatewayRequestContext => context,
+        } as unknown as GatewayRequestContext;
+        const invoke = async (method: string, params: Record<string, unknown>) => {
+          const respond = vi.fn<RespondFn>();
+          await handlers[method]!({
+            req: { type: "req", id: "event-owner", method, params },
+            params,
+            client: peers[0]!.client,
+            isWebchatConnect: () => false,
+            respond,
+            context,
+          });
+          flushPendingSessionsChangedEvents(context);
+          expect(respond.mock.calls[0]?.[0]).toBe(true);
+          return peers.map(({ socket }) => {
+            const frames = socket.send.mock.calls.map(([frame]) => JSON.parse(String(frame)));
+            socket.send.mockClear();
+            return frames.map(({ event, payload }) => ({ event, payload }));
+          });
+        };
+        const target = { sessionKey: "global", agentId: "work" };
+        const rawUpdate = await invoke("board.update", {
+          ...target,
+          ops: [{ kind: "tab_create", tabId: "notes", title: "Notes" }],
+        });
+        const rawPut = await invoke("board.widget.put", {
+          ...target,
+          name: "status",
+          content: { kind: "html", html: "<p>Working</p>" },
+          declared: { tools: ["status.refresh"] },
+        });
+        const widget = boardStore.getSnapshot(target).widgets[0]!;
+        const rawGrant = await invoke("board.widget.grant", {
+          ...target,
+          name: "status",
+          decision: "granted",
+          revision: widget.revision,
+          instanceId: widget.instanceId,
+        });
+        const emptyUpdate = await invoke("board.update", { ...target, ops: [] });
+        const ordinaryUpdate = await invoke("board.update", {
+          sessionKey: "agent:work:global",
+          ops: [{ kind: "tab_create", tabId: "ordinary", title: "Ordinary" }],
+        });
+        const otherAgentUpdate = await invoke("board.update", {
+          sessionKey: "global",
+          agentId: "main",
+          ops: [{ kind: "tab_create", tabId: "main-notes", title: "Main notes" }],
+        });
+        expect(boardStore.getSnapshot(target)).toMatchObject({
+          sessionKey: "global",
+          revision: 3,
+          widgets: [{ name: "status", grantState: "granted" }],
+        });
+        const changed = (agentId: string, revision: number, widgetName?: string) => ({
+          event: "board.changed",
+          payload: {
+            sessionKey: `agent:${agentId}:global`,
+            revision,
+            ...(widgetName ? { widget: widgetName } : {}),
+          },
+        });
+        const sessionChanged = (sessionKey: string, agentId: string, label: string) => ({
+          event: "sessions.changed",
+          payload: expect.objectContaining({
+            sessionKey,
+            agentId,
+            sessionId: label,
+            label,
+            reason: "board",
+          }),
+        });
+        const rawSession = sessionChanged("global", "work", "raw-owner");
+        expect({
+          rawUpdate,
+          rawPut,
+          rawGrant,
+          emptyUpdate,
+          ordinaryUpdate,
+          otherAgentUpdate,
+        }).toEqual({
+          rawUpdate: [[rawSession, changed("work", 1)], [], []],
+          rawPut: [[rawSession, changed("work", 2, "status")], [], []],
+          rawGrant: [[changed("work", 3)], [], []],
+          emptyUpdate: [[], [], []],
+          ordinaryUpdate: [
+            [],
+            [sessionChanged("agent:work:global", "work", "ordinary-owner"), changed("work", 1)],
+            [],
+          ],
+          otherAgentUpdate: [
+            [],
+            [],
+            [sessionChanged("global", "main", "other-agent-owner"), changed("main", 1)],
+          ],
+        });
+      });
+    },
+  );
 });
 
 describe("collaboration event scope guards", () => {
