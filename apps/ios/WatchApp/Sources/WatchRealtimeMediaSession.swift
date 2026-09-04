@@ -54,7 +54,7 @@ final class WatchRealtimeMediaSession: Sendable {
         self.cancel()
     }
 
-    func startAudio() async throws -> WatchRealtimeAudioFormat {
+    func startAudio() async throws {
         guard self.lifecycle.phase.withLock({ phase in
             guard phase == .idle else { return false }
             phase = .starting
@@ -73,7 +73,7 @@ final class WatchRealtimeMediaSession: Sendable {
                 throw WatchRealtimeMediaError
                     .unavailable(String(localized: "Allow microphone access in Settings to start voice."))
             }
-            let format = try await self.audio.start(
+            try await self.audio.start(
                 onPacket: { [transport = self.transport] in transport.sendOpus($0, timestamp: $1) },
                 onFailure: { [weak self] message in
                     guard let self else { return }
@@ -87,7 +87,6 @@ final class WatchRealtimeMediaSession: Sendable {
                 phase = .active
                 return true
             }) else { throw CancellationError() }
-            return format
         } catch {
             await self.stop()
             throw error

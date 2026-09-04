@@ -2,13 +2,6 @@ import AVFAudio
 import Foundation
 import Synchronization
 
-struct WatchRealtimeAudioFormat: Sendable {
-    let captureSampleRate: Double
-    let captureChannels: UInt32
-    let opusSampleRate = WatchOpusCodec.sampleRate
-    let opusFrameDuration = 0.020
-}
-
 /// Graph mutations, conversion, codecs and playback have one queue owner. The tap only
 /// copies its borrowed buffer; its bounded handoff and cancellation are mutex protected.
 final class WatchRealtimeAudioIO: @unchecked Sendable {
@@ -42,7 +35,7 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
     private var scheduledFrames: UInt32 = 0
     private var playbackGeneration: UInt64 = 0
     private var observations: [NSObjectProtocol] = []
-    private var startContinuation: CheckedContinuation<WatchRealtimeAudioFormat, Error>?
+    private var startContinuation: CheckedContinuation<Void, Error>?
     private var stopContinuations: [CheckedContinuation<Void, Never>] = []
     private var activating = false
     private var ownsLease = false
@@ -68,11 +61,11 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
 
     func start(
         onPacket: @escaping @Sendable (Data, UInt64) -> Void,
-        onFailure: @escaping @Sendable (String) -> Void) async throws -> WatchRealtimeAudioFormat
+        onFailure: @escaping @Sendable (String) -> Void) async throws
     {
         try await withTaskCancellationHandler {
             try Task.checkCancellation()
-            return try await withCheckedThrowingContinuation { continuation in
+            try await withCheckedThrowingContinuation { continuation in
                 self.queue.async { self.begin(continuation, onPacket: onPacket, onFailure: onFailure) }
             }
         } onCancel: { self.cancel() }
@@ -136,7 +129,7 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
     }
 
     private func begin(
-        _ continuation: CheckedContinuation<WatchRealtimeAudioFormat, Error>,
+        _ continuation: CheckedContinuation<Void, Error>,
         onPacket: @escaping @Sendable (Data, UInt64) -> Void,
         onFailure: @escaping @Sendable (String) -> Void)
     {
@@ -191,15 +184,15 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
 
     private func finishStart() {
         do {
-            let format = try self.configureGraph()
+            try self.configureGraph()
             self.observeAudioChanges()
             let continuation = self.startContinuation
             self.startContinuation = nil
-            continuation?.resume(returning: format)
+            continuation?.resume()
         } catch { self.fail(error.localizedDescription) }
     }
 
-    private func configureGraph() throws -> WatchRealtimeAudioFormat {
+    private func configureGraph() throws {
         self.running = false
         if self.hasTap { self.engine.inputNode.removeTap(onBus: 0)
             self.hasTap = false
@@ -237,7 +230,6 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
         self.engine.prepare()
         try self.engine.start()
         self.running = true
-        return WatchRealtimeAudioFormat(captureSampleRate: format.sampleRate, captureChannels: format.channelCount)
     }
 
     private func capture(_ buffer: AVAudioPCMBuffer) {
@@ -335,7 +327,7 @@ final class WatchRealtimeAudioIO: @unchecked Sendable {
             self.queue.async {
                 guard self.running, !self.gate.withLock({ $0.stopped }) else { return }
                 do {
-                    _ = try self.configureGraph()
+                    try self.configureGraph()
                 } catch {
                     self.fail(error.localizedDescription)
                 }

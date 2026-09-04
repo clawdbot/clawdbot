@@ -148,7 +148,7 @@ final class WatchRealtimeCallController {
                 // watchOS permits low-level networking only with an active audio session.
                 // Capture stays muted until both the Gateway owner and media are ready.
                 attempt.media.setMuted(true)
-                _ = try await attempt.media.startAudio()
+                try await attempt.media.startAudio()
                 try self.checkCurrent(attempt)
                 try await self.connectGateway(attempt)
                 try self.checkCurrent(attempt)
