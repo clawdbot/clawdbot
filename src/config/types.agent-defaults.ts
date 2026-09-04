@@ -442,6 +442,15 @@ export type AgentCompactionMemoryFlushConfig = {
   enabled?: boolean;
   /** Optional provider/model override used only for pre-compaction memory flush turns. */
   model?: string;
+  /**
+   * Fallback model refs for the flush when `model` is set.
+   *
+   * Omit to keep the default: an explicit flush model resolves exactly, so a
+   * cheap or local maintenance model never silently falls through to the paid
+   * conversation model. Set this to name the models you accept paying for on
+   * this path instead.
+   */
+  fallbacks?: string[];
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
   /**
