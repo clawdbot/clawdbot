@@ -229,6 +229,19 @@ Auto-capture also rejects text that looks like envelope/transport metadata,
 prompt-injection payloads, or already-injected `<relevant-memories>` context,
 and caps at 3 captured memories per agent turn.
 
+Completed message occurrences are not processed again while they remain in the
+conversation transcript, including after compaction. The last 60 completed text
+blocks also stay deduplicated after their messages leave the transcript. This
+history includes text that matched an existing memory and successful blocks from
+a partially failed message. A later message can still capture text that an
+earlier occurrence skipped because of the per-turn limit. Identical replacements
+without a distinct timestamp or retained context can be indistinguishable from
+an unchanged replay. Resetting or ending
+the conversation clears that progress. Overlapping completions in one conversation
+share capture progress; other conversations can proceed independently. On shutdown,
+the plugin stops new capture work and waits for pending captures before closing
+its storage.
+
 Every memory is owned by one agent. Recall, duplicate detection, capture,
 listing, raw queries, and deletion all enforce that owner before returning or
 mutating rows. An agent with `memory.search.enabled: false` in its `agents.entries.*`

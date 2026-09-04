@@ -16,7 +16,6 @@ import {
 } from "./dreaming-state.js";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
-import { buildPromotionRecallAnnotations } from "./short-term-promotion-metadata.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -149,20 +148,11 @@ describe("memory forget", () => {
       });
       const promoted = candidates[0];
       expect(promoted).toBeDefined();
-      const resultEntry = `- ${promoted!.snippet} Source: ${promoted!.path}#L1-L1 ${buildPromotionRecallAnnotations(promoted!)}`;
       const output = JSON.stringify({
-        memory: `# Long-Term Memory\n${resultEntry}\n`,
-        operations: [
-          { candidateKey: promoted!.key, action, resultEntry, priorEntries: [priorEntry] },
-        ],
+        operations: [{ candidateKey: promoted!.key, action, priorEntries: [priorEntry] }],
       });
       const subagent = {
-        run: vi.fn(async () => ({ runId: "shared-consolidation" })),
-        waitForRun: vi.fn(async () => ({ status: "ok" })),
-        getSessionMessages: vi.fn(async () => ({
-          messages: [{ role: "assistant", content: output }],
-        })),
-        deleteSession: vi.fn(async () => undefined),
+        complete: vi.fn(async () => ({ text: output })),
       };
 
       if (failOrigins) {

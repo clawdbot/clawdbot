@@ -4,11 +4,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectChannelConfigDoctorBuildEntries,
+  collectPluginDeclarationSourceEntries,
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { resolvePluginNpmRuntimeBuildPlan } from "../../scripts/lib/plugin-npm-runtime-build.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -27,6 +29,28 @@ function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
 }
 
 describe("bundled plugin build entries", () => {
+  it("selects typed barrels and manifest exports rather than every runtime sidecar", () => {
+    const sources = [
+      "./index.ts",
+      "./api.ts",
+      "./runtime-api.ts",
+      "./contract-api.ts",
+      "./client.ts",
+      "./types.ts",
+      "./runtime-helper.ts",
+      "./setup-entry.ts",
+    ];
+    expect(
+      collectPluginDeclarationSourceEntries(
+        {
+          exports: { "./client": { types: "./dist/client.d.ts", import: "./dist/client.js" } },
+          types: "./dist/types.d.ts",
+        },
+        sources,
+      ),
+    ).toEqual(["./api.ts", "./runtime-api.ts", "./contract-api.ts", "./client.ts", "./types.ts"]);
+  });
+
   it("retains manifest-owned config repairs independently of runtime package exclusions", () => {
     const cwd = tempDirs.make("openclaw-config-doctor-entries-");
     const pluginDir = path.join(cwd, "extensions", "external-owner");
@@ -101,14 +125,14 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
-  it("keeps the Matrix packaged runtime shim in bundled plugin build entries", () => {
+  it("keeps the Matrix packaged runtime shim in its package-owned build", () => {
     const entries = listBundledPluginBuildEntries();
-    const expectedEntries = {
-      "extensions/matrix/plugin-entry.handlers.runtime":
-        "extensions/matrix/plugin-entry.handlers.runtime.ts",
-    };
-
-    expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
+    const plan = resolvePluginNpmRuntimeBuildPlan({ packageDir: "extensions/matrix" });
+    expect(entries["extensions/matrix/plugin-entry.handlers.runtime"]).toBeUndefined();
+    expect(plan?.entry["plugin-entry.handlers.runtime"]).toBe(
+      path.resolve("extensions/matrix/plugin-entry.handlers.runtime.ts"),
+    );
+    expect(plan?.runtimeBuildOutputs).toContain("./dist/plugin-entry.handlers.runtime.js");
   });
 
   it("keeps Codex CLI metadata in bundled build and standalone pack entries", () => {
@@ -197,10 +221,10 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).not.toContain("dist/extensions/image-generation-core/openclaw.plugin.json");
   });
 
-  it("packs the Matrix packaged runtime shim", () => {
+  it("leaves Matrix packaging to the standalone package build", () => {
     const artifacts = listBundledPluginPackArtifacts({ includeRootPackageExcludedDirs: true });
 
-    expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
+    expectNoPrefixMatches(artifacts, "dist/extensions/matrix/");
   });
 
   it("keeps private QA bundles out of required npm pack artifacts", () => {

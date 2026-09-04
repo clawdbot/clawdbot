@@ -4,6 +4,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import {
   invalidateChatAvatarCache,
   refreshChatAvatar,
@@ -120,7 +121,8 @@ describe("renderChatAvatar", () => {
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("B");
   });
 
-  it("settles a missing local profile avatar to initials before rendering its URL", async () => {
+  it("retains missing profile initials across rerenders and loads a new revision", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
     const gatewayOrigin = globalThis.location.origin;
     setAvatarGatewayOrigin(gatewayOrigin);
     const fetchAvatar = vi
@@ -128,8 +130,8 @@ describe("renderChatAvatar", () => {
       .mockResolvedValue(new Response(null, { status: 404 }));
     const container = document.createElement("div");
     const avatarUrl = "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar?v=7";
-    const renderUser = () =>
-      render(renderChatAvatar("user", undefined, { name: "Hannah", avatar: avatarUrl }), container);
+    const renderUser = (avatar = avatarUrl) =>
+      render(renderChatAvatar("user", undefined, { name: "Hannah", avatar }), container);
 
     renderUser();
     const slot = container.querySelector<HTMLElement>(".chat-avatar-slot");
@@ -137,18 +139,33 @@ describe("renderChatAvatar", () => {
     expect(slot?.classList.contains("is-fallback")).toBe(true);
     expect(image?.hasAttribute("src")).toBe(false);
     expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
-    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
+    await expect(resolveAvatarImageUrl(avatarUrl)).resolves.toBeNull();
+    expect(fetchAvatar).toHaveBeenCalledOnce();
     expect(fetchAvatar).toHaveBeenCalledWith(
       `${gatewayOrigin}${avatarUrl}`,
       expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
     );
     expect(image?.hasAttribute("src")).toBe(false);
 
-    renderUser();
-    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledTimes(2));
-    expect(slot?.classList.contains("is-fallback")).toBe(true);
-    expect(image?.hasAttribute("src")).toBe(false);
-    expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
+    for (let renderIndex = 0; renderIndex < 3; renderIndex += 1) {
+      setAvatarGatewayOrigin(gatewayOrigin);
+      renderUser();
+      await expect(resolveAvatarImageUrl(avatarUrl)).resolves.toBeNull();
+      expect(fetchAvatar).toHaveBeenCalledOnce();
+      expect(slot?.classList.contains("is-fallback")).toBe(true);
+      expect(image?.hasAttribute("src")).toBe(false);
+      expect(slot?.querySelector(".chat-avatar--sender-initials")?.textContent?.trim()).toBe("H");
+    }
+
+    fetchAvatar.mockResolvedValueOnce(
+      new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+    );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:uploaded-profile");
+    renderUser("/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar?v=8");
+    await vi.waitFor(() => expect(image?.getAttribute("src")).toBe("blob:uploaded-profile"));
+    image?.dispatchEvent(new Event("load"));
+    expect(slot?.classList.contains("is-fallback")).toBe(false);
+    expect(fetchAvatar).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -491,7 +508,7 @@ describe("refreshSenderAgentAvatars", () => {
 
 describe("attributed sender avatars", () => {
   it("restores pending initials when the authenticated sender avatar changes", async () => {
-    setAvatarGatewayOrigin("https://gateway.example.test", "Bearer profile-token");
+    setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response(new Uint8Array([1, 2, 3]), {

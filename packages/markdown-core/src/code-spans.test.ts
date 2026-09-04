@@ -1,4 +1,3 @@
-// Code span tests cover CommonMark block ownership and streamed lookup behavior.
 import { describe, expect, it } from "vitest";
 import { findMarkdownCodeSpans } from "./reasoning-tags.js";
 
@@ -7,19 +6,6 @@ describe("markdown-core code spans", () => {
     const regions = findMarkdownCodeSpans(text);
     expect(regions).toHaveLength(expectedSlices.length);
     expect(regions.map(([start, end]) => text.slice(start, end))).toEqual(expectedSlices);
-  }
-
-  function expectInsideCodeCase(params: {
-    positionSelector: (text: string, regionEnd: number) => number;
-    expected: boolean;
-  }) {
-    const text = "plain `code` done";
-    const regions = findMarkdownCodeSpans(text);
-    const regionEnd = regions[0]?.[1] ?? -1;
-    const position = params.positionSelector(text, regionEnd);
-    expect(regions.some(([start, end]) => position >= start && position < end)).toBe(
-      params.expected,
-    );
   }
 
   it.each([
@@ -122,26 +108,6 @@ describe("markdown-core code spans", () => {
     },
   ] as const)("follows CommonMark block ownership: $name", ({ text, expectedSlices }) => {
     expectCodeRegionSlices(text, expectedSlices);
-  });
-
-  it.each([
-    {
-      name: "inside code",
-      positionSelector: (text: string) => text.indexOf("code"),
-      expected: true,
-    },
-    {
-      name: "outside code",
-      positionSelector: (text: string) => text.indexOf("plain"),
-      expected: false,
-    },
-    {
-      name: "at region end",
-      positionSelector: (_text: string, regionEnd: number) => regionEnd,
-      expected: false,
-    },
-  ] as const)("reports whether positions are inside discovered regions: $name", (testCase) => {
-    expectInsideCodeCase(testCase);
   });
 
   it("walks deeply nested Markdown without exhausting the JavaScript stack", () => {

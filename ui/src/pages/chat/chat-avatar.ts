@@ -1,4 +1,5 @@
 // Control UI chat module implements chat avatar behavior.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type TemplateResult } from "lit";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -22,7 +23,11 @@ import {
   isRenderableControlUiAvatarUrl,
   resolveAssistantTextAvatar,
 } from "../../lib/avatar.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  normalizeRoleForGrouping,
+  readMessageSenderSession,
+  resolveMessageRole,
+} from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
 import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
@@ -567,9 +572,11 @@ export async function refreshSenderAgentAvatars(
   senderAvatarInputs.set(host, inputs);
   // Use the same normalized sender metadata as grouping, after each transcript commit.
   const agentIds = host.chatMessages.flatMap((message) => {
-    const normalized = normalizeMessage(message);
-    const id = normalized.senderSession?.agentId;
-    return normalized.role === "assistant" && id ? [id] : [];
+    if (resolveMessageRole(message) !== "assistant") {
+      return [];
+    }
+    const id = readMessageSenderSession(asOptionalRecord(message)?.senderSession)?.agentId;
+    return id ? [id] : [];
   });
   await loadSenderAgentAvatars(host, agentIds);
 }

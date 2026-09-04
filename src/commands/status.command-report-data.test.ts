@@ -10,7 +10,48 @@ describe("buildStatusCommandReportData", () => {
     vi.stubEnv("OPENCLAW_PROFILE", undefined);
     vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
   });
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    {
+      ageMs: 300_000,
+      channel: "quietchat",
+      accountId: "acct",
+      expected: "ok-token · 5m ago · quietchat · account acct",
+    },
+    {
+      ageMs: 15_000,
+      channel: "quietchat",
+      accountId: "acct",
+      expected: "ok-token · just now · quietchat · account acct",
+    },
+    { ageMs: 300_000, expected: "ok-token · 5m ago" },
+  ])(
+    "formats the last heartbeat age once for $ageMs ms",
+    async ({ ageMs, channel, accountId, expected }) => {
+      const now = Date.parse("2026-09-01T12:00:00.000Z");
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const result = await buildStatusCommandReportData(
+        createStatusCommandReportDataParams({
+          lastHeartbeat: {
+            ts: now - ageMs,
+            status: "ok-token",
+            channel,
+            accountId,
+          },
+        }),
+      );
+
+      const row = expectDefined(
+        result.overviewRows.find(({ Item }) => Item === "Last heartbeat"),
+        "last heartbeat row",
+      );
+      expect(stripAnsi(row.Value)).toBe(expected);
+    },
+  );
 
   it("builds report inputs from shared status surfaces", async () => {
     const baseParams = createStatusCommandReportDataParams();

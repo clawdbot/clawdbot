@@ -61,7 +61,6 @@ const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "t
 const QA_RUNTIME_LIVE_TEST = "extensions/qa-lab/src/matrix-channel-driver.lifecycle.live.test.ts";
 const QA_RUNTIME_ARTIFACT = "dist/extensions/qa-lab/runtime-api.js";
 const SOURCE_PERFORMANCE_ARTIFACT = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
-type ProcessSignal = `SIG${string}`;
 type LiveShardPreparation = {
   env: NodeJS.ProcessEnv;
   profile: string;
@@ -840,19 +839,16 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     pnpmArgs: buildLiveShardPnpmArgs(files, addLiveShardReportArgs(passthroughArgs, reportPath)),
     ...spawnParams,
   });
-  let forwardedSignal: ProcessSignal | null = null;
-  const teardown = installVitestProcessGroupCleanup({
+  const cleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
   });
   createVitestProcessCompletion({ child, detached: spawnParams.detached })
-    .finally(teardown)
+    .finally(cleanup.teardown)
     .then(
       ({ code, signal }) => {
+        const forwardedSignal = cleanup.getForwardedSignal();
         if (forwardedSignal) {
           process.kill(process.pid, forwardedSignal);
           return;

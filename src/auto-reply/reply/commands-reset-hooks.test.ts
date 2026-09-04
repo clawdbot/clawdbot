@@ -1,8 +1,12 @@
 // Tests reset hook emission and cleanup around reset commands.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { MsgContext } from "../templating.js";
 import { buildCommandContext } from "./commands-context.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
@@ -270,6 +274,28 @@ describe("handleCommands reset hooks", () => {
     });
   });
 
+  it("keeps a failed ACP reset as a failure status notice", async () => {
+    resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValueOnce({
+      ok: false,
+      error: "reset rejected",
+    });
+    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue("agent:main:acp:bound");
+    const params = buildResetParams("/reset", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+
+    expect(await maybeHandleResetCommand(params)).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ ACP session reset failed. Check /acp status and try again.",
+        isStatusNotice: true,
+      },
+    });
+    expect(params.command.resetHookTriggered).not.toBe(true);
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
+  });
+
   it("keeps tail dispatch after a bound ACP reset", async () => {
     resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
       "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
@@ -427,13 +453,16 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("marks soft reset turns and emits reset hooks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-soft-reset-tombstone-"));
+    const storePath = path.join(tempDir, "sessions.json");
     const params = buildResetParams("/reset soft", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
-    params.sessionEntry = {
+    const sessionEntry: NonNullable<HandleCommandsParams["sessionEntry"]> = {
       sessionId: "session-1",
-      updatedAt: Date.now(),
+      lifecycleRevision: "soft-reset-revision",
+      updatedAt: 0,
       cliSessionIds: { "claude-cli": "cli-session-1" },
       cliSessionBindings: {
         "claude-cli": {
@@ -442,22 +471,33 @@ describe("handleCommands reset hooks", () => {
         },
       },
       claudeCliSessionId: "cli-session-1",
-    } as HandleCommandsParams["sessionEntry"];
+    };
+    params.sessionEntry = sessionEntry;
+    params.sessionStore = { [params.sessionKey]: sessionEntry };
+    params.storePath = storePath;
+    await replaceSessionEntry({ sessionKey: params.sessionKey, storePath }, sessionEntry);
 
-    const result = await maybeHandleResetCommand(params);
+    try {
+      const result = await maybeHandleResetCommand(params);
 
-    expect(result).toBeNull();
-    const event = firstHookEvent();
-    expectObjectFields(event, { type: "command", action: "reset" }, "hook event");
-    const context = requireRecord(event.context, "hook context");
-    expectObjectFields(context.previousSessionEntry, { sessionId: "session-1" }, "session entry");
-    expect(params.command.resetHookTriggered).toBe(true);
-    expect(params.command.softResetTriggered).toBe(true);
-    expect(params.command.softResetTail).toBe("");
-    expect(params.sessionEntry?.cliSessionIds).toBeUndefined();
-    expect(params.sessionEntry?.cliSessionBindings).toBeUndefined();
-    expect(params.sessionEntry?.claudeCliSessionId).toBeUndefined();
-    expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith("agent:main:main");
+      expect(result).toBeNull();
+      const event = firstHookEvent();
+      expectObjectFields(event, { type: "command", action: "reset" }, "hook event");
+      const context = requireRecord(event.context, "hook context");
+      expectObjectFields(context.previousSessionEntry, { sessionId: "session-1" }, "session entry");
+      expect(params.command.resetHookTriggered).toBe(true);
+      expect(params.command.softResetTriggered).toBe(true);
+      expect(params.command.softResetTail).toBe("");
+      expect(params.sessionEntry?.cliSessionIds).toBeUndefined();
+      expect(params.sessionEntry?.cliSessionBindings).toBeUndefined();
+      expect(params.sessionEntry?.claudeCliSessionId).toBeUndefined();
+      expect(
+        loadSessionEntry({ sessionKey: params.sessionKey, storePath })?.updatedAt,
+      ).toBeGreaterThan(0);
+      expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith("agent:main:main");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it.each<{

@@ -22,20 +22,25 @@ describe("Control UI retained publication", () => {
         const contents = await fs.readFile(path.join(current.root, current.assetPath));
         const targetAsset = path.join(current.target, current.assetPath);
         const siblingAsset = path.join(sibling.target, sibling.assetPath);
-        const reads = new Map([
+        const opens = new Map([
           [targetAsset, 0],
           [siblingAsset, 0],
         ]);
-        const refreshReads: number[] = [];
+        const refreshOpens: number[] = [];
         const readFile = fs.readFile;
+        const open = fs.open;
         const utimes = fs.utimes;
         let mutated = false;
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const file = args[0];
+          if (typeof file === "string" && opens.has(file)) {
+            opens.set(file, opens.get(file)! + 1);
+          }
+          return open(...args);
+        });
         vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
           const result = await readFile(...args);
           const file = args[0];
-          if (typeof file === "string" && reads.has(file)) {
-            reads.set(file, reads.get(file)! + 1);
-          }
           if (!mutated && file === path.join(current.root, "asset-manifest.json")) {
             mutated = true;
             if (mutation === "removed") {
@@ -53,22 +58,22 @@ describe("Control UI retained publication", () => {
         });
         vi.spyOn(fs, "utimes").mockImplementation(async (...args) => {
           if (args[0] === current.target) {
-            refreshReads.push(reads.get(targetAsset)!);
+            refreshOpens.push(opens.get(targetAsset)!);
           }
           return utimes(...args);
         });
         const owner = createControlUiAssetRetention(current.root);
         if (mutation === "symlink") {
           await expect(owner.prepare()).rejects.toThrow();
-          expect(refreshReads).toEqual([]);
+          expect(refreshOpens).toEqual([]);
         } else {
           await owner.prepare();
           expect(owner.resolveAsset(current.assetPath)?.filePath).toBe(targetAsset);
-          expect(refreshReads).toEqual([2]);
-          expect(reads.get(targetAsset)).toBe(2);
+          expect(refreshOpens).toEqual([2]);
+          expect(opens.get(targetAsset)).toBe(2);
         }
         expect(mutated).toBe(true);
-        expect(reads.get(siblingAsset)).toBe(1);
+        expect(opens.get(siblingAsset)).toBe(1);
         vi.restoreAllMocks();
         expect(await fs.readFile(targetAsset)).toEqual(contents);
         expect(await fs.readFile(path.join(outside, current.assetPath))).toEqual(contents);
@@ -133,6 +138,60 @@ describe("Control UI retained publication", () => {
             1,
           );
         }
+      });
+    },
+  );
+
+  it.each(["partial", "zero-progress"] as const)(
+    "handles %s destination writes without adopting incomplete bytes",
+    async (behavior) => {
+      await withRetentionFixture(async ({ root, cache }) => {
+        const build = await writeRetentionBuild(path.join(root, "build"), "write", {
+          size: 128 * 1024,
+        });
+        const source = path.join(build.root, build.assetPath);
+        const open = fs.open;
+        let intercepted = false;
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await open(...args);
+          const file = args[0];
+          if (
+            typeof file !== "string" ||
+            !file.includes(".staging-") ||
+            !file.endsWith(build.assetPath)
+          ) {
+            return handle;
+          }
+          const write = handle.write.bind(handle);
+          vi.spyOn(handle, "write").mockImplementation((async (
+            buffer: Buffer,
+            offset: number,
+            length: number,
+            position: number | null,
+          ) => {
+            intercepted = true;
+            if (behavior === "zero-progress") {
+              return { buffer, bytesWritten: 0 };
+            }
+            return await write(buffer, offset, Math.min(length, 17), position);
+          }) as typeof handle.write);
+          return handle;
+        });
+        const owner = createControlUiAssetRetention(build.root);
+        if (behavior === "zero-progress") {
+          await expect(owner.prepare()).rejects.toThrow("write made no progress");
+          expect(owner.resolveAsset(build.assetPath)).toBeNull();
+          expect(await fs.readdir(cache)).toEqual([]);
+        } else {
+          await owner.prepare();
+          expect(await fs.readFile(owner.resolveAsset(build.assetPath)!.filePath)).toEqual(
+            await fs.readFile(source),
+          );
+        }
+        expect(intercepted).toBe(true);
+        expect((await fs.readdir(cache)).some((entry) => entry.startsWith(".staging-"))).toBe(
+          false,
+        );
       });
     },
   );

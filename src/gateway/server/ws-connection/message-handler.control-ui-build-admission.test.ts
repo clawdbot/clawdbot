@@ -3,13 +3,17 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
   ConnectErrorDetailCodes,
   readControlUiBuildMismatchId,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
@@ -133,7 +137,12 @@ function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot(gatewayConfig);
+});
+
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   vi.clearAllMocks();
   resolveRuntimeServiceBuildIdMock.mockReturnValue("gateway-build");
   const { rm } = await import("node:fs/promises");

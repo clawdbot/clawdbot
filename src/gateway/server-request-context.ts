@@ -40,6 +40,7 @@ type GatewayRequestContextParams = {
   gatewayTlsFingerprint?: GatewayRequestContext["gatewayTlsFingerprint"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
+  mentionInbox?: GatewayRequestContext["mentionInbox"];
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
   getPortalService?: () => GatewayRequestContext["portalService"];
@@ -55,6 +56,7 @@ type GatewayRequestContextParams = {
   approvalWebPushDelivery?: GatewayRequestContext["approvalWebPushDelivery"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
+  placementStandingGrants: GatewayRequestContext["placementStandingGrants"];
   systemAgentApprovalManager?: GatewayRequestContext["systemAgentApprovalManager"];
   listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
@@ -194,6 +196,7 @@ export function createGatewayRequestContext(
     sessionViewerPresence: params.runtimeState.sessionViewerPresence,
     sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
+    mentionInbox: params.mentionInbox,
     notifyPluginMetadataChanged: params.notifyPluginMetadataChanged,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     ensureSandboxHostPort: params.ensureSandboxHostPort,
@@ -212,6 +215,7 @@ export function createGatewayRequestContext(
     approvalWebPushDelivery: params.approvalWebPushDelivery,
     pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
     pluginApprovalManager: params.pluginApprovalManager,
+    placementStandingGrants: params.placementStandingGrants,
     systemAgentApprovalManager: params.systemAgentApprovalManager,
     listSessionPendingApprovals: params.listSessionPendingApprovals,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,

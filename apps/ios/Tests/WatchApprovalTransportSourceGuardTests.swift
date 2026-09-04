@@ -306,7 +306,7 @@ struct WatchApprovalTransportSourceGuardTests {
             "if self.store.consume(execApprovalSnapshot: execApprovalSnapshot, transport: transport)"))
         #expect(receiverSource.contains(
             "if self.store.consume(execApprovalSnapshot: snapshot, transport: transport)"))
-        #expect(receiverSource.contains("if self.consume(execApprovalSnapshot: message, transport: transport)"))
+        #expect(storeSource.contains("if self.consume(execApprovalSnapshot: message, transport: transport)"))
     }
 
     private static func readWatchSource(_ filename: String) throws -> String {

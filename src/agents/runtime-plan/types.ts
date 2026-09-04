@@ -560,7 +560,7 @@ export type BuildAgentRuntimePlanParams = {
   authProfileProvider?: string;
   authProfileMode?: string;
   sessionAuthProfileId?: string;
-  sessionAuthProfileSource?: "auto" | "user";
+  sessionAuthProfileSource?: "auto" | "user" | "user-link";
   sessionAuthProfileCandidateIds?: string[];
   authProfileStore?: AuthProfileStore;
   modelRoute?: AgentRuntimeAuthModelRoute;

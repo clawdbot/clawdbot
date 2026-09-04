@@ -263,6 +263,36 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it("carries expanded dashboard presentation into route data", async () => {
+    const { context } = contextFor(result([]));
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/dashboard/work", search: "?dashboard=expanded", hash: "" },
+        "dashboard",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:work:main",
+      face: "dashboard",
+      dashboardExpanded: true,
+    });
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/work", search: "?dashboard=expanded", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:work:main",
+      face: "chat",
+      dashboardExpanded: true,
+    });
+  });
+
   it("waits for configured session defaults before resolving an agent main route", async () => {
     type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
     let listener: GatewayListener | null = null;

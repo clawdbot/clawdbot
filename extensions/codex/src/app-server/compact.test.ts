@@ -826,8 +826,8 @@ describe("maybeCompactCodexAppServerSession", () => {
     let bindingReads = 0;
     const bindingStore = {
       ...testCodexAppServerBindingStore,
-      read: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.read>) => {
-        const result = await testCodexAppServerBindingStore.read(...args);
+      read: vi.fn((...args: Parameters<typeof testCodexAppServerBindingStore.read>) => {
+        const result = testCodexAppServerBindingStore.read(...args);
         if (bindingReads++ === 0) {
           seedCodexTestBinding(sessionFile, {
             threadId: "thread-2",
@@ -905,8 +905,8 @@ describe("maybeCompactCodexAppServerSession", () => {
     let bindingReads = 0;
     const bindingStore = {
       ...testCodexAppServerBindingStore,
-      read: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.read>) => {
-        const result = await testCodexAppServerBindingStore.read(...args);
+      read: vi.fn((...args: Parameters<typeof testCodexAppServerBindingStore.read>) => {
+        const result = testCodexAppServerBindingStore.read(...args);
         if (bindingReads++ === 0) {
           seedCodexTestBinding(sessionFile, {
             threadId: "thread-2",

@@ -316,7 +316,9 @@ function createManifestChannelPlugin(params: {
           accountId,
         }),
       }),
-      isEnabled: (_account, cfg) => getChannelConfigRecord(cfg, params.channelId).enabled !== false,
+      isEnabled: (account, cfg) =>
+        getChannelConfigRecord(cfg, params.channelId).enabled !== false &&
+        account.config.enabled !== false,
       isConfigured: (_account, cfg) =>
         hasExplicitChannelConfig({
           config: cfg,

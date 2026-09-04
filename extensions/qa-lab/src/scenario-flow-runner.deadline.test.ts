@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
+import type { QaSuiteStepOutcome } from "./suite-types.js";
 
 type QaFlowAction = QaScenarioFlow["steps"][number]["actions"][number];
 
@@ -87,7 +88,7 @@ describe("scenario flow deadline", () => {
     let markActionStarted!: () => void;
     let releaseAction!: () => void;
     let expireDeadline!: (reason: Error) => void;
-    let pendingStep: Promise<string | void> | undefined;
+    let pendingStep: Promise<QaSuiteStepOutcome | void> | undefined;
     const actionStarted = new Promise<void>((resolve) => {
       markActionStarted = resolve;
     });

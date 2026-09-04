@@ -4,6 +4,7 @@ import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
+import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -759,18 +760,29 @@ export async function finalizeSetupWizard(
     const modelCatalog = await loadPreparedModelCatalogSnapshot({
       config: nextConfig,
       readOnly: true,
+    }).catch((error: unknown) => {
+      if (!(error instanceof PreparedModelCatalogConfigReplacedError)) {
+        throw error;
+      }
+      // Finalization precedes the deferred Gateway restart, so the active owner
+      // may still represent the previous config. Never reuse its facts for nextConfig.
+      return undefined;
     });
-    const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
-      routeVariants: modelCatalog.routeVariants,
-    });
-    const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, {
-      agentDir,
-      ...(modelCatalogFacts.observedRoutes
-        ? { observedRoutes: modelCatalogFacts.observedRoutes }
-        : {}),
-    });
+    const modelCatalogFacts = modelCatalog
+      ? resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
+          routeVariants: modelCatalog.routeVariants,
+        })
+      : undefined;
+    const modelAuthStatus = modelCatalogFacts
+      ? resolveDefaultModelAuthStatus(nextConfig, {
+          agentDir,
+          ...(modelCatalogFacts.observedRoutes
+            ? { observedRoutes: modelCatalogFacts.observedRoutes }
+            : {}),
+        })
+      : undefined;
     const shouldSeedBootstrapHatch =
-      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.status === "ready";
+      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus?.status === "ready";
 
     await prompter.note(
       [
@@ -799,7 +811,7 @@ export async function finalizeSetupWizard(
           t("wizard.finalize.hatchYourAgent"),
         );
       }
-      if (modelAuthStatus.status === "missing") {
+      if (modelAuthStatus?.status === "missing") {
         await prompter.note(
           [
             t("wizard.finalize.noModelAuth", { provider: modelAuthStatus.provider }),

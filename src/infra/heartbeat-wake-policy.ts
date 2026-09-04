@@ -71,6 +71,8 @@ export function isTargetedUnscheduledWake(params: TargetedUnscheduledWakeParams)
   // they cannot broaden the immediate-wake exception.
   const reason = params.reason?.trim();
   switch (params.source) {
+    case "cron":
+      return params.intent === "immediate" && (reason?.startsWith("cron:") ?? false);
     case "manual":
     case "notifications-event":
     case "restart-sentinel":

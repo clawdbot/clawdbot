@@ -1137,11 +1137,75 @@ NODE
     }
   });
 
-  it("relativizes absolute npm path identities against the command cwd", () => {
+  it.each(["absolute", "relative", "file:absolute", "file:relative"])(
+    "uses the absolute npm tarball identity for %s input",
+    (form) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-archive-identity-"));
+      const npm = join(tmp, "npm");
+      const commandCwd = join(tmp, "work");
+      const candidate = join(tmp, "candidate.tgz");
+      const protocol = form.startsWith("file:") ? "file:" : "";
+      const spec = `${protocol}${form.endsWith("relative") ? "../candidate.tgz" : candidate}`;
+      mkdirSync(commandCwd);
+      writeNpmLifecycleFixture(npm);
+      try {
+        const result = runInstallShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `cd ${JSON.stringify(commandCwd)}`,
+            `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(spec)} "$PWD"`,
+          ].join("\n"),
+          { NPM_FAKE_VERSION: "12.0.0" },
+        );
+        expect(result.status).toBe(0);
+        expect(result.stdout.trim()).toBe(`--allow-scripts=${protocol}${candidate}`);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    { version: "11.16.0", advisory: true },
+    { version: "12.0.0", advisory: false },
+  ])(
+    "handles comma tarball identity under npm $version before mutation",
+    ({ version, advisory }) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-archive-comma,"));
+      const npm = join(tmp, "npm");
+      const args = join(tmp, "args");
+      writeNpmLifecycleFixture(npm);
+      try {
+        const result = runInstallShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `npm_command_path() { printf '%s\\n' ${JSON.stringify(npm)}; }`,
+            `cd ${JSON.stringify(tmp)}`,
+            `run_verified_npm_global_install ${JSON.stringify(join(tmp, "candidate.tgz"))} ${JSON.stringify(join(tmp, "log"))}`,
+          ].join("\n"),
+          {
+            NPM_FAKE_VERSION: version,
+            NPM_FAKE_ARGS: args,
+            NPM_FAKE_ROOT: join(tmp, "lib/node_modules"),
+            NPM_FAKE_PACKAGE_DIR: join(tmp, "lib/node_modules/openclaw"),
+          },
+        );
+        expect(result.status).toBe(advisory ? 0 : 1);
+        expect(existsSync(args)).toBe(advisory);
+        if (!advisory) {
+          expect(result.stderr).toContain("without commas");
+        }
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("retains relative directory identities under comma ancestors", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-lifecycle-comma,"));
     const npm = join(tmp, "npm");
     const commandCwd = join(tmp, "work");
-    const candidate = join(tmp, "candidate.tgz");
+    const candidate = join(tmp, "candidate");
     mkdirSync(commandCwd);
     writeNpmLifecycleFixture(npm);
     try {
@@ -1154,7 +1218,7 @@ NODE
         { NPM_FAKE_VERSION: "12.0.0" },
       );
       expect(result.status).toBe(0);
-      expect(result.stdout.trim()).toBe("--allow-scripts=../candidate.tgz");
+      expect(result.stdout.trim()).toBe("--allow-scripts=../candidate");
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

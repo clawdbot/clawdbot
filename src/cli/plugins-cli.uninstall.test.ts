@@ -12,6 +12,7 @@ import {
   buildPluginDiagnosticsReportMock,
   buildPluginSnapshotReportMock,
   createTestInstalledPluginIndex,
+  parseClawHubPluginSpecMock,
   pluginCliConfigMock,
   planPluginUninstallMock,
   PromptInputClosedError,
@@ -184,7 +185,7 @@ describe("plugins cli uninstall", () => {
     } as OpenClawConfig;
     const nextConfig = {
       plugins: {
-        entries: {},
+        entries: { alpha: { enabled: false } },
         installs: {},
       },
     } as OpenClawConfig;
@@ -201,17 +202,22 @@ describe("plugins cli uninstall", () => {
 
     expect(promptYesNoMock).not.toHaveBeenCalled();
     expectLatestUninstallPlanParams({ pluginId: "alpha", deleteFiles: false });
-    expectInstallRecordsWrittenWithLease({}, { plugins: { entries: {} } });
+    expectInstallRecordsWrittenWithLease(
+      {},
+      {
+        plugins: { entries: { alpha: { enabled: false } } },
+      },
+    );
     expect(configWriteMock).toHaveBeenCalledWith({
       plugins: {
-        entries: {},
+        entries: { alpha: { enabled: false } },
       },
     });
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
       baseHash: "mock",
       nextConfig: {
         plugins: {
-          entries: {},
+          entries: { alpha: { enabled: false } },
         },
       },
       writeOptions: expect.objectContaining({
@@ -224,7 +230,7 @@ describe("plugins cli uninstall", () => {
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
       config: {
         plugins: {
-          entries: {},
+          entries: { alpha: { enabled: false } },
         },
       },
       installRecords: {},
@@ -317,15 +323,18 @@ describe("plugins cli uninstall", () => {
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("warns but proceeds when a shared plugin has an uncertain Claw reference", async () => {
+  it("warns for a versionless scoped ClawHub spec and proceeds", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-claw-plugin-ref-");
     closeOpenClawStateDatabaseForTest();
     try {
+      const { parseClawHubPluginSpec } = await vi.importActual<
+        typeof import("../infra/clawhub-spec.js")
+      >("../infra/clawhub-spec.js");
+      parseClawHubPluginSpecMock.mockImplementation(parseClawHubPluginSpec);
       const installRecord = {
         source: "clawhub" as const,
-        spec: "clawhub:@owner/audit@2.0.1",
-        clawhubPackage: "@owner/audit",
+        spec: "clawhub:@owner/audit",
         version: "2.0.1",
         installPath: ALPHA_INSTALL_PATH,
       };
@@ -786,6 +795,11 @@ describe("plugins cli uninstall", () => {
               ...(claimed ? { [pluginId]: { enabled: true } } : {}),
               discord: { enabled: true },
             },
+            plugins: {
+              entries: {
+                [pluginId]: { enabled: false },
+              },
+            },
           },
         );
       } finally {
@@ -840,7 +854,13 @@ describe("plugins cli uninstall", () => {
       );
       try {
         await runPluginsCommand(["plugins", "uninstall", requestedId, "--force", "--keep-files"]);
-        expectInstallRecordsWrittenWithLease({}, { channels: { "pack/one": { enabled: true } } });
+        expectInstallRecordsWrittenWithLease(
+          {},
+          {
+            channels: { "pack/one": { enabled: true } },
+            plugins: { entries: { "pack/one": { enabled: false } } },
+          },
+        );
       } finally {
         indexSpy.mockRestore();
       }

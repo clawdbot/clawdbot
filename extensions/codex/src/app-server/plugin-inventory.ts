@@ -66,8 +66,8 @@ export type CodexPluginOwnedApp = {
   accessible: boolean;
   enabled: boolean;
   needsAuth: boolean;
-  /** Tool config keys Codex explicitly classifies as read-only. */
-  readOnlyToolConfigKeys?: readonly string[];
+  /** Current non-read-only tool keys; absent when Codex omits tool metadata. */
+  approvalOverrideToolConfigKeys?: readonly string[];
 };
 
 /** Inventory record for one configured Codex plugin policy. */
@@ -533,29 +533,28 @@ function resolveOwnedApps(params: {
           // app/read metadata is the canonical connector access proof.
           needsAuth: !info.isAccessible,
         },
-        resolveOwnedAppReadOnlyToolConfigKeys(info),
+        resolveOwnedAppApprovalOverrideKeys(info),
       );
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-/** Returns the config keys that Codex metadata proves belong to read-only tools. */
-export function resolveOwnedAppReadOnlyToolConfigKeys(
+/** Returns current tool keys whose overrides could bypass the requested reviewer. */
+export function resolveOwnedAppApprovalOverrideKeys(
   app: v2.AppInfo,
-): Pick<CodexPluginOwnedApp, "readOnlyToolConfigKeys"> {
+): Pick<CodexPluginOwnedApp, "approvalOverrideToolConfigKeys"> {
+  if (!app.toolSummaries) {
+    return {};
+  }
   const appName = app.name.trim();
   const appNameLower = appName.toLowerCase();
-  const tools = app.toolSummaries ?? [];
-  const writableToolConfigKeys = new Set(
-    tools
-      .filter((tool) => !tool.isReadOnly)
-      .flatMap((tool) => resolveAppToolConfigKeys({ appName, appNameLower, tool })),
-  );
-  const keys = tools
-    .filter((tool) => tool.isReadOnly)
-    .flatMap((tool) => resolveAppToolConfigKeys({ appName, appNameLower, tool }))
-    .filter((key) => !writableToolConfigKeys.has(key));
-  return keys.length > 0 ? { readOnlyToolConfigKeys: Array.from(new Set(keys)).toSorted() } : {};
+  // Agents: app/read includes disabled tools. Keep every non-read-only alias,
+  // including collisions with read-only titles; retired names cannot authorize
+  // a current tool and must not prevent the entire app from being admitted.
+  const keys = app.toolSummaries
+    .filter((tool) => !tool.isReadOnly)
+    .flatMap((tool) => resolveAppToolConfigKeys({ appName, appNameLower, tool }));
+  return { approvalOverrideToolConfigKeys: Array.from(new Set(keys)).toSorted() };
 }
 
 function resolveAppToolConfigKeys(params: {

@@ -1,12 +1,13 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.NodePresenceAliveBeacon
-import ai.openclaw.app.ui.chat.contextMeterThinkingLabel
+import ai.openclaw.app.ui.chat.chatThinkingOptionLabel
 import ai.openclaw.app.ui.formatApprovalDuration
 import ai.openclaw.app.ui.formatCronWake
 import ai.openclaw.app.ui.formatUsageUpdated
@@ -152,8 +153,8 @@ class AppLanguageTest {
       assertEquals("Rejeté", skillWorkshopStatusLabel("rejected"))
       assertEquals("Chargement", skillWorkshopStatusLabel("loading"))
       assertEquals("future_status", skillWorkshopStatusLabel("future_status"))
-      assertEquals("Élevé", contextMeterThinkingLabel("high"))
-      assertEquals("adaptive", contextMeterThinkingLabel("adaptive"))
+      assertEquals("Élevé", chatThinkingOptionLabel(ChatThinkingLevelOption("high", "high")))
+      assertEquals("Adaptatif", chatThinkingOptionLabel(ChatThinkingLevelOption("adaptive", "adaptive")))
       val androidRelease =
         Build.VERSION.RELEASE
           ?.trim()

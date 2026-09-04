@@ -138,7 +138,8 @@ export async function runConsentScenario(entry, coreTarball) {
         env: {
           ...process.env,
           OPENCLAW_NPM_REGISTRY_PORT: String(registryPort ?? 0),
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org",
+          OPENCLAW_NPM_REGISTRY_UPSTREAM:
+            process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL || "https://registry.npmjs.org",
         },
         stdio: ["ignore", "inherit", "inherit"],
       },

@@ -13,7 +13,6 @@ type ModelCatalogCacheEntry = {
   result: ModelCatalogResult;
   inFlight?: ModelCatalogPendingRequest;
   inFlightRefresh?: boolean;
-  inFlightRejects?: boolean;
 };
 
 type ModelCatalogPendingRequest = {
@@ -44,14 +43,12 @@ export async function loadModelCatalog(
     preparedOnly?: boolean;
     refresh?: boolean;
     refreshIfDue?: boolean;
-    rejectOnFailure?: boolean;
     signal?: AbortSignal;
   },
 ): Promise<ModelCatalogResult> {
   opts.signal?.throwIfAborted();
   const cache = modelCatalogCacheFor(client);
   const agentId = opts.agentId.trim();
-  const rejectOnFailure = opts?.rejectOnFailure === true;
   const cacheKey = `${agentId}\0${opts.preparedOnly ? "prepared" : "exact"}`;
   const preparedCacheKey = `${agentId}\0prepared`;
   const cached = cache.get(cacheKey);
@@ -72,20 +69,14 @@ export async function loadModelCatalog(
     opts.refreshIfDue === true &&
     cached?.inFlight &&
     !pendingRequestAborted &&
-    cached.inFlightRefresh === true &&
-    cached.inFlightRejects === rejectOnFailure
+    cached.inFlightRefresh === true
   ) {
     return await subscribeToModelCatalogRequest(cached.inFlight, opts.signal);
   }
   if (!refresh && cached?.result && (cached.expiresAt > now || refreshCooldownActive)) {
     return cached.result;
   }
-  if (
-    cached?.inFlight &&
-    !pendingRequestAborted &&
-    cached.inFlightRejects === rejectOnFailure &&
-    (!refresh || cached.inFlightRefresh === true)
-  ) {
+  if (cached?.inFlight && !pendingRequestAborted && (!refresh || cached.inFlightRefresh === true)) {
     return await subscribeToModelCatalogRequest(cached.inFlight, opts.signal);
   }
 
@@ -93,33 +84,32 @@ export async function loadModelCatalog(
   // replaces inFlight, so an older request resolving late cannot clobber the
   // fresher result with pre-mutation catalog data.
   const controller = opts.signal ? new AbortController() : undefined;
+  const params = {
+    view: "configured",
+    agentId,
+    ...(opts.preparedOnly === true ? { preparedOnly: true } : {}),
+    ...(refresh ? { refresh: true } : {}),
+  };
   const inFlight: ModelCatalogPendingRequest = {
     controller,
     subscribers: new Set(),
-    promise: requestModels(
-      client,
-      cached?.result,
-      agentId,
-      opts.preparedOnly === true,
-      refresh,
-      rejectOnFailure,
-      controller?.signal,
+    promise: (controller
+      ? client.request<ModelCatalogResult>("models.list", params, { signal: controller.signal })
+      : client.request<ModelCatalogResult>("models.list", params)
     )
       .then((result) => {
         const latest = cache.get(cacheKey);
         if (modelCatalogCache.get(client) === cache && latest?.inFlight === inFlight) {
           const refreshEligibleAt = refresh
-            ? result.fresh
-              ? Date.now() + MODEL_CATALOG_REFRESH_COOLDOWN_MS
-              : undefined
+            ? Date.now() + MODEL_CATALOG_REFRESH_COOLDOWN_MS
             : nextRefreshEligibleAt;
           const entry = {
-            expiresAt: result.fresh ? Date.now() + MODEL_CATALOG_CACHE_TTL_MS : 0,
+            expiresAt: Date.now() + MODEL_CATALOG_CACHE_TTL_MS,
             ...(refreshEligibleAt ? { refreshEligibleAt } : {}),
-            result: result.value,
+            result,
           };
           cache.set(cacheKey, entry);
-          if (result.fresh && opts.preparedOnly !== true) {
+          if (opts.preparedOnly !== true) {
             // An exact catalog supersedes the prepared projection. Reusing it for
             // automatic reads prevents route re-entry from restoring stale data.
             cache.set(preparedCacheKey, entry);
@@ -127,7 +117,7 @@ export async function loadModelCatalog(
             invalidateChatMetadataStore(client, { agentId });
           }
         }
-        return result.value;
+        return result;
       })
       .catch((error: unknown) => {
         const latest = cache.get(cacheKey);
@@ -148,7 +138,6 @@ export async function loadModelCatalog(
     ...(nextRefreshEligibleAt ? { refreshEligibleAt: nextRefreshEligibleAt } : {}),
     result: cached?.result ?? { models: [] },
     inFlight,
-    inFlightRejects: rejectOnFailure,
     ...(refresh ? { inFlightRefresh: true } : {}),
   });
   return await subscribeToModelCatalogRequest(inFlight, opts.signal);
@@ -190,34 +179,5 @@ async function subscribeToModelCatalogRequest(
   } finally {
     signal.removeEventListener("abort", onAbort);
     pending.subscribers.delete(subscriber);
-  }
-}
-
-async function requestModels(
-  client: GatewayBrowserClient,
-  fallback: ModelCatalogResult | undefined,
-  agentId: string,
-  preparedOnly: boolean,
-  refresh: boolean,
-  rejectOnFailure: boolean,
-  signal: AbortSignal | undefined,
-): Promise<{ value: ModelCatalogResult; fresh: boolean }> {
-  try {
-    const params = {
-      view: "configured",
-      agentId,
-      ...(preparedOnly ? { preparedOnly: true } : {}),
-      ...(refresh ? { refresh: true } : {}),
-    };
-    const result = signal
-      ? await client.request<ModelCatalogResult>("models.list", params, { signal })
-      : await client.request<ModelCatalogResult>("models.list", params);
-    return { value: result, fresh: true };
-  } catch (error) {
-    if (rejectOnFailure) {
-      throw error;
-    }
-    // Failed loads fall back without extending the TTL so the next call retries.
-    return { value: fallback ?? { models: [] }, fresh: false };
   }
 }

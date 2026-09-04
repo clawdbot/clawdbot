@@ -118,14 +118,27 @@ describe("harness runtime plugins", () => {
     expect(pluginRegistry.agentHarnesses).toHaveLength(1);
   });
 
-  it("carries the missing Codex owner reason and remediation into the turn guard", async () => {
+  it.each([
+    { name: "runtime override", selection: { agentHarnessRuntimeOverride: "codex" } },
+    { name: "session pin", selection: { agentHarnessId: "codex" } },
+    {
+      name: "model policy",
+      selection: {
+        config: {
+          agents: {
+            defaults: { models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } } },
+          },
+        },
+      },
+    },
+  ])("keeps a missing explicit Codex $name fatal with remediation", async ({ selection }) => {
     const pluginRegistry = createEmptyPluginRegistry();
     attachPreparedPluginFacts(pluginRegistry, {}, makeRegistry([]));
 
     const error = await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
       modelId: "gpt-5.5",
-      agentHarnessRuntimeOverride: "codex",
+      ...selection,
       workspaceDir: "/tmp/workspace",
       pluginRegistry,
     }).catch((cause: unknown) => cause);
@@ -193,18 +206,43 @@ describe("harness runtime plugins", () => {
     expect(formatForLog((error as Error).message)).toContain('Run "openclaw doctor --fix"');
   });
 
-  it("reports explicit library policy without a prepared registry context", async () => {
+  it.each([
+    {
+      name: "global disablement",
+      plugins: { enabled: false },
+      expectedReason: "plugins disabled",
+    },
+    {
+      name: "a restrictive allowlist",
+      plugins: { allow: ["telegram"] },
+      expectedReason: "not in allowlist",
+    },
+    {
+      name: "a denylist",
+      plugins: { deny: ["codex"] },
+      expectedReason: "blocked by denylist",
+    },
+    {
+      name: "an explicitly disabled owner",
+      plugins: { entries: { codex: { enabled: false } } },
+      expectedReason: "disabled in config",
+    },
+  ] satisfies Array<{
+    name: string;
+    plugins: NonNullable<OpenClawConfig["plugins"]>;
+    expectedReason: string;
+  }>)("reports $name without a prepared registry context", async ({ plugins, expectedReason }) => {
     const error = await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
       modelId: "gpt-5.5",
-      config: { plugins: { enabled: false } },
+      config: { plugins },
       agentHarnessRuntimeOverride: "codex",
       workspaceDir: "/tmp/workspace",
       pluginRegistry: undefined,
     }).catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("plugins disabled");
+    expect((error as Error).message).toContain(expectedReason);
     expect((error as Error).message).not.toContain("absent from this prepared plugin generation");
   });
 

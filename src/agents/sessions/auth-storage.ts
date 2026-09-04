@@ -739,8 +739,9 @@ export class AuthStorage {
         }
 
         const refreshedCredential: OAuthCredential = {
-          type: "oauth",
+          ...cred,
           ...refreshed.newCredentials,
+          type: "oauth",
         };
         const merged: AuthStorageData = {
           ...currentData,

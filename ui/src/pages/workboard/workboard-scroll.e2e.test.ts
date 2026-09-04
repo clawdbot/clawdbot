@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import {
   cardFitsWithinWorkboardContent,
   createMobileScrollCards,
@@ -34,6 +35,7 @@ suite.define(() => {
       const cards = createMobileScrollCards(baseTime);
       await page.setViewportSize({ height: 700, width: 390 });
       await installMockGateway(page, {
+        ...workboardUi,
         methodResponses: {
           "config.get": workboardConfigSnapshot(),
           "sessions.list": {

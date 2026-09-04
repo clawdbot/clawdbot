@@ -96,10 +96,6 @@ const SECTION_DOCS_URLS = {
   surfaces: "https://docs.openclaw.ai/concepts/messages",
 } as const satisfies Record<string, string>;
 
-// Root sections without beginner-worthy pages stay explicit. Adding a root config key
-// requires choosing a docsUrl or listing it here.
-const SECTIONS_WITHOUT_DOCS = ["$schema", "meta", "attachments"] as const;
-
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",
@@ -343,8 +339,5 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
 
 /** @internal */
 export const testApi = {
-  collectMatchingSchemaPaths,
-  mapSensitivePaths,
   SECTION_DOCS_URLS,
-  SECTIONS_WITHOUT_DOCS,
 };

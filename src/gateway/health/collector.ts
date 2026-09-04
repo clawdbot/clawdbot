@@ -565,6 +565,9 @@ export async function collectGatewayHealthSnapshot(params: {
   const channels: Record<string, ChannelHealthSummary> = {};
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     includeSetupFallbackPlugins: false,
+    // Health reports admitted/configured channels; dormant credentials are migration evidence.
+    // Loading their checkers here can synchronously stall the Gateway after hello.
+    includePersistedAuthState: false,
   });
   const channelOrder = plugins.map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};

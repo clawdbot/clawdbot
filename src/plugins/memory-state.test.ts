@@ -355,7 +355,7 @@ describe("memory plugin state", () => {
     const prepare = vi.fn(async () => [...compiledLines]);
     registerMemoryPromptPreparation("memory-wiki", prepare);
     const params = {
-      availableTools: new Set(["wiki_search"]),
+      availableTools: new Set(["wiki_search", "memory_search"]),
       agentId: "main",
       agentSessionKey: "agent:main:main",
     };
@@ -368,6 +368,8 @@ describe("memory plugin state", () => {
     expect(Object.isFrozen(preparedBefore.context.availableTools)).toBe(true);
     expect(Object.isFrozen(preparedBefore.lines)).toBe(true);
     expect(buildMemoryPromptSection(params, preparedBefore)).toEqual(["compiled before"]);
+    params.availableTools.delete("wiki_search");
+    params.availableTools.add("wiki_search");
     expect(buildMemoryPromptSection(params, preparedBefore)).toEqual(["compiled before"]);
     expect(prepare).toHaveBeenCalledTimes(1);
 
@@ -376,7 +378,15 @@ describe("memory plugin state", () => {
     expect(prepare).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects prepared state from a different run context", async () => {
+  it.each([
+    ["agent", { agentId: "second" }],
+    ["session", { agentSessionKey: "agent:first:other" }],
+    ["citations", { citationsMode: "off" as const }],
+    ["sandbox", { sandboxed: true }],
+    ["removed tool", { availableTools: new Set<string>() }],
+    ["added tool", { availableTools: new Set(["wiki_search", "memory_search"]) }],
+    ["replaced tool", { availableTools: new Set(["memory_search"]) }],
+  ])("rejects prepared state after a change to the %s", async (_name, changed) => {
     registerMemoryPromptPreparation("memory-wiki", async () => ["private wiki state"]);
     const prepared = await prepareMemoryPromptSection({
       availableTools: new Set(["wiki_search"]),
@@ -388,8 +398,9 @@ describe("memory plugin state", () => {
       buildMemoryPromptSection(
         {
           availableTools: new Set(["wiki_search"]),
-          agentId: "second",
-          agentSessionKey: "agent:second:main",
+          agentId: "first",
+          agentSessionKey: "agent:first:main",
+          ...changed,
         },
         prepared,
       ),

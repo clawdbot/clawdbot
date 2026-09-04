@@ -6,22 +6,9 @@ import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-s
 
 /** Minimum startup timeout accepted by the Codex app-server harness. */
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
-/** Default idle timeout while waiting for app-server turn completion. */
-const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
-/** Short guard after apparent assistant completion. */
-const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
-// Native Codex can spend a long quiet window synthesizing after tool results,
-// raw assistant/reasoning completions, or reasoning progress. Forwarded deltas
-// count as activity, but older native paths may not surface them, so keep this
-// terminal guard conservative.
-const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
-/** Guard after reasoning/commentary progress when no tool handoff occurred. */
-export const CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
-/** Long terminal idle watch for app-server turns that never send completion. */
-const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
-// Terminal receipt must still reach settlement; force a bounded abort if the
-// handler tail stalls, or the session can remain active forever.
-export const TURN_TERMINAL_SETTLEMENT_IDLE_TIMEOUT_MS = 2 * 60_000;
+// Native terminal receipt must still reach local settlement; a blocked
+// projection must not retain the session lane indefinitely.
+export const TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS = 2 * 60_000;
 // Aborted/timed-out completions still join queued projection work; this grace
 // bounds a blocked handler tail so finalization cannot hang forever.
 export const TURN_FINALIZE_DRAIN_ABORT_GRACE_MS = 5_000;
@@ -126,46 +113,6 @@ export function resolveCodexStartupTimeoutMs(params: {
   );
   const timeoutMs = resolvePositiveIntegerTimeoutMs(params.timeoutMs, timeoutFloorMs);
   return Math.max(timeoutFloorMs, timeoutMs);
-}
-
-/** Resolves the completion-idle timeout for an active turn. */
-export function resolveCodexTurnCompletionIdleTimeoutMs(value: number | undefined): number {
-  return resolvePositiveIntegerTimeoutMs(value, CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS);
-}
-
-/** Resolves the short assistant-completion release timeout. */
-export function resolveCodexTurnAssistantCompletionIdleTimeoutMs(
-  value: number | undefined,
-): number {
-  return resolvePositiveIntegerTimeoutMs(value, CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS);
-}
-
-/** Resolves the conservative post-tool raw assistant guard timeout. */
-export function resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(
-  value: number | undefined,
-  fallbackMs: number,
-): number {
-  const defaultMs = Math.max(
-    resolvePositiveIntegerTimeoutMs(undefined, fallbackMs),
-    CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
-  );
-  return resolvePositiveIntegerTimeoutMs(value, defaultMs);
-}
-
-/** Resolves the long terminal turn idle timeout. */
-export function resolveCodexTurnTerminalIdleTimeoutMs(
-  value: number | undefined,
-  runTimeoutOverrideMs?: number,
-): number {
-  // The terminal watchdog is wrapper-owned; Codex turn options do not carry a
-  // timeout budget. Follow explicit per-run intent without replacing the floor
-  // with the implicit 48-hour agent default.
-  const explicitRunBudgetMs = resolvePositiveIntegerTimeoutMs(
-    runTimeoutOverrideMs,
-    CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
-  );
-  const defaultMs = Math.max(CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS, explicitRunBudgetMs);
-  return resolvePositiveIntegerTimeoutMs(value, defaultMs);
 }
 
 /** Adds gateway grace time to a caller timeout without overflowing invalid values. */

@@ -13,6 +13,7 @@ import {
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
@@ -22,6 +23,7 @@ import {
 import { SessionManager } from "../../sessions/session-manager.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
+import { preparePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
@@ -132,6 +134,41 @@ async function withInitialWriter(
 }
 
 describe("admitted lazy session writer", () => {
+  it.each([false, true])(
+    "prepares a fresh keyed turn before its first append (existing=%s)",
+    async (existing) => {
+      await withInitialWriter(
+        async ({ manager, runParams, target }) => {
+          const message = { ...userMessage, idempotencyKey: `${runParams.runId}:user` };
+          const recorder = createUserTurnTranscriptRecorder({
+            message,
+            target: { ...target, sessionEntry: undefined },
+          });
+          expect(Boolean(loadSessionEntry(target))).toBe(existing);
+          expect(
+            preparePersistedCurrentUserTurn({
+              sessionManager: manager,
+              message,
+              recorder,
+              runId: runParams.runId,
+            }),
+          ).toBeUndefined();
+          manager.appendMessage(message);
+          expect(loadSessionEntry(target)).toMatchObject({
+            sessionId: target.sessionId,
+            activeWriterRunId: runParams.runId,
+          });
+          expect(
+            SessionManager.open(target)
+              .getBranch()
+              .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+          ).toHaveLength(1);
+        },
+        { existing },
+      );
+    },
+  );
+
   it.each([false, true])(
     "retains the exact committed writer for later mutations (existing=%s)",
     async (existing) => {

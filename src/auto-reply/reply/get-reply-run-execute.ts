@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
+import { resolveAgentConfig, resolveAgentRunCwd } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
@@ -436,7 +436,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
-      cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd),
+      cwd:
+        normalizeOptionalString(state.sessionEntry?.spawnedCwd) ?? resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings
         ? admittedSessionSettings.permissionMode
         : preparedSessionState.sessionEntry?.permissionMode,
@@ -519,6 +520,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
             skillWorkshopProposalRevision: { ...opts.skillWorkshopProposalRevision },
           }
         : {}),
+      ...(opts?.skillLibraryAuthoring ? { skillLibraryAuthoring: opts.skillLibraryAuthoring } : {}),
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, { config: cfg, workspaceDir, modelId: model })
         ? { enforceFinalTag: true }

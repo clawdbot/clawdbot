@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { JsonTestResults } from "vitest/node";
+import { parseVitestExecutionArgs } from "./vitest-cli.mts";
 import type { VitestReportCapture } from "./vitest-report-capture.mts";
 
 export type VitestReportOutcome = {
@@ -56,44 +57,6 @@ function caseInventory(reports: JsonTestResults[]) {
     .toSorted();
 }
 
-function nativeHelpRequested(args: string[], parseCLI: typeof import("vitest/node").parseCLI) {
-  const controls: string[] = [];
-  for (const [index, original] of args.entries()) {
-    if (original === "--") {
-      break;
-    }
-    // CAC treats every prefix except exactly two dashes as a short-option group.
-    const arg = original.replace(/^---+/u, "-");
-    // Project only help onto native watch's boolean/short-alias grammar.
-    // parseCLI(help) prints and skips validation; only the real child may do that.
-    const projected = arg.startsWith("--")
-      ? arg.replace(
-          /^--(no-)?(help|h)(?=[.=]|$)/u,
-          (_, no: string | undefined, name: string) =>
-            `--${no ?? ""}${name === "h" ? "w" : "watch"}`,
-        )
-      : arg.startsWith("-no-")
-        ? arg.replace(/^-no-(help|h)$/u, (_, name: string) =>
-            name === "h" ? "-no-w" : "-no-watch",
-          )
-        : arg.replace(
-            /^-(?!-)([^=]+)/u,
-            (_, flags: string) => `-${flags.replace(/[^h]/gu, "x").replaceAll("h", "w")}`,
-          );
-    if (projected === arg || !/watch|w/u.test(projected)) {
-      continue;
-    }
-    controls.push(projected);
-    const value = args[index + 1];
-    if (value && !value.startsWith("-")) {
-      controls.push(value);
-    }
-  }
-  return Boolean(
-    parseCLI(["vitest", "run", ...controls], { allowUnknownOptions: true }).options.watch,
-  );
-}
-
 /** Own file artifacts only; callers retain admission, retry, environment and process ownership. */
 export async function createVitestReportOwner(invocations: Invocation[], cwd: string) {
   if (
@@ -107,32 +70,11 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
     return null;
   }
   const { parseCLI } = await import("vitest/node");
-  // Both schedulers emit named `run`: unlike `--run --version`, `run --version`
-  // executes tests. Help was classified without output; native errors stay in the child.
-  let parsed: ReturnType<typeof parseCLI>[];
-  try {
-    if (invocations.some(({ args }) => nativeHelpRequested(args, parseCLI))) {
-      return null;
-    }
-    parsed = invocations.map(({ args }) => parseCLI(["vitest", ...args]));
-  } catch {
-    // Repeated help is truthy in CAC but watch rejects repeated scalar values.
-    // That and all native parse errors must be handled by the actual child.
+  const parsed = invocations.map(({ args }) => parseVitestExecutionArgs(args, parseCLI));
+  if (parsed.some((entry) => !entry || entry.options.watch)) {
     return null;
   }
-  if (
-    parsed.some(
-      ({ options, filter }) =>
-        options.watch ||
-        options.listTags ||
-        options.clearCache ||
-        options.mergeReports ||
-        (options.standalone && !filter.length),
-    )
-  ) {
-    return null;
-  }
-  const runOptions = parsed.map(({ options }) => options);
+  const runOptions = parsed.map((entry) => entry!.options);
   const requests = runOptions.map((option) => {
     // Native CLI's singular alias is distinct from config-defined reporters.
     const reporters = (option as typeof option & { reporter?: string[] }).reporter ?? [];
@@ -314,7 +256,8 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
           `export default ${JSON.stringify({
             root: cwd,
             test: {
-              projects: projectConfigs,
+              // An omitted list lets native Vitest host a wholly empty blob replay.
+              projects: projectConfigs.length ? projectConfigs : undefined,
               coverage: { enabled: false },
               passWithNoTests: captures.every((capture) => capture.passWithNoTests),
               dangerouslyIgnoreUnhandledErrors: captures.every(

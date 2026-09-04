@@ -53,6 +53,19 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
   - non-exec node commands: `operator.pairing` + `operator.write`
   - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
 
+Headless node hosts report the hardware model on macOS and Linux.
+
+Connected CLI node hosts and the macOS app report CPU count, load averages,
+memory, and home-volume disk capacity every 60 seconds, starting on connection.
+The Gateway exposes the latest snapshot as `hostStats` in `node.list` and
+`node.describe`. When received, it saves the snapshot on the paired node
+record, so offline nodes keep showing last-known stats with the original
+`updatedAtMs`. Connected nodes use live session stats. `openclaw nodes status`
+and `openclaw nodes describe` show a compact stats summary with a last-known age
+for offline nodes. Windows omits load averages, and unavailable disk capacity is
+omitted. See
+[Node host stats](/gateway/protocol#node-host-stats) for the wire contract.
+
 ## Version skew and upgrade order
 
 The Gateway WebSocket accepts authenticated node clients across an N-1 protocol window.
@@ -685,6 +698,18 @@ The Control UI can drag files into an open paired-node terminal. The native node
 
 Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the node host inside WSL for native WSL paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
 
+### Agent file transfers
+
+The [File Transfer plugin](/plugins/reference/file-transfer) provides independently
+selectable directory-listing, fetch, and write tools. Allowing one tool does not
+make the others available; node-command and path policies still apply.
+
+Every successful file fetch saves the bytes in the Gateway's file-transfer media
+store and returns both `localPath` and `mediaId`, including for inlined text and
+images. When node writing is available, pass that `mediaId` as `sourceMediaId` to
+reuse the saved bytes. `sourceMediaId` does not accept a local path or an ID from
+another media store. For inline bytes, use `contentBase64` instead.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -977,7 +1002,9 @@ Notes:
 
 ## Exec node binding
 
-When multiple nodes are available, you can bind exec to a specific node. This sets the default node for `exec host=node` (and can be overridden per agent).
+With no node target set, `exec host=node` selects the sole paired, connected node that supports `system.run`. Other paired devices do not make the selection ambiguous. If multiple executable nodes are connected, choose a target per call or bind exec to a specific node; the active Canvas target does not select the exec host. A bound or explicit target that is offline or cannot execute commands is rejected rather than redirected to another node.
+
+A binding sets the default node for `exec host=node` and can be overridden per agent.
 
 Global default:
 
@@ -992,7 +1019,7 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
-Unset to allow any node:
+Unset the binding to use the sole eligible node, or choose a target per call when multiple eligible nodes are connected:
 
 ```bash
 openclaw config unset tools.exec.node

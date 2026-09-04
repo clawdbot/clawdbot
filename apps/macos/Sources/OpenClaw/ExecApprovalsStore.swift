@@ -749,8 +749,9 @@ extension ExecApprovalsStore {
         let basisIsCurrent: Bool = switch basis {
         case .allowlistEntries:
             !usesByKey.isEmpty && usesByKey.keys.allSatisfy { currentKeys.contains($0) }
-        case .autoAllowedSkill:
-            current.agent.autoAllowSkills
+        case let .autoAllowedSkill(snapshot):
+            // The Gateway can retire while SQLite waits to begin this transaction.
+            current.agent.autoAllowSkills && snapshot.isCurrent
         case nil:
             false
         }

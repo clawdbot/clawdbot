@@ -40,24 +40,43 @@ describe("connection bootstrap coordinator", () => {
     expect(maximum).toBe(2);
   });
 
-  it("does not start queued work after its connection is replaced", async () => {
-    const coordinator = createConnectionBootstrapCoordinator();
-    coordinator.synchronize({ client: {}, connected: true });
-    const first = deferred();
-    const second = deferred();
-    let staleStarted = false;
-    const firstTask = coordinator.run("first", async () => await first.promise);
-    const secondTask = coordinator.run("second", async () => await second.promise);
-    const staleTask = coordinator.run("stale", async () => {
-      staleStarted = true;
-    });
+  it.each(["reset", "disconnected", "replaced"])(
+    "does not start queued work after its connection is %s",
+    async (boundary) => {
+      const coordinator = createConnectionBootstrapCoordinator();
+      coordinator.synchronize({ client: {}, connected: true });
+      const first = deferred();
+      const second = deferred();
+      let boundaryReturned = false;
+      let startedAfterBoundary = false;
+      let staleStarted = false;
+      const block = (completion: ReturnType<typeof deferred>) => async () => {
+        startedAfterBoundary ||= boundaryReturned;
+        await completion.promise;
+      };
+      const firstTask = coordinator.run("first", block(first));
+      const secondTask = coordinator.run("second", block(second));
+      const staleTask = coordinator.run("stale", async () => {
+        startedAfterBoundary ||= boundaryReturned;
+        staleStarted = true;
+      });
 
-    coordinator.synchronize({ client: {}, connected: true });
-    first.resolve();
-    second.resolve();
-    await Promise.all([firstTask, secondTask, staleTask]);
-    expect(staleStarted).toBe(false);
-  });
+      if (boundary === "reset") {
+        coordinator.reset();
+      } else {
+        coordinator.synchronize({
+          client: boundary === "replaced" ? {} : null,
+          connected: boundary === "replaced",
+        });
+      }
+      boundaryReturned = true;
+      first.resolve();
+      second.resolve();
+      await Promise.all([firstTask, secondTask, staleTask]);
+      expect(startedAfterBoundary).toBe(false);
+      expect(staleStarted).toBe(false);
+    },
+  );
 
   it("keeps a new connection's active task deduplicated after the old task finishes", async () => {
     const coordinator = createConnectionBootstrapCoordinator();

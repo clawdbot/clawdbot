@@ -25,6 +25,7 @@ class OpenClawAccessibilityService : AccessibilityService() {
       AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
       AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED,
       -> advanceUiEpoch()
+
       else -> Unit
     }
   }

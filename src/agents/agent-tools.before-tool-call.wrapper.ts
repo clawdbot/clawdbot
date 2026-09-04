@@ -29,13 +29,13 @@ import {
   emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
   findSkillUsageMatch,
+  prepareToolTerminalPresentation,
   reconcileLoopCallExecutionParams,
   recordLoopOutcome,
   rememberPendingTerminalPresentation,
   resolveToolDiagnosticIdentity,
   resolveToolErrorDiagnostic,
   resolveToolResultTerminalDiagnostic,
-  resolveToolTerminalPresentation,
   summarizeToolParams,
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import {
@@ -553,10 +553,12 @@ export function wrapToolWithBeforeToolCallHook(
             : error;
         }
         const durationMs = Date.now() - startedAt;
-        const terminalPresentation = resolveToolTerminalPresentation({
+        const preparedTerminalPresentation = prepareToolTerminalPresentation({
+          ctx,
           tool,
           toolParams: executeParams,
-          result,
+          toolCallId,
+          toolCallOrdinal,
         });
         await recordLoopOutcome({
           ctx,
@@ -566,15 +568,12 @@ export function wrapToolWithBeforeToolCallHook(
           result,
           resultContentSource: tool.resultContentSource,
           toolCallOrdinal,
-          terminalPresentation,
+          terminalPresentation: preparedTerminalPresentation?.project?.(result),
         });
-        rememberPendingTerminalPresentation({
-          ctx,
-          tool,
-          toolParams: executeParams,
-          toolCallId,
-          toolCallOrdinal,
-        });
+        // A harness abort can settle before a cancellation-ignoring source returns.
+        if (!signal?.aborted) {
+          rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
+        }
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
           toolParams: executeParams,

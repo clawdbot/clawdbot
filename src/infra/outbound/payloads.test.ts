@@ -712,6 +712,7 @@ describe("OutboundPayloadPlan projections", () => {
       }),
       expect.objectContaining({ text: "hello", mediaUrls: [] }),
     ]);
+    expect(projectOutboundPayloadPlanForOutbound(plan)[1]?.isStatusNotice).toBeUndefined();
     expect(
       summarizeOutboundPayloadForTransport({
         text: "✅ Session reset.",

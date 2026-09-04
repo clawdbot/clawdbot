@@ -5,20 +5,21 @@ import { createDoctorPrompter } from "./doctor-prompter.js";
 const confirmMock = vi.fn();
 const selectMock = vi.fn();
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: (options: unknown) => confirmMock(options),
   select: (options: unknown) => selectMock(options),
 }));
 
-function setNonInteractiveTerminal() {
+function setTerminal(isTTY: boolean) {
   Object.defineProperty(process.stdin, "isTTY", {
-    value: false,
+    value: isTTY,
     configurable: true,
   });
 }
 
 function createRepairPrompter(params?: { force?: boolean }) {
-  setNonInteractiveTerminal();
+  setTerminal(false);
   return createDoctorPrompter({
     runtime: {
       log: vi.fn(),
@@ -34,15 +35,16 @@ function createRepairPrompter(params?: { force?: boolean }) {
 }
 
 describe("createDoctorPrompter", () => {
-  const originalStdinIsTTY = process.stdin.isTTY;
+  const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
   const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
 
   afterEach(() => {
     vi.resetAllMocks();
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: originalStdinIsTTY,
-      configurable: true,
-    });
+    if (originalStdinIsTTY) {
+      Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
+    } else {
+      Reflect.deleteProperty(process.stdin, "isTTY");
+    }
     if (originalUpdateInProgress === undefined) {
       delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
     } else {
@@ -86,40 +88,44 @@ describe("createDoctorPrompter", () => {
     expect(confirmMock).not.toHaveBeenCalled();
   });
 
-  it("does not auto-accept runtime repairs that require interactive confirmation", async () => {
-    const prompter = createRepairPrompter();
+  it.each([{ repair: true }, { repair: true, force: true }, { yes: true }, { force: true }])(
+    "refuses interactive-only repairs without a terminal for %j",
+    async (options) => {
+      setTerminal(false);
+      const prompter = createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options,
+      });
 
-    await expect(
-      prompter.confirmRuntimeRepair({
-        message: "Archive orphan transcripts?",
-        initialValue: false,
-        requiresInteractiveConfirmation: true,
-      }),
-    ).resolves.toBe(false);
-    expect(confirmMock).not.toHaveBeenCalled();
-  });
+      await expect(
+        prompter.confirmRuntimeRepair({
+          message: "Overwrite gateway service config?",
+          initialValue: true,
+          requiresInteractiveConfirmation: true,
+        }),
+      ).resolves.toBe(false);
+      expect(confirmMock).not.toHaveBeenCalled();
+    },
+  );
 
-  it("does not accept interactive-only runtime repairs through --yes defaults", async () => {
-    setNonInteractiveTerminal();
+  it.each([false, true])("honors interactive consent with force alone: %s", async (approved) => {
+    setTerminal(true);
+    confirmMock.mockResolvedValueOnce(approved);
     const prompter = createDoctorPrompter({
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
-      options: {
-        yes: true,
-      },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { force: true },
     });
 
+    expect(prompter.shouldRepair).toBe(false);
+    expect(prompter.shouldForce).toBe(true);
     await expect(
       prompter.confirmRuntimeRepair({
-        message: "Archive orphan transcripts?",
+        message: "Overwrite gateway service config?",
         initialValue: true,
         requiresInteractiveConfirmation: true,
       }),
-    ).resolves.toBe(false);
-    expect(confirmMock).not.toHaveBeenCalled();
+    ).resolves.toBe(approved);
+    expect(confirmMock).toHaveBeenCalledOnce();
   });
 
   it("keeps skip-in-non-interactive prompts disabled during update-mode repairs", async () => {

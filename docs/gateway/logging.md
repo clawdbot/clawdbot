@@ -43,11 +43,16 @@ openclaw logs --follow
 - **File logs** are controlled exclusively by `logging.level`.
 - `--verbose` only affects **console verbosity** (and WS log style) - it does **not** raise the file log level.
 - To capture verbose-only details in file logs, set `logging.level` to `debug` or `trace`.
+- Embedded-run `continue_normal` decisions log at `debug`; retry, profile-rotation, model-fallback, and error decisions remain warnings.
 - Trace logging also includes diagnostic timing summaries for selected hot paths, such as plugin tool factory preparation. See [/tools/plugin#slow-plugin-tool-setup](/tools/plugin#slow-plugin-tool-setup).
 
 ## Console capture
 
 The CLI captures `console.log/info/warn/error/debug/trace`, writes them to file logs, and still prints to stdout/stderr.
+
+`console.trace()` keeps its redacted stack in every console style, including
+forced stderr output. File capture records it once at `trace` level, subject to
+the configured file log level.
 
 Tune console verbosity independently:
 

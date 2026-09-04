@@ -394,6 +394,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               {
                 cfg,
                 entry: latestEntry,
+                runId: operationId,
                 agentId: target.agentId,
                 sessionId,
                 sessionKey: target.canonicalKey,

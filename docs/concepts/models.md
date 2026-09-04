@@ -86,6 +86,11 @@ Other selection rules:
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening or refreshing a model picker may discover models required by a trailing `provider/*` policy entry. Default and configured picker views hide catalog rows marked `deprecated` or `disabled` unless that exact model is configured as a primary, fallback, utility/tool model, alias/settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
+Once the Gateway has discovered a provider inventory, model-selection hot reloads
+retain it without running discovery again. Aliases, policy, and runtime capabilities
+use the new configuration. Explicit catalog refresh replaces that inventory;
+changes to its provider, plugin, auth, environment, or workspace scope invalidate it.
+
 Full mechanics: [Model failover](/concepts/model-failover).
 
 ## Quick model policy
@@ -219,6 +224,12 @@ state and can force the next turn to process the full conversation again. Other
 providers may also include thinking configuration in their cache identity, so
 changing only the thinking level can increase latency and input-token cost even
 when the model itself stays the same.
+
+Retained reasoning is model-bound on current Claude models. Moving a session
+off Claude Fable 5.1 continues without Fable's earlier thinking, moving onto it
+keeps the thinking of Opus 5, Sonnet 5, Opus 4.8, and Fable 5, and switching
+away and back or changing `/think` invalidates the pre-switch Fable reasoning.
+See [Anthropic](/providers/anthropic#tool-calls-and-retained-thinking).
 
 <a id="model-in-chat" />
 

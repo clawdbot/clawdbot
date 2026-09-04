@@ -67,6 +67,9 @@ and `openclaw memory status --deep`.
   until cleared.
 - Output includes per-agent session stores when multiple agents are
   configured.
+- Fleet status works without a System Agent owner. Pending events include each
+  agent's main queue; a shared global queue is counted once. `--agent` selects
+  credentials only for `--usage`.
 
 ## Usage and quota
 

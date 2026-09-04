@@ -35,6 +35,7 @@ import {
 const telegramSpooledRetryDeadLetterMinAgeMs = 24 * 60 * 60 * 1000;
 
 const handleUpdateSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
+const answerCallbackQuerySpy = vi.hoisted(() => vi.fn(async () => true));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
 const deleteWebhookSpy = vi.hoisted(() => vi.fn(async () => true));
 const initSpy = vi.hoisted(() => vi.fn(async () => undefined));
@@ -51,7 +52,11 @@ const createTelegramBotSpy = vi.hoisted(() =>
     init: initSpy,
     botInfo: webhookBotInfo,
     handleUpdate: handleUpdateSpy,
-    api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
+    api: {
+      setWebhook: setWebhookSpy,
+      deleteWebhook: deleteWebhookSpy,
+      answerCallbackQuery: answerCallbackQuerySpy,
+    },
     stop: stopSpy,
   })),
 );
@@ -228,6 +233,8 @@ function createTelegramPrivateTopicCallback(updateId: number) {
 function resetTelegramWebhookMocks(): void {
   handleUpdateSpy.mockReset();
   handleUpdateSpy.mockImplementation((..._args: unknown[]): unknown => undefined);
+  answerCallbackQuerySpy.mockReset();
+  answerCallbackQuerySpy.mockImplementation(async () => true);
 
   setWebhookSpy.mockReset();
   deleteWebhookSpy.mockReset();
@@ -243,7 +250,11 @@ function resetTelegramWebhookMocks(): void {
     init: initSpy,
     botInfo: webhookBotInfo,
     handleUpdate: handleUpdateSpy,
-    api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
+    api: {
+      setWebhook: setWebhookSpy,
+      deleteWebhook: deleteWebhookSpy,
+      answerCallbackQuery: answerCallbackQuerySpy,
+    },
     stop: stopSpy,
   }));
 }
@@ -1109,6 +1120,68 @@ describe("startTelegramWebhook", () => {
 
         finishWork?.();
         await waitForWebhookState(() => expect(workFinished).toBe(true));
+      },
+    );
+  });
+
+  it("answers a durably admitted callback before its same-chat lane drains", async () => {
+    const blockingUpdate = {
+      update_id: 5,
+      message: {
+        message_id: 5,
+        date: 1_736_380_800,
+        from: { id: 111, is_bot: false, first_name: "Ada" },
+        chat: { id: 1234, type: "private" },
+        text: "slow",
+      },
+    };
+    const callbackUpdate = {
+      update_id: 6,
+      callback_query: createTelegramPrivateTopicCallback(6),
+    };
+    const seenUpdateIds: number[] = [];
+    let releaseBlockingUpdate: (() => void) | undefined;
+    const blockingUpdateCompleted = new Promise<void>((resolve) => {
+      releaseBlockingUpdate = resolve;
+    });
+    handleUpdateSpy.mockImplementation(async (update: unknown) => {
+      const updateId = (update as { update_id: number }).update_id;
+      seenUpdateIds.push(updateId);
+      if (updateId === blockingUpdate.update_id) {
+        await blockingUpdateCompleted;
+      }
+    });
+
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+      },
+      async ({ port }) => {
+        const url = webhookUrl(port, TELEGRAM_WEBHOOK_PATH);
+        try {
+          const blockingResponse = await postWebhookJson({
+            url,
+            payload: JSON.stringify(blockingUpdate),
+            secret: TELEGRAM_SECRET,
+          });
+          expect(blockingResponse.status).toBe(200);
+          await waitForWebhookState(() => expect(seenUpdateIds).toEqual([5]));
+
+          const callbackResponse = await postWebhookJson({
+            url,
+            payload: JSON.stringify(callbackUpdate),
+            secret: TELEGRAM_SECRET,
+          });
+          expect(callbackResponse.status).toBe(200);
+          expect(callbackResponse.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+          expect(answerCallbackQuerySpy).toHaveBeenCalledWith("callback-6");
+          expect(seenUpdateIds).toEqual([5]);
+        } finally {
+          releaseBlockingUpdate?.();
+        }
+
+        await waitForWebhookState(() => expect(seenUpdateIds).toEqual([5, 6]));
       },
     );
   });
@@ -2397,6 +2470,7 @@ describe("startTelegramWebhook", () => {
 
   it("returns non-200 when the webhook update cannot be spooled durably", async () => {
     handleUpdateSpy.mockClear();
+    answerCallbackQuerySpy.mockClear();
     await withStartedWebhook(
       {
         secret: TELEGRAM_SECRET,
@@ -2405,12 +2479,15 @@ describe("startTelegramWebhook", () => {
       async ({ port }) => {
         const response = await postWebhookJson({
           url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-          payload: JSON.stringify({ message: { text: "missing update id" } }),
+          payload: JSON.stringify({
+            callback_query: createTelegramPrivateTopicCallback(33),
+          }),
           secret: TELEGRAM_SECRET,
         });
 
         expect(response.status).toBe(500);
         expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
+        expect(answerCallbackQuerySpy).not.toHaveBeenCalled();
         expect(handleUpdateSpy).not.toHaveBeenCalled();
       },
     );
@@ -2872,12 +2949,11 @@ describe("startTelegramWebhook", () => {
           req.end("{}");
         });
 
-        if (responseOrError.kind === "response") {
-          expect(responseOrError.statusCode).toBe(413);
-          expect(responseOrError.body).toBe("Payload too large");
-        } else {
-          expect(responseOrError.code).toBeOneOf(["ECONNRESET", "EPIPE"]);
-        }
+        expect(responseOrError).toEqual({
+          kind: "response",
+          statusCode: 413,
+          body: "Payload too large",
+        });
         expect(handleUpdateSpy).not.toHaveBeenCalled();
       },
     );

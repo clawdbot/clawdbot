@@ -1564,6 +1564,8 @@ async function runEncodedWindowsPowerShell(command: string, maxBuffer: number): 
   }
   try {
     const { stdout } = await runExec(powershell, buildEncodedPowerShellArgs(command), {
+      // Inherited PowerShell 7 paths can shadow Get-Acl and its nested security module.
+      env: { PSModulePath: path.win32.join(path.win32.dirname(powershell), "Modules") },
       timeoutMs: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
       maxBuffer,
     });

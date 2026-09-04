@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import Observation
 import OSLog
@@ -37,10 +36,7 @@ final class CookieSyncManager: NSObject {
     @ObservationIgnored private var reconcileTask: Task<Void, Never>?
     @ObservationIgnored private var retryTask: Task<Void, Never>?
     @ObservationIgnored private var process: Process?
-    @ObservationIgnored private var stdoutPipe: Pipe?
-    @ObservationIgnored private var stderrPipe: Pipe?
-    @ObservationIgnored private var stdoutSource: DispatchSourceRead?
-    @ObservationIgnored private var stderrSource: DispatchSourceRead?
+    @ObservationIgnored private var readers: [PipeReadStream] = []
     @ObservationIgnored private var startupWatchdog: DispatchSourceTimer?
     @ObservationIgnored private var stdoutBuffer = Data()
     @ObservationIgnored private var processGeneration: UUID?
@@ -208,6 +204,10 @@ final class CookieSyncManager: NSObject {
         let process = Process()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
+        defer {
+            try? stdoutPipe.fileHandleForReading.close()
+            try? stderrPipe.fileHandleForReading.close()
+        }
         let generation = UUID()
         let arguments = [
             "browser",
@@ -235,25 +235,33 @@ final class CookieSyncManager: NSObject {
             environment["OPENCLAW_GATEWAY_PASSWORD"] = password
         }
         process.environment = environment
-        process.terminationHandler = { [weak self] process in
-            let terminationStatus = process.terminationStatus
-            Task { @MainActor [weak self] in
-                self?.childTerminated(generation: generation, status: terminationStatus)
-            }
-        }
-
         self.process = process
-        self.stdoutPipe = stdoutPipe
-        self.stderrPipe = stderrPipe
         self.processGeneration = generation
         self.runningIntent = intent
         self.stdoutBuffer.removeAll(keepingCapacity: true)
 
         do {
+            // Consume on the reader's serial executor so termination cannot
+            // overtake status chunks waiting for a separate actor hop.
+            let readers = try [
+                PipeReadStream(handle: stdoutPipe.fileHandleForReading, queue: .main, onData: { [weak self] data in
+                    MainActor.assumeIsolated { self?.consumeStdout(data, generation: generation) }
+                }),
+                PipeReadStream(handle: stderrPipe.fileHandleForReading, queue: .main, onData: { [weak self] data in
+                    MainActor.assumeIsolated { self?.consumeStderr(data, generation: generation) }
+                }),
+            ]
+            self.readers = readers
+            process.terminationHandler = { [weak self] process in
+                let terminationStatus = process.terminationStatus
+                Task { @MainActor [weak self] in
+                    for reader in readers {
+                        await reader.finish()
+                    }
+                    self?.childTerminated(generation: generation, status: terminationStatus)
+                }
+            }
             try process.run()
-            try? stdoutPipe.fileHandleForWriting.close()
-            try? stderrPipe.fileHandleForWriting.close()
-            self.installReadSources(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe, generation: generation)
             self.installStartupWatchdog(generation: generation)
             self.state = .running
             self.logger.info("cookie sync started for \(intent.domains.count, privacy: .public) domain(s)")
@@ -262,30 +270,6 @@ final class CookieSyncManager: NSObject {
             self.stopChild(nextState: .error("Cookie sync could not start: \(error.localizedDescription)"))
             self.scheduleRetry()
         }
-    }
-
-    private func installReadSources(stdoutPipe: Pipe, stderrPipe: Pipe, generation: UUID) {
-        let stdoutDescriptor = stdoutPipe.fileHandleForReading.fileDescriptor
-        let stdoutSource = DispatchSource.makeReadSource(fileDescriptor: stdoutDescriptor, queue: self.queue)
-        stdoutSource.setEventHandler { [weak self] in
-            let data = Self.readAvailable(fileDescriptor: stdoutDescriptor, byteCount: stdoutSource.data)
-            Task { @MainActor [weak self] in
-                self?.consumeStdout(data, generation: generation)
-            }
-        }
-        self.stdoutSource = stdoutSource
-        stdoutSource.resume()
-
-        let stderrDescriptor = stderrPipe.fileHandleForReading.fileDescriptor
-        let stderrSource = DispatchSource.makeReadSource(fileDescriptor: stderrDescriptor, queue: self.queue)
-        stderrSource.setEventHandler { [weak self] in
-            let data = Self.readAvailable(fileDescriptor: stderrDescriptor, byteCount: stderrSource.data)
-            Task { @MainActor [weak self] in
-                self?.consumeStderr(data, generation: generation)
-            }
-        }
-        self.stderrSource = stderrSource
-        stderrSource.resume()
     }
 
     private func installStartupWatchdog(generation: UUID) {
@@ -308,11 +292,6 @@ final class CookieSyncManager: NSObject {
 
     private func consumeStdout(_ data: Data, generation: UUID) {
         guard self.processGeneration == generation else { return }
-        guard !data.isEmpty else {
-            self.stdoutSource?.cancel()
-            self.stdoutSource = nil
-            return
-        }
         self.stdoutBuffer.append(data)
         if self.stdoutBuffer.count > 64 * 1024 {
             self.stdoutBuffer.removeFirst(self.stdoutBuffer.count - 64 * 1024)
@@ -332,11 +311,6 @@ final class CookieSyncManager: NSObject {
 
     private func consumeStderr(_ data: Data, generation: UUID) {
         guard self.processGeneration == generation else { return }
-        guard !data.isEmpty else {
-            self.stderrSource?.cancel()
-            self.stderrSource = nil
-            return
-        }
         // Preserve lossy decoding so malformed CLI bytes do not hide useful diagnostics.
         // swiftlint:disable:next optional_data_string_conversion
         let message = String(decoding: data, as: UTF8.self)
@@ -378,35 +352,16 @@ final class CookieSyncManager: NSObject {
     private func stopChild(nextState: State) {
         self.startupWatchdog?.cancel()
         self.startupWatchdog = nil
-        self.stdoutSource?.cancel()
-        self.stdoutSource = nil
-        self.stderrSource?.cancel()
-        self.stderrSource = nil
+        self.readers.forEach { $0.close() }
+        self.readers.removeAll()
         let process = self.process
         self.process = nil
         self.processGeneration = nil
         self.runningIntent = nil
-        try? self.stdoutPipe?.fileHandleForReading.close()
-        try? self.stdoutPipe?.fileHandleForWriting.close()
-        try? self.stderrPipe?.fileHandleForReading.close()
-        try? self.stderrPipe?.fileHandleForWriting.close()
-        self.stdoutPipe = nil
-        self.stderrPipe = nil
         self.stdoutBuffer.removeAll(keepingCapacity: false)
         if process?.isRunning == true {
             process?.terminate()
         }
         self.state = nextState
-    }
-
-    private nonisolated static func readAvailable(fileDescriptor: Int32, byteCount: UInt) -> Data {
-        let count = max(1, min(Int(byteCount), 64 * 1024))
-        var data = Data(count: count)
-        let bytesRead = data.withUnsafeMutableBytes { buffer in
-            Darwin.read(fileDescriptor, buffer.baseAddress, count)
-        }
-        guard bytesRead > 0 else { return Data() }
-        data.removeSubrange(bytesRead..<data.count)
-        return data
     }
 }

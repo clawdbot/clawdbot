@@ -264,41 +264,52 @@ describe("sandbox explain command", () => {
     });
   });
 
-  it("reports the generated sandbox workspace for non-rw sessions", async () => {
-    mockCfg = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "agent",
-            workspaceAccess: "none",
-            workspaceRoot: "/tmp/openclaw-sandboxes",
+  it.each([
+    { workspaceAccess: "none", writable: true, agentMounts: [] },
+    {
+      workspaceAccess: "ro",
+      writable: false,
+      agentMounts: [expect.objectContaining({ source: "agent", writable: false })],
+    },
+  ])(
+    "reports the generated sandbox workspace for $workspaceAccess sessions",
+    async ({ workspaceAccess, writable, agentMounts }) => {
+      mockCfg = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              scope: "agent",
+              workspaceAccess,
+              workspaceRoot: "/tmp/openclaw-sandboxes",
+            },
           },
+          list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
         },
-        list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
-      },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
-    };
+        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+      };
 
-    const logs: string[] = [];
-    await sandboxExplainCommand({ json: true, agent: "builder" }, {
-      log: (msg: string) => logs.push(msg),
-      error: (msg: string) => logs.push(msg),
-      exit: (_code: number) => {},
-    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+      const logs: string[] = [];
+      await sandboxExplainCommand({ json: true, agent: "builder" }, {
+        log: (msg: string) => logs.push(msg),
+        error: (msg: string) => logs.push(msg),
+        exit: (_code: number) => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
-    const parsed = JSON.parse(logs.join(""));
-    expect(path.dirname(parsed.sandbox.effectiveHostWorkspaceRoot)).toBe(
-      path.resolve("/tmp/openclaw-sandboxes"),
-    );
-    expect(path.basename(parsed.sandbox.effectiveHostWorkspaceRoot)).toMatch(
-      /^workspace-[a-f0-9]{32}$/,
-    );
-    expect(parsed.sandbox.workspaceSource).toBe("sandbox");
-    expect(parsed.sandbox.workspaceMounts).toEqual([
-      expect.objectContaining({ source: "workspace", writable: false }),
-    ]);
-  });
+      const parsed = JSON.parse(logs.join(""));
+      expect(path.dirname(parsed.sandbox.effectiveHostWorkspaceRoot)).toBe(
+        path.resolve("/tmp/openclaw-sandboxes"),
+      );
+      expect(path.basename(parsed.sandbox.effectiveHostWorkspaceRoot)).toMatch(
+        /^workspace-[a-f0-9]{32}$/,
+      );
+      expect(parsed.sandbox.workspaceSource).toBe("sandbox");
+      expect(parsed.sandbox.workspaceMounts).toEqual([
+        expect.objectContaining({ source: "workspace", writable }),
+        ...agentMounts,
+      ]);
+    },
+  );
 
   it("reports guest-isolated workspaces and the effective writable-access cap", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-guests" }, async (state) => {

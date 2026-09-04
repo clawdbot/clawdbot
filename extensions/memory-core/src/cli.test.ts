@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -326,6 +327,97 @@ describe("memory cli", () => {
   const configuredAgents = {
     agents: { ownership: "explicit" as const, entries: { main: {}, ops: {} } },
   };
+
+  it("resets and rebuilds the real index without changing canonical session bytes or other owners", async () => {
+    const stateDir = path.join(fixtureRoot, `reset-state-${workspaceCaseId++}`);
+    const workspaceDir = path.join(fixtureRoot, `reset-workspace-${workspaceCaseId++}`);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      "# Memory\nThe observatory uses a copper telescope.\n",
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
+      memory: {
+        search: {
+          provider: "none",
+          sources: ["memory"],
+          store: { vector: { enabled: false } },
+        },
+      },
+      plugins: { enabled: false },
+    };
+    getRuntimeConfig.mockReturnValue(cfg);
+    await seedCliBackfillTranscript("reset-survivor", ["2026-01-01"]);
+    const actualMemory =
+      await vi.importActual<typeof import("./memory/index.js")>("./memory/index.js");
+    getMemorySearchManager.mockImplementation(actualMemory.getMemorySearchManager);
+    await runMemoryCli(["index", "--agent", "main"]);
+    const db = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
+    try {
+      // A valid older same-version store must not undergo unrelated repairs during reset.
+      db.exec("ALTER TABLE session_pending_inputs DROP COLUMN consumed_event_id");
+      const pendingInputSchema = () =>
+        db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'session_pending_inputs'").get();
+      const beforePendingInputSchema = pendingInputSchema();
+      const nonMemoryTables = (
+        db
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+          .all() as Array<{ name: string }>
+      ).filter(
+        ({ name }) => !name.startsWith("memory_index_") && name !== "memory_embedding_cache",
+      );
+      const snapshot = () =>
+        nonMemoryTables.map(({ name }) => ({
+          name,
+          rows: db
+            .prepare(`SELECT * FROM "${name}"`)
+            .all()
+            .map((row) => JSON.stringify(row))
+            .toSorted(),
+        }));
+      const before = snapshot();
+      expect(db.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()).toEqual({
+        count: 2,
+      });
+      const indexedContent = () =>
+        db
+          .prepare(
+            "SELECT path, text, embedding FROM memory_index_chunks ORDER BY path, start_line",
+          )
+          .all();
+      const beforeIndex = indexedContent();
+      expect(beforeIndex.some((row) => String(row.text).includes("copper telescope"))).toBe(true);
+      await runMemoryCli(["reset", "--agent", "main", "--yes"]);
+      expect(pendingInputSchema()).toEqual(beforePendingInputSchema);
+      expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get()).toEqual({
+        count: 0,
+      });
+      expect(snapshot()).toEqual(before);
+      await runMemoryCli(["index", "--agent", "main"]);
+      expect(indexedContent()).toEqual(beforeIndex);
+      expect(snapshot()).toEqual(before);
+    } finally {
+      db.close();
+      await actualMemory.closeAllMemorySearchManagers();
+    }
+  });
+
+  it("requires reset confirmation and does not create missing agent databases", async () => {
+    const stateDir = path.join(fixtureRoot, `missing-reset-${workspaceCaseId++}`);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    getRuntimeConfig.mockReturnValue(configuredAgents);
+    await expect(runMemoryCli(["reset"])).rejects.toThrow("--yes");
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["reset", "--yes"]);
+    for (const agentId of ["main", "ops"]) {
+      expect(log).toHaveBeenCalledWith(`No memory index to reset (${agentId}).`);
+      await expectPathMissing(resolveOpenClawAgentSqlitePath({ agentId }));
+    }
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+  });
 
   function mockCommandManagerForConfiguredAgents() {
     getMemorySearchManager.mockImplementation(async () => ({
@@ -710,6 +802,14 @@ describe("memory cli", () => {
         makeMemoryStatus({
           files: 2,
           chunks: 5,
+          sourceCounts: [{ source: "memory", files: 2, chunks: 5, chunkBytes: 2048 }],
+          storage: {
+            databaseBytes: 1048576,
+            walBytes: 2048,
+            reusableBytes: 524288,
+            embeddingCacheBytes: 4096,
+            embeddingCacheEntries: 123,
+          },
           cache: { enabled: true, entries: 123, maxEntries: 50000 },
           fts: { enabled: true, available: true },
           vector: {
@@ -735,7 +835,10 @@ describe("memory cli", () => {
     expectLogged(log, "Vector dims: 1024");
     expectLogged(log, "Vector path: /opt/sqlite-vec.dylib");
     expectLogged(log, "FTS: ready");
+    expectLogged(log, "2.0 KiB text + embeddings");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
+    expectLogged(log, "Agent database: 1.0 MiB · WAL 2.0 KiB · reusable 512.0 KiB");
+    expectLogged(log, "Stored embedding cache: 4.0 KiB · 123 entries");
     expect(close).toHaveBeenCalled();
   });
 
@@ -797,6 +900,8 @@ describe("memory cli", () => {
             indexIdentity: {
               status: "mismatched",
               reason: "index was built for provider openai, expected ollama",
+              code: "provider",
+              owner: "configuration",
             },
           },
         }),
@@ -808,9 +913,15 @@ describe("memory cli", () => {
 
     expectLogged(log, "Provider: ollama (requested: ollama)");
     expectLogged(log, "Dirty: yes");
-    expectLogged(log, "Index identity: index was built for provider openai, expected ollama");
+    expectLogged(
+      log,
+      "Index identity: index was built for provider openai, expected ollama (owner: configuration, code: provider)",
+    );
     expectLogged(log, "Vector search: paused until memory is rebuilt");
-    expectLogged(log, "Fix: Run: openclaw memory status --index --agent main");
+    expectLogged(
+      log,
+      "Fix: Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
+    );
     expect(close).toHaveBeenCalled();
   });
 
@@ -1457,6 +1568,9 @@ describe("memory cli", () => {
       await runMemoryCli(["status", "--fix"]);
 
       expectLogged(log, "Repair: rewrote store");
+      expect(getMemorySearchManager).toHaveBeenCalledWith(
+        expect.objectContaining({ purpose: "cli" }),
+      );
       const audit = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
       const repaired = audit as {
         entries: Record<string, { conceptTags?: string[] }>;
@@ -1963,6 +2077,7 @@ describe("memory cli", () => {
       cfg: {},
       agentId: "main",
       purpose: "cli",
+      inspectSources: true,
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -1979,6 +2094,7 @@ describe("memory cli", () => {
       cfg: {},
       agentId: "main",
       purpose: "cli",
+      inspectSources: true,
       acquireLocalService,
     });
   });
@@ -2058,7 +2174,9 @@ describe("memory cli", () => {
       status: () =>
         makeMemoryStatus({
           dirty: true,
-          custom: { indexIdentity: { status: "mismatched", reason } },
+          custom: {
+            indexIdentity: { status: "mismatched", reason, code: "model", owner: "configuration" },
+          },
         }),
       close,
     });
@@ -2071,8 +2189,9 @@ describe("memory cli", () => {
     expect(firstWrittenJsonArg(writeJson)).toEqual({
       results: [],
       stale: true,
-      warning: `Memory index is stale: ${reason}. Search results may be incomplete.`,
-      action: "Run: openclaw memory status --index --agent main",
+      warning: `Memory index is stale: ${reason} (owner: configuration, code: model). Search results may be incomplete.`,
+      action:
+        "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
     });
   });
 

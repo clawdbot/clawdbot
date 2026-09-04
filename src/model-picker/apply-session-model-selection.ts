@@ -21,7 +21,7 @@ import { refreshQueuedFollowupSession } from "../auto-reply/reply/queue.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { resolveSupportedThinkingLevel } from "../auto-reply/thinking.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import {
   adoptPersistedSessionSnapshot,
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
@@ -64,6 +64,7 @@ export type ApplySessionModelSelectionParams = {
   thinkingCatalog?: readonly ModelCatalogEntry[];
   canPersistStickyModelSelection?: boolean;
   stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
+  validateAuthProfileSelection?: () => string | undefined;
   request: SessionModelSelectionRequest;
   /** Raw directive text used only by the existing session patch hook. */
   patchModel?: string;
@@ -194,6 +195,10 @@ export async function applySessionModelSelection(
   if (prepared.status === "rejected") {
     return prepared;
   }
+  const authProfileError = params.validateAuthProfileSelection?.();
+  if (authProfileError) {
+    return { status: "rejected", reason: "not-allowed", message: authProfileError };
+  }
   // Metadata preparation can yield. Memory-only sessions need the same lock and
   // replacement fence that persisted sessions enforce in their atomic write.
   const currentEntry = params.storePath
@@ -271,6 +276,7 @@ export async function applySessionModelSelection(
       reassertLiveModelSwitchPending: applied.changed && nextEntry.liveModelSwitchPending === true,
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
+      validateCommit: params.validateAuthProfileSelection,
     });
     if (persistence.entry) {
       params.sessionStore[params.sessionKey] = persistence.entry;
@@ -278,6 +284,9 @@ export async function applySessionModelSelection(
     }
     if (persistence.status === "model-selection-locked") {
       return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
+    }
+    if (persistence.status === "commit-rejected") {
+      return { status: "rejected", reason: "not-allowed", message: persistence.error };
     }
     if (
       persistence.status !== "current" ||
@@ -346,7 +355,7 @@ export async function applySessionModelSelection(
       nextRouteResolution: "resolved",
       nextModelOverrideSource: request.isDefault ? undefined : "user",
       nextAuthProfileId: persistedEntry.authProfileOverride,
-      nextAuthProfileIdSource: resolveSessionAuthProfileOverrideSource(persistedEntry),
+      nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(persistedEntry),
       nextThinking: {
         level: persistedEntry.thinkingLevel,
         catalog: [...thinkingCatalog],

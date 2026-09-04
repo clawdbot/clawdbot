@@ -10,7 +10,7 @@ import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
 } from "./agent-runtime-id.js";
-import { listAgentEntries } from "./agent-scope-config.js";
+import { listAgentEntries, withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 
 // Harness runtime discovery feeds plugin preloading/setup. Only plugin runtimes
@@ -146,11 +146,17 @@ export function collectConfiguredAgentHarnessRuntimes(
   config: OpenClawConfig,
   options: ConfiguredAgentHarnessRuntimeOptions = {},
 ): string[] {
-  const runtimes = new Set<string>();
-  const includeImplicitRuntimePreferences = options.includeImplicitRuntimePreferences ?? true;
+  // Roster facts are memoized for the whole batch: per-reference policy
+  // resolution otherwise re-projects the roster O(agents × models) times,
+  // which blocks the event loop on large fleets (#135743). The batch is a
+  // pure read of config.
+  return withAgentRosterFactsBatch(config, () => {
+    const runtimes = new Set<string>();
+    const includeImplicitRuntimePreferences = options.includeImplicitRuntimePreferences ?? true;
 
-  pushConfiguredModelRuntimeIds(config, runtimes);
-  pushConfiguredAgentModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
+    pushConfiguredModelRuntimeIds(config, runtimes);
+    pushConfiguredAgentModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
 
-  return [...runtimes].toSorted((left, right) => left.localeCompare(right));
+    return [...runtimes].toSorted((left, right) => left.localeCompare(right));
+  });
 }

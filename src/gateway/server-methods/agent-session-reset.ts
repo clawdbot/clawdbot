@@ -64,13 +64,9 @@ export function buildBareSessionResetResult(params: {
   sessionId?: string;
   ackText?: string;
 }) {
+  const text = params.ackText ?? sessionResetAckText(params.reason);
   return {
-    payloads: [
-      {
-        text: params.ackText ?? sessionResetAckText(params.reason),
-        isStatusNotice: true,
-      },
-    ],
+    payloads: [{ text, isStatusNotice: true }],
     meta: {
       durationMs: 0,
       ...(params.sessionId
@@ -163,7 +159,7 @@ async function deliverBareSessionResetResult(params: {
     outboundSession: undefined,
     sessionEntry: params.sessionEntry,
     result: result as never,
-    payloads: result.payloads as never,
+    payloads: result.payloads,
     preparedPlugin: params.preparedPlugin,
     assertDeliveryCurrent: params.assertCurrent,
   });

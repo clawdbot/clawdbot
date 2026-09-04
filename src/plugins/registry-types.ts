@@ -35,6 +35,7 @@ import type {
 } from "./manifest-types.js";
 import type {
   PluginManifestContracts,
+  PluginManifestControlUi,
   PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
   PluginManifestDashboardDataBinding,
@@ -520,6 +521,7 @@ export type PluginRecord = {
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
+  controlUi?: PluginManifestControlUi;
   mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
   dependencyStatus?: PluginDependencyStatus;

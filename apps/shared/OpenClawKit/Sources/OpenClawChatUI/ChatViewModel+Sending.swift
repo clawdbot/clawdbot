@@ -16,6 +16,7 @@ extension OpenClawChatViewModel {
             !isSending &&
             self.attachmentStagingCount == 0 &&
             !self.hasBlockingRunActivity &&
+            self.composerModelAvailabilityMessage == nil &&
             self.hasDraftToSend
     }
 
@@ -380,6 +381,10 @@ extension OpenClawChatViewModel {
         }
 
         guard await self.prepareLiveRoute(for: draft) else { return }
+        guard self.composerModelAvailabilityMessage == nil else {
+            logDiagnostic("chat.ui send ignored reason=model-auth sessionKey=\(sessionKey)")
+            return
+        }
         let attempt = self.beginLiveSend(draft)
         await self.deliverLiveSend(attempt)
     }
@@ -699,10 +704,7 @@ extension OpenClawChatViewModel {
         let historyContext = beginHistoryRequest(for: attempt.draft.session)
         let refresh = await refreshHistoryAfterRun(historyRequest: historyContext)
         guard isCurrentSession(attempt.draft.session) else { return }
-        let hasInFlightRunSnapshot = refresh.applied &&
-            refresh.runSnapshotApplied &&
-            refresh.hasInFlightRun
-        if hasInFlightRunSnapshot ||
+        if refresh.hasInFlightRun || (refresh.applied && !refresh.runSnapshotApplied) ||
             !clearPendingRunIfAssistantMessagePresent(
                 runId: response.runId,
                 after: attempt.userMessageTimestamp)

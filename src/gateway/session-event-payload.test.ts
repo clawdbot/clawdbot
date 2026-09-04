@@ -19,6 +19,7 @@ it("projects session actors and explicitly clears absent attribution", () => {
   ).toMatchObject({
     createdActor: { type: "human", id: "profile-ada", label: "Ada" },
     archivedBy: null,
+    archiveReason: null,
     participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
     participantCount: 1,
   });
@@ -30,11 +31,13 @@ it("projects session actors and explicitly clears absent attribution", () => {
         kind: "direct",
         updatedAt: 2,
         archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+        archiveReason: "active-session-cap",
       },
     }),
   ).toMatchObject({
     createdActor: null,
     archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+    archiveReason: "active-session-cap",
     participants: [],
     participantCount: 0,
   });

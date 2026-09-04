@@ -14,6 +14,7 @@ import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-text-sanitize.js";
+import { takeMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
 import type {
   PluginApprovalRequest,
@@ -93,6 +94,7 @@ export function createPluginApprovalHandlers(
         scope?: ApprovalScope | null;
         toolName?: string | null;
         toolCallId?: string | null;
+        mcpTool?: { server: string; tool: string };
         allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
@@ -199,6 +201,7 @@ export function createPluginApprovalHandlers(
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,
+        ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
         ...(Array.isArray(p.allowedDecisions)
           ? {
               allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
@@ -230,6 +233,14 @@ export function createPluginApprovalHandlers(
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       if (trustedAgentRuntime) {
         record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
+        if (request.mcpTool && request.toolCallId) {
+          record.mcpToolApprovalActive = takeMcpToolApprovalBinding({
+            authority: trustedAgentRuntime.delegatedAuthority,
+            agentId: trustedAgentRuntime.agentId,
+            toolCallId: request.toolCallId,
+            ...request.mcpTool,
+          });
+        }
       }
       if (
         trustedAgentRuntime?.executionIdentity &&

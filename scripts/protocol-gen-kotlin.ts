@@ -86,6 +86,7 @@ const schemaNames = new Map<string, string>([
   ["SessionGitHubPublicationPublishing", "SessionGitHubPublicationPublishing"],
   ["SessionGitHubPublicationPublished", "SessionGitHubPublicationPublished"],
   ["SessionGitHubPublicationFailed", "SessionGitHubPublicationFailed"],
+  ["SessionGitHubPublicationNeedsConfirmation", "SessionGitHubPublicationNeedsConfirmation"],
   ["SessionGitHubPublicationResult", "SessionGitHubPublicationResult"],
   ["TalkSessionCancelOutputResult", "TalkSessionCancelOutputResult"],
 ]);
@@ -258,10 +259,7 @@ function emitWireModels(): string[] {
     string,
     { discriminator: string; literal: string; unionName: string }
   >();
-  const discriminatedUnions = new Map<
-    string,
-    { discriminator: string; variants: Array<{ literal: string }> }
-  >();
+  const discriminatedUnions = new Map<string, string>();
   for (const [schemaName, kotlinName] of schemaNames) {
     const schema = protocolSchemas[schemaName];
     const branches = schema?.oneOf ?? schema?.anyOf;
@@ -276,14 +274,18 @@ function emitWireModels(): string[] {
     if (!discriminator) {
       continue;
     }
-    const variants = branches.map((branch) => ({
-      literal: literalValue(branch.properties?.[discriminator] ?? {}) as string,
-    }));
-    discriminatedUnions.set(kotlinName, { discriminator, variants });
-    for (const [index, branch] of branches.entries()) {
-      unionVariants.set(schemaSignature(branch), {
+    discriminatedUnions.set(kotlinName, discriminator);
+    for (const branch of branches) {
+      const signature = schemaSignature(branch);
+      const literal = literalValue(branch.properties?.[discriminator] ?? {}) as string;
+      if (!selectedSignatures.has(signature)) {
+        throw new Error(
+          `${schemaName} variant ${JSON.stringify(literal)} must be selected for Kotlin generation`,
+        );
+      }
+      unionVariants.set(signature, {
         discriminator,
-        literal: variants[index]!.literal,
+        literal,
         unionName: kotlinName,
       });
     }
@@ -366,14 +368,11 @@ function emitWireModels(): string[] {
     ].join("\n");
   };
 
-  const emitUnion = (
-    name: string,
-    union: { discriminator: string; variants: Array<{ literal: string }> },
-  ): string =>
+  const emitUnion = (name: string, discriminator: string): string =>
     [
       "@OptIn(ExperimentalSerializationApi::class)",
       "@Serializable",
-      `@JsonClassDiscriminator(${JSON.stringify(union.discriminator)})`,
+      `@JsonClassDiscriminator(${JSON.stringify(discriminator)})`,
       `sealed interface ${name}`,
     ].join("\n");
 

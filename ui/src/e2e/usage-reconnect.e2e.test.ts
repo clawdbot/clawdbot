@@ -76,7 +76,12 @@ function sessionsUsage(
           ...usageTotals,
           activityDates: [today()],
           dailyBreakdown: [
-            { date: today(), tokens: usageTotals.totalTokens, cost: usageTotals.totalCost },
+            {
+              ...usageTotals,
+              date: today(),
+              tokens: usageTotals.totalTokens,
+              cost: usageTotals.totalCost,
+            },
           ],
           messageCounts: {
             total: 2,

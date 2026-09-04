@@ -2,6 +2,7 @@
 summary: "Host exec approvals: policy knobs, allowlists, and the YOLO/strict workflow"
 read_when:
   - Configuring exec approvals or allowlists
+  - Inspecting or revoking durable MCP tool grants
   - Implementing exec approval UX in the macOS app
   - Reviewing sandbox-escape prompts and their implications
 title: "Exec approvals"
@@ -157,6 +158,14 @@ Example schema:
         },
         {
           "pattern": "~/Projects/**/bin/git"
+        }
+      ],
+      "mcpTools": [
+        {
+          "server": "project-docs",
+          "tool": "publish_page",
+          "source": "allow-always",
+          "addedAt": 1737150000000
         }
       ]
     }
@@ -445,6 +454,47 @@ Each allowlist entry supports:
 | `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
 | `lastResolvedPath` | Last resolved binary path                                                |
 
+## MCP tool grants
+
+For Gateway-hosted Codex runs, **Allow Always** can save a durable grant for one
+MCP tool on a server configured in `mcp.servers`. The Gateway writes the grant
+to `agents.<agentId>.mcpTools` in this same approvals document. It covers the
+exact agent, configured server name, and tool name, **with any arguments**;
+it does not grant access to other agents, servers, or tools.
+
+Each entry has `server`, `tool`, `source: "allow-always"`, and `addedAt`
+(Unix milliseconds). `lastUsedAt` is optional. Codex apps, native plugin
+servers, and computer-use servers do not receive OpenClaw MCP tool grants.
+OpenClaw only mints when durable persistence is offered and it can unambiguously
+match the approval to a live Gateway-owned tool call. Missing or ambiguous
+correlation retains Codex's existing native/session behavior instead.
+
+Grants apply when the server's `codex.defaultToolsApprovalMode` is `auto` or
+unspecified. Explicit `prompt` wins over a stored grant and keeps asking;
+explicit `approve` already bypasses per-call approval. See
+[Codex tool approvals](/cli/mcp#codex-tool-approvals).
+
+The durable grant is read when OpenClaw next prepares the Codex thread
+configuration and hook registration, such as for a new session or after a
+restart. The current session continues using Codex's remembered decision;
+OpenClaw does not reload grants for every tool call.
+
+To inspect grants, run `openclaw approvals get --gateway`. To revoke one,
+export the document, remove its entry from `agents.<agentId>.mcpTools`, and
+replace the document with the existing `set` command:
+
+```bash
+openclaw approvals get --gateway --json | jq '.file' > approvals.json
+# Edit approvals.json, preserving other settings, allowlists, and grants.
+openclaw approvals set --gateway --file approvals.json
+```
+
+Omit `--gateway` from both commands to edit local approvals. Revocation takes
+effect at the next thread preparation/registration too; start a new session
+or restart to discard the active session's remembered approval. If Codex also
+persisted a separate approval in its native config, remove that native grant
+there as well.
+
 ## Standing grants for automations
 
 Approvals raised by gateway-host automation (cron) runs are delivered only to
@@ -522,6 +572,15 @@ or headless node host). This uses `skills.bins` over the Gateway RPC to
 fetch the skill bin list. Disable this if you want strict manual
 allowlists.
 
+Skill trust belongs to the Gateway that supplied it. Switching Gateways retires
+the previous cache, including the Mac app's trusted-binary list and an approval
+check that is still in progress. A failed refresh can keep the last known trust
+from the same Gateway; it cannot import another Gateway's trust.
+
+The Mac's Exec Approvals pane refreshes its trusted binaries and agent choices
+when the selected Gateway connects. Local policy, the selected scope, and
+unfinished allowlist edits stay on the Mac.
+
 <Warning>
 - This is an **implicit convenience allowlist**, separate from manual path allowlist entries.
 - It is intended for trusted operator environments where Gateway and node are in the same trust boundary.
@@ -562,6 +621,20 @@ When a prompt is required, the gateway broadcasts
 `exec.approval.requested` to operator clients. The Control UI and macOS
 app resolve it via `exec.approval.resolve`, then the gateway forwards the
 approved request to the node host.
+
+The macOS approval panel keeps ordinary commands compact, with the supplied agent
+and host in one summary. It shows the working directory beneath the full,
+wrapping command; longer commands scroll. Expand **Details** to inspect the
+executable path. Directory and executable paths remain fully selectable.
+**Copy** copies the displayed command, including visible escapes for control and
+invisible characters. The host comes from the request; a gateway or node can be
+remote from the Mac displaying the panel.
+
+Choose **Allow Once** or press **Command-Return** to approve one execution.
+Return alone does not approve. **Escape** dismisses the panel, denying the request
+when **Don't Allow** is available; otherwise it closes without a decision.
+**Always Allow Here** appears only when the request's policy permits durable
+approval.
 
 For `host=node`, approval requests include a canonical `systemRunPlan`
 payload. The gateway uses that plan as the authoritative command/cwd/session

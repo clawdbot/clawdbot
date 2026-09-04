@@ -16,6 +16,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { createShowWidgetTool } from "./widget-tool.js";
+import { createBoardPutCaller } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const WIDGET_CODE_MAX_CHARS = 262_144;
@@ -64,38 +65,12 @@ function registerDiagramContentKind(): void {
   setActivePluginRegistry(registry);
 }
 
-function createBoardPutCaller() {
-  const mock = vi.fn(async (_method: string, params: Record<string, unknown>) => ({
-    sessionKey: params.sessionKey,
-    revision: 1,
-    tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-    widgets: [
-      {
-        name: params.name,
-        tabId: "main",
-        contentKind: "plugin",
-        pluginKind: "diagram:diagram",
-        sizeW: 6,
-        sizeH: 4,
-        position: 0,
-        grantState: "none",
-        revision: 1,
-      },
-    ],
-    resolvedWidgetName: params.name,
-  }));
-  const callGateway: InProcessGatewayCaller = async <T>(
-    method: string,
-    params: Record<string, unknown>,
-  ): Promise<T> => (await mock(method, params)) as T;
-  return { mock, callGateway };
-}
-
 function createLiveBoardTestContext(
   broadcast: ReturnType<typeof vi.fn> = vi.fn(),
 ): GatewayRequestContext {
   const context = {
     broadcast,
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
     getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
   } as unknown as GatewayRequestContext;
   context.resolveGatewayContext = () => context;
@@ -248,6 +223,7 @@ describe("show_widget", () => {
     expect(JSON.parse(text ?? "null")).toEqual({
       status: "pinned",
       boardWidgetName: "diagram",
+      capabilityState: "none",
       text: "Widget pinned to dashboard tab main as diagram",
     });
     expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(

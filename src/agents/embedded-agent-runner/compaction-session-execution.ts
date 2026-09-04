@@ -147,6 +147,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         memoryTranscript?.sessionManager ?? SessionManager.open(sessionTarget),
         {
           agentId: sessionAgentId,
+          runId: params.runId,
           sessionKey: params.sessionKey,
           config: params.config,
           contextWindowTokens: contextTokenBudget,

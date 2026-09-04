@@ -3,7 +3,7 @@ import fsCore from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -39,7 +39,6 @@ import {
   runMemoryFlushIfNeeded as runMemoryFlushIfNeededRaw,
   runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw,
 } from "./agent-runner-memory.js";
-import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import {
   createTestFollowupRun,
   createTestTemplateContext,
@@ -47,19 +46,56 @@ import {
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import { incrementCompactionCount } from "./session-updates.js";
 import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
-const compactEmbeddedAgentSessionMock = vi.fn();
+const {
+  compactEmbeddedAgentSessionMock,
+  runEmbeddedAgentEntryMock,
+  runEmbeddedAgentMock,
+  refreshQueuedFollowupSessionMock,
+  incrementCompactionCountMock,
+  registerAgentRunContextMock,
+  clearAgentRunContextMock,
+} = vi.hoisted(() => ({
+  compactEmbeddedAgentSessionMock: vi.fn(),
+  runEmbeddedAgentEntryMock: vi.fn(),
+  runEmbeddedAgentMock: vi.fn(),
+  refreshQueuedFollowupSessionMock: vi.fn(),
+  incrementCompactionCountMock: vi.fn(),
+  registerAgentRunContextMock: vi.fn(),
+  clearAgentRunContextMock: vi.fn(),
+}));
 const runWithModelFallbackMock = vi.fn();
-const runEmbeddedAgentEntryMock = vi.fn();
-const runEmbeddedAgentMock = vi.fn();
-const refreshQueuedFollowupSessionMock = vi.fn();
-const incrementCompactionCountMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
-const ensureMemoryFlushTargetFileMock = vi.fn();
-const registerAgentRunContextMock = vi.fn();
-const clearAgentRunContextMock = vi.fn();
+
+vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({
+  runEmbeddedAgentEntry: runEmbeddedAgentEntryMock,
+}));
+vi.mock("../../agents/embedded-agent.js", () => ({
+  compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock,
+  runEmbeddedAgent: runEmbeddedAgentMock,
+}));
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
+  refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
+}));
+vi.mock("./session-updates.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-updates.js")>()),
+  incrementCompactionCount: incrementCompactionCountMock,
+}));
+vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
+  registerAgentRunContext: registerAgentRunContextMock,
+  clearAgentRunContext: clearAgentRunContextMock,
+}));
+
+let incrementCompactionCount: typeof import("./session-updates.js").incrementCompactionCount;
+beforeAll(async () => {
+  ({ incrementCompactionCount } =
+    await vi.importActual<typeof import("./session-updates.js")>("./session-updates.js"));
+});
+
 const TEST_MAX_FLUSH_FAILURES = 3;
 
 type MemoryFlushTestParams = Parameters<typeof runMemoryFlushIfNeededRaw>[0] & {
@@ -147,49 +183,12 @@ type TestReplyOperation = ReplyOperation & {
 };
 
 function createReplyOperation(): TestReplyOperation {
-  const now = Date.now();
-  return {
-    key: "test",
-    sessionId: "session",
-    turnKind: "visible",
-    abortSignal: new AbortController().signal,
-    staleExpiryReason: undefined,
-    resetTriggered: false,
-    terminalRecovery: false,
-    acceptedSteeredInboundAudio: false,
-    startedAtMs: now,
-    lastActivityAtMs: now,
-    phase: "queued",
-    result: null,
-    recordActivity: vi.fn(),
-    hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
+  const { replyOperation } = createMockReplyOperation({ key: "test" });
+  return Object.assign(replyOperation, {
+    phase: "queued" as const,
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
-    updateSessionKey: vi.fn<ReplyOperation["updateSessionKey"]>(),
-    bindToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityProjector: vi.fn(),
-    projectToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityRoute: vi.fn(),
-    attachBackend: vi.fn(),
-    detachBackend: vi.fn(),
-    freezeAbort: vi.fn(),
-    retainFailureUntilComplete: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn((afterClear: () => void) => {
-      afterClear();
-    }),
-    completeWithAfterClearBarrier: vi.fn(),
-    fail: vi.fn(),
-    abortByUser: vi.fn(() => true),
-    abortForRestart: vi.fn(() => true),
-    supersede: vi.fn(() => true),
-    markTerminalRecovery: vi.fn(),
-    markAcceptedSteeredInboundAudio: vi.fn(),
-    markWaitingForDeferredMaintenance: vi.fn(),
-    markDeferredMaintenanceWaitEnded: vi.fn(),
-    markWaitingForGlobalLane: vi.fn(),
-    markGlobalLaneWaitEnded: vi.fn(),
-  };
+  });
 }
 
 function createCompactionLifecycle(replyOperation: ReplyOperation) {
@@ -541,6 +540,7 @@ describe("runMemoryFlushIfNeeded", () => {
               options: Parameters<ModelFallbackParams["run"]>[2],
             ) =>
               params.runCandidate(provider, model, {
+                classifyResult: () => undefined,
                 allowTransientCooldownProbe: options.allowTransientCooldownProbe,
                 isFinalFallbackAttempt: options.isFinalFallbackAttempt,
                 isFallbackRetry: false,
@@ -573,7 +573,6 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     runEmbeddedAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
     refreshQueuedFollowupSessionMock.mockReset();
-    ensureMemoryFlushTargetFileMock.mockReset().mockResolvedValue(undefined);
     ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
     registerAgentRunContextMock.mockReset();
     clearAgentRunContextMock.mockReset();
@@ -594,22 +593,9 @@ describe("runMemoryFlushIfNeeded", () => {
       }
       return nextEntry.compactionCount;
     });
-    setAgentRunnerMemoryTestDeps({
-      compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock as never,
-      runEmbeddedAgentEntry: runEmbeddedAgentEntryMock as never,
-      runEmbeddedAgent: runEmbeddedAgentMock as never,
-      ensureMemoryFlushTargetFile: ensureMemoryFlushTargetFileMock as never,
-      refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
-      incrementCompactionCount: incrementCompactionCountMock as never,
-      clearAgentRunContext: clearAgentRunContextMock as never,
-      registerAgentRunContext: registerAgentRunContextMock as never,
-      randomUUID: () => "00000000-0000-0000-0000-000000000001",
-      now: () => 1_700_000_000_000,
-    });
   });
 
   afterEach(async () => {
-    setAgentRunnerMemoryTestDeps();
     cliBackendsTesting.resetDepsForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearMemoryPluginState();
@@ -673,6 +659,10 @@ describe("runMemoryFlushIfNeeded", () => {
       allowEmptyAssistantReplyAsSilent: false,
       terminalReplyExpectation: "required",
     });
+    const targetPath = path.join(followupRun.run.workspaceDir, "memory/2023-11-14.md");
+    registerAgentRunContextMock.mockImplementationOnce(() => {
+      expect(fsCore.readFileSync(targetPath, "utf8")).toBe("");
+    });
     const { result, sessionKey, storePath } = await runProjectedCompaction(true, followupRun);
 
     expect(result.outcome).toBe("completed");
@@ -689,8 +679,11 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.silentExpected).toBe(true);
     expect(flushCall.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(flushCall.terminalReplyExpectation).toBe("optional");
+    const flushRunId = runEmbeddedAgentEntryMock.mock.calls[0]?.[0].identity.runId;
+    expect(flushRunId).toEqual(expect.any(String));
+    expect(flushRunId).not.toBe("");
     expect(registerAgentRunContextMock).toHaveBeenCalledWith(
-      "00000000-0000-0000-0000-000000000001",
+      flushRunId,
       expect.objectContaining({
         isControlUiVisible: false,
         projectSessionActive: false,
@@ -700,13 +693,8 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
       }),
     );
-    expect(ensureMemoryFlushTargetFileMock).toHaveBeenCalledWith({
-      workspaceDir: followupRun.run.workspaceDir,
-      relativePath: flushCall.memoryFlushWritePath,
-    });
-    expect(ensureMemoryFlushTargetFileMock.mock.invocationCallOrder[0]).toBeLessThan(
-      registerAgentRunContextMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
+    expect(flushCall.memoryFlushWritePath).toBe("memory/2023-11-14.md");
+    expect(await fs.readFile(targetPath, "utf8")).toBe("");
     expect(registerAgentRunContextMock.mock.invocationCallOrder[0]).toBeLessThan(
       runEmbeddedAgentEntryMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
@@ -714,7 +702,7 @@ describe("runMemoryFlushIfNeeded", () => {
       clearAgentRunContextMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(clearAgentRunContextMock).toHaveBeenCalledOnce();
-    expect(clearAgentRunContextMock).toHaveBeenCalledWith("00000000-0000-0000-0000-000000000001");
+    expect(clearAgentRunContextMock).toHaveBeenCalledWith(flushRunId);
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledTimes(1);
     const refreshCall = requireRefreshQueuedFollowupSessionCall();
     expect(refreshCall.key).toBe(sessionKey);
@@ -1249,7 +1237,11 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
   });
 
-  it.each([
+  it.each<{
+    stage: string;
+    afterRegistration: boolean;
+    setup: (error: Error) => void | (() => void);
+  }>([
     {
       stage: "initial plan resolution",
       afterRegistration: false,
@@ -1281,7 +1273,18 @@ describe("runMemoryFlushIfNeeded", () => {
       stage: "target preparation",
       afterRegistration: false,
       setup: (error: Error) => {
-        ensureMemoryFlushTargetFileMock.mockRejectedValueOnce(error);
+        const originalOpen = fsCore.promises.open.bind(fsCore.promises);
+        const targetPath = path.join(rootDir, "memory/2023-11-14.md");
+        const openSpy = vi
+          .spyOn(fsCore.promises, "open")
+          .mockImplementation(async (target, flags, mode) => {
+            if (target === targetPath) {
+              openSpy.mockRestore();
+              throw error;
+            }
+            return await originalOpen(target, flags, mode);
+          });
+        return () => openSpy.mockRestore();
       },
     },
     {
@@ -1298,7 +1301,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await writeTestSessionStore(storePath, "main", sessionEntry);
     const message = `${failure.stage} failed`;
     const error = new Error(message);
-    const cleanup = failure.setup(error) as (() => void) | undefined;
+    const cleanup = failure.setup(error);
     const replyOperation = createReplyOperation();
     const visibleErrorPayloads: ReplyPayload[] = [];
     const params = {
@@ -1336,7 +1339,7 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(clearAgentRunContextMock).toHaveBeenCalledTimes(failure.afterRegistration ? 1 : 0);
       if (failure.afterRegistration) {
         expect(clearAgentRunContextMock).toHaveBeenCalledWith(
-          "00000000-0000-0000-0000-000000000001",
+          registerAgentRunContextMock.mock.calls[0]?.[0],
         );
         expect(registerAgentRunContextMock.mock.invocationCallOrder[0]).toBeLessThan(
           clearAgentRunContextMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -1358,7 +1361,9 @@ describe("runMemoryFlushIfNeeded", () => {
         compactionCount: 1,
       });
     } finally {
-      cleanup?.();
+      if (cleanup) {
+        cleanup();
+      }
     }
   });
 
@@ -1376,7 +1381,9 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(result).toEqual({ sessionEntry, outcome: "skipped" });
-    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(registerAgentRunContextMock).not.toHaveBeenCalled();
     expect(runEmbeddedAgentEntryMock).not.toHaveBeenCalled();
   });
@@ -1507,84 +1514,95 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(agentCall.authProfileIdSource).toBeUndefined();
   });
 
-  it("loads the selected harness before memory-flush fallback preflight", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          compaction: {
-            memoryFlush: {},
+  it.each([undefined, "model-owner"])(
+    "prepares the requested memory runtime without pinning observations (owner %s)",
+    async (pluginOwnerId) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+            },
           },
         },
-      },
-    };
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 80_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 1,
-      agentRuntimeOverride: "codex",
-    };
-    const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
-    runWithModelFallbackMock.mockImplementationOnce(
-      async (params: { provider: string; model: string; run: ModelFallbackParams["run"] }) => ({
-        result: await params.run(params.provider, params.model, {
-          isFinalFallbackAttempt: false,
-          modelRoutingProvenance: modelRoutingProvenance(params.provider, params.model),
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 1,
+        agentRuntimeOverride: "codex",
+        modelSelectionLocked: pluginOwnerId !== undefined,
+        pluginOwnerId,
+        agentHarnessId: "openclaw",
+      };
+      const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (params: { provider: string; model: string; run: ModelFallbackParams["run"] }) => ({
+          result: await params.run(params.provider, params.model, {
+            isFinalFallbackAttempt: false,
+            modelRoutingProvenance: modelRoutingProvenance(params.provider, params.model),
+          }),
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
         }),
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      }),
-    );
+      );
 
-    await runMemoryFlushIfNeeded({
-      cfg,
-      followupRun: createTestFollowupRun({
-        agentId: "main",
+      await runMemoryFlushIfNeeded({
+        cfg,
+        followupRun: createTestFollowupRun({
+          agentId: "main",
+          sessionKey: "main",
+          runtimePolicySessionKey,
+          workspaceDir: rootDir,
+          provider: "openai",
+          model: "gpt-5.4",
+          modelSelectionLocked: sessionEntry.modelSelectionLocked,
+        }),
+        sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
+        defaultModel: "openai/gpt-5.4",
+        modelContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
         sessionKey: "main",
         runtimePolicySessionKey,
-        workspaceDir: "/workspace",
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      const fallbackCall = requireModelFallbackCall();
+      expect(fallbackCall.agentId).toBe("main");
+      expect(fallbackCall.sessionKey).toBe(runtimePolicySessionKey);
+      expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
+      expect(requireEmbeddedAgentCall()).toMatchObject({
+        isFinalFallbackAttempt: false,
+        agentHarnessId: undefined,
+        agentHarnessRuntimeOverride: "codex",
+      });
+
+      await fallbackCall.prepareAgentHarnessRuntime?.({
         provider: "openai",
         model: "gpt-5.4",
-      }),
-      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
-      defaultModel: "openai/gpt-5.4",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      runtimePolicySessionKey,
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
-
-    const fallbackCall = requireModelFallbackCall();
-    expect(fallbackCall.agentId).toBe("main");
-    expect(fallbackCall.sessionKey).toBe(runtimePolicySessionKey);
-    expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
-    expect(requireEmbeddedAgentCall().isFinalFallbackAttempt).toBe(false);
-
-    await fallbackCall.prepareAgentHarnessRuntime?.({
-      provider: "openai",
-      model: "gpt-5.4",
-      agentHarnessRuntimeOverride: "codex",
-    });
-
-    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        agentId: "main",
-        sessionKey: runtimePolicySessionKey,
-        agentHarnessId: "codex",
         agentHarnessRuntimeOverride: "codex",
-        workspaceDir: "/workspace",
-      }),
-    );
-  });
+      });
+
+      expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          modelId: "gpt-5.4",
+          agentId: "main",
+          sessionKey: runtimePolicySessionKey,
+          agentHarnessId: "codex",
+          agentHarnessRuntimeOverride: "codex",
+          workspaceDir: rootDir,
+        }),
+      );
+    },
+  );
 
   it("ignores stale runtime pins before memory-flush fallback preflight", async () => {
     const sessionEntry: SessionEntry = {
@@ -1661,12 +1679,15 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     const result = await runDefaultMemoryFlush(sessionEntry, {
+      followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
       sessionCtx: createTestTemplateContext({ Provider: "webchat" }),
     });
 
     expect(result).toEqual({ sessionEntry, outcome: "skipped" });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("skips memory flush for an incognito key after process-local state is gone", async () => {
@@ -1791,7 +1812,9 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(result).toEqual({ sessionEntry, outcome: "skipped" });
-    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -2134,7 +2157,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it.each(["user", "auto"] as const)(
-    "passes resolved context budget and $authProfileIdSource auth profile to preflight compaction",
+    "passes resolved context budget and %s auth profile to preflight compaction",
     async (authProfileIdSource) => {
       const sessionEntry: SessionEntry = {
         sessionId: "session",

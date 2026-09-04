@@ -41,6 +41,7 @@ export function buildGatewaySessionEventFields(params: {
     archived: sessionRow.archived ?? false,
     archivedAt: sessionRow.archivedAt ?? null,
     archivedBy: sessionRow.archivedBy ?? null,
+    archiveReason: sessionRow.archiveReason ?? null,
     pinned: sessionRow.pinned ?? false,
     pinnedAt: sessionRow.pinnedAt ?? null,
     unread: sessionRow.unread ?? false,

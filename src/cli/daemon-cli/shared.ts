@@ -12,6 +12,8 @@ import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
+import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-exec.js";
+import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
@@ -28,16 +30,36 @@ export function createDaemonInstallActionContext(jsonFlag: unknown) {
   };
 }
 
-/** Block service installation in Nix mode, where managed service install is unsupported. */
-export function failIfNixDaemonInstallMode(
-  fail: (message: string, hints?: string[]) => void,
+/** Resolve installation refusal before service or state inspection. */
+export function resolveDaemonInstallBlockMessage(
+  service: "gateway" | "node",
   env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  if (!resolveIsNixMode(env)) {
-    return false;
+): string | undefined {
+  if (resolveIsNixMode(env)) {
+    return "Nix mode detected; service install is disabled.";
   }
-  fail("Nix mode detected; service install is disabled.");
-  return true;
+  // Node installation shares the Nix gate, not Gateway ownership policy.
+  if (service === "node") {
+    return undefined;
+  }
+  const mutationError = resolveGatewayServiceMutationError(
+    "install or rewrite the gateway service",
+    env,
+  );
+  if (mutationError) {
+    return `Gateway install blocked: ${String(mutationError)}`;
+  }
+  if (process.platform === "linux" && hasSudoToRootSystemdUserManagerMismatch(env)) {
+    return (
+      "Gateway install blocked: Refusing a sudo-to-root systemd user-service install because " +
+      "OpenClaw state and service files would belong to root while systemctl targets the " +
+      "invoking user's manager. Rerun the same command without sudo. If [unsafe-permissions] " +
+      "blocked the non-sudo command, repair the reported directory with `chmod go-w <path>` " +
+      "and retry; do not use sudo or --force to bypass it. " +
+      "See https://docs.openclaw.ai/cli/gateway#install-identity."
+    );
+  }
+  return undefined;
 }
 
 /** Build terminal style helpers for status output with no-color fallback. */
@@ -125,11 +147,10 @@ export function normalizeListenerAddress(raw: string): string {
   return value.trim();
 }
 
-/** Render platform-specific hints for missing/stopped Gateway runtimes. */
+/** Render platform-specific hints for unloaded/stopped Gateway runtimes. */
 export function renderRuntimeHints(
   runtime:
     | {
-        missingUnit?: boolean;
         missingSupervision?: boolean;
         missingGuiSession?: boolean;
         status?: string;
@@ -143,13 +164,6 @@ export function renderRuntimeHints(
   }
   const hints: string[] = [];
   const fileLog = logFile ?? null;
-  if (runtime.missingUnit) {
-    hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
-    if (fileLog) {
-      hints.push(`File logs: ${fileLog}`);
-    }
-    return hints;
-  }
   if (runtime.missingGuiSession) {
     hints.push(
       "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
@@ -191,19 +205,21 @@ export function renderRuntimeHints(
 
 /** Render install/start hints for the current service platform/container context. */
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  const profile = env.OPENCLAW_PROFILE;
   const container = resolveDaemonContainerContext(env);
-  const hints = buildPlatformServiceStartHints({
-    installCommand: formatCliCommand("openclaw gateway install", env),
+  if (container) {
+    return [`Restart the container or the service that manages it for ${container}.`];
+  }
+  const profile = env.OPENCLAW_PROFILE;
+  const installHint =
+    resolveDaemonInstallBlockMessage("gateway", env) ??
+    formatCliCommand("openclaw gateway install", env);
+  return buildPlatformServiceStartHints({
+    installHint,
     startCommand: formatCliCommand("openclaw gateway start", env),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
     systemdServiceName: resolveGatewaySystemdServiceName(profile),
     windowsTaskName: resolveGatewayWindowsTaskName(profile),
   });
-  if (!container) {
-    return hints;
-  }
-  return [`Restart the container or the service that manages it for ${container}.`];
 }
 
 /** Drop generic systemd hints when a container-specific hint is clearer. */

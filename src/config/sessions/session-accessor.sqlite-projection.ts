@@ -96,8 +96,10 @@ function loadSessionArchiveRuntime() {
 }
 
 export async function applySessionEntryReplacements<T>(params: {
+  assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
+  consumePendingReset?: boolean;
   requireWriteSuccess?: boolean;
   sessionKeys?: readonly string[];
   statuses?: readonly SessionEntryStatus[];
@@ -244,6 +246,7 @@ function readProjectedRemovalEntry(
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
 export async function applySessionEntryLifecycleMutation(params: {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   storePath: string;
   removals?: Iterable<SessionEntryLifecycleRemoval>;
   upserts?: Iterable<SessionEntryLifecycleUpsert>;
@@ -266,6 +269,7 @@ export async function applySessionEntryLifecycleMutation(params: {
 }): Promise<SessionEntryLifecycleMutationResult> {
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    env: params.env,
     sessionKey: "",
     storePath: params.storePath,
   });

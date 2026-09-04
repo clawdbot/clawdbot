@@ -148,6 +148,7 @@ function mintGrant(params: {
     nowMs: params.nowMs ?? NOW_MS + 1_000,
     databaseOptions: params.databaseOptions,
     standingGrant: {
+      kind: "cron",
       agentId: "main",
       cronJobId: "job-1",
       jobConfigRevision: params.jobConfigRevision,
@@ -212,6 +213,7 @@ describe("cron standing grant mint", () => {
       nowMs: NOW_MS + 1_000,
       databaseOptions,
       standingGrant: {
+        kind: "cron",
         agentId: "main",
         cronJobId: "job-1",
         jobConfigRevision: "sha256:rev",
@@ -259,6 +261,7 @@ describe("cron standing grant mint", () => {
           return null;
         }
         return {
+          kind: "cron",
           agentId: payload.agentId,
           cronJobId: source.jobId,
           jobConfigRevision: source.jobConfigRevision,
@@ -310,6 +313,7 @@ describe("cron standing grant mint", () => {
           return null;
         }
         return {
+          kind: "cron",
           agentId: payload.agentId,
           cronJobId: source.jobId,
           jobConfigRevision: source.jobConfigRevision,

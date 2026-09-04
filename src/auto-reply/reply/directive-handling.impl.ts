@@ -10,7 +10,7 @@ import {
 } from "../../agents/fast-mode.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
@@ -19,6 +19,7 @@ import {
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../../sessions/model-overrides.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -156,6 +157,7 @@ export async function handleDirectiveOnly(
     provider,
     agentId: activeAgentId,
     modelPolicy: params.modelPolicy,
+    requesterProfileId: params.ctx ? readSessionInputProfileId(params.ctx) : undefined,
   });
   if (modelResolution.errorText) {
     return rejectModelTransaction(modelResolution.errorText);
@@ -319,20 +321,28 @@ export async function handleDirectiveOnly(
       "hasReasoningDirective",
     );
   }
-  if (directives.hasElevatedDirective && !directives.elevatedLevel) {
-    if (!directives.rawElevatedLevel) {
-      if (!elevatedEnabled || !elevatedAllowed) {
-        return acknowledgeIgnoredDirective(
-          {
-            text: formatElevatedUnavailableText({
-              runtimeSandboxed: runtimeIsSandboxed,
-              failures: params.elevatedFailures,
-              sessionKey: params.sessionKey,
-            }),
-          },
-          "hasElevatedDirective",
-        );
-      }
+  if (directives.hasElevatedDirective) {
+    if (!directives.elevatedLevel && directives.rawElevatedLevel) {
+      return acknowledgeIgnoredDirective(
+        {
+          text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on, ask, full.`,
+        },
+        "hasElevatedDirective",
+      );
+    }
+    if (!elevatedEnabled || !elevatedAllowed) {
+      return acknowledgeIgnoredDirective(
+        {
+          text: formatElevatedUnavailableText({
+            runtimeSandboxed: runtimeIsSandboxed,
+            failures: params.elevatedFailures,
+            sessionKey: params.sessionKey,
+          }),
+        },
+        "hasElevatedDirective",
+      );
+    }
+    if (!directives.elevatedLevel) {
       const level = currentElevatedLevel ?? "off";
       return acknowledgeIgnoredDirective(
         {
@@ -346,24 +356,6 @@ export async function handleDirectiveOnly(
         "hasElevatedDirective",
       );
     }
-    return acknowledgeIgnoredDirective(
-      {
-        text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on, ask, full.`,
-      },
-      "hasElevatedDirective",
-    );
-  }
-  if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {
-    return acknowledgeIgnoredDirective(
-      {
-        text: formatElevatedUnavailableText({
-          runtimeSandboxed: runtimeIsSandboxed,
-          failures: params.elevatedFailures,
-          sessionKey: params.sessionKey,
-        }),
-      },
-      "hasElevatedDirective",
-    );
   }
   if (directives.hasExecDirective) {
     const invalidExecMessage = directives.invalidExecHost
@@ -473,6 +465,10 @@ export async function handleDirectiveOnly(
     directives.reasoningLevel !== undefined &&
     directives.reasoningLevel !== prevReasoningLevel;
   if (shouldPersistSessionEntry) {
+    const authProfileError = modelResolution.validateAuthProfileSelection?.();
+    if (authProfileError) {
+      return rejectModelTransaction(authProfileError);
+    }
     const initialSessionEntry = { ...sessionEntry };
     applySessionDirectiveFields({
       directives,
@@ -511,14 +507,17 @@ export async function handleDirectiveOnly(
         reassertLiveModelSwitchPending:
           modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
         touchedFields: touchedSessionFields,
+        validateCommit: modelResolution.validateAuthProfileSelection,
       });
       if (persistence.status !== "applied") {
         const errorText =
-          persistence.status === "model-selection-locked"
-            ? MODEL_SELECTION_LOCKED_MESSAGE
-            : modelSelection
-              ? "Model change was not applied because the session changed. Retry."
-              : "Session settings were not applied because the session changed. Retry.";
+          persistence.status === "commit-rejected"
+            ? persistence.error
+            : persistence.status === "model-selection-locked"
+              ? MODEL_SELECTION_LOCKED_MESSAGE
+              : modelSelection
+                ? "Model change was not applied because the session changed. Retry."
+                : "Session settings were not applied because the session changed. Retry.";
         return rejectModelTransaction(errorText);
       }
     }
@@ -555,7 +554,7 @@ export async function handleDirectiveOnly(
         nextRouteResolution: "resolved",
         nextModelOverrideSource: modelSelection.isDefault ? undefined : "user",
         nextAuthProfileId: appliedSessionEntry.authProfileOverride,
-        nextAuthProfileIdSource: resolveSessionAuthProfileOverrideSource(appliedSessionEntry),
+        nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(appliedSessionEntry),
         nextThinking: {
           level: appliedSessionEntry.thinkingLevel,
           catalog: thinkingCatalog,

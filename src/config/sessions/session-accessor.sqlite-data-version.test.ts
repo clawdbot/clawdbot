@@ -1,6 +1,5 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Compilable, QueryResult } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
@@ -19,42 +18,24 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import {
+  readSessionEntryCount,
+  iterateSessionEntryKeys,
+} from "./session-accessor.sqlite-entry-store.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());
-const sessionNodeVersionScans = vi.hoisted(() => ({
-  onScan: undefined as ((database: DatabaseSync) => void) | undefined,
-  rowCounts: [] as number[],
-}));
-
-vi.mock("../../infra/kysely-sync.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/kysely-sync.js")>();
-  return {
-    ...actual,
-    executeSqliteQuerySync<Row>(database: DatabaseSync, query: Compilable<Row>): QueryResult<Row> {
-      const compiled = query.compile();
-      const result = actual.executeSqliteQuerySync(database, query);
-      if (
-        compiled.sql.replace(/\s+/gu, " ").trim() ===
-        'select "session_key", "updated_at" from "session_nodes"'
-      ) {
-        sessionNodeVersionScans.rowCounts.push(result.rows.length);
-        const onScan = sessionNodeVersionScans.onScan;
-        sessionNodeVersionScans.onScan = undefined;
-        onScan?.(database);
-      }
-      return result;
-    },
-  };
-});
-
 vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-status.js")>();
   return {
     ...actual,
-    parseSessionEntryJson: (row: Parameters<typeof actual.parseSessionEntryJson>[0]) => {
-      parseSessionEntryCalls(row.entry_json);
-      return actual.parseSessionEntryJson(row);
+    parseSessionEntryJson: (...args: Parameters<typeof actual.parseSessionEntryJson>) => {
+      // Snapshot/publication rows omit the current-id column; exact writer CAS reads
+      // share this decoder but are outside the cache work measured here.
+      if (args[0].current_session_id === undefined) {
+        parseSessionEntryCalls(args[0].entry_json);
+      }
+      return actual.parseSessionEntryJson(...args);
     },
   };
 });
@@ -63,8 +44,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   parseSessionEntryCalls.mockClear();
-  sessionNodeVersionScans.onScan = undefined;
-  sessionNodeVersionScans.rowCounts.length = 0;
 });
 
 afterEach(() => {
@@ -143,6 +122,8 @@ describe("SQLite session entry cache", () => {
   it.each([
     ["malformed", "{", false],
     ["JSON5", '{sessionId:"raw",updatedAt:1}', false],
+    ["non-finite identity", '{"sessionId":"raw","updatedAt":1e999}', false],
+    ["duplicate identity", '{"sessionId":null,"sessionId":"raw","updatedAt":1}', true],
     [
       "duplicate prompts",
       '{"sessionId":"raw","updatedAt":1,"skillsSnapshot":{},"skillsSnapshot":{"prompt":"last","skills":[]}}',
@@ -164,6 +145,8 @@ describe("SQLite session entry cache", () => {
     const snapshot = readSessionEntryCache(database, { cache: false });
     expect(snapshot.keys).toEqual([scope.sessionKey]);
     expect(snapshot.entries.size).toBe(readable ? 1 : 0);
+    expect(readSessionEntryCount(database)).toBe(readable ? 1 : 0);
+    expect([...iterateSessionEntryKeys(database)]).toEqual(readable ? [scope.sessionKey] : []);
     expect(snapshot.entries.get(scope.sessionKey)?.skillsSnapshot).toBeUndefined();
   });
 
@@ -331,7 +314,6 @@ describe("SQLite session entry cache", () => {
     expect(second[0]?.entry).toBe(first[0]?.entry);
     expect(second[1]?.entry).toBe(first[1]?.entry);
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
-    expect(sessionNodeVersionScans.rowCounts).toEqual([]);
   });
 
   it("fully reloads after another connection commits", async () => {
@@ -424,7 +406,7 @@ describe("SQLite session entry cache", () => {
     }
   });
 
-  it("fully reloads when an external commit races incremental row reads", async () => {
+  it("observes a commit during a listing on the next snapshot", async () => {
     const scope = createSessionScope("external-race");
     const siblingScope = { ...scope, sessionKey: "agent:main:external-race-sibling" };
     await upsertSessionEntryCore(scope, {
@@ -463,25 +445,29 @@ describe("SQLite session entry cache", () => {
         sessionId: "external-race-sibling",
         updatedAt: 2,
       };
-      sessionNodeVersionScans.onScan = () => {
+      parseSessionEntryCalls.mockImplementationOnce(() => {
         external
           .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
           .run(JSON.stringify(externalEntry), externalEntry.updatedAt, siblingScope.sessionKey);
-      };
+      });
 
       const entries = listSessionEntriesCore(scope);
       const byId = new Map(entries.map((row) => [row.entry.sessionId, row.entry]));
 
       expect(byId.get("external-race-local")?.label).toBe("local-after");
-      expect(byId.get("external-race-sibling")?.label).toBe("external-after");
-      expect(sessionNodeVersionScans.rowCounts).toEqual([2]);
+      expect(byId.get("external-race-sibling")?.label).toBe("external-before");
+      expect(
+        listSessionEntriesCore(scope).find(
+          ({ entry }) => entry.sessionId === "external-race-sibling",
+        )?.entry.label,
+      ).toBe("external-after");
     } finally {
       maintenance.close();
       external.close();
     }
   });
 
-  it("incrementally handles added and removed keys on the cached connection", async () => {
+  it("reloads added and removed keys after an untracked connection write", async () => {
     const scope = createSessionScope("same-connection-keys");
     const removedScope = { ...scope, sessionKey: "agent:main:same-connection-removed" };
     await upsertSessionEntryCore(scope, {
@@ -524,14 +510,16 @@ describe("SQLite session entry cache", () => {
     expect(entries.map((row) => row.sessionKey)).toEqual(
       [scope.sessionKey, insertedKey].toSorted(),
     );
-    expect(entries.find((row) => row.sessionKey === scope.sessionKey)?.entry).toBe(keptProjection);
+    expect(entries.find((row) => row.sessionKey === scope.sessionKey)?.entry).toEqual(
+      keptProjection,
+    );
     expect(entries.find((row) => row.sessionKey === insertedKey)?.entry).toMatchObject(
       insertedEntry,
     );
-    expect(parseSessionEntryCalls).toHaveBeenCalledOnce();
+    expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
   });
 
-  it("scales parse and projection work with changed keys instead of store size", async () => {
+  it("scales tracked projection work with changed keys without parsing saved prompts", async () => {
     const scope = createSessionScope("changed-key-scaling");
     const rowCount = 24;
     for (let index = 0; index < rowCount; index++) {
@@ -546,7 +534,7 @@ describe("SQLite session entry cache", () => {
     }
     listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 
-    const database = openOpenClawAgentDatabase(scope);
+    parseSessionEntryCalls.mockClear();
     for (const index of [3, 19]) {
       const sessionKey = `agent:main:changed-key-scaling-${index}`;
       const entry = {
@@ -555,13 +543,8 @@ describe("SQLite session entry cache", () => {
         updatedAt: 1_000 + index,
         skillsSnapshot: { prompt: "large skill prompt".repeat(8192), skills: [] },
       };
-      database.db
-        .prepare(
-          "UPDATE session_nodes SET entry_json = ?, label = ?, updated_at = ? WHERE session_key = ?",
-        )
-        .run(JSON.stringify(entry), entry.label, entry.updatedAt, sessionKey);
+      await upsertSessionEntryCore({ ...scope, sessionKey }, entry);
     }
-    parseSessionEntryCalls.mockClear();
 
     const entries = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 
@@ -608,7 +591,6 @@ describe("SQLite session entry cache", () => {
       siblingBefore,
     );
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
-    expect(sessionNodeVersionScans.rowCounts).toEqual([]);
 
     const cachedAfter = readSessionEntryCache(database, { cache: true });
     expect(cachedAfter.entries).toBe(cachedBefore.entries);
@@ -656,36 +638,43 @@ describe("SQLite session entry cache", () => {
     expect(cachedAfter.entries.get(scope.sessionKey)).toBe(existing);
   });
 
-  it("does not let a tracked write mask an earlier raw connection write", async () => {
-    const scope = createSessionScope("raw-before-tracked");
-    const trackedScope = { ...scope, sessionKey: "agent:main:tracked-after-raw" };
-    await upsertSessionEntryCore(scope, { label: "raw-before", sessionId: "raw", updatedAt: 1 });
-    await upsertSessionEntryCore(trackedScope, {
-      label: "tracked-before",
-      sessionId: "tracked",
-      updatedAt: 1,
-    });
-    listSessionEntriesCore(scope);
+  it.each([false, true])(
+    "does not mask a raw write before a tracked write (same timestamp: %s)",
+    async (sameTimestamp) => {
+      const scope = createSessionScope("raw-before-tracked");
+      const trackedScope = { ...scope, sessionKey: "agent:main:tracked-after-raw" };
+      await upsertSessionEntryCore(scope, { label: "raw-before", sessionId: "raw", updatedAt: 1 });
+      await upsertSessionEntryCore(trackedScope, {
+        label: "tracked-before",
+        sessionId: "tracked",
+        updatedAt: 1,
+      });
+      listSessionEntriesCore(scope);
 
-    const database = openOpenClawAgentDatabase(scope);
-    const rawEntry = { label: "raw-after", sessionId: "raw", updatedAt: Date.now() };
-    database.db
-      .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
-      .run(JSON.stringify(rawEntry), rawEntry.updatedAt, scope.sessionKey);
-    await upsertSessionEntryCore(trackedScope, { label: "tracked-after", updatedAt: 2 });
+      const database = openOpenClawAgentDatabase(scope);
+      const previous = loadSessionEntry(scope)!;
+      const rawEntry = {
+        ...previous,
+        label: "raw-after",
+        updatedAt: previous.updatedAt + (sameTimestamp ? 0 : 1),
+      };
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?")
+        .run(JSON.stringify(rawEntry), rawEntry.updatedAt, scope.sessionKey);
+      await upsertSessionEntryCore(trackedScope, { label: "tracked-after", updatedAt: 2 });
 
-    parseSessionEntryCalls.mockClear();
-    const entries = listSessionEntriesCore(scope);
-    const entriesBySessionId = new Map(entries.map((row) => [row.entry.sessionId, row.entry]));
+      parseSessionEntryCalls.mockClear();
+      const entries = listSessionEntriesCore(scope);
+      const entriesBySessionId = new Map(entries.map((row) => [row.entry.sessionId, row.entry]));
 
-    expect(entriesBySessionId.get("raw")).toMatchObject(rawEntry);
-    expect(entriesBySessionId.get("tracked")).toMatchObject({
-      label: "tracked-after",
-      sessionId: "tracked",
-    });
-    expect(parseSessionEntryCalls).toHaveBeenCalledOnce();
-    expect(sessionNodeVersionScans.rowCounts).toEqual([2]);
-  });
+      expect(entriesBySessionId.get("raw")).toMatchObject(rawEntry);
+      expect(entriesBySessionId.get("tracked")).toMatchObject({
+        label: "tracked-after",
+        sessionId: "tracked",
+      });
+      expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("invalidates cached keys when transcript creation inserts a placeholder node", async () => {
     const scope = createSessionScope("placeholder-key");
@@ -749,7 +738,7 @@ describe("SQLite session entry cache", () => {
   it("bypasses the cache in a transaction and reuses the persisted snapshot after rollback", async () => {
     const scope = createSessionScope("transaction-rollback");
     await upsertSessionEntryCore(scope, { label: "before", sessionId: "rollback", updatedAt: 1 });
-    const borrowedBefore = openSessionEntryReadView(scope).get(scope.sessionKey);
+    const borrowedBefore = listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
     expect(borrowedBefore?.label).toBe("before");
     if (!borrowedBefore) {
       throw new Error("missing seeded rollback entry");
@@ -767,7 +756,7 @@ describe("SQLite session entry cache", () => {
     ).toThrow("roll back cache probe");
 
     parseSessionEntryCalls.mockClear();
-    const borrowedAfter = openSessionEntryReadView(scope).get(scope.sessionKey);
+    const borrowedAfter = listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
     expect(borrowedAfter).toStrictEqual(borrowedBefore);
     expect(borrowedAfter?.label).toBe("before");
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
@@ -802,7 +791,6 @@ describe("SQLite session entry cache", () => {
       .run(JSON.stringify(updated), updated.updatedAt, scope.sessionKey);
 
     expect(listSessionEntriesCore(scope)[0]?.entry.label).toBe("latest");
-    expect(sessionNodeVersionScans.rowCounts).toEqual([1]);
     expect(loadSessionEntry({ ...scope, readConsistency: "latest" })?.label).toBe("latest");
   });
 });

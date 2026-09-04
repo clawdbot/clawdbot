@@ -177,6 +177,92 @@ describe("config cli integration", () => {
     });
   });
 
+  it("accepts absent and exact authored expectations", async () => {
+    await withConfigFileHarness(
+      "openclaw-config-cli-conditional-success-",
+      "{ gateway: { port: 18789 } }\n",
+      async ({ configPath }) => {
+        const absentOutput = createTestRuntime();
+        await runConfigSet({
+          path: "gateway.bind",
+          value: '"loopback"',
+          cliOptions: { strictJson: true, expectCurrentAbsent: true },
+          runtime: absentOutput.runtime,
+        });
+        expect(absentOutput.errors).toStrictEqual([]);
+
+        const exactOutput = createTestRuntime();
+        await runConfigSet({
+          path: "gateway.port",
+          value: "19001",
+          cliOptions: { strictJson: true, expectCurrentJson: "18789" },
+          runtime: exactOutput.runtime,
+        });
+        expect(exactOutput.errors).toStrictEqual([]);
+        expect(JSON5.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+          gateway: { bind: "loopback", port: 19001 },
+        });
+      },
+    );
+  });
+
+  it("rejects a conditional set when the authored value changed before CLI load", async () => {
+    await withConfigFileHarness(
+      "openclaw-config-cli-conditional-preload-conflict-",
+      "{ gateway: { port: 19002 } }\n",
+      async ({ configPath }) => {
+        const before = fs.readFileSync(configPath, "utf8");
+        const output = createTestRuntime();
+
+        await expect(
+          runConfigSet({
+            path: "gateway.port",
+            value: "19001",
+            cliOptions: { strictJson: true, expectCurrentJson: "18789" },
+            runtime: output.runtime,
+          }),
+        ).rejects.toThrow("__exit__:1");
+
+        expect(fs.readFileSync(configPath, "utf8")).toBe(before);
+        expect(output.logs).toStrictEqual([]);
+        expect(output.errors.join("\n")).toContain(
+          "conditional config set expectation did not match the authored config",
+        );
+        expect(output.errors.join("\n")).not.toContain("18789");
+        expect(output.errors.join("\n")).not.toContain("19002");
+      },
+    );
+  });
+
+  it("keeps the snapshot hash guard after a matching conditional preflight", async () => {
+    await withConfigFileHarness(
+      "openclaw-config-cli-conditional-postload-race-",
+      "{ gateway: { port: 18789 } }\n",
+      async ({ configPath }) => {
+        const concurrentRaw = "{ gateway: { port: 19002 } }\n";
+        const output = createTestRuntime();
+
+        await expect(
+          runConfigSet({
+            path: "gateway.port",
+            value: "19001",
+            cliOptions: { strictJson: true, expectCurrentJson: "18789" },
+            runtime: output.runtime,
+            beforePersistentApply: () => {
+              fs.writeFileSync(configPath, concurrentRaw, "utf8");
+            },
+          }),
+        ).rejects.toThrow("__exit__:1");
+
+        expect(fs.readFileSync(configPath, "utf8")).toBe(concurrentRaw);
+        expect(output.logs).toStrictEqual([]);
+        expect(output.errors.join("\n")).toContain("config changed since last load");
+        expect(output.errors.join("\n")).not.toContain("18789");
+        expect(output.errors.join("\n")).not.toContain("19002");
+      },
+    );
+  });
+
   it("preserves exact JSON5 bytes while rejecting an absent authored unset", async () => {
     const raw =
       '{\n  // preserve this comment and order\n  gateway: { port: 18789 },\n  logging: { level: "info" },\n}\n';

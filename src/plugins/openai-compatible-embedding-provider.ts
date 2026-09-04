@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
+import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
 import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
@@ -11,7 +12,6 @@ import type {
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
 import type {
   EmbeddingInput,
@@ -327,7 +327,7 @@ async function postEmbeddingRequest(params: {
       ? await client.acquireLocalService(client.localServiceTarget, params.signal)
       : undefined;
   try {
-    const { response, release } = await fetchWithSsrFGuard({
+    return await withRemoteHttpResponse({
       url: client.endpointUrl,
       init: {
         method: "POST",
@@ -335,25 +335,23 @@ async function postEmbeddingRequest(params: {
         body: JSON.stringify(body),
       },
       signal: params.signal,
-      policy: client.ssrfPolicy,
+      ssrfPolicy: client.ssrfPolicy,
       auditContext: "embedding-provider:openai-compatible",
-    });
-    try {
-      if (!response.ok) {
-        throw await createEmbeddingHttpError(response);
-      }
-      return readEmbeddingVectors(
-        await readProviderJsonArrayFieldResponse(
-          response,
+      onResponse: async (response) => {
+        if (!response.ok) {
+          throw await createEmbeddingHttpError(response);
+        }
+        return readEmbeddingVectors(
+          await readProviderJsonArrayFieldResponse(
+            response,
+            "openai-compatible embeddings failed",
+            "data",
+          ),
+          input.length,
           "openai-compatible embeddings failed",
-          "data",
-        ),
-        input.length,
-        "openai-compatible embeddings failed",
-      );
-    } finally {
-      await release();
-    }
+        );
+      },
+    });
   } finally {
     localServiceLease?.release();
   }

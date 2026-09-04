@@ -41,7 +41,7 @@ function buildRenderedSkillsPrompt(params: {
   includeLimitNote?: boolean;
 }): string {
   // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
-  // The production-renderer parity test in src/agents/code-mode.test.ts enforces this coupling.
+  // The production-renderer parity test in src/agents/code-mode.skills.test.ts enforces this coupling.
   const truncated = params.skills.length < params.total;
   const limitNote =
     params.includeLimitNote === false
@@ -61,14 +61,24 @@ function buildRenderedSkillsPrompt(params: {
   return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
 }
 
-/** Render a deterministic skills catalog within the shared model-context budget. */
-export function formatSkillsForPromptBounded(params: {
+type SkillsPromptParams = {
   skills: Skill[];
   maxSkillsInPrompt?: number;
   maxSkillsPromptChars?: number;
   remoteNote?: string;
   preserveOrder?: boolean;
-}): string {
+};
+
+/** Render a deterministic skills catalog within the shared model-context budget. */
+export function formatSkillsForPromptBounded(params: SkillsPromptParams): string {
+  return prepareSkillsForPrompt(params).prompt;
+}
+
+/** Keep resource selection tied to the exact catalog admitted by the prompt budget. */
+export function prepareSkillsForPrompt(params: SkillsPromptParams): {
+  prompt: string;
+  skills: Skill[];
+} {
   const maxSkillsInPrompt = params.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT;
   const maxSkillsPromptChars = params.maxSkillsPromptChars ?? DEFAULT_MAX_SKILLS_PROMPT_CHARS;
   const orderedSkills = params.preserveOrder
@@ -99,8 +109,6 @@ export function formatSkillsForPromptBounded(params: {
     return undefined;
   };
 
-  const fitsFull = (skills: Skill[], includeLimitNote = true): boolean =>
-    renderWithinLimit(skills, { kind: "full" }, includeLimitNote) !== undefined;
   const fitsCompact = (
     skills: Skill[],
     descriptionMaxChars: number,
@@ -109,8 +117,12 @@ export function formatSkillsForPromptBounded(params: {
     renderWithinLimit(skills, { kind: "compact", descriptionMaxChars }, includeLimitNote) !==
     undefined;
 
-  if (fitsFull(skillsForPrompt)) {
-    return renderWithinLimit(skillsForPrompt, { kind: "full" }) ?? "";
+  const fullPrompt = renderWithinLimit(skillsForPrompt, { kind: "full" });
+  if (fullPrompt !== undefined) {
+    return {
+      prompt: fullPrompt,
+      skills: skillsForPrompt,
+    };
   }
 
   if (!fitsCompact(skillsForPrompt, 0)) {
@@ -130,7 +142,7 @@ export function formatSkillsForPromptBounded(params: {
   if (skillsForPrompt.length === 0 && byCount.length > 0) {
     const fullWithoutNotice = renderWithinLimit(byCount, { kind: "full" }, false);
     if (fullWithoutNotice !== undefined) {
-      return fullWithoutNotice;
+      return { prompt: fullWithoutNotice, skills: byCount };
     }
     let lo = 0;
     let hi = byCount.length;
@@ -165,11 +177,11 @@ export function formatSkillsForPromptBounded(params: {
     }
     descriptionMaxChars = lo;
   }
-  return (
+  const prompt =
     renderWithinLimit(
       skillsForPrompt,
       { kind: "compact", descriptionMaxChars },
       includeLimitNote,
-    ) ?? ""
-  );
+    ) ?? "";
+  return { prompt, skills: prompt ? skillsForPrompt : [] };
 }

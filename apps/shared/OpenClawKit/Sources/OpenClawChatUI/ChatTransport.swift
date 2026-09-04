@@ -4,6 +4,7 @@ import OpenClawProtocol
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
+    case chatMetadataChanged
     case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case sessionObserver(SessionObserverDigest)
     case chat(OpenClawChatEventPayload)
@@ -643,6 +644,19 @@ public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
     }
 }
 
+public struct OpenClawChatModelCatalogSnapshot: Sendable, Equatable {
+    public let choices: [OpenClawChatModelChoice]
+    public let availabilityIsSessionScoped: Bool
+
+    public init(
+        choices: [OpenClawChatModelChoice],
+        availabilityIsSessionScoped: Bool)
+    {
+        self.choices = choices
+        self.availabilityIsSessionScoped = availabilityIsSessionScoped
+    }
+}
+
 public enum OpenClawChatMediaKind: String, Sendable {
     case image
     case audio
@@ -739,6 +753,9 @@ public protocol OpenClawChatTransport: Sendable {
     func fetchProgressCard(sessionKey: String) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
+    func loadModelCatalog(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
     var supportsComposerCapabilities: Bool { get }
     func loadComposerCapabilityCatalog(
         sessionKey: String,
@@ -1246,6 +1263,16 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "models.list not supported by this transport"])
+    }
+
+    public func loadModelCatalog(
+        sessionKey _: String,
+        agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
+    {
+        let choices = try await self.listModels(agentID: agentID)
+        return OpenClawChatModelCatalogSnapshot(
+            choices: choices,
+            availabilityIsSessionScoped: false)
     }
 
     public var supportsSlashCommandCatalog: Bool {

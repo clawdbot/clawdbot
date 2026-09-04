@@ -469,7 +469,7 @@ describe("codex conversation controls", () => {
       authProfileOverrideSource: "user",
       liveModelSwitchPending: true,
     });
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: "thread-model-authority",
       model: "gpt-5.4",
     });
@@ -510,7 +510,7 @@ describe("codex conversation controls", () => {
       }),
     ).resolves.toBe("Codex model set to gpt-5.5.");
 
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: "thread-provider-switch",
       model: "local-model",
       modelProvider: "lmstudio",

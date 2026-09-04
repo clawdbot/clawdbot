@@ -17,12 +17,13 @@ afterEach(() => {
 describe("board widget sizing", () => {
   it("snaps reported HTML heights to rows with card inset and fixed-mode fallbacks", () => {
     const card = boardWidget({ sizeH: 6 });
-    expect(effectiveBoardWidgetRows(card, 100)).toBe(2);
-    expect(effectiveBoardWidgetRows(card, 101)).toBe(3);
-    expect(effectiveBoardWidgetRows({ ...card, presentation: "full-bleed" }, 124)).toBe(2);
-    expect(effectiveBoardWidgetRows({ ...card, presentation: "frameless" }, 125)).toBe(3);
+    expect(effectiveBoardWidgetRows(card, 98)).toBe(2);
+    expect(effectiveBoardWidgetRows(card, 99)).toBe(3);
+    expect(effectiveBoardWidgetRows({ ...card, presentation: "full-bleed" }, 122)).toBe(2);
+    expect(effectiveBoardWidgetRows({ ...card, presentation: "frameless" }, 123)).toBe(3);
     expect(effectiveBoardWidgetRows(card, 1)).toBe(2);
     expect(effectiveBoardWidgetRows(card, 10_000)).toBe(20);
+    expect(effectiveBoardWidgetRows(card, 10_000, 0, 240)).toBeGreaterThan(20);
     expect(effectiveBoardWidgetRows({ ...card, heightMode: "fixed" }, 600)).toBe(6);
     expect(effectiveBoardWidgetRows(card, undefined)).toBe(6);
     expect(effectiveBoardWidgetRows({ ...card, contentKind: "mcp-app" }, 600)).toBe(6);
@@ -35,16 +36,17 @@ describe("board widget sizing", () => {
 
   it("hugs auto cards to their exact content height inside the quantized cell", () => {
     const card = boardWidget({ sizeH: 6 });
-    // Card inset adds 12px per edge; frameless/full-bleed report bare content.
-    expect(exactBoardWidgetHeightPx(card, 300)).toBe(324);
-    expect(exactBoardWidgetHeightPx({ ...card, presentation: "frameless" }, 300)).toBe(300);
+    // Every presentation reserves its border; cards also add 12px per edge.
+    expect(exactBoardWidgetHeightPx(card, 300)).toBe(326);
+    expect(exactBoardWidgetHeightPx({ ...card, presentation: "frameless" }, 300)).toBe(302);
     // Short content hugs below the 2-row cell minimum: the cell keeps its
     // minimum span, only the card shrinks.
-    expect(exactBoardWidgetHeightPx(card, 60)).toBe(84);
+    expect(exactBoardWidgetHeightPx(card, 60)).toBe(86);
     // At the 20-row cap the card fills the cell exactly and the body clips.
     expect(exactBoardWidgetHeightPx(card, 10_000)).toBe(20 * 56 + 19 * 12);
+    expect(exactBoardWidgetHeightPx(card, 10_000, 0, 240)).toBe(10_026);
     // Coarse-pointer layouts keep the 38px bar in flow, joining the height.
-    expect(exactBoardWidgetHeightPx(card, 300, 38)).toBe(362);
+    expect(exactBoardWidgetHeightPx(card, 300, 38)).toBe(364);
     expect(exactBoardWidgetHeightPx({ ...card, heightMode: "fixed" }, 300)).toBeUndefined();
     expect(exactBoardWidgetHeightPx(card, undefined)).toBeUndefined();
     expect(exactBoardWidgetHeightPx({ ...card, contentKind: "mcp-app" }, 300)).toBeUndefined();
@@ -71,6 +73,26 @@ describe("board widget sizing", () => {
     Reflect.set(cell ?? {}, "dragging", true);
     await cell?.updateComplete;
     expect(section()?.getAttribute("style")).not.toContain("align-self");
+  });
+
+  it("lets a dashboard document fit tall HTML content without an inner scroll viewport", async () => {
+    const view = await mount();
+    view.fitAutoContent = true;
+    await view.updateComplete;
+    const cell = view.querySelector("openclaw-board-widget-cell");
+    const frame = cell?.querySelector("iframe");
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame?.contentWindow ?? null,
+        data: { type: "openclaw:widget-size", height: 10_000 },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      const section = cell?.querySelector<HTMLElement>(".board-widget");
+      expect(section?.getAttribute("style")).toContain("height: 10026px");
+      expect(section?.getAttribute("style")).toContain("span 148");
+    });
   });
 
   it("pins preset resizing and toggles height mode from the menu", async () => {

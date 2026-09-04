@@ -27,9 +27,8 @@ public enum DashboardRouteMap {
     /// no fragment, which the dashboard URL reserves for the auth token.
     public static func isValidSameAppSearch(_ search: String) -> Bool {
         guard search.hasPrefix("?"), !search.contains("#") else { return false }
-        var components = URLComponents()
-        components.percentEncodedQuery = String(search.dropFirst())
-        return components.percentEncodedQuery != nil
+        // Parse bridge input: assigning an invalid percentEncodedQuery traps.
+        return URLComponents(string: search, encodingInvalidCharacters: false)?.percentEncodedQuery != nil
     }
 
     public static func dashboardURL(

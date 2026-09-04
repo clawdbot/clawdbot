@@ -49,6 +49,7 @@ export function waitForFile(file) {
     "lib/dist-artifact-ownership.mts",
     "lib/failed-trailer.mts",
     "lib/managed-child-process.mts",
+    "lib/vitest-resource-ownership.mts",
     "lib/windows-taskkill.mjs",
     "lib/repo-root.mjs",
   ]) {
@@ -68,7 +69,7 @@ const mode = ${JSON.stringify(step === phase ? mode : "success")};
 const shard = process.argv.includes("scripts") ? "scripts" : process.argv.includes("src") ? "core" : "extensions";
 const name = step === "oxlint" ? shard : step;
 const lock = ".artifacts/dist-artifacts.lock";
-fs.appendFileSync("steps.jsonl", JSON.stringify({ step, shard, pid: process.pid, owned: fs.existsSync(lock + "/owner.json"), claims: fs.existsSync(lock) ? fs.readdirSync(lock).filter(name => name.startsWith("child-")) : [] }) + "\\n");
+fs.appendFileSync("steps.jsonl", JSON.stringify({ step, shard, args: process.argv.slice(2), pid: process.pid, owned: fs.existsSync(lock + "/owner.json"), claims: fs.existsSync(lock) ? fs.readdirSync(lock).filter(name => name.startsWith("child-")) : [] }) + "\\n");
 process.stdout.write(JSON.stringify({ step, shard }) + "\\n");
 process.stderr.write("diagnostic:" + name + "\\n");
 if (mode === "throw") throw new Error("fixture preparation failure");
@@ -141,7 +142,14 @@ process.stderr.write = (chunk, ...args) => {
   return { root, probe, env };
 }
 
-type Step = { step: string; shard: string; pid: number; owned: boolean; claims: string[] };
+type Step = {
+  step: string;
+  shard: string;
+  args: string[];
+  pid: number;
+  owned: boolean;
+  claims: string[];
+};
 
 function readRows<T>(root: string, name: string): T[] {
   const file = path.join(root, name);
@@ -200,7 +208,7 @@ async function runLintFixture(
         requireProcessTreeExit: true,
         onReady(child) {
           if (forwarded) {
-            fixture.track(
+            void fixture.track(
               (async () => {
                 const ready = path.join(
                   root,
@@ -258,7 +266,14 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
       expect(result.status, details).toBe(code);
       const lint = steps.find((step) => step.step === "oxlint");
       expect(lint, details).toMatchObject({ owned: true });
-      if (entry !== "run-oxlint.mjs") expect(lint!.claims).toHaveLength(1);
+      if (mode === "success") {
+        expect(steps.find((step) => step.step === "prepare")?.args, details).toEqual([
+          "--mode=package-boundary",
+        ]);
+      }
+      if (entry !== "run-oxlint.mjs") {
+        expect(lint!.claims).toHaveLength(1);
+      }
       if (mode === "success" && entry === "run-lint.mts") {
         expect(steps.map((step) => step.step)).toEqual(["i18n", "prepare", "oxlint", "stylelint"]);
       }
@@ -333,7 +348,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
           steps
             .filter((step) => step.step === "oxlint")
             .map((step) => step.shard)
-            .sort(),
+            .toSorted(),
         ).toEqual(["core", "extensions", "scripts"]);
         expect(trailers, details).toEqual([
           {

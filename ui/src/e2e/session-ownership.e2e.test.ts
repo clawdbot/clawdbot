@@ -205,14 +205,14 @@ suite.define(() => {
       const slotBounds = slot.getBoundingClientRect();
       const textBounds = text.getBoundingClientRect();
       return {
-        backSize: [backBounds.width, backBounds.height],
+        backSize: [Math.round(backBounds.width), Math.round(backBounds.height)],
         centerDelta:
           stackBounds.left + stackBounds.width / 2 - (slotBounds.left + slotBounds.width / 2),
-        frontSize: [frontBounds.width, frontBounds.height],
+        frontSize: [Math.round(frontBounds.width), Math.round(frontBounds.height)],
         overlap: backBounds.right - frontBounds.left,
         reveal: frontBounds.left - backBounds.left,
         slotWidth: slotBounds.width,
-        stackSize: [stackBounds.width, stackBounds.height],
+        stackSize: [Math.round(stackBounds.width), Math.round(stackBounds.height)],
         textGap: textBounds.left - stackBounds.right,
       };
     });
@@ -310,14 +310,16 @@ suite.define(() => {
     await captureUiProof(suite, currentPage, "00-people-controls-from-session-owners.png");
     await expectBrowser(ownerMenu.locator('[value="grouping:person"]')).toBeVisible();
     await expectBrowser(ownerMenu.locator('[value="sort:people"]')).toBeVisible();
-    const ownerRows = ownerMenu.locator('wa-dropdown-item[value^="owner:"]:not([value="owner:"])');
+    const ownerSubmenu = ownerMenu.getByRole("menuitem", { name: /Specific owner/ });
+    await ownerSubmenu.hover();
+    const ownerRows = ownerSubmenu.locator('[slot="submenu"][value^="owner:"]');
     await expectBrowser(ownerRows).toHaveCount(3);
+    await expectBrowser(ownerRows.first()).toBeVisible();
     await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
     await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
     await expectBrowser(ownerRows.locator("openclaw-session-owner-chip img")).toHaveCount(3);
-    const firstOwnerCenterDelta = await avatarLabelCenterDelta(ownerRows.first());
     await captureUiProof(suite, currentPage, "00-people-sort-available.png");
-    expect(firstOwnerCenterDelta).toBeLessThanOrEqual(0.5);
+    expect(await avatarLabelCenterDelta(ownerRows.first())).toBeLessThanOrEqual(0.5);
     await selectMenuValue(ownerMenu, "grouping:person");
     await expectBrowser(
       currentPage.locator('[data-session-section="person:profile:profile-ada"]'),
@@ -365,8 +367,8 @@ suite.define(() => {
         );
     };
     const beforeSelection = (await gateway.getRequests("sessions.list")).length;
-    await peopleMenu.locator('[value="owner:profile-ada"]').waitFor();
-    await selectMenuValue(peopleMenu, "owner:profile-ada");
+    await peopleMenu.getByRole("menuitem", { name: /Specific owner/ }).hover();
+    await peopleMenu.locator('[slot="submenu"][value="owner:profile-ada"]').click();
     await expectOwnerFilter(beforeSelection);
     await captureSessionOwnerProof(suite, currentPage, "04-owner-filter-selected.png");
 
@@ -703,7 +705,7 @@ suite.define(() => {
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     await expect.poll(() => dropdown.getAttribute("open")).not.toBeNull();
-    expect(await dropdown.locator(".chat-pane__sharing-title").count()).toBe(1);
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-title")).toHaveCount(2);
     await currentPage.getByText("Publish draft", { exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
     await expect.poll(() => dropdown.getAttribute("open")).toBeNull();

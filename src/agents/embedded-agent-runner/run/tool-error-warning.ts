@@ -285,28 +285,19 @@ function formatConciseExecExitSuffix(error: string | undefined): string {
 function maybeWrapInlineCode(value: string, markdown: boolean): string {
   return markdown ? formatInlineCodeSpan(value) : value;
 }
-/** Warn only when a tool failure would otherwise leave the user with no reply. */
+/** Always warn when a tool failure would otherwise leave the user with no reply. */
 export function buildFailureWarning(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
-  suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean;
   verboseLevel?: VerboseLevel;
   useMarkdown: boolean;
-}): { text: string; nonTerminalToolErrorWarning: boolean } | undefined {
-  if (
-    params.hasUserFacingReply ||
-    params.suppressToolErrors ||
-    params.suppressToolErrorWarnings === true
-  ) {
+}): string | undefined {
+  if (params.hasUserFacingReply) {
     return undefined;
   }
-  return {
-    text: formatToolErrorWarningText({
-      lastToolError: params.lastToolError,
-      includeDetails: params.verboseLevel === "full",
-      useMarkdown: params.useMarkdown,
-    }),
-    nonTerminalToolErrorWarning: params.lastToolError.middlewareError === true,
-  };
+  return formatToolErrorWarningText({
+    lastToolError: params.lastToolError,
+    includeDetails: params.verboseLevel === "full",
+    useMarkdown: params.useMarkdown,
+  });
 }

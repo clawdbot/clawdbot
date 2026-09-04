@@ -28,12 +28,15 @@ describe("settings search target manifest", () => {
         target.hash,
       ]),
     ).toEqual([
+      ["device", "/settings/device", "", ""],
+      ["devicePermissions", "/settings/device/permissions", "", ""],
       ["updates", "/settings/updates", "", "#config-section-update"],
       ["channels", "/settings/channels", "", ""],
       ["security", "/settings/security", "", ""],
       ["secrets", "/settings/secrets", "", ""],
       ["system", "/settings/connection", "", "#settings-connection-host"],
       ["personal", "/settings/profile", "", "#settings-profile-identity"],
+      ["githubConnections", "/settings/profile", "", "#settings-profile-github-connections"],
       ["modelBehavior", "/settings/model-providers", "", "#settings-model-behavior"],
       [
         "appearanceLanguage",

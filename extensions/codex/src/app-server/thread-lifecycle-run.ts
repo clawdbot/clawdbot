@@ -32,9 +32,8 @@ import {
   shouldStartTransientNoToolThread,
 } from "./thread-fingerprints.js";
 import {
-  assertAdoptedCodexThreadResumeAllowed,
   resumePendingCodexThread,
-  prepareSupervisedCodexThreadResume,
+  prepareCodexThreadResume,
   withCodexThreadLifecycleBinding,
 } from "./thread-lifecycle-adoption.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
@@ -61,6 +60,7 @@ export async function startOrResumeThread(
   const incognito = isIncognitoSessionKey(params.params.sessionKey);
   const clientId = resolveCodexAppServerClientInstanceId(params.client);
   return await withCodexThreadLifecycleBinding(params, async (bindingIdentity, currentBinding) => {
+    const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = currentBinding;
     if (hasCodexNativeToolCatalog(binding)) {
       // A resumed native catalog is immutable data. Run eligibility only changes
@@ -238,7 +238,7 @@ export async function startOrResumeThread(
       if (!current?.threadId) {
         return;
       }
-      assertCodexBindingMayBeReplaced(current, operation);
+      assertCodexBindingMayBeReplaced(current, operation, expectedOwnership);
       const cleared = await params.bindingStore.mutate(bindingIdentity, {
         kind: "clear",
         threadId: current.threadId,
@@ -419,7 +419,11 @@ export async function startOrResumeThread(
       // Scheduled configured MCP moved from Codex-native config to OpenClaw dynamic tools.
       // A persistent main/named session has one binding: rotate its exact predecessor instead
       // of retaining native and scheduled variants that could diverge or widen authority.
-      assertCodexBindingMayBeReplaced(predecessorBinding, "changing configured MCP ownership");
+      assertCodexBindingMayBeReplaced(
+        predecessorBinding,
+        "changing configured MCP ownership",
+        expectedOwnership,
+      );
       embeddedAgentLog.debug(
         "codex app-server configured MCP ownership changed; starting a new thread",
         { threadId: predecessorBinding.threadId },
@@ -433,7 +437,7 @@ export async function startOrResumeThread(
       params.mcpServersFingerprintEvaluated === true &&
       binding.mcpServersFingerprint !== params.mcpServersFingerprint
     ) {
-      assertCodexBindingMayBeReplaced(binding, "changing MCP configuration");
+      assertCodexBindingMayBeReplaced(binding, "changing MCP configuration", expectedOwnership);
       if (
         !ringZeroActive &&
         (transientNativeToolRestriction ||
@@ -467,7 +471,11 @@ export async function startOrResumeThread(
       webSearchBindingChanged &&
       !deferLegacyWebSearchRotationToTransientNativeSurface
     ) {
-      assertCodexBindingMayBeReplaced(binding, "changing web-search configuration");
+      assertCodexBindingMayBeReplaced(
+        binding,
+        "changing web-search configuration",
+        expectedOwnership,
+      );
       if (!ringZeroActive && transientWebSearchRestriction) {
         embeddedAgentLog.debug(
           "codex app-server tool surface restricted for turn; starting transient thread",
@@ -490,7 +498,11 @@ export async function startOrResumeThread(
       binding = undefined;
     }
     if (binding?.threadId && transientNativeToolRestriction && !ringZeroActive) {
-      assertCodexBindingMayBeReplaced(binding, "starting a native-tool-restricted turn");
+      assertCodexBindingMayBeReplaced(
+        binding,
+        "starting a native-tool-restricted turn",
+        expectedOwnership,
+      );
       embeddedAgentLog.debug(
         "codex app-server native tool surface disabled for turn; starting transient thread",
         {
@@ -501,7 +513,11 @@ export async function startOrResumeThread(
       binding = undefined;
     }
     if (binding?.threadId && transientDelegationRestriction) {
-      assertCodexBindingMayBeReplaced(binding, "starting a delegation-restricted turn");
+      assertCodexBindingMayBeReplaced(
+        binding,
+        "starting a delegation-restricted turn",
+        expectedOwnership,
+      );
       // Loaded Codex threads ignore resume config overrides. Keep the normal
       // binding intact and start a transient thread with collaboration disabled.
       embeddedAgentLog.debug(
@@ -609,7 +625,11 @@ export async function startOrResumeThread(
           legacyDynamicToolsFingerprint,
         )
       ) {
-        assertCodexBindingMayBeReplaced(binding, "changing the dynamic tool catalog");
+        assertCodexBindingMayBeReplaced(
+          binding,
+          "changing the dynamic tool catalog",
+          expectedOwnership,
+        );
         preserveExistingBinding = shouldStartTransientNoToolThread({
           previous: binding.dynamicToolsFingerprint,
           nextHasDynamicTools: params.dynamicTools.length > 0,
@@ -630,28 +650,6 @@ export async function startOrResumeThread(
           );
           await clearCurrentBinding("rotating a stale thread binding");
         }
-      } else if (incognito) {
-        if (
-          binding.clientId &&
-          binding.clientId === clientId &&
-          ((await buildLoadedPluginThreadConfig(binding))?.fingerprint ??
-            binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
-        ) {
-          // Ephemeral threads have no cold-resume source; reuse only the live client that started it.
-          params.buildFinalConfigPatch?.({ action: "resume", binding });
-          throwIfAborted();
-          lifecycleTiming.mark("thread-ready");
-          lifecycleTiming.logSummary({
-            runId: params.params.runId,
-            sessionId: params.params.sessionId,
-            sessionKey: params.params.sessionKey,
-            threadId: binding.threadId,
-            action: "resumed",
-          });
-          return { ...binding, lifecycle: { action: "resumed" } };
-        }
-        await clearCurrentBinding("rotating an unavailable ephemeral thread binding");
-        binding = undefined;
       } else {
         const warmReuse = await tryReuseCodexLiveThread({
           ...requestContext,
@@ -663,51 +661,39 @@ export async function startOrResumeThread(
         if (warmReuse.kind === "ready") {
           return warmReuse.binding;
         }
-        if (warmReuse.kind === "rotate") {
+        if (incognito || warmReuse.kind === "rotate") {
           throwIfAborted();
-          await clearCurrentBinding("rotating a stale plugin app binding");
+          await clearCurrentBinding(
+            incognito
+              ? "rotating an unavailable ephemeral thread binding"
+              : "rotating a stale plugin app binding",
+          );
         } else {
-          // Native adoption must be checked before releasing any retained owner;
-          // a passive refusal neither acquires nor authorizes dropping a subscription.
-          const adoptedThread =
-            binding.preserveNativeModel === true
-              ? await assertAdoptedCodexThreadResumeAllowed(
-                  params,
-                  binding.threadId,
-                  requestContext,
-                )
-              : undefined;
-          const configuration =
-            adoptedThread && binding.connectionScope === "supervision"
-              ? prepareSupervisedCodexThreadResume(params, binding, adoptedThread)
-              : undefined;
-          try {
-            await releaseRetainedThread(
-              binding.threadId,
-              binding.clientId,
-              configuration?.assertCurrent,
-            );
-            configuration?.assertCurrent();
-            const resumed = await resumeExistingCodexThread(params, {
-              ...requestContext,
-              binding,
-              clearCurrentBinding,
-              prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
-              prebuiltPluginThreadConfig,
-              buildLoadedPluginThreadConfig,
-              assertResumeOwnership: configuration?.assertCurrent,
-              assertResumeConfiguration: configuration?.assertConfigured,
-            });
-            if (resumed) {
-              return resumed;
-            }
-          } finally {
-            configuration?.dispose();
+          const resumeBinding = binding;
+          const resumed = await resumeExistingCodexThread(params, {
+            ...requestContext,
+            binding: resumeBinding,
+            clearCurrentBinding,
+            prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
+            prebuiltPluginThreadConfig,
+            buildLoadedPluginThreadConfig,
+            prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
+            releaseRetainedThread: async (assertCurrent) => {
+              await releaseRetainedThread(
+                resumeBinding.threadId,
+                resumeBinding.clientId,
+                assertCurrent,
+              );
+            },
+          });
+          if (resumed) {
+            return resumed;
           }
         }
       }
     }
 
+    assertCodexBindingMayBeReplaced(binding, "starting a fresh native thread", expectedOwnership);
     if (initialBoundThreadId && !preserveExistingBinding && !replacementPredecessor) {
       await releaseRetainedThread(initialBoundThreadId);
     }

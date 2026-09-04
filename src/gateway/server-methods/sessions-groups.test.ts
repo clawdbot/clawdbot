@@ -54,7 +54,10 @@ function renameOptions(params: Record<string, unknown>, respond: ReturnType<type
   return {
     params,
     respond,
-    context: { getRuntimeConfig: () => ({}) },
+    context: {
+      getRuntimeConfig: () => ({}),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+    },
   } as unknown as GatewayRequestHandlerOptions;
 }
 

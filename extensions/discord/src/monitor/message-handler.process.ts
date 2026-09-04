@@ -53,10 +53,6 @@ const TARGETED_ONLY_ALLOWED_MENTIONS = {
   parse: ["users", "roles"],
 } as APIAllowedMentions;
 
-function isProcessAborted(abortSignal?: AbortSignal): boolean {
-  return Boolean(abortSignal?.aborted);
-}
-
 function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   if (payload.isError !== true || !isReplyPayloadNonTerminalToolErrorWarning(payload)) {
     return false;
@@ -110,7 +106,7 @@ async function processDiscordMessageInner(
     turnAdoptionLifecycle,
     preparedMedia: mediaList,
   } = ctx;
-  if (isProcessAborted(abortSignal)) {
+  if (abortSignal?.aborted) {
     return;
   }
   const text = messageText;
@@ -255,7 +251,7 @@ async function processDiscordMessageInner(
   });
   let replyLifecycleStarted = false;
   const onDiscordReplyStart = async () => {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       return;
     }
     replyLifecycleStarted = true;
@@ -278,7 +274,7 @@ async function processDiscordMessageInner(
       allowProgressBlock?: boolean;
     },
   ) => {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       // Surface so operators don't chase missing replies when an abort
       // drops a model-produced text payload.
       logVerbose(
@@ -429,7 +425,7 @@ async function processDiscordMessageInner(
             return undefined;
           },
           editFinal: async (previewMessageId, edit) => {
-            if (isProcessAborted(abortSignal)) {
+            if (abortSignal?.aborted) {
               throw new Error("process aborted");
             }
             notifyFinalReplyStart();
@@ -451,7 +447,7 @@ async function processDiscordMessageInner(
           },
         }),
         deliverNormally: async () => {
-          if (isProcessAborted(abortSignal)) {
+          if (abortSignal?.aborted) {
             return false;
           }
           const fallbackPayload =
@@ -501,7 +497,7 @@ async function processDiscordMessageInner(
         return { visibleReplySent: true };
       }
     }
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       // Mirror the entry-point abort log so a mid-deliver abort (after
       // the preview path bowed out) does not silently drop the reply.
       logVerbose(
@@ -583,7 +579,7 @@ async function processDiscordMessageInner(
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
-    if (!pendingToolWarningFinal || userFacingFinalDelivered || isProcessAborted(abortSignal)) {
+    if (!pendingToolWarningFinal || userFacingFinalDelivered || abortSignal?.aborted) {
       return undefined;
     }
     const pending = pendingToolWarningFinal;
@@ -599,7 +595,7 @@ async function processDiscordMessageInner(
     }
   };
   try {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       dispatchAborted = true;
       return;
     }
@@ -670,7 +666,7 @@ async function processDiscordMessageInner(
       return;
     }
     dispatchResult = preparedResult.dispatchResult;
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       dispatchAborted = true;
       return;
     }
@@ -688,13 +684,14 @@ async function processDiscordMessageInner(
       markFinalReplyDelivered();
     }
   } catch (err) {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       dispatchAborted = true;
       return;
     }
     dispatchError = true;
-    const conflictCompleted = await completeDiscordSessionConflict(
+    const conflictOutcome = await completeDiscordSessionConflict(
       err,
+      sourceReplyDeliveryMode,
       (payload, info) =>
         deliverDiscordPayload(payload, {
           ...info,
@@ -703,8 +700,12 @@ async function processDiscordMessageInner(
         }),
       onDiscordDeliveryError,
     );
-    if (conflictCompleted) {
-      // The visible terminal notice owns this event, so replay can commit.
+    if (conflictOutcome) {
+      runtime.error(
+        `discord: reply session init conflict exhausted; terminal notice ${conflictOutcome} ` +
+          `(sourceReplyDeliveryMode=${sourceReplyDeliveryMode}, message=${message.id}, session=${persistedSessionKey})`,
+      );
+      // Both a delivered notice and recorded policy suppression consume the event.
       return;
     }
     throw err;

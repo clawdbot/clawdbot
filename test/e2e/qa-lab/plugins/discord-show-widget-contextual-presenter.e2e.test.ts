@@ -3,7 +3,6 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { MessageFlags } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   GatewayClient,
@@ -24,6 +23,7 @@ const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const DISCORD_CHANNEL_ID = "789";
 const DISCORD_MESSAGE_ID = "1000000000000000001";
 const DISCORD_APPLICATION_ID = "123456789012345678";
+const DISCORD_COMPONENTS_V2_FLAG = 1 << 15;
 const DISCORD_SESSION_KEY = `agent:qa:discord:channel:${DISCORD_CHANNEL_ID}`;
 const INLINE_SESSION_KEY = "agent:qa:inline-widget-proof";
 const INVENTORY_MARKER = "DISCORD_WIDGET_PRESENTER_INVENTORY";
@@ -431,7 +431,7 @@ describe("Discord show_widget contextual presenter process proof", () => {
           },
         ]);
         expect(post?.body?.attachments).toEqual([{ id: 0, filename: testCase.expected }]);
-        expect(Boolean(Number(post?.body?.flags ?? 0) & MessageFlags.IsComponentsV2)).toBe(
+        expect(Boolean(Number(post?.body?.flags ?? 0) & DISCORD_COMPONENTS_V2_FLAG)).toBe(
           testCase.v2 === true,
         );
         process.stdout.write(

@@ -17,6 +17,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 }));
 vi.mock("./session-transcript-title-reader.js", () => ({ readSessionTitleFieldsFromTranscript }));
 
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -59,6 +60,17 @@ function mockSessionUpdate(current: SessionEntry): void {
 
 describe("maybeGenerateDashboardSessionTitle", () => {
   beforeEach(() => {
+    // Exercise runtime compatibility with a registered backend; setup loading has its own tests.
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
     generateConversationLabelWithFallback.mockReset();
     resolveUtilityModelRefForAgent.mockReset();
     updateSessionEntry.mockReset();
@@ -73,7 +85,10 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     mockSessionUpdate(baseEntry);
   });
 
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+    vi.useRealTimers();
+  });
 
   it("generates and persists a dashboard display name", async () => {
     await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);

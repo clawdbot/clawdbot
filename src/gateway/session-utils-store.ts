@@ -43,6 +43,7 @@ import type { GatewayAgentOwnership } from "./agent-list.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import {
+  type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
@@ -142,6 +143,7 @@ function loadSessionEntryWithMode(
   opts:
     | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection"> & {
         includeStoreChildEntries?: boolean;
+        targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
       })
     | undefined,
   readOnly: boolean,
@@ -154,6 +156,7 @@ function loadSessionEntryWithMode(
     exactRead: true,
     readOnly,
     projection: opts?.projection,
+    targetDiscoveryCache: opts?.targetDiscoveryCache,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
     ...(opts?.includeStoreChildEntries ? { includeStoreChildEntries: true } : {}),
@@ -194,7 +197,10 @@ export function loadGatewaySessionEntry(
 
 export function loadGatewaySessionEntryReadOnly(
   sessionKey: string,
-  opts?: { agentId?: string; clone?: boolean; includeStoreChildEntries?: boolean },
+  opts?: {
+    includeStoreChildEntries?: boolean;
+    targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
@@ -445,8 +451,8 @@ export function listAgentsForGateway(
   });
   return {
     defaultId: basic.defaultId,
-    ownership: basic.ownership!,
-    selectionRequired: basic.selectionRequired!,
+    ownership: basic.ownership,
+    selectionRequired: basic.selectionRequired,
     mainKey: basic.mainKey,
     scope: basic.scope,
     agents,

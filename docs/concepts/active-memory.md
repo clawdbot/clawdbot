@@ -61,10 +61,13 @@ This does not merge transcripts, change session keys or delivery routes, widen
 workspace memory (`MEMORY.md` and `memory/*.md`) keeps its existing behavior.
 
 Active Memory must remain enabled. Retrieval adds a bounded blocking step to
-eligible replies; timeout, unavailable search, and empty results all continue
-the reply without recalled transcript context. OpenClaw's built-in memory
-provider supports this protected transcript-recall path. Other memory providers keep their own recall behavior but do
-not automatically receive private transcript authorization. `openclaw doctor`
+eligible replies. An intentional no-intent skip or an unavailable search adds a
+short hidden outcome note instead of recalled transcript context. This tells
+the main model that recall did not run or could not finish without exposing
+provider errors. Timeout and empty results keep their existing behavior.
+OpenClaw's built-in memory provider supports this protected transcript-recall
+path. Other memory providers keep their own recall behavior but do not
+automatically receive private transcript authorization. `openclaw doctor`
 reports an unsupported provider or missing `memory_search` tool.
 
 ## Advanced Active Memory quick start
@@ -132,17 +135,20 @@ flowchart LR
   U["User Message"] --> D["Deterministic Trigger Recall"]
   D -->|strong trusted match| I["Inject Bounded Hidden Context"]
   D -->|weak or empty| H["Check Recall Intent"]
-  H -->|no| M["Main Reply"]
+  H -->|no| O["Inject Bounded Recall Outcome"]
   H -->|yes| R["Active Memory Deep Recall Sub-Agent"]
   R -->|NONE| M
+  R -->|unavailable| O
   R -->|relevant summary| I
+  O --> M["Main Reply"]
   I --> M
 ```
 
 The deep-recall sub-agent can call only the configured memory recall tools (see
 [Memory tools](#memory-tools)). If the connection between the query and
-available memory is weak, it returns `NONE` and the main reply proceeds
-without extra context.
+available memory is weak, it returns `NONE` and the main reply proceeds without
+extra context. Intentional no-intent skips and unavailable recall add only a
+fixed, bounded outcome note.
 
 Active memory is a conversational enrichment feature, not a platform-wide
 inference feature:
@@ -602,6 +608,13 @@ promptOverride: "You are a memory search agent. Return NONE or one compact user 
 Blocking sub-agent runs keep their runtime transcript in the agent's SQLite
 store. By default, OpenClaw removes the temporary sub-agent session rows after
 the run finishes and does not create a JSONL file.
+
+If cleanup crosses the recall deadline, a completed summary grounded in memory
+results can still be recovered as `timeout_partial` after cleanup settles.
+This works with temporary transcripts; `persistTranscripts` only controls
+debugging exports. Failed runs, failed cleanup, and unavailable memory results
+remain ineligible for timeout recovery. Recovered summaries are not cached or
+stored in session debug lines.
 
 To export those transcripts as JSONL artifacts for debugging:
 

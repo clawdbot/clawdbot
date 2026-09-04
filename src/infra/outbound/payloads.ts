@@ -40,8 +40,7 @@ export type NormalizedOutboundPayload = {
   location?: ReplyPayload["location"];
   /** Hook-only content for audio-only TTS payloads. Never used as channel text/caption. */
   hookContent?: string;
-  // Agent-command delivery hands this shape to reply_payload_sending.
-  // Dropping the flag lets banner plugins treat Gateway reset acks as model text.
+  /** Preserves the status/answer distinction through delivery hooks. */
   isStatusNotice?: boolean;
 };
 

@@ -57,10 +57,11 @@ export const matrixAccountStateSchemaMigration: PluginDoctorStateMigration = {
   id: "matrix-account-sqlite-schema",
   label: "Matrix account SQLite schemas",
   async detectLegacyState(params) {
-    const { detectOpenClawStateDatabaseSchemaMigrations } =
-      await import("openclaw/plugin-sdk/doctor-repair-runtime");
     const preview: string[] = [];
     for (const storageRootDir of await collectMatrixAccountStateRoots(params.stateDir)) {
+      // Empty-state startup scans must not load the schema repair runtime.
+      const { detectOpenClawStateDatabaseSchemaMigrations } =
+        await import("openclaw/plugin-sdk/doctor-repair-runtime");
       const env = resolveMatrixSqliteStateEnv({ env: params.env, stateDir: storageRootDir });
       preview.push(
         ...detectOpenClawStateDatabaseSchemaMigrations({ env }).map((migration) =>
@@ -71,11 +72,11 @@ export const matrixAccountStateSchemaMigration: PluginDoctorStateMigration = {
     return preview.length > 0 ? { preview } : null;
   },
   async migrateLegacyState(params) {
-    const { detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema } =
-      await import("openclaw/plugin-sdk/doctor-repair-runtime");
     const changes: string[] = [];
     const warnings: string[] = [];
     for (const storageRootDir of await collectMatrixAccountStateRoots(params.stateDir)) {
+      const { detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema } =
+        await import("openclaw/plugin-sdk/doctor-repair-runtime");
       const env = resolveMatrixSqliteStateEnv({ env: params.env, stateDir: storageRootDir });
       if (detectOpenClawStateDatabaseSchemaMigrations({ env }).length === 0) {
         continue;

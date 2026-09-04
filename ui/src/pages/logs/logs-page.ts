@@ -12,6 +12,7 @@ import {
   failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { downloadTextFile } from "../../lib/download.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -242,20 +243,6 @@ class LogsPage extends OpenClawLightDomElement {
     return this.logsTask.status === TaskStatus.COMPLETE;
   }
 
-  private exportLogs(lines: string[], label: string) {
-    if (lines.length === 0) {
-      return;
-    }
-    const blob = new Blob([`${lines.join("\n")}\n`], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    anchor.href = url;
-    anchor.download = `openclaw-logs-${label}-${stamp}.log`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
-
   override render() {
     const body = renderLogs({
       loading: this.logsTask.status === TaskStatus.PENDING && !this.logsTaskQuiet,
@@ -278,7 +265,10 @@ class LogsPage extends OpenClawLightDomElement {
             this.streamFollow.schedule(true);
           }
         }),
-      onExport: (lines, label) => this.exportLogs(lines, label),
+      onExport: (lines, label) => {
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+        downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
+      },
       onScroll: (event) => this.streamFollow.handleScroll(event),
     });
     return html`

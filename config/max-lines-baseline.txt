@@ -135,8 +135,6 @@ extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/mattermost/src/mattermost/slash-http.ts
 extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.test.ts
-extensions/memory-core/src/dreaming-narrative.test.ts
-extensions/memory-core/src/dreaming-narrative.ts
 extensions/memory-core/src/dreaming-phases.test.ts
 extensions/memory-core/src/dreaming-phases.ts
 extensions/memory-core/src/dreaming.test.ts
@@ -258,13 +256,14 @@ extensions/webhooks/src/http.ts
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.test.ts
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts
 extensions/whatsapp/src/connection-controller.ts
+extensions/workboard/browser/lib/workboard/index.test.ts
+extensions/workboard/browser/pages/workboard/view.test.ts
 extensions/workboard/src/sqlite-store.ts
 extensions/workboard/src/store-card-helpers.ts
 extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
 extensions/xai/realtime-voice-provider.test.ts
-extensions/xai/web-search.test.ts
 extensions/zalo/src/monitor.ts
 extensions/zalouser/src/monitor.ts
 extensions/zalouser/src/zalo-js.ts
@@ -552,7 +551,6 @@ src/config/plugin-auto-enable.shared.ts
 src/config/redact-snapshot.test.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
-src/config/schema.ts
 src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
@@ -719,7 +717,6 @@ src/logging/diagnostic-stability.ts
 src/logging/diagnostic-support-export.ts
 src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
-src/logging/logger.ts
 src/logging/redact.test.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts
@@ -843,7 +840,6 @@ ui/src/lib/cron/index.test.ts
 ui/src/lib/cron/index.ts
 ui/src/lib/nodes/index.ts
 ui/src/lib/skills/index.test.ts
-ui/src/lib/workboard/index.test.ts
 ui/src/pages/agents/agents-page.ts
 ui/src/pages/agents/memory/dreaming.test.ts
 ui/src/pages/agents/memory/view.ts
@@ -872,5 +868,4 @@ ui/src/pages/skills/view.ts
 ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts
-ui/src/pages/workboard/view.test.ts
 ui/src/test-helpers/control-ui-e2e.ts

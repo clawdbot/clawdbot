@@ -45,10 +45,7 @@ import { executePollAction } from "./outbound-send-service.js";
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
-  isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply,
-  isDeliveredCurrentSourceReplyAction,
-  isThreadPlacementSourceReplyActionName,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 
@@ -74,32 +71,12 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
 ): T {
   // Current-source identity comes from the authorized route and delivery receipt,
   // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  // Reply-type actions, thread replies, and polls are visible source replies too:
-  // leaving them unmarked makes dispatch send the no-visible-reply fallback after
-  // the channel has already delivered a visible result.
-  const isMessageIdReplyActionResult =
-    result.kind === "action" && isCurrentSourceReplyActionName(result.action);
-  const isThreadPlacementReplyActionResult =
-    result.kind === "action" && isThreadPlacementSourceReplyActionName(result.action);
-  if (
-    result.kind !== "send" &&
-    result.kind !== "poll" &&
-    !isMessageIdReplyActionResult &&
-    !isThreadPlacementReplyActionResult
-  ) {
-    return result;
-  }
   const authorization = params.input.messageActionAuthorization;
-  if (!authorization?.toolContext) {
+  if (result.kind === "broadcast" || !authorization?.toolContext) {
     return result;
   }
   const mirrorParams = {
-    action:
-      isMessageIdReplyActionResult || isThreadPlacementReplyActionResult
-        ? result.action
-        : result.kind === "poll"
-          ? "poll"
-          : "send",
+    action: result.action,
     channel: params.channel,
     actionParams: params.actionParams,
     cfg: params.cfg,
@@ -112,11 +89,7 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
     deliveredPayload: result.payload,
     replyToIsExplicit: params.replyToIsExplicit,
   };
-  if (
-    isMessageIdReplyActionResult
-      ? !isDeliveredCurrentSourceReplyAction(mirrorParams)
-      : !isDeliveredCurrentSourceReply(mirrorParams)
-  ) {
+  if (!isDeliveredCurrentSourceReply(mirrorParams)) {
     return result;
   }
   const payload = asResultRecord(result.payload);

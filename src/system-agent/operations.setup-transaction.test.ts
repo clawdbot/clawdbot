@@ -267,7 +267,7 @@ describe("system-agent setup transaction", () => {
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: pending.workspace, resume: true, surface: "cli" }),
-      { commit: expect.any(Function) },
+      { beforePersistentApply },
     );
     expect(localOnboarding.complete).toHaveBeenCalledWith({
       configPath: pending.configPath,
@@ -295,7 +295,7 @@ describe("system-agent setup transaction", () => {
 
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }), {
-      commit: expect.any(Function),
+      beforePersistentApply: undefined,
     });
     expect(localOnboarding.complete).not.toHaveBeenCalled();
     expect(localOnboarding.states.get(pending.configPath)).toEqual(pending);
@@ -593,7 +593,7 @@ describe("system-agent setup transaction", () => {
 
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }), {
-      commit: expect.any(Function),
+      beforePersistentApply: undefined,
     });
     expect(localOnboarding.readForConfig).not.toHaveBeenCalled();
     expect(localOnboarding.complete).not.toHaveBeenCalled();

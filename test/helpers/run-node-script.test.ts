@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { waitForDead, waitForPidFile } from "./process-wait.js";
 import { runNodeScript } from "./run-node-script.js";
@@ -74,6 +75,11 @@ if(mode==='at limit') {
 it.skipIf(process.platform === "win32")(
   "retains inputs when captured command output leaves cleanup uncertain",
   async ({ signal }) => {
+    const ownerRoot = tempDirs.make("node-script-owner-");
+    const owner = createVitestResourceOwner(ownerRoot);
+    for (const key of ["TMPDIR", "TMP", "TEMP"]) {
+      vi.stubEnv(key, ownerRoot);
+    }
     const fixture = createFixtureLifetime();
     const directory = fixture.createTempDir("openclaw-node-script-uncertain-");
     const script = join(directory, "parent.mjs");
@@ -110,6 +116,7 @@ child.once('message',()=>process.exit(0));
         processTreeState: "indeterminate",
       });
       await expect(fixture.cleanup()).rejects.toThrow("Fixture cleanup unverified");
+      expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       expect(existsSync(directory)).toBe(true);
       writeFileSync(release, "release");
       await waitForDead(await waitForPidFile(pidFile, 2_000), 2_000);
@@ -124,6 +131,7 @@ child.once('message',()=>process.exit(0));
       }
       await fixture.cleanup();
       rmSync(directory, { recursive: true, force: true });
+      vi.unstubAllEnvs();
     }
   },
 );

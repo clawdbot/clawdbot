@@ -15,7 +15,14 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
     return [item.key, ...item.groups];
   }
   if (item.kind === "agent-run-frame") {
-    return [item.key, item.outcome, ...item.parts];
+    const outcome = item.outcome;
+    // Grouping recreates frame wrappers; only the outcome and nested content invalidate a row.
+    return [
+      item.key,
+      outcome.kind,
+      outcome.kind === "completed" ? outcome.actionOwner : null,
+      ...item.parts.flatMap(itemDependencies),
+    ];
   }
   return [item];
 }
@@ -23,20 +30,15 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
 export function trackTranscriptRenderDependencies(
   state: ChatThreadState,
   dependencies: unknown[],
-): unknown[] {
+): void {
   const previous = state.transcriptRenderDependencies;
-  const nextLength = dependencies.length - 1;
-  let changed = previous.length !== nextLength;
-  for (let index = 0; !changed && index < nextLength; index += 1) {
-    changed = !Object.is(previous[index], dependencies[index + 1]);
-  }
-  if (changed) {
-    // The first dependency is chatItems. Keep the shared context stable when
-    // only the live row changes, but invalidate every row for presentation changes.
-    state.transcriptRenderDependencies = dependencies.slice(1);
+  if (
+    previous.length !== dependencies.length ||
+    dependencies.some((value, index) => !Object.is(previous[index], value))
+  ) {
+    state.transcriptRenderDependencies = dependencies;
     state.transcriptRenderContext = {};
   }
-  return dependencies;
 }
 
 export function guardChatRenderItems(

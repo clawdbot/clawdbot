@@ -1188,6 +1188,26 @@ describe("projectChatDisplayMessages", () => {
       content: safeFailureContent,
     },
     {
+      name: "projects provider refusals before classifying their explanation text",
+      message: {
+        content: [],
+        errorMessage: "Anthropic refusal: prompt is too long.",
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            timestamp: 1,
+            details: { category: "reasoning_extraction", explanation: "private upstream" },
+          },
+        ],
+      },
+      content: [
+        {
+          type: "text",
+          text: "The provider refused this request (category: reasoning_extraction). Revise the request and try again.",
+        },
+      ],
+    },
+    {
       name: "preserves visible output_text from a failed assistant turn",
       message: {
         content: [{ type: "output_text", text: "A partial reply before the run failed." }],

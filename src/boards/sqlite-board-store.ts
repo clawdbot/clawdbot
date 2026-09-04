@@ -85,6 +85,26 @@ function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolea
   return true;
 }
 
+export function listBoardSessionKeysReadOnly(params: {
+  agentId: string;
+  path: string;
+  env?: NodeJS.ProcessEnv;
+}): ReadonlySet<string> {
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    if (!boardTablesPresent(database)) {
+      return [];
+    }
+    const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+    // Every persisted widget belongs to a tab, so distinct tab owners are the
+    // complete board inventory without reading widget payloads.
+    return executeSqliteQuerySync(
+      database.db,
+      db.selectFrom("board_tabs").select("session_key").distinct(),
+    ).rows.map((row) => row.session_key);
+  }, params);
+  return new Set(result.found ? result.value : []);
+}
+
 function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;

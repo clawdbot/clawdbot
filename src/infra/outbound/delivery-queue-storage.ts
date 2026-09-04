@@ -1,5 +1,6 @@
 // Delivery queue storage persists replayable outbound send intents and tracks
 // platform-send recovery state in the shared SQLite queue.
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   promoteDeliveryQueueEntryPlatformSend,
   transitionOwnedDeliveryQueueEntry,
@@ -11,15 +12,16 @@ import {
   upsertDeliveryQueueEntryOnceAcrossNamespaces,
 } from "../delivery-queue-sqlite-namespace.js";
 import {
-  completeDeliveryQueueEntry,
-  deleteDeliveryQueueEntry,
   getDeliveryQueueEntryOwners,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   reserveDeliveryQueueEntryAttempt,
+  prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntry,
+  terminalizePendingDeliveryQueueEntryInDatabase,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
+  upsertDeliveryQueueEntryInDatabase,
   type DeliveryQueueEntryState,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
@@ -53,6 +55,8 @@ import {
   projectPreparedOutboundBatchForStorage,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
+
+export { ackDelivery } from "./delivery-queue-ack.js";
 
 export type {
   LegacyQueuedDelivery,
@@ -269,57 +273,7 @@ export async function enqueuePreparedDeliveryOnce(
   return { id: normalizedId, created: true };
 }
 
-type AckDeliveryOptions = {
-  /** Caller holds a GC-visible recovery lease until its active adapter settles. */
-  retainSpoolArtifacts?: boolean;
-  /** An intentionally suppressed pre-send batch must not become a success receipt. */
-  suppressCompletionReceipt?: boolean;
-  /** Prevent an older provider attempt from settling a replacement owner. */
-  expectedPlatformSendAttemptId?: string | null;
-};
-
 const lostPlatformClaim = (id: string) => new Error(`Delivery platform claim was lost: ${id}`);
-
-/** Remove a successfully delivered entry, or retain its producer-owned receipt. */
-export async function ackDelivery(
-  id: string,
-  stateDir?: string,
-  options?: AckDeliveryOptions,
-): Promise<void> {
-  // Read the media references before the row goes, then unlink only after the
-  // delete commits. A crash in between leaves an orphan for the retention sweep;
-  // unlinking first could strip media from a row that still has to replay.
-  let spoolPaths: string[] = [];
-  const settle = (current: QueuedDelivery | null): void => {
-    spoolPaths = current ? collectEntrySpoolPaths(queuedDeliveryPayloads(current), stateDir) : [];
-    if (current?.completionRetention && options?.suppressCompletionReceipt !== true) {
-      completeDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
-    } else {
-      deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
-    }
-  };
-  if (options && "expectedPlatformSendAttemptId" in options) {
-    const settled = transitionOwnedDeliveryQueueEntry(
-      {
-        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-        id,
-        stateDir,
-        platformSendAttemptId: options.expectedPlatformSendAttemptId ?? null,
-      },
-      (entry) => settle(entry as QueuedDelivery),
-    );
-    if (!settled) {
-      throw lostPlatformClaim(id);
-    }
-  } else {
-    settle(
-      loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir) as QueuedDelivery | null,
-    );
-  }
-  if (!options?.retainSpoolArtifacts) {
-    await releaseSpoolArtifacts(spoolPaths, stateDir);
-  }
-}
 
 /** Update a queue entry after a failed delivery attempt. */
 export async function failDelivery(
@@ -457,9 +411,13 @@ function updateQueuedDelivery(
         stateDir,
         platformSendAttemptId: expectedPlatformSendAttemptId,
       },
-      () => {
-        updateDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir, (entry) =>
-          update(entry as QueuedDelivery),
+      (entry, database) => {
+        upsertDeliveryQueueEntryInDatabase(
+          {
+            queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+            entry: update(entry as QueuedDelivery),
+          },
+          database,
         );
       },
     );
@@ -632,7 +590,7 @@ export async function stageDeliveryFailureSettlement(
       stateDir,
       platformSendAttemptId: attemptId ?? null,
     },
-    (current) => {
+    (current, database) => {
       // A platform owner may renew after the scan snapshot. Only an explicitly
       // held/reclaimed claim may settle an active lease; reread under the CAS lock.
       if (
@@ -644,13 +602,15 @@ export async function stageDeliveryFailureSettlement(
       }
       // SAFETY: The owned pending row is in the prepared outbound namespace, before terminal compaction.
       staged = { ...(current as QueuedDelivery), recoveryState: "settlement_pending", settlement };
-      upsertDeliveryQueueEntry({
-        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-        entry: staged,
-        stateDir,
-        status: "failed",
-        updatePendingOnly: true,
-      });
+      upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+          entry: staged,
+          status: "failed",
+          updatePendingOnly: true,
+        },
+        database,
+      );
     },
   );
   return staged;
@@ -735,15 +695,22 @@ export async function failPendingDelivery(
   },
   stateDir?: string,
 ): Promise<FailPendingDeliveryResult> {
+  const terminal = { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, id: params.id, entry: params.entry };
+  // An unmatched claim must remain a no-op; standalone calls validate before opening state.
+  const prepared =
+    params.expectedPlatformSendAttemptId === undefined
+      ? prepareDeliveryQueueTerminalEntry(terminal)
+      : undefined;
+  const database = openOpenClawStateDatabase({
+    env: stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env,
+  });
   let terminalized = false;
   const terminalize = () => {
     terminalized =
-      terminalizePendingDeliveryQueueEntry({
-        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-        id: params.id,
-        entry: params.entry,
-        stateDir,
-      }).status === "terminalized";
+      terminalizePendingDeliveryQueueEntryInDatabase(
+        database,
+        prepared ?? prepareDeliveryQueueTerminalEntry(terminal),
+      ).status === "terminalized";
   };
   if (params.expectedPlatformSendAttemptId !== undefined) {
     transitionOwnedDeliveryQueueEntry(
@@ -751,6 +718,7 @@ export async function failPendingDelivery(
         queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
         id: params.id,
         stateDir,
+        database,
         platformSendAttemptId: params.expectedPlatformSendAttemptId,
       },
       terminalize,

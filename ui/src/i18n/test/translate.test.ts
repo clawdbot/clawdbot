@@ -134,7 +134,7 @@ describe("i18n", () => {
     delete internal.translations["zh-CN"];
 
     await translate.i18n.setLocale("zh-CN");
-    expect(translate.t("common.health")).toBe("健康状况");
+    expect(translate.t("common.health")).toBe(readTranslationString(zh_CN, "common.health"));
   });
 
   it("loads saved non-English locale on startup", async () => {
@@ -146,7 +146,7 @@ describe("i18n", () => {
       expect(fresh.i18n.getLocale()).toBe("zh-CN");
     });
     expect(fresh.i18n.getLocale()).toBe("zh-CN");
-    expect(fresh.t("common.health")).toBe("健康状况");
+    expect(fresh.t("common.health")).toBe(readTranslationString(zh_CN, "common.health"));
   });
 
   it("syncs canonical document locale metadata on startup", async () => {
@@ -295,15 +295,13 @@ describe("i18n", () => {
     }
   });
 
-  it("keeps new chat composer commands localized in shipped locale bundles", () => {
-    const checkedKeys = ["chat.composer.addAttachment", "chat.composer.attachFileOption"];
+  it("keeps the chat composer attachment action localized in shipped locale bundles", () => {
+    const key = "chat.composer.addAttachment";
 
     for (const [locale, value] of Object.entries(shippedLocales)) {
-      for (const key of checkedKeys) {
-        expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
-          readTranslationString(en, key),
-        );
-      }
+      expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
+        readTranslationString(en, key),
+      );
     }
   });
 });

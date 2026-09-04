@@ -17,7 +17,7 @@ import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.
 import { createOpenClawCodingTools } from "../../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
-import { createCodeModePermissionChangeReason } from "../../code-mode-repair-provenance.js";
+import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
@@ -31,7 +31,7 @@ import {
   resolveSessionPermissionExecMode,
   type PreparedSessionPermissionPolicy,
 } from "../../tool-fs-policy.js";
-import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../../tool-policy.js";
+import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
 import {
   createToolSearchCatalogRef,
@@ -78,18 +78,13 @@ export function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
-  const inspectingCodeModeRecovery = attempt.codeModeRecovery?.kind === "inspect";
-  const forceDirectMessageTool = inspectingCodeModeRecovery
-    ? false
-    : messageToolOwnsVisibleReply(attempt);
+  const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
   const toolRunContext = buildEmbeddedAttemptToolRunContext({
     ...attempt,
     forceMessageTool: forceDirectMessageTool,
     trace: params.runTrace,
   });
-  const toolsAllowWithForcedRuntimeTools = inspectingCodeModeRecovery
-    ? ["read"]
-    : toolRunContext.runtimeToolAllowlist;
+  const toolsAllowWithForcedRuntimeTools = toolRunContext.runtimeToolAllowlist;
   const toolsEnabled = supportsModelTools(attempt.model);
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
   const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
@@ -117,7 +112,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
     isRawModelRun,
     toolsAllow: attempt.toolsAllow,
     forceCodeModeControls: attempt.forceCodeModeTools,
-    forceDirectTools: inspectingCodeModeRecovery,
   });
   if (isCodeModeDiagnosticEnabled()) {
     logCodeModeDiagnostic(log, "activation", {
@@ -333,6 +327,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
               proposalReviewCompletion: attempt.skillWorkshopProposalReviewCompletion,
               collectionReconcile: attempt.skillWorkshopCollectionReconcile,
               proposalRevision: attempt.skillWorkshopProposalRevision,
+              libraryAuthoring: attempt.skillLibraryAuthoring,
             },
             modelCompat: extractModelCompat(attempt.model),
             modelApi: attempt.model.api,
@@ -345,14 +340,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
             currentMessagingTarget: attempt.currentMessagingTarget,
             currentThreadTs: attempt.currentThreadTs,
             currentMessageId: attempt.currentMessageId,
-            currentInboundAudio: attempt.currentInboundAudio,
-            ...(attempt.replyOperation
-              ? {
-                  hasCurrentInboundAudio: () =>
-                    attempt.currentInboundAudio === true ||
-                    attempt.replyOperation?.acceptedSteeredInboundAudio === true,
-                }
-              : {}),
             includeCoreTools: toolConstructionPlan.includeCoreTools,
             includeToolSearchControls: toolSearchControlsEnabledForRun,
             toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,
@@ -399,11 +386,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
           params.markCoreToolStage("attempt:tools-allow");
           return filteredTools;
         })();
-    const toolsRaw = inspectingCodeModeRecovery
-      ? constructedToolsRaw.filter((tool) => normalizeToolPolicyName(tool.name) === "read")
-      : attempt.forceRestartSafeTools
-        ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
-        : constructedToolsRaw;
+    const toolsRaw = attempt.forceRestartSafeTools
+      ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
+      : constructedToolsRaw;
     if (attempt.forceRestartSafeTools) {
       log.info(
         `restart-safe recovery tool policy retained ${toolsRaw.length}/${constructedToolsRaw.length} concrete tools`,

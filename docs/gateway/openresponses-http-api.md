@@ -39,6 +39,21 @@ If the request includes an OpenResponses `user` string, the Gateway derives a st
 
 `previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, and `x-openclaw-session-key`).
 
+### Explicit incognito session continuation
+
+Explicitly selecting or continuing an incognito conversation with `x-openclaw-session-key` (the `sessionKey` override) requires effective `operator.admin` authority. This rule follows authority, not ingress: it denies both trusted-proxy callers without owner/admin authority and private `gateway.auth.mode="none"` callers that explicitly narrow `x-openclaw-scopes` below admin (for example, to `operator.write`). Either receives HTTP `403` with a `forbidden` error. A profile-less private no-auth caller on this path gets `missing scope: operator.admin`; for a profile-backed caller, the response hides the private target with this error shape (where `<sessionKey>` is the requested override):
+
+```json
+{
+  "error": {
+    "message": "Incognito session \"<sessionKey>\" was not found.",
+    "type": "forbidden"
+  }
+}
+```
+
+Owner/admin callers keep explicit incognito session continuation. A private no-auth request without `x-openclaw-scopes` receives the default operator scopes, including `operator.admin`, and is therefore treated as owner/admin. Reserved internal namespace overrides (`subagent:`, `cron:`, `acp:`) remain a separate validation failure and still return HTTP `400` with `invalid_request_error`.
+
 ## Request shape
 
 | Field                                                            | Support                                                                                                                        |
@@ -124,6 +139,7 @@ Allowed MIME types (default): `text/plain`, `text/markdown`, `text/html`, `text/
 
 Current behavior:
 
+- Text inferred from otherwise untyped bytes retains its detected encoding, including UTF-16 and Windows-1252. Declared text charsets remain supported.
 - File content is decoded and added to the **system prompt**, not the user message, so it stays ephemeral (not persisted in session history).
 - Decoded file text is wrapped as **untrusted external content** before it is added, so file bytes are treated as data, not trusted instructions. The injected block uses explicit boundary markers (`<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>`) and a `Source: External` metadata line. It intentionally omits the long `SECURITY NOTICE:` banner to preserve prompt budget; the boundary markers and metadata still apply.
 - PDFs are parsed for text first. If little text is found, the first pages are rasterized into images and passed to the model, and the injected file block uses the placeholder `[PDF content rendered to images]`.

@@ -93,6 +93,18 @@ function shouldBuildBundledDistEntry(packageJson) {
   return packageJson?.openclaw?.build?.bundledDist !== false;
 }
 
+/**
+ * Standalone and isolated source-checkout builds retain the package's declared format.
+ * @returns {"cjs" | "esm"}
+ */
+export function resolvePluginRuntimeFormat(packageJson) {
+  return packageJson?.openclaw?.build?.runtimeFormat === "cjs" ? "cjs" : "esm";
+}
+
+export function pluginRuntimeExtension(runtimeFormat) {
+  return runtimeFormat === "cjs" ? ".cjs" : ".js";
+}
+
 function isExcludedTopLevelPublicSurfaceFile(fileName) {
   const normalizedName = fileName.toLowerCase();
   return (
@@ -120,6 +132,25 @@ export function collectPluginSourceEntries(packageJson) {
     packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
   }
   return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
+}
+
+/** Select typed plugin contracts, not runtime loader sidecars or implementation helpers. */
+export function collectPluginDeclarationSourceEntries(packageJson, sourceEntries) {
+  const entryName = (entry) =>
+    entry.replace(/^\.\/(?:dist\/)?/u, "").replace(/(?:\.d)?\.[cm]?[jt]s$/u, "");
+  const publicNames = new Set(["api", "runtime-api", "contract-api"]);
+  function collectExports(value) {
+    if (typeof value === "string") {
+      publicNames.add(entryName(value));
+    } else if (value && typeof value === "object") {
+      for (const entry of Object.values(value)) {
+        collectExports(entry);
+      }
+    }
+  }
+  collectExports(packageJson?.exports);
+  collectExports(packageJson?.types ?? packageJson?.typings);
+  return sourceEntries.filter((entry) => publicNames.has(entryName(entry)));
 }
 
 /** Collect top-level public plugin surface files that should be built. */
@@ -257,7 +288,15 @@ export function collectBundledPluginBuildEntries(params = {}) {
     if (!shouldBuildBundledCluster(dirName, env, { packageJson })) {
       continue;
     }
-    if (!shouldBuildBundledDistEntry(packageJson) && !dockerSelectedBuildIds?.has(dirName)) {
+    const externalSourceEntry =
+      params.includeExternalSourceEntries === true &&
+      (packageJson?.openclaw?.release?.publishToNpm === true ||
+        packageJson?.openclaw?.release?.publishToClawHub === true);
+    if (
+      !shouldBuildBundledDistEntry(packageJson) &&
+      !dockerSelectedBuildIds?.has(dirName) &&
+      !externalSourceEntry
+    ) {
       continue;
     }
 
@@ -301,6 +340,35 @@ export function collectBundledPluginBuildEntries(params = {}) {
     );
   }
   return entries.filter((entry) => filteredBuildIds.has(entry.id));
+}
+
+/** One source-checkout output plan for compilation, metadata, and readiness checks. */
+export function collectSourceCheckoutPluginBuildEntries(params = {}) {
+  const env = params.env ?? process.env;
+  const dockerSelected = parseDockerSelectedPluginBuildIdFilter(env);
+  const excluded = collectRootPackageExcludedExtensionDirs(params);
+  return collectBundledPluginBuildEntries({
+    ...params,
+    includeExternalSourceEntries: !dockerSelected,
+  })
+    .filter(({ id }) =>
+      NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)
+        ? env.OPENCLAW_BUILD_PRIVATE_QA === "1"
+        : !dockerSelected || !excluded.has(id) || dockerSelected.has(id),
+    )
+    .map((entry) => {
+      const isolated =
+        !dockerSelected &&
+        !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(entry.id) &&
+        (excluded.has(entry.id) || !shouldBuildBundledDistEntry(entry.packageJson));
+      // Docker-selected plugins belong to the unified ESM graph, irrespective
+      // of their standalone format. Never infer ownership from files left on disk.
+      const runtimeFormat = isolated ? resolvePluginRuntimeFormat(entry.packageJson) : "esm";
+      return Object.assign(entry, {
+        isolated,
+        runtimeExtension: pluginRuntimeExtension(runtimeFormat),
+      });
+    });
 }
 
 /** Retain channel config migrations with core schemas, independently of plugin installation. */

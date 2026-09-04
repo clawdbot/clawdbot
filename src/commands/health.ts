@@ -26,6 +26,7 @@ import type { HealthSummary } from "../gateway/health/types.js";
 import { info } from "../globals.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatExactDuration } from "../infra/format-time/format-duration-exact.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
@@ -121,35 +122,6 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
 }
 
 const loadConfigRuntime = async () => await import("../config/config.js");
-
-const formatDurationParts = (ms: number): string => {
-  if (!Number.isFinite(ms)) {
-    return "unknown";
-  }
-  if (ms < 1000) {
-    return `${Math.max(0, Math.round(ms))}ms`;
-  }
-  const units: Array<{ label: string; size: number }> = [
-    { label: "w", size: 7 * 24 * 60 * 60 * 1000 },
-    { label: "d", size: 24 * 60 * 60 * 1000 },
-    { label: "h", size: 60 * 60 * 1000 },
-    { label: "m", size: 60 * 1000 },
-    { label: "s", size: 1000 },
-  ];
-  let remaining = Math.max(0, Math.floor(ms));
-  const parts: string[] = [];
-  for (const unit of units) {
-    const value = Math.floor(remaining / unit.size);
-    if (value > 0) {
-      parts.push(`${value}${unit.label}`);
-      remaining -= value * unit.size;
-    }
-  }
-  if (parts.length === 0) {
-    return "0s";
-  }
-  return parts.join(" ");
-};
 
 function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   const eventLoop = summary.eventLoop;
@@ -445,38 +417,25 @@ export async function healthCommand(
     const heartbeatParts = displayAgents
       .map((agent) => {
         const everyMs = agent.heartbeat?.everyMs;
-        const label = everyMs ? formatDurationParts(everyMs) : "disabled";
+        const label = everyMs ? formatExactDuration(everyMs, "unknown", true) : "disabled";
         return `${label} (${agent.agentId})`;
       })
       .filter(Boolean);
     if (heartbeatParts.length > 0) {
       runtime.log(info(`Heartbeat interval: ${heartbeatParts.join(", ")}`));
     }
-    if (displayAgents.length === 0) {
-      runtime.log(
-        info(`Session store: ${summary.sessions.path} (${summary.sessions.count} entries)`),
-      );
-      if (summary.sessions.recent.length > 0) {
-        for (const r of summary.sessions.recent) {
-          runtime.log(
-            `- ${r.key} (${r.updatedAt ? `${Math.round((Date.now() - r.updatedAt) / 60000)}m ago` : "no activity"})`,
-          );
-        }
-      }
-    } else {
-      for (const agent of displayAgents) {
+    const sessionGroups =
+      displayAgents.length > 0
+        ? displayAgents
+        : [{ agentId: undefined, sessions: summary.sessions }];
+    for (const { agentId, sessions } of sessionGroups) {
+      const label = agentId ? `Session store (${agentId})` : "Session store";
+      runtime.log(info(`${label}: ${sessions.path} (${sessions.count} entries)`));
+      for (const { key, age } of sessions.recent) {
+        // A remote Gateway owns these ages; the CLI clock may differ.
         runtime.log(
-          info(
-            `Session store (${agent.agentId}): ${agent.sessions.path} (${agent.sessions.count} entries)`,
-          ),
+          `- ${key} (${age === null ? "no activity" : `${Math.round(age / 60000)}m ago`})`,
         );
-        if (agent.sessions.recent.length > 0) {
-          for (const r of agent.sessions.recent) {
-            runtime.log(
-              `- ${r.key} (${r.updatedAt ? `${Math.round((Date.now() - r.updatedAt) / 60000)}m ago` : "no activity"})`,
-            );
-          }
-        }
       }
     }
   }

@@ -1,6 +1,8 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
 export function serializeReleaseArtifact(payload: unknown): string;
-export function normalizeReleaseCoveragePolicy(input: ReleaseRecord): "npm-beta-v1" | undefined;
+export function normalizeReleaseCoveragePolicy(
+  input: ReleaseRecord,
+): "npm-beta-v1" | "npm-stable-v1" | undefined;
 export function validateReleaseCoveragePolicyBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,

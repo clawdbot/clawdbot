@@ -5,6 +5,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
+  formatProviderRefusalText,
   formatRawAssistantErrorForUi,
   isGenericProviderInternalError,
   parseApiErrorInfo,
@@ -99,6 +100,10 @@ export function formatAssistantErrorText(
   const raw = (msg.errorMessage ?? "").trim();
   if (msg.stopReason !== "error" && !raw) {
     return undefined;
+  }
+  const providerRefusalText = formatProviderRefusalText(msg);
+  if (providerRefusalText) {
+    return providerRefusalText;
   }
   const formatCopy = renderFormatErrorCopy(raw);
   const classifiedFacts = facts ?? classifyAssistantErrorFacts(msg, opts);

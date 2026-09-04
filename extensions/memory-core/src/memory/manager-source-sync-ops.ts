@@ -112,9 +112,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         }
         dirtyEntries.push(entry);
       }
-      const indexItems = dirtyEntries.map(
-        (entry): MemoryIndexWorkItem => ({ entry, source: "memory" }),
-      );
+      const indexItems = dirtyEntries.map((entry): MemoryIndexWorkItem => ({
+        entry,
+        source: "memory",
+      }));
       if (params.deferIndex) {
         return { indexItems, finalize: deleteStaleRows };
       }
@@ -348,12 +349,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           )
         ).filter((entry): entry is MemoryIndexEntry => entry !== null);
         pendingIndexItems.push(
-          ...dirtyEntries.map(
-            (entry): MemoryIndexWorkItem => ({
-              entry,
-              source: "sessions",
-            }),
-          ),
+          ...dirtyEntries.map((entry): MemoryIndexWorkItem => ({
+            entry,
+            source: "sessions",
+          })),
         );
         if (pendingIndexItems.length >= SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES) {
           await flushPendingIndexItems();

@@ -104,9 +104,18 @@ export function mergeTransportHeaders(
   ...headerSources: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
   const merged: Record<string, string> = {};
+  const namesByLowercase = new Map<string, string>();
   for (const headers of headerSources) {
-    if (headers) {
-      Object.assign(merged, headers);
+    for (const [name, value] of Object.entries(headers ?? {})) {
+      // HTTP header names are case-insensitive. Remove the earlier spelling so
+      // fetch cannot combine a protected replacement with its stale value.
+      const lowercaseName = name.toLowerCase();
+      const previousName = namesByLowercase.get(lowercaseName);
+      if (previousName && previousName !== name) {
+        delete merged[previousName];
+      }
+      merged[name] = value;
+      namesByLowercase.set(lowercaseName, name);
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;

@@ -22,7 +22,7 @@ struct ConfigStoreTests {
         await ConfigStore._testClearOverrides()
         #expect(remoteHit)
         #expect(!localHit)
-        #expect(result["remote"] as? Bool == true)
+        #expect(result.root["remote"] as? Bool == true)
     }
 
     @Test func `load uses local in local mode`() async {
@@ -42,7 +42,7 @@ struct ConfigStoreTests {
         await ConfigStore._testClearOverrides()
         #expect(localHit)
         #expect(!remoteHit)
-        #expect(result["local"] as? Bool == true)
+        #expect(result.root["local"] as? Bool == true)
     }
 
     @Test func `save routes to remote in remote mode`() async throws {
@@ -60,6 +60,7 @@ struct ConfigStoreTests {
         try await self.withOverrides(.init(
             isRemoteMode: { true },
             saveLocal: { _ in localHit = true },
+            loadRemote: { [:] },
             saveRemote: { _ in
                 remoteHit = true
                 // Reproduce a concurrent AppState-style publisher overlapping this save.
@@ -69,7 +70,7 @@ struct ConfigStoreTests {
             },
             notificationCenter: notificationCenter))
         {
-            try await ConfigStore.save(["remote": true])
+            try await self.saveLoadedDocument(["remote": true])
         }
 
         #expect(remoteHit)
@@ -83,10 +84,11 @@ struct ConfigStoreTests {
         var remoteHit = false
         await ConfigStore._testSetOverrides(.init(
             isRemoteMode: { false },
+            loadLocal: { [:] },
             saveLocal: { _ in localHit = true },
             saveRemote: { _ in remoteHit = true }))
 
-        try await ConfigStore.save(["local": true])
+        try await self.saveLoadedDocument(["local": true])
 
         await ConfigStore._testClearOverrides()
         #expect(localHit)
@@ -105,6 +107,7 @@ struct ConfigStoreTests {
 
         await self.withOverrides(.init(
             isRemoteMode: { true },
+            loadRemote: { [:] },
             saveRemote: { _ in
                 // Concurrent same-name traffic must not look like a ConfigStore announcement.
                 await Task.detached {
@@ -115,30 +118,12 @@ struct ConfigStoreTests {
             notificationCenter: notificationCenter))
         {
             do {
-                try await ConfigStore.save(["remote": true])
+                try await self.saveLoadedDocument(["remote": true])
                 Issue.record("Expected save to fail")
             } catch {}
         }
 
         #expect(changeCount.value == 0)
-    }
-
-    @Test func `remote stale-base rejection clears the cached revision`() async {
-        ConfigStore._testSetLastHash("legacy-raw-hash")
-        await self.withOverrides(.init(
-            isRemoteMode: { true },
-            saveRemote: { _ in
-                throw NSError(domain: "Gateway", code: 0, userInfo: [
-                    NSLocalizedDescriptionKey: "config changed since last load; re-run config.get and retry",
-                ])
-            })) {
-                do {
-                    try await ConfigStore.save(["browser": ["enabled": false]])
-                    Issue.record("Expected save to fail")
-                } catch {}
-            }
-
-        #expect(ConfigStore._testLastHash() == nil)
     }
 
     @Test func `local save does not fall back to direct write after stale gateway rejection`() async throws {
@@ -163,6 +148,7 @@ struct ConfigStoreTests {
             let before = try String(contentsOf: configPath, encoding: .utf8)
             await ConfigStore._testSetOverrides(.init(
                 isRemoteMode: { false },
+                loadLocal: { OpenClawConfigFile.loadDict() },
                 saveGateway: { _ in
                     throw NSError(domain: "Gateway", code: 0, userInfo: [
                         NSLocalizedDescriptionKey: "config changed since last load; re-run config.get and retry",
@@ -171,7 +157,7 @@ struct ConfigStoreTests {
 
             var didThrow = false
             do {
-                try await ConfigStore.save(["browser": ["enabled": false]])
+                try await self.saveLoadedDocument(["browser": ["enabled": false]])
             } catch {
                 didThrow = true
             }
@@ -195,12 +181,13 @@ struct ConfigStoreTests {
         ]) {
             await ConfigStore._testSetOverrides(.init(
                 isRemoteMode: { false },
+                loadLocal: { OpenClawConfigFile.loadDict() },
                 saveGateway: { _ in
                     throw NSError(domain: "Gateway", code: 0, userInfo: [
                         NSLocalizedDescriptionKey: "gateway not configured",
                     ])
                 }))
-            try await ConfigStore.save([
+            try await self.saveLoadedDocument([
                 "gateway": ["mode": "local"],
                 "browser": ["enabled": false],
             ])
@@ -211,6 +198,12 @@ struct ConfigStoreTests {
             #expect(((root?["browser"] as? [String: Any])?["enabled"] as? Bool) == false)
             #expect((root?["meta"] as? [String: Any]) != nil)
         }
+    }
+
+    private func saveLoadedDocument(_ root: [String: Any]) async throws {
+        var document = await ConfigStore.load()
+        document.root = root
+        try await ConfigStore.save(document)
     }
 
     private func withOverrides<T>(

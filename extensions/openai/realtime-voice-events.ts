@@ -55,7 +55,17 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       }
       return;
     }
+    if (event.type === "response.created") {
+      // Publish the response owner before observers can interrupt its first PCM.
+      this.outputAudioGeneration += 1;
+      this.responseActive = true;
+      this.responseCreateState = "idle";
+    }
+    const audioGeneration = this.outputAudioGeneration;
     emitServerEvent();
+    if (!this.acceptsEvent(connection)) {
+      return;
+    }
     switch (event.type) {
       case "session.created":
         return;
@@ -65,20 +75,18 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         return;
       }
 
-      case "response.created":
-        this.responseActive = true;
-        this.responseCreateInFlight = false;
-        return;
-
       case "conversation.output_audio.delta":
       case "response.audio.delta":
       case "response.output_audio.delta": {
         const audioDelta = event.delta ?? event.data;
-        if (!audioDelta) {
+        if (
+          !audioDelta ||
+          this.responseCancelInFlight ||
+          audioGeneration !== this.outputAudioGeneration
+        ) {
           return;
         }
         const audio = base64ToBuffer(audioDelta);
-        this.config.onAudio(audio);
         if (event.item_id && event.item_id !== this.assistantAudioItem?.itemId) {
           this.assistantAudioItem = {
             itemId: event.item_id,
@@ -90,7 +98,16 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
           this.assistantAudioItem.bytes += audio.byteLength;
         }
         this.responseActive = true;
-        this.sendMark();
+        const generation = this.outputAudioGeneration;
+        const markName = this.createPlaybackMark();
+        this.config.onAudio(audio, event.item_id ? { itemId: event.item_id } : undefined);
+        if (generation === this.outputAudioGeneration && this.acceptsEvent(connection)) {
+          this.config.onMark?.(markName, () => {
+            if (this.acceptsEvent(connection)) {
+              this.acknowledgeMark(markName);
+            }
+          });
+        }
         return;
       }
 
@@ -152,28 +169,28 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
-        const rejectedEventId = readRealtimeErrorEventId(event.error);
-        if (rejectedEventId && rejectedEventId === this.standaloneSpeechEventId) {
-          this.responseCreateInFlight = false;
-          this.standaloneSpeechActive = false;
-          this.standaloneSpeechEventId = null;
-          this.config.onError?.(new Error(detail));
-          if (this.standaloneSpeechQueue.length > 0) {
-            this.flushStandaloneSpeech();
-          } else if (this.responseCreatePending) {
-            this.flushPendingResponseCreate();
-          }
-          return;
-        }
+        const error = isRecord(event.error) ? event.error : undefined;
+        // Validation errors can omit event_id. The response parameter still belongs
+        // to our single pending create; an explicit id always overrides that evidence.
+        const rejectedEventId =
+          readRealtimeErrorEventId(event.error) ??
+          (this.responseCreateState === "in-flight" &&
+          error?.type === "invalid_request_error" &&
+          typeof error.param === "string" &&
+          (error.param === "response" || error.param.startsWith("response."))
+            ? (this.manualResponseCreateEventId ?? this.standaloneSpeechEventId)
+            : undefined);
+        const rejectsStandaloneSpeech =
+          this.standaloneSpeechEventId !== null && rejectedEventId === this.standaloneSpeechEventId;
         const rejectsManualResponseCreate =
           this.manualResponseCreateEventId !== null &&
-          readRealtimeErrorEventId(event.error) === this.manualResponseCreateEventId;
+          rejectedEventId === this.manualResponseCreateEventId;
         if (
           rejectsManualResponseCreate &&
           detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)
         ) {
           this.responseActive = true;
-          this.responseCreateInFlight = false;
+          this.responseCreateState = "idle";
           this.manualResponseCreateEventId = null;
           this.responseCreatePending = true;
           return;
@@ -195,14 +212,18 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
           }
           return;
         }
-        if (rejectsManualResponseCreate) {
-          this.responseCreateInFlight = false;
-          this.manualResponseCreateEventId = null;
-          if (this.responseCreatePending) {
-            this.flushPendingResponseCreate();
-          } else {
-            this.restoreAutoRespondAfterManualResponse();
-          }
+        if (rejectsManualResponseCreate || rejectsStandaloneSpeech) {
+          // Rejected creates never emit response.done. Retire the same response owner
+          // so transports release speech and reentrant callbacks drain only afterward.
+          this.handleResponseDone(
+            {
+              type: "response.done",
+              response: { status: "failed", status_details: { error: event.error } },
+            },
+            connection,
+            () => this.config.onError?.(new Error(detail)),
+          );
+          return;
         }
         this.config.onError?.(new Error(detail));
       }
@@ -315,11 +336,12 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       }
     };
     try {
-      invoke(() => this.config.onResponseDone?.(outcome));
-      invoke(emitServerEvent);
+      // Terminal output still belongs to this response until observers retire its owner.
       invoke(() => {
         providerTerminated = this.handleCompletedResponse(event, connection);
       });
+      invoke(() => this.config.onResponseDone?.(outcome));
+      invoke(emitServerEvent);
     } finally {
       // response.done owns response state regardless of observer success. A fatal tool
       // boundary still clears state, but must not start queued work on a closing socket.

@@ -676,7 +676,7 @@ describe("AppSidebar catalog session rows", () => {
       const active = sidebar.querySelectorAll(".sidebar-recent-session--active");
       expect(active).toHaveLength(1);
       expect(active[0]?.getAttribute("data-session-key")).toBe(
-        "catalog:codex:gateway%3Alocal:thread-1",
+        "agent:main:catalog:codex:gateway%3Alocal:thread-1",
       );
       expect(active[0]?.getAttribute("role")).toBe("listitem");
       expect(active[0]?.closest('[role="list"]')?.getAttribute("aria-label")).toBe("Local Codex");

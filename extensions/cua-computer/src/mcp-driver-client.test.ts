@@ -294,6 +294,22 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         fake.respond(request, sessionState("window"));
       } else if (request.method === "tools/call" && request.params?.name === "list_windows") {
         held.push(request);
+        if (held.length !== 2) {
+          return;
+        }
+        const firstRequest = held.find((call) => call.params?.arguments?.marker === "first");
+        const secondRequest = held.find((call) => call.params?.arguments?.marker === "second");
+        if (!firstRequest || !secondRequest) {
+          throw new Error("fixture did not receive both tagged requests");
+        }
+        const framed = Buffer.from(
+          `${JSON.stringify({ jsonrpc: "2.0", id: secondRequest.id, result: toolResult({ marker: "second", text: "β雪" }) })}\n\n${JSON.stringify({ jsonrpc: "2.0", id: firstRequest.id, result: toolResult({ marker: "first" }) })}\n`,
+        );
+        const split = framed.indexOf(Buffer.from("雪")) + 1;
+        expect(split).toBeGreaterThan(0);
+        // Receiving both requests owns the response; cold proxy startup is not a polling deadline.
+        fake.writeRaw(secondRequest, framed.subarray(0, split));
+        setImmediate(() => fake.writeRaw(secondRequest, framed.subarray(split)));
       } else if (request.method === "tools/call" && request.params?.name === "end_session") {
         fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
       }
@@ -309,24 +325,6 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       settlement.push("second");
       return result;
     });
-    await vi.waitFor(() => expect(held).toHaveLength(2));
-    const firstRequest = held.find((request) => request.params?.arguments?.marker === "first");
-    const secondRequest = held.find((request) => request.params?.arguments?.marker === "second");
-    if (!firstRequest || !secondRequest) {
-      throw new Error("fixture did not receive both tagged requests");
-    }
-
-    const framed = Buffer.from(
-      `${JSON.stringify({ jsonrpc: "2.0", id: secondRequest.id, result: toolResult({ marker: "second", text: "β雪" }) })}\n\n${JSON.stringify({ jsonrpc: "2.0", id: firstRequest.id, result: toolResult({ marker: "first" }) })}\n`,
-    );
-    const split = framed.indexOf(Buffer.from("雪")) + 1;
-    expect(split).toBeGreaterThan(0);
-    endpoint.writeRaw(secondRequest, framed.subarray(0, split));
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    endpoint.writeRaw(secondRequest, framed.subarray(split));
-
     const [first, second] = await Promise.all([firstCall, secondCall]);
     expect(JSON.parse(first.structuredJson!)).toEqual({ marker: "first" });
     expect(JSON.parse(second.structuredJson!)).toEqual({ marker: "second", text: "β雪" });

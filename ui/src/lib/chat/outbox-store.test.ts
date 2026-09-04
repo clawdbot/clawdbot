@@ -23,6 +23,85 @@ afterEach(() => {
 });
 
 describe("stored outbox summaries", () => {
+  it("restores selected recipients with their exact draft and queued text", () => {
+    const target = storageTargetForGateway("ws://mention-outbox.test");
+    const scopeKey = storedChatOutboxScopeKey({ sessionKey: "agent:main:mentions" });
+    const mentions = [{ profileId: "profile-alex", start: 0, end: 5 }];
+    const store = readStoredOutboxStore(sessionStorage, target);
+    store.sessions[scopeKey] = {
+      draft: "@Alex draft",
+      draftMentions: mentions,
+      queue: [
+        {
+          id: "mention-send",
+          text: "@Alex queued",
+          mentions,
+          createdAt: 1,
+          sendRunId: "mention-run",
+          sendState: "waiting-reconnect",
+        },
+      ],
+      updatedAt: 1,
+    };
+
+    writeStoredOutboxStore(sessionStorage, target, store);
+    mentions[0]!.profileId = "later-selection";
+    const restored = readStoredOutboxStore(sessionStorage, target).sessions[scopeKey];
+
+    expect(restored).toMatchObject({
+      draft: "@Alex draft",
+      draftMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
+      queue: [
+        {
+          text: "@Alex queued",
+          mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
+          sendRunId: "mention-run",
+          sendState: "waiting-reconnect",
+        },
+      ],
+    });
+  });
+
+  it.each([
+    { reason: "out-of-range token", mentions: [{ profileId: "profile-alex", start: 0, end: 50 }] },
+    {
+      reason: "missing mention prefix",
+      mentions: [{ profileId: "profile-alex", start: 1, end: 5 }],
+    },
+    { reason: "malformed annotations", mentions: "profile-alex" },
+  ])("parks a queued row with $reason", ({ mentions }) => {
+    const target = storageTargetForGateway("ws://mention-recovery.test");
+    const scopeKey = storedChatOutboxScopeKey({ sessionKey: "agent:main:mentions" });
+    sessionStorage.setItem(
+      target.key,
+      JSON.stringify({
+        version: 4,
+        gatewayOwner: target.gatewayOwner,
+        recovery: {},
+        sessions: {
+          [scopeKey]: {
+            queue: [
+              {
+                id: "corrupt-mention",
+                text: "@Alex review",
+                mentions,
+                createdAt: 1,
+                sendState: "waiting-reconnect",
+              },
+            ],
+            updatedAt: 1,
+          },
+        },
+      }),
+    );
+
+    const restored = readStoredOutboxStore(sessionStorage, target).sessions[scopeKey]?.queue?.[0];
+
+    expect(restored).toMatchObject({ text: "@Alex review", sendState: "failed" });
+    expect(restored?.mentions).toBeUndefined();
+    expect(restored?.sendError).toBeTruthy();
+  });
+
   it("normalizes an unchanged projection once and refreshes after an external write", () => {
     const unsubscribe = subscribeStoredChatOutboxChanges(() => undefined);
     const gatewayUrl = "ws://gateway.test/control";

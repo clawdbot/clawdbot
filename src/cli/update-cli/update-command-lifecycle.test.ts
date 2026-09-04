@@ -86,11 +86,14 @@ vi.mock("./shared.js", async (importOriginal) => ({
   tryWriteCompletionCache: vi.fn(async () => "completed"),
 }));
 
-vi.mock("./update-command-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-config.js")>()),
+vi.mock("./update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: vi.fn(async () => {
     record("config-snapshot");
   }),
+}));
+
+vi.mock("./update-command-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-config.js")>()),
   persistRequestedUpdateChannel: vi.fn(async (params: { configSnapshot: unknown }) => {
     record("persist-channel");
     return params.configSnapshot;

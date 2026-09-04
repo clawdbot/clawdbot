@@ -213,6 +213,7 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopCollectionReconcile?: SkillWorkshopRunOptions["collectionReconcile"];
   /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
   skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
+  skillLibraryAuthoring?: SkillWorkshopRunOptions["libraryAuthoring"];
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
@@ -274,7 +275,7 @@ export type RunEmbeddedAgentParams = {
   modelFallbackAvailability?: ModelFallbackAvailability;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
-  /** True when the pinned non-default harness owns model selection for this session. */
+  /** Locks the selected model against hooks and fallbacks; does not imply native model ownership. */
   modelSelectionLocked?: boolean;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */
   agentHarnessRuntimeOverride?: string;
@@ -296,8 +297,6 @@ export type RunEmbeddedAgentParams = {
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
-  /** If true, suppress tool error warning payloads for this run (including mutating tools). */
-  suppressToolErrorWarnings?: boolean;
   /** Bootstrap context mode for workspace file injection. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for context mode behavior. */

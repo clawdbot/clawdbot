@@ -588,6 +588,7 @@ describe("OpenClaw SDK", () => {
       status: "running",
       agentId: "main",
       sessionKey: "agent:main:main",
+      sortBy: "endedAt",
     });
     expect(taskList.tasks).toEqual([
       {
@@ -616,7 +617,12 @@ describe("OpenClaw SDK", () => {
     expect(transport.calls).toEqual([
       {
         method: "tasks.list",
-        params: { status: "running", agentId: "main", sessionKey: "agent:main:main" },
+        params: {
+          status: "running",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sortBy: "endedAt",
+        },
         options: undefined,
       },
       {

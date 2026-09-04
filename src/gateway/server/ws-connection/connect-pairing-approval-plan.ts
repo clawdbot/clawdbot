@@ -59,7 +59,7 @@ function resolveTrustedProxyDeviceAutoApproveScopes(params: {
 export type PairingApprovalPlan = {
   /** Request is created silent and immediately self-approved by its lane. */
   silent: boolean;
-  allowSilentLocalPairing: boolean;
+  localApproval: "silent" | "trusted-cidr" | null;
   trustedProxyAutoApproveScopes: string[] | null;
   trustedProxyUser: string | undefined;
   isTrustedProxySameKeyUpgrade: boolean;
@@ -70,13 +70,7 @@ export type PairingApprovalPlan = {
   bootstrapPairingScopes: string[] | undefined;
 };
 
-/**
- * Resolve which non-interactive approval lane (if any) may resolve a pairing
- * request before it ever reaches an operator prompt. Keeping every lane's
- * eligibility in one place is what makes a silent policy/caller contradiction
- * (the removed scope-upgrade veto) visible in review.
- */
-export async function resolvePairingApprovalPlan(params: {
+type PairingApprovalPlanParams = {
   reason: ConnectPairingRequiredReason;
   existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null;
   state: AuthenticatedGatewayConnect;
@@ -90,19 +84,24 @@ export async function resolvePairingApprovalPlan(params: {
   scopes: string[];
   hasRequestedScopes: boolean;
   connectionScopeCap: (scopes: string[]) => string[];
-}): Promise<PairingApprovalPlan> {
-  const { reason, existingPairedDevice, state, connectParams, configSnapshot, scopes } = params;
-  const {
-    role,
-    isControlUi,
-    isBrowserOperatorUi,
-    isWebchat,
-    isNativeAppUi,
-    authMethod,
-    authResult,
-    bootstrapTokenCandidate,
-    pairingLocality,
-  } = state;
+};
+
+/** Reused at planning and synchronous approval commit so config changes revoke the same policy. */
+export function resolveLocalPairingApproval(
+  params: Pick<
+    PairingApprovalPlanParams,
+    | "reason"
+    | "existingPairedDevice"
+    | "state"
+    | "configSnapshot"
+    | "scopes"
+    | "hasBrowserOriginHeader"
+    | "reportedClientIpSource"
+    | "reportedClientIp"
+  >,
+): PairingApprovalPlan["localApproval"] {
+  const { reason, existingPairedDevice, state, configSnapshot, scopes } = params;
+  const { role, isControlUi, isWebchat, isNativeAppUi, authMethod, pairingLocality } = state;
   const allowSilentLocalPairing =
     !(existingPairedDevice && role !== "operator") &&
     shouldAllowSilentLocalPairing({
@@ -115,7 +114,10 @@ export async function resolvePairingApprovalPlan(params: {
       authMethod,
       reason,
     });
-  const allowSilentTrustedCidrsNodePairing = shouldAutoApproveNodePairingFromTrustedCidrs({
+  if (allowSilentLocalPairing) {
+    return "silent";
+  }
+  return shouldAutoApproveNodePairingFromTrustedCidrs({
     existingPairedDevice: Boolean(existingPairedDevice),
     role,
     reason,
@@ -126,7 +128,25 @@ export async function resolvePairingApprovalPlan(params: {
     reportedClientIpSource: params.reportedClientIpSource,
     reportedClientIp: params.reportedClientIp,
     autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
-  });
+  })
+    ? "trusted-cidr"
+    : null;
+}
+
+export async function resolvePairingApprovalPlan(
+  params: PairingApprovalPlanParams,
+): Promise<PairingApprovalPlan> {
+  const { reason, existingPairedDevice, state, connectParams, configSnapshot, scopes } = params;
+  const {
+    role,
+    isControlUi,
+    isBrowserOperatorUi,
+    isWebchat,
+    authMethod,
+    authResult,
+    bootstrapTokenCandidate,
+  } = state;
+  const localApproval = resolveLocalPairingApproval(params);
   const trustedProxyAutoApproveConfig =
     configSnapshot.gateway?.auth?.trustedProxy?.deviceAutoApprove;
   const trustedProxyUser = authResult.user?.trim();
@@ -230,11 +250,10 @@ export async function resolvePairingApprovalPlan(params: {
     // stay a durable cap while owner-credentialed local clients widen
     // without a prompt they could bypass with a fresh identity anyway.
     silent:
-      allowSilentLocalPairing ||
-      allowSilentTrustedCidrsNodePairing ||
+      localApproval !== null ||
       allowSetupCodeHandoffBootstrapPairing ||
       allowControlUiOperatorBootstrapPairing,
-    allowSilentLocalPairing,
+    localApproval,
     trustedProxyAutoApproveScopes,
     trustedProxyUser,
     isTrustedProxySameKeyUpgrade,

@@ -383,6 +383,10 @@ describe("modelsAuthLoginCommand", () => {
     mocks.upsertAuthProfileAfterLoginWithLock.mockReset();
     mocks.upsertAuthProfileAfterLoginWithLock.mockResolvedValue(undefined);
     mocks.promoteAuthProfileInOrder.mockReset();
+    mocks.promoteAuthProfileInOrder.mockResolvedValue({
+      ok: true,
+      value: { version: 1, profiles: {} },
+    });
     mocks.removeProviderAuthProfilesWithLock.mockReset();
     mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
 
@@ -844,12 +848,26 @@ describe("modelsAuthLoginCommand", () => {
     expect(runCliAuth).toHaveBeenCalledOnce();
   });
 
-  it("uses the requested agent store for provider auth login", async () => {
+  it("shows local agent scope before provider auth login", async () => {
     const runtime = createRuntime();
     const originalConfig = useCoderAgentConfig();
+    const note = vi.fn(async () => {});
+    mocks.createClackPrompter.mockReturnValue({ note, select: vi.fn() });
 
     await modelsAuthLoginCommand({ provider: "openai", agent: "coder" }, runtime);
 
+    expect(note).toHaveBeenCalledWith(
+      [
+        "Scope: System / agent",
+        "Agent: coder",
+        "Location: the machine running OpenClaw",
+        "For personal model accounts on a Gateway, run openclaw models accounts login --help.",
+      ].join("\n"),
+      "Provider sign-in",
+    );
+    expect(note.mock.invocationCallOrder[0]).toBeLessThan(
+      runProviderAuth.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
     const authRunCall = readMockCallArg(runProviderAuth) as AuthRunCall;
@@ -1287,7 +1305,7 @@ describe("modelsAuthLoginCommand", () => {
     await expect(
       modelsAuthLoginCommand({ provider: "openai", force: true }, runtime),
     ).rejects.toThrow(
-      'Could not clear cached profiles for "openai" before re-login: profile store update failed',
+      'Could not clear cached profiles for "openai" before re-login: auth store is busy; close other OpenClaw commands using this state directory and retry',
     );
 
     expect(runtime.error).not.toHaveBeenCalled();

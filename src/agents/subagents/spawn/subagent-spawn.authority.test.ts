@@ -50,9 +50,12 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { finalizeAgentToolAvailability } from "../../agent-tool-availability.js";
+import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
 import { createAgentHarnessHostCapabilities } from "../../harness/host-capability.js";
+import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -281,7 +284,7 @@ describe("pending spawn invocation authority", () => {
       signal: closure === "native construction signal" ? invocationAbort.signal : undefined,
     });
     let forwarded: Promise<unknown> | undefined;
-    const observed: AnyAgentTool = {
+    const observed: AnyAgentTool = copyAgentToolMetadata(source, {
       ...source,
       execute: (...args) => {
         const pending = source.execute!(...args);
@@ -292,11 +295,17 @@ describe("pending spawn invocation authority", () => {
         );
         return pending;
       },
-    };
+    });
+    const wait = createAgentsWaitTool({
+      config: cfg,
+      agentSessionKey: parentSessionKey,
+      agentId: "main",
+    });
+    const tools = [observed, wait];
     const [tool] = host
-      ? host.capabilities.bindToolSurface([observed])
+      ? finalizeAgentToolAvailability(host.capabilities.bindToolSurface(tools))
       : finalizeAgentTools({
-          tools: [observed],
+          tools,
           hookContext: {
             config: cfg,
             agentId: "main",
@@ -331,7 +340,13 @@ describe("pending spawn invocation authority", () => {
       (error: unknown) => error,
     );
     try {
-      const childSessionKey = await entered.promise;
+      // A rejected spawn never enters preparation; report it instead of waiting for the test timeout.
+      const childSessionKey = await Promise.race([
+        entered.promise,
+        wrapped.then(() => {
+          throw new Error("Spawn settled before entering context preparation");
+        }),
+      ]);
       expect(subagentRuns.size, "no ownership transfer before preparation resolves").toBe(0);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeDefined();
       if (closure === "native acceptance") {
@@ -397,7 +412,7 @@ describe("pending spawn invocation authority", () => {
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
       const survivor = vi.fn(async () => {});
       enqueueSwarmRun({
-        groupId: JSON.stringify([parentSessionKey, groupId]),
+        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
         runId: "surviving-reservation",
         maxConcurrent: 1,
         activeRunIds: [],
@@ -426,7 +441,7 @@ describe("pending spawn invocation authority", () => {
       const { cfg, context, admission, parent, admitted } = await createBoundParent();
       const blockerStarted = createDeferred();
       enqueueSwarmRun({
-        groupId: JSON.stringify([parentSessionKey, groupId]),
+        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
         runId: "handoff-blocker",
         maxConcurrent: 1,
         activeRunIds: [],
@@ -481,7 +496,7 @@ describe("pending spawn invocation authority", () => {
         requesterTurnRunId: parentRunId,
       });
       let forwarded: Promise<unknown> | undefined;
-      const observed: AnyAgentTool = {
+      const observed: AnyAgentTool = copyAgentToolMetadata(source, {
         ...source,
         execute: (...args) => {
           const pending = source.execute!(...args);
@@ -491,9 +506,14 @@ describe("pending spawn invocation authority", () => {
           );
           return pending;
         },
-      };
+      });
+      const wait = createAgentsWaitTool({
+        config: cfg,
+        agentSessionKey: parentSessionKey,
+        agentId: "main",
+      });
       const [tool] = finalizeAgentTools({
-        tools: [observed],
+        tools: [observed, wait],
         hookContext: {
           config: cfg,
           agentId: "main",

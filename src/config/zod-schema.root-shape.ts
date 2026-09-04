@@ -338,6 +338,7 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
+      skipMissedJobs: z.boolean().optional(),
       triggers: z
         .strictObject({
           enabled: z.boolean().optional(),
@@ -382,6 +383,7 @@ export const OpenClawSchemaShape = {
         .array(
           z.strictObject({
             providerId: z.string().min(1),
+            whenOccupied: z.boolean().optional(),
             sessionId: z.string().min(1).optional(),
             title: z.string().min(1).optional(),
             accountId: z.string().min(1).optional(),

@@ -4,23 +4,23 @@ import { Cron } from "croner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "./schedule.js";
-import {
-  clearCronScheduleCacheForTest,
-  getCronScheduleCacheMaxForTest,
-  getCronScheduleCacheSizeForTest,
-  hasCronInCacheForTest,
-} from "./schedule.test-support.js";
 
-function requireTimestamp(value: number | undefined, label: string): number {
-  if (value === undefined) {
-    throw new Error(`expected ${label} timestamp`);
+const cronConstructed = vi.hoisted(() => vi.fn());
+
+vi.mock("croner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("croner")>();
+  class ObservedCron<T = undefined> extends actual.Cron<T> {
+    constructor(...args: ConstructorParameters<typeof actual.Cron<T>>) {
+      super(...args);
+      cronConstructed(...args);
+    }
   }
-  return value;
-}
+  return { ...actual, Cron: ObservedCron };
+});
 
 describe("cron schedule", () => {
   beforeEach(() => {
-    clearCronScheduleCacheForTest();
+    cronConstructed.mockClear();
   });
 
   it("computes next run for cron expression with timezone", () => {
@@ -477,61 +477,70 @@ describe("cron schedule", () => {
       { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
       nowMs,
     );
-    if (previous !== undefined) {
-      expect(previous).toBeLessThan(nowMs);
-    }
+    expect(previous).toBe(Date.parse("2026-02-28T00:00:00.000Z"));
   });
 
   it("reuses compiled cron evaluators for the same expression/timezone", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
-    expect(getCronScheduleCacheSizeForTest()).toBe(0);
-
-    requireTimestamp(
+    expect(
       computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" }, nowMs),
-      "first next run",
-    );
-    requireTimestamp(
+    ).toBe(Date.parse("2026-03-02T00:00:00.000Z"));
+    const initialConstructions = cronConstructed.mock.calls.length;
+    expect(
       computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" }, nowMs + 1_000),
-      "second next run",
+    ).toBe(Date.parse("2026-03-02T00:00:00.000Z"));
+    expect(cronConstructed).toHaveBeenCalledTimes(initialConstructions);
+
+    expect(computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs)).toBe(
+      Date.parse("2026-03-01T08:00:00.000Z"),
     );
-    requireTimestamp(
-      computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs),
-      "third next run",
+    const timezoneConstructions = cronConstructed.mock.calls.length;
+    expect(computeNextRunAtMs({ kind: "cron", expr: "0 8 * * *", tz: "UTC" }, nowMs + 1_000)).toBe(
+      Date.parse("2026-03-01T08:00:00.000Z"),
     );
-    expect(getCronScheduleCacheSizeForTest()).toBe(2);
+    expect(cronConstructed).toHaveBeenCalledTimes(timezoneConstructions);
   });
 
   it("promotes accessed entries to avoid premature LRU eviction", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
-    const cacheMax = getCronScheduleCacheMaxForTest();
 
-    // Fill cache to capacity with unique expressions.
-    // i=0 → "0 0 * * *", i=1 → "1 0 * * *", ..., i=511 → "31 8 * * *"
-    for (let i = 0; i < cacheMax; i++) {
-      computeNextRunAtMs(
-        { kind: "cron", expr: `${i % 60} ${Math.floor(i / 60)} * * *`, tz: "UTC" },
-        nowMs,
+    // Touch the full 512-entry budget so earlier tests cannot affect eviction order.
+    for (let i = 0; i < 512; i++) {
+      expect(
+        computeNextRunAtMs(
+          { kind: "cron", expr: `${i % 60} ${Math.floor(i / 60)} * * *`, tz: "UTC" },
+          nowMs,
+        ),
+      ).toBeGreaterThan(nowMs);
+    }
+    cronConstructed.mockClear();
+
+    expect(computeNextRunAtMs({ kind: "cron", expr: "0 0 * * *", tz: "UTC" }, nowMs)).toBe(
+      Date.parse("2026-03-02T00:00:00.000Z"),
+    );
+    expect(cronConstructed).not.toHaveBeenCalled();
+
+    expect(computeNextRunAtMs({ kind: "cron", expr: "0 0 1 1 *", tz: "UTC" }, nowMs)).toBe(
+      Date.parse("2027-01-01T00:00:00.000Z"),
+    );
+    expect(cronConstructed).toHaveBeenCalledTimes(1);
+
+    // Read survivors before reintroducing the victim, since lookups also promote entries.
+    for (const [expr, expected] of [
+      ["0 0 * * *", "2026-03-02T00:00:00.000Z"],
+      ["2 0 * * *", "2026-03-01T00:02:00.000Z"],
+      ["0 0 1 1 *", "2027-01-01T00:00:00.000Z"],
+    ] as const) {
+      expect(computeNextRunAtMs({ kind: "cron", expr, tz: "UTC" }, nowMs)).toBe(
+        Date.parse(expected),
       );
     }
-    expect(getCronScheduleCacheSizeForTest()).toBe(cacheMax);
+    expect(cronConstructed).toHaveBeenCalledTimes(1);
 
-    // Entry #0 ("0 0 * * *") is the oldest by insertion order.
-    // Access it so LRU promotes it (delete + re-insert at end of Map).
-    computeNextRunAtMs({ kind: "cron", expr: "0 0 * * *", tz: "UTC" }, nowMs);
-
-    // Entry #1 ("1 0 * * *") is now the least-recently-used.
-    // Insert a new entry to trigger one eviction.
-    computeNextRunAtMs({ kind: "cron", expr: "0 0 1 1 *", tz: "UTC" }, nowMs);
-    expect(getCronScheduleCacheSizeForTest()).toBe(cacheMax);
-
-    // Under LRU: entry #0 survived (was promoted), entry #1 was evicted.
-    // Under FIFO: entry #0 would be evicted instead — this assertion would fail.
-    expect(hasCronInCacheForTest("0 0 * * *", "UTC")).toBe(true);
-    expect(hasCronInCacheForTest("1 0 * * *", "UTC")).toBe(false);
-
-    // The new entry and a non-evicted middle entry should both be present.
-    expect(hasCronInCacheForTest("0 0 1 1 *", "UTC")).toBe(true);
-    expect(hasCronInCacheForTest("2 0 * * *", "UTC")).toBe(true);
+    expect(computeNextRunAtMs({ kind: "cron", expr: "1 0 * * *", tz: "UTC" }, nowMs)).toBe(
+      Date.parse("2026-03-01T00:01:00.000Z"),
+    );
+    expect(cronConstructed).toHaveBeenCalledTimes(2);
   });
 
   describe("cron with specific seconds (6-field pattern)", () => {

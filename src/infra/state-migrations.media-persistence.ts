@@ -34,6 +34,7 @@ import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-par
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
+import { formatErrorMessage } from "./errors.js";
 import { repairGatewayAgentMediaMigrationStartupFailures } from "./gateway-boot-lifecycle.js";
 import {
   executeSqliteQuerySync,
@@ -715,7 +716,7 @@ export async function migrateLegacyMediaPersistence(
       }
     });
   } catch (error) {
-    warnings.push(`Agent database maintenance deferred: ${String(error)}`);
+    warnings.push(`Agent database maintenance deferred: ${formatErrorMessage(error)}`);
   }
   return { changes, warnings };
 }

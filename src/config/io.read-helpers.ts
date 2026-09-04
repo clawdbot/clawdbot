@@ -82,24 +82,45 @@ export function resolveGatewayMode(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+export function visitConfigValueTree(
+  value: unknown,
+  visit: (candidate: unknown, path: readonly string[]) => boolean,
+  rootPath: readonly string[] = [],
+): void {
+  type Frame = { kind: "leave" } | { kind: "visit"; value: unknown; key?: string };
+  const currentPath = [...rootPath];
+  const pending: Frame[] = [{ kind: "visit", value }];
+  while (pending.length > 0) {
+    const frame = pending.pop()!;
+    if (frame.kind === "leave") {
+      currentPath.pop();
+      continue;
+    }
+    if (frame.key !== undefined) {
+      currentPath.push(frame.key);
+      pending.push({ kind: "leave" });
+    }
+    if (!visit(frame.value, currentPath)) {
+      continue;
+    }
+    const entries =
+      Array.isArray(frame.value) || isRecord(frame.value) ? Object.entries(frame.value) : [];
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const [key, child] = entries[index]!;
+      pending.push({ kind: "visit", key, value: child });
+    }
+  }
+}
+
 export function rejectConfigNonFiniteNumbers(value: unknown): void {
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error(`Value must be a finite number, got ${String(value)}`);
+  visitConfigValueTree(value, (candidate) => {
+    if (typeof candidate === "number") {
+      if (!Number.isFinite(candidate)) {
+        throw new Error(`Value must be a finite number, got ${String(candidate)}`);
+      }
     }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      rejectConfigNonFiniteNumbers(entry);
-    }
-    return;
-  }
-  if (isRecord(value)) {
-    for (const entry of Object.values(value)) {
-      rejectConfigNonFiniteNumbers(entry);
-    }
-  }
+    return true;
+  });
 }
 
 export function collectEnvRefPaths(
@@ -331,9 +352,11 @@ export function resolveConfigForRead(
   }
   const envWarnings: EnvSubstitutionWarning[] = [];
   const pendingEnvSecretRefs = new Map<string, string>();
+  const resolvedEnvSecretRefs = new Map<string, string>();
   const resolvedConfigRaw = resolveConfigEnvVars(resolvedIncludes, env, {
     onMissing: (warning) => envWarnings.push(warning),
     onPendingEnvSecretRef: (id, configPath) => pendingEnvSecretRefs.set(configPath, id),
+    onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
   });
   return {
     resolvedConfigRaw,
@@ -343,6 +366,7 @@ export function resolveConfigForRead(
       envWarnings,
       pendingEnvSecretRefs,
       coerceConfig(resolvedConfigRaw).secrets?.defaults?.env,
+      resolvedEnvSecretRefs,
     ),
   };
 }

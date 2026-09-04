@@ -5,6 +5,7 @@ import {
 } from "@openclaw/session-url-contract";
 import type { Page, Route, Video } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -163,6 +164,52 @@ const focusedCases = [
 ];
 
 suite.define(() => {
+  it("recovers the login gate after its chunk fails without loading it during admission", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport },
+      async ({ page }) => {
+        const failure = await installChunkFailure(
+          page,
+          /\/assets\/login-gate-[^/?]+\.js(?:\?.*)?$/u,
+        );
+        const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+        const rejectLogin = async () => {
+          await gateway.waitForRequest("connect");
+          await gateway.rejectDeferred("connect", {
+            code: "INVALID_REQUEST",
+            message: "token missing",
+            details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+          });
+        };
+        await page.goto(suite.server.baseUrl);
+        await gateway.waitForRequest("connect");
+        await page.locator(".connect-splash").waitFor();
+        expect(failure.chunkRequestCount()).toBe(0);
+        await rejectLogin();
+        const error = page.locator(".lazy-view-error");
+        await error.waitFor();
+        expect(await error.textContent()).toContain("Failed to fetch dynamically imported module");
+        expect(failure.chunkRequestCount()).toBe(1);
+        await expect.poll(failure.headCount).toBe(1);
+        await Promise.all([
+          page.waitForEvent("domcontentloaded"),
+          error.getByRole("button", { name: "Reload", exact: true }).click(),
+        ]);
+        await rejectLogin();
+        await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
+        expect(failure.chunkRequestCount()).toBe(2);
+        expect(await error.count()).toBe(0);
+        const connectCount = (await gateway.getRequests("connect")).length;
+        await gateway.deferNext("connect");
+        await page.getByRole("button", { name: "Connect", exact: true }).click();
+        await gateway.waitForRequest("connect", { after: connectCount });
+        await gateway.resolveDeferred("connect");
+        await waitForControlUiGatewayReady(page);
+        expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+      },
+    );
+  });
+
   it("does not reload after a lazy surface is dismissed during its retry probe", async () => {
     let releaseProbe = () => {};
     const manualProbe = new Promise<void>((resolve) => {
@@ -407,6 +454,7 @@ suite.define(() => {
       webChrome: true,
       pathname: "",
       readySelector: ".sidebar-brand",
+      preserveCollapsedNavigation: false,
       proofName: "native-titlebar",
     },
     {
@@ -414,8 +462,9 @@ suite.define(() => {
       chunk: /\/assets\/sidebar-attention-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
       label: "sidebar-attention",
       webChrome: false,
-      pathname: "settings/appearance",
-      readySelector: ".shell--settings",
+      pathname: "chat/main?nav=collapsed",
+      readySelector: ".shell--nav-collapsed",
+      preserveCollapsedNavigation: true,
       proofName: "sidebar-attention",
     },
   ])("recovers $name visibly after its chunk fails", async (testCase) => {
@@ -448,6 +497,13 @@ suite.define(() => {
           });
         }
 
+        if (testCase.preserveCollapsedNavigation) {
+          await page.evaluate(() => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("nav", "collapsed");
+            window.history.replaceState(window.history.state, "", url);
+          });
+        }
         await retryThroughReload(page, error);
         if (testCase.webChrome) {
           const toolbar = page.locator(".macos-titlebar-controls");

@@ -213,6 +213,46 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(result.prompt).toBe("heartbeat context\n\nprompt context\n\nhello");
   });
 
+  it("preserves authenticated channel identity in prompt-build hook context", async () => {
+    const handler = vi.fn(() => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler }]),
+    );
+
+    await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "hello",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: {
+        trigger: "user",
+        accountId: "account-a",
+        channel: "telegram",
+        channelId: "chat-a",
+        senderId: "sender-a",
+        chatId: "chat-a",
+        channelContext: {
+          sender: { id: "sender-a" },
+          chat: { id: "chat-a" },
+        },
+      },
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        accountId: "account-a",
+        channel: "telegram",
+        channelId: "chat-a",
+        senderId: "sender-a",
+        chatId: "chat-a",
+        channelContext: {
+          sender: { id: "sender-a" },
+          chat: { id: "chat-a" },
+        },
+      }),
+    );
+  });
+
   it("runs authorized enrichment after restrictive hooks finalize the tool surface", async () => {
     const calls: string[] = [];
     initializeGlobalHookRunner(

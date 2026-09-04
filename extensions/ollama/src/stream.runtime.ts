@@ -19,7 +19,10 @@ import { createAssistantMessageEventStream, transformMessages } from "openclaw/p
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
-import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  createPlainTextToolCallCompatWrapper,
+  notifyLlmRequestActivity,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   describeUnsupportedToolResultMedia,
   extractToolResultText,
@@ -1228,6 +1231,7 @@ function createRawOllamaStreamFn(
 
           for await (const chunk of parseNdjsonStream(reader)) {
             throwIfOllamaStreamAborted(options?.signal);
+            notifyLlmRequestActivity(options?.signal);
             if (finalResponse) {
               throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
             }

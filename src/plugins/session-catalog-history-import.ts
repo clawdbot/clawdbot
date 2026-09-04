@@ -58,7 +58,27 @@ function importedSessionCatalogMessage(params: {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
-  } as AgentMessage;
+  };
+}
+
+function sessionCatalogContinuationNotice(text: string, timestamp: number): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp,
+    api: "openai-responses",
+    provider: "openclaw",
+    model: "session-catalog",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+  };
 }
 
 function fitSessionCatalogItemToBytes(
@@ -155,6 +175,8 @@ export async function importSessionCatalogHistory(params: {
   agentId: string;
   cwd?: string;
   config: OpenClawConfig;
+  continuationNotice?: string;
+  commitGuard?: () => void;
 }): Promise<void> {
   const items = await readBoundedSessionCatalogHistory({ read: params.read });
   const fallbackTimestamp = Date.now();
@@ -176,6 +198,19 @@ export async function importSessionCatalogHistory(params: {
         message,
         idempotencyLookup: "scan",
         cwd: params.cwd,
+        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
+      });
+    }
+    const notice = params.continuationNotice?.trim();
+    if (notice) {
+      await transcript.appendMessage({
+        message: {
+          ...sessionCatalogContinuationNotice(notice, fallbackTimestamp + items.length),
+          idempotencyKey: `${params.catalogId}-catalog:${params.threadId}:continuation-notice`,
+        },
+        idempotencyLookup: "scan",
+        cwd: params.cwd,
+        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
       });
     }
   });

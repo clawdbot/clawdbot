@@ -18,6 +18,7 @@ import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbo
 import { createWebSendApi } from "./inbound/send-api.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
+import { cacheInboundMessageMeta } from "./quoted-message.js";
 
 const runtimeContextMocks = vi.hoisted(() => ({
   controllers: new Map<string, unknown>(),
@@ -287,6 +288,10 @@ describe("WhatsApp delivery recovery", () => {
       mediaUrl: "fixture://voice.ogg",
       audioAsVoice: false,
     });
+    cacheInboundMessageMeta(accountId, "1555@s.whatsapp.net", "quoted-1", {
+      body: "original quote",
+      fromMe: false,
+    });
     const quotedResult = await sendPayload(
       { text: "quoted text" },
       { replyToId: "quoted-1", replyToIdSource: "explicit", replyToMode: "all" },
@@ -339,6 +344,7 @@ describe("WhatsApp delivery recovery", () => {
               remoteJid: "1555@s.whatsapp.net",
               fromMe: false,
             }),
+            message: { conversation: "original quote" },
           }),
         },
       ],

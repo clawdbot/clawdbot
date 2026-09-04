@@ -5,8 +5,14 @@ import {
 } from "../../infra/installation-target-context.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
-import { executePreparedCliRun } from "./execute.js";
-import { createManagedRun, supervisorSpawnMock } from "./execute.test-support.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
+import {
+  createManagedRun,
+  supervisorSpawnMock,
+  wrapPreparedCliRunWithTestAdmission,
+} from "./execute.test-support.js";
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
 afterEach(() => supervisorSpawnMock.mockReset());
 

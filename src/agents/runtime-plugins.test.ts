@@ -137,6 +137,22 @@ describe("agent runtime plugin registries", () => {
     );
   });
 
+  it("uses harness runtimes prepared by the lifecycle batch", () => {
+    const configuredHarnessRuntimes = ["codex"];
+
+    loadAgentRuntimePluginRegistryHandle({
+      config: {},
+      configuredHarnessRuntimes,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(hoisted.resolveAgentRuntimePluginSelections).toHaveBeenCalledWith(
+      {},
+      [],
+      configuredHarnessRuntimes,
+    );
+  });
+
   it.each([true, false])("reuses only an imported selected owner (imported=%s)", (imported) => {
     const base = createEmptyPluginRegistry();
     base.plugins.push(

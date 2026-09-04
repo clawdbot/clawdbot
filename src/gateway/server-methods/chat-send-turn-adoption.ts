@@ -53,6 +53,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   const lifecycle: TurnAdoptionLifecycle = {
     // Gateway cancel identity only — share collect key via ownerKey.
     admission: "cancel-only",
+    abortSignal: params.controller.signal,
     ...(params.originatingLeafEntryId !== undefined
       ? { originatingLeafEntryId: params.originatingLeafEntryId }
       : {}),

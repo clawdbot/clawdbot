@@ -223,6 +223,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     const activationState = resolveEffectivePluginActivationState({
       id: plugin.pluginId,
       origin: startupPolicyOrigin,
+      channelIds: plugin.contributions?.channels,
       config: pluginsConfig,
       rootConfig: params.config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin, params.platform),

@@ -95,34 +95,39 @@ describe("BoardWidgetSandboxHost document timeout", () => {
     host.dispose();
   });
 
-  it("keeps a replacement document after cancelling a stalled load", async () => {
-    vi.useFakeTimers();
-    let firstSignal: AbortSignal | undefined;
-    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
-      if (fetchMock.mock.calls.length === 1) {
-        firstSignal = init?.signal ?? undefined;
-        return new Promise<Response>((_resolve, reject) => {
-          firstSignal?.addEventListener("abort", () => reject(new Error("request aborted")));
-        });
-      }
-      return Promise.resolve(new Response("<!doctype html><p>replacement</p>"));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const { host, onLoadFailed, onLoaded, options } = createHost();
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  it.each(["generation", "client"] as const)(
+    "keeps a replacement document after a %s change cancels a stalled load",
+    async (change) => {
+      vi.useFakeTimers();
+      let firstSignal: AbortSignal | undefined;
+      const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        if (fetchMock.mock.calls.length === 1) {
+          firstSignal = init?.signal ?? undefined;
+          return new Promise<Response>((_resolve, reject) => {
+            firstSignal?.addEventListener("abort", () => reject(new Error("request aborted")));
+          });
+        }
+        return Promise.resolve(new Response("<!doctype html><p>replacement</p>"));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { host, onLoadFailed, onLoaded, options } = createHost();
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
 
-    host.update({
-      ...options,
-      widget: widget("b".repeat(32)),
-      resolveFrameUrl: () => "/widget?generation=replacement",
-    });
-    await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(10_000);
+      host.update({
+        ...options,
+        ...(change === "generation"
+          ? { widget: widget("b".repeat(32)) }
+          : { client: { request: vi.fn(async () => ({ ok: true })) } }),
+        resolveFrameUrl: () => "/widget?generation=replacement",
+      });
+      await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(10_000);
 
-    expect(firstSignal?.aborted).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(onLoadFailed).not.toHaveBeenCalled();
-    expect(onLoaded).toHaveBeenCalledOnce();
-    host.dispose();
-  });
+      expect(firstSignal?.aborted).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(onLoadFailed).not.toHaveBeenCalled();
+      expect(onLoaded).toHaveBeenCalledOnce();
+      host.dispose();
+    },
+  );
 });

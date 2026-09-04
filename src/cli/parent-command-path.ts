@@ -65,6 +65,7 @@ export function resolveParentAwareCommandPath(argv: readonly string[]): string[]
   return (
     resolveParentCommandPath(argv, "agent", AGENT_PARENT_BOOLEAN_FLAGS, AGENT_PARENT_VALUE_FLAGS) ??
     resolveModelsParentCommandPath(argv) ??
+    resolveParentCommandPath(argv, "channels", [], ["--agent"]) ??
     resolveParentCommandPath(argv, "update", UPDATE_PARENT_BOOLEAN_FLAGS, UPDATE_PARENT_VALUE_FLAGS)
   );
 }

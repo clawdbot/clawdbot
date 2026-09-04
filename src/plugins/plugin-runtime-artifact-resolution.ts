@@ -33,6 +33,7 @@ export function resolvePluginRuntimeArtifact(params: {
   rootDir: string;
   origin: PluginOrigin;
   preferBuiltPluginArtifacts: boolean;
+  sourcePreferred?: boolean;
   packageManifest?: OpenClawPackageManifest;
   registry?: PluginRegistry;
 }): { source: string; rootDir: string } {
@@ -51,6 +52,7 @@ export function resolvePluginRuntimeArtifact(params: {
     params.entryKind,
     params.origin,
     params.preferBuiltPluginArtifacts,
+    params.sourcePreferred,
     params.packageManifest?.build?.bundledDist,
   ]);
   let resolved = artifacts.get(selectionKey);

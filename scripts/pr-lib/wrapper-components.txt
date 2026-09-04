@@ -21,9 +21,11 @@ scripts/lib/test-selector-source-facts.mts
 scripts/lib/vitest-build-prerequisites.mts
 scripts/lib/vitest-cli-mode.mts
 scripts/lib/vitest-cli.mts
+scripts/lib/vitest-home-selection.mts
 scripts/lib/vitest-local-scheduling.mts
 scripts/lib/vitest-process-env.mts
 scripts/lib/vitest-process.mts
+scripts/lib/vitest-resource-ownership.mts
 scripts/lib/vitest-shard-metadata.mts
 scripts/lib/vitest-unhandled-errors.mts
 scripts/lib/vitest-worker-artifacts.mts
@@ -37,6 +39,8 @@ scripts/vitest-process-group.mts
 scripts/windows-cmd-helpers.mjs
 src/cli/wait.ts
 test/helpers/temp-dir.ts
+test/test-home-context.mts
+test/test-home-policy.mts
 test/vitest/vitest.agents-paths.mjs
 test/vitest/vitest.channel-paths.mjs
 test/vitest/vitest.cli-process-paths.mjs

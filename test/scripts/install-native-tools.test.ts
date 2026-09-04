@@ -13,7 +13,7 @@ const installers = [
   },
   {
     script: "scripts/install-swift-tools.sh",
-    url: "https://github.com/nicklockwood/SwiftFormat/releases/download/0.62.1/swiftformat.zip",
+    url: "https://github.com/nicklockwood/SwiftFormat/releases/download/0.63.0/swiftformat.zip",
   },
   {
     script: "scripts/install-periphery.sh",

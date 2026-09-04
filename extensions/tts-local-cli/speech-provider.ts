@@ -58,7 +58,10 @@ function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechPro
   return asOptionalRecord(providers?.["tts-local-cli"]) ?? asOptionalRecord(providers?.cli) ?? {};
 }
 
-function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
+function getConfig(
+  cfg: SpeechProviderConfig,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): CliConfig | null {
   const command = typeof cfg.command === "string" ? cfg.command.trim() : "";
   if (!command) {
     return null;
@@ -67,7 +70,7 @@ function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
     command,
     args: asStringArray(cfg.args) ?? [],
     outputFormat: normalizeOutputFormat(cfg.outputFormat),
-    timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : DEFAULT_TIMEOUT_MS,
+    timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : timeoutMs,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
     env: filterStringRecord(cfg.env),
   };
@@ -193,19 +196,7 @@ function detectAudioFormat(buffer: Buffer): SourceFormat | null {
 }
 
 function getFileExt(format: SourceFormat): string {
-  if (format === "opus") {
-    return ".opus";
-  }
-  if (format === "ogg") {
-    return ".ogg";
-  }
-  if (format === "m4a") {
-    return ".m4a";
-  }
-  if (format === "wav") {
-    return ".wav";
-  }
-  return ".mp3";
+  return `.${format}`;
 }
 
 function readAudioFile(filePath: string): Buffer {
@@ -358,6 +349,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
     aliases: ["cli"],
     label: "Local CLI",
     autoSelectOrder: 1000,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
 
     resolveConfig(ctx): SpeechProviderConfig {
       return resolveCliProviderConfig(ctx.rawConfig);
@@ -368,7 +360,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
     },
 
     async synthesize(req: SpeechSynthesisRequest) {
-      const config = getConfig(req.providerConfig);
+      const config = getConfig(req.providerConfig, req.timeoutMs);
       if (!config) {
         throw new Error("CLI TTS not configured");
       }
@@ -414,7 +406,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
     },
 
     async synthesizeTelephony(req: SpeechTelephonySynthesisRequest) {
-      const config = getConfig(req.providerConfig);
+      const config = getConfig(req.providerConfig, req.timeoutMs);
       if (!config) {
         throw new Error("CLI TTS not configured");
       }

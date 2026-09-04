@@ -17,6 +17,7 @@ import {
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
+  resolveRequiredNodeCommandAuthority,
   retainFulfilledNodeCapabilities,
 } from "./node-command-policy.js";
 import {
@@ -873,6 +874,18 @@ describe("gateway/node-command-policy", () => {
         withheldCommands: [],
       }),
     ).toEqual(["computer"]);
+  });
+
+  it("keeps policy-withheld declared commands unauthorized", () => {
+    expect(
+      resolveRequiredNodeCommandAuthority({
+        requiredCommands: ["screen.snapshot", "computer.act"],
+        declaredCommands: ["screen.snapshot", "computer.act"],
+        effectiveCommands: [],
+        withheldCommands: ["computer.act"],
+        allowlist: new Set(["screen.snapshot", "computer.act"]),
+      }),
+    ).toEqual({ command: "computer.act", state: "unauthorized" });
   });
 
   it("allows node-enabled and paired mobile UI without a persistent allow", () => {

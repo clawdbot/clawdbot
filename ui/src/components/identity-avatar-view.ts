@@ -67,12 +67,14 @@ export function renderIdentityAvatarImage({
   }
   return html`<img
     class=${className ?? nothing}
-    src=${typeof view.imageUrl === "string"
-      ? view.imageUrl
-      : until(
-          view.imageUrl.then((url) => url ?? nothing),
-          nothing,
-        )}
+    src=${
+      typeof view.imageUrl === "string"
+        ? view.imageUrl
+        : until(
+            view.imageUrl.then((url) => url ?? nothing),
+            nothing,
+          )
+    }
     alt=${alt}
     aria-hidden=${ariaHidden ? "true" : nothing}
     referrerpolicy="no-referrer"

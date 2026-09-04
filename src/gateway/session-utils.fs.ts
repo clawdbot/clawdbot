@@ -542,10 +542,11 @@ export function buildSessionPreviewItems(
   messages: readonly unknown[],
   maxItems: number,
   maxChars: number,
+  view: "display" | "model-context" = "display",
 ): SessionPreviewItem[] {
   const items: SessionPreviewItem[] = [];
   for (const message of messages) {
-    const projected = projectSessionDisplayMessage(message, { maxChars });
+    const projected = projectSessionDisplayMessage(message, { maxChars, view });
     if (!projected) {
       continue;
     }

@@ -93,6 +93,21 @@ The same `docs` server, written straight into config:
 
 An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
+## Approvals
+
+Codex MCP tool approvals follow the session permission posture: the default full-permission posture does not prompt, while stricter modes check tools without safety annotations (`workspace` can use automatic review; `guarded` and `read-only` can prompt the operator).
+
+When durable persistence is offered, **Allow Always** saves a per-agent grant
+for the exact configured server and tool, even when its arguments change.
+This applies to Gateway-hosted Codex runs when OpenClaw can unambiguously match
+the approval to a live Gateway-owned tool call; missing or ambiguous matches retain
+Codex's native/session behavior. Codex apps, native plugin servers, and
+computer-use servers are excluded. Grants survive restarts and apply at the
+next thread configuration and hook registration, such as a new session or
+restart; the current session uses Codex's remembered decision.
+
+Override a server with `openclaw mcp configure <server> --approval approve|prompt|auto`; an explicit mode takes precedence over the posture-derived default. Stored grants apply only under `auto` or an unspecified server mode; explicit `prompt` keeps asking. Inspect or revoke grants through [MCP tool grants](/tools/exec-approvals#mcp-tool-grants). See [Codex tool approvals](/cli/mcp#codex-tool-approvals) for details and [Native approvals in Slack](/channels/slack#native-approvals-in-slack) for Slack button delivery.
+
 ## Troubleshooting
 
 ### The server appears in Settings but exposes no tools

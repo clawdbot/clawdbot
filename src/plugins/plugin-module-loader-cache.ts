@@ -10,6 +10,7 @@ import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
   clearPluginModuleRequireCache,
   tryNativeRequireJavaScriptModule,
+  tryNativeRequireModule,
 } from "./native-module-require.js";
 import {
   bindPluginCacheRoot,
@@ -23,6 +24,7 @@ import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderModuleCacheKey,
   preparePluginLoaderAliases,
+  isPluginSdkAliasSpecifier,
   resolvePluginLoaderTryNative,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
@@ -211,6 +213,34 @@ function createLazySourceTransformLoader(params: {
       params.loaderFilename,
       {
         ...jitiOptions,
+        // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
+        // matcher misses them. Keep host state native while plugin source remains
+        // transformable and reloadable within its cache generation.
+        virtualModules: params.transformOpenClawDependencies
+          ? undefined
+          : new Proxy<Record<string, unknown>>(
+              {},
+              {
+                has(_target, key) {
+                  return (
+                    typeof key === "string" &&
+                    isPluginSdkAliasSpecifier(key) &&
+                    Boolean(params.resolveAlias(key))
+                  );
+                },
+                get(_target, key) {
+                  const target = typeof key === "string" ? params.resolveAlias(key) : undefined;
+                  if (!target) {
+                    return undefined;
+                  }
+                  const native = tryNativeRequireModule(target, {
+                    allowWindows: true,
+                    fallbackOnMissingDependency: true,
+                  });
+                  return native.ok ? native.moduleExport : jitiLoader(target);
+                },
+              },
+            ),
         nativeModules: params.transformOpenClawDependencies
           ? jitiOptions.nativeModules.filter((moduleName) => moduleName !== "openclaw")
           : jitiOptions.nativeModules,

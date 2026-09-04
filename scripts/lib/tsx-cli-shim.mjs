@@ -27,7 +27,7 @@ function resolvePrimaryRoot(checkoutRoot) {
   return path.basename(resolved) === ".git" ? path.dirname(resolved) : null;
 }
 
-function resolveTsxImport(checkoutRoot) {
+export function resolveTsxImport(checkoutRoot) {
   const modulesDir =
     process.env.PNPM_CONFIG_MODULES_DIR?.trim() || process.env.npm_config_modules_dir?.trim();
   const hydratedTsxRoot = modulesDir
@@ -41,7 +41,9 @@ function resolveTsxImport(checkoutRoot) {
   ].filter(Boolean)) {
     try {
       const require = createRequire(path.join(candidateRoot, "package.json"));
-      const importUrl = pathToFileURL(require.resolve("tsx")).href;
+      // Keep compiled ESM native: tsx's CJS hook rewrites its import-only
+      // dependency edges into require() calls with incompatible export conditions.
+      const importUrl = pathToFileURL(require.resolve("tsx/esm")).href;
       const selectedModulesDir =
         candidateRoot === hydratedTsxRoot
           ? path.dirname(candidateRoot)
@@ -112,11 +114,15 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
   for (const signal of FORWARDED_SIGNALS) {
     const handler = () => {
       signalChild(child, signal, detached);
-      forceKillTimer ??= setTimeout(
-        () => signalChild(child, "SIGKILL", detached),
-        forceKillDelayMs,
-      );
-      forceKillTimer.unref();
+      // A lifecycle-owning implementation must finish killing its own child groups.
+      // A competing shim deadline can kill that owner and orphan those children.
+      if (options.terminationOwner !== "implementation") {
+        forceKillTimer ??= setTimeout(
+          () => signalChild(child, "SIGKILL", detached),
+          forceKillDelayMs,
+        );
+        forceKillTimer.unref();
+      }
     };
     signalHandlers.set(signal, handler);
     process.on(signal, handler);

@@ -42,7 +42,7 @@ on:
         default: ""
         type: string
       previous_version:
-        description: Optional baseline version for installer/dev-update and packaged upgrade
+        description: Optional exact older baseline version for installer/dev-update and packaged upgrade
         required: false
         default: ""
         type: string
@@ -117,14 +117,14 @@ on:
         default: ""
         type: string
       advisory:
-        description: Treat failures as advisory for the caller
+        description: Also treat preparation and Linux failures as advisory for the caller
         required: false
         default: false
         type: boolean
   workflow_call:
     inputs:
       advisory:
-        description: Treat failures as advisory for the caller
+        description: Also treat preparation and Linux failures as advisory for the caller
         required: false
         default: false
         type: boolean
@@ -156,7 +156,7 @@ on:
         default: ""
         type: string
       previous_version:
-        description: Optional baseline version for the upgrade lane (defaults to npm latest)
+        description: Optional exact older baseline version for the upgrade lane
         required: false
         default: ""
         type: string
@@ -684,21 +684,16 @@ jobs:
           CANDIDATE_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/candidate.json
         run: |
           set -euo pipefail
-          if [[ "$INPUT_TARGET_CONTEXT_REF" == "extended-stable/"* ||
-                "$INPUT_TARGET_CONTEXT_REF" == "refs/heads/extended-stable/"* ]]; then
-            PUBLISHED_VERSIONS="$RUNNER_TEMP/openclaw-published-versions.json"
-            npm view openclaw versions --json > "$PUBLISHED_VERSIONS"
-            BASELINE_SPEC="$(node workflow/scripts/lib/release-upgrade-baseline.mjs \
-              --candidate-version "$(jq -er '.candidateVersion' "$CANDIDATE_JSON")" \
-              --target-context-ref "$INPUT_TARGET_CONTEXT_REF" \
-              --previous-version "$INPUT_PREVIOUS_VERSION" \
-              --versions-json "$PUBLISHED_VERSIONS")"
-          elif [[ -n "${INPUT_PREVIOUS_VERSION}" ]]; then
-            BASELINE_SPEC="openclaw@${INPUT_PREVIOUS_VERSION}"
-          else
-            BASELINE_VERSION="$(npm view openclaw@latest version)"
-            BASELINE_SPEC="openclaw@${BASELINE_VERSION}"
+          resolver_args=(
+            --candidate-version "$(jq -er '.candidateVersion' "$CANDIDATE_JSON")"
+            --target-context-ref "$INPUT_TARGET_CONTEXT_REF"
+          )
+          if [[ -n "$INPUT_PREVIOUS_VERSION" ]]; then
+            resolver_args+=(--previous-version "$INPUT_PREVIOUS_VERSION")
           fi
+          BASELINE_SPEC="$(
+            node workflow/scripts/lib/release-upgrade-baseline.mjs "${resolver_args[@]}"
+          )"
           echo "value=${BASELINE_SPEC}" >> "$GITHUB_OUTPUT"
 
       - name: Pack baseline artifact
@@ -902,7 +897,7 @@ jobs:
   cross_os_release_checks:
     name: "${{ matrix.display_name }} / ${{ matrix.suite_label }}"
     needs: prepare
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || matrix.os_id != 'ubuntu' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}

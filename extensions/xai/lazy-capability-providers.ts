@@ -203,6 +203,7 @@ function createLazyXaiRealtimeVoiceBridge(
   req: RealtimeVoiceBridgeCreateRequest,
 ): RealtimeVoiceBridge {
   assertXaiRealtimeVoiceRequestSupported(req);
+  const getPlaybackState = req.getPlaybackState;
   type PendingVoiceOperation =
     | { type: "audio" }
     | { timestamp: number; type: "media-timestamp" }
@@ -317,6 +318,17 @@ function createLazyXaiRealtimeVoiceBridge(
                 // An explicit wrapper reconnect owns a new provider bridge. Guard every
                 // nonterminal callback so late events cannot reach its replacement.
                 onAudio: guardProviderCallback(connection, req.onAudio),
+                ...(getPlaybackState
+                  ? {
+                      getPlaybackState: () => {
+                        if (!acceptsProviderCallback(connection)) {
+                          return [];
+                        }
+                        const playback = getPlaybackState();
+                        return acceptsProviderCallback(connection) ? playback : [];
+                      },
+                    }
+                  : {}),
                 onClearAudio: guardProviderCallback(connection, req.onClearAudio),
                 ...(req.onMark ? { onMark: guardProviderCallback(connection, req.onMark) } : {}),
                 ...(req.onTranscript

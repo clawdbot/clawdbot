@@ -18,6 +18,7 @@ export function buildCliLiveSessionFingerprint(params: {
           promptHash: sha256Hex(skillSnapshot.prompt),
           skillFilter: skillSnapshot.skillFilter,
           skills: skillSnapshot.skills,
+          librarySelections: skillSnapshot.librarySelections,
           resolvedSkills: (skillSnapshot.resolvedSkills ?? []).map((skill) => ({
             name: skill.name,
             description: skill.description,

@@ -207,7 +207,7 @@ suite.define(() => {
             sessionId: "current-session",
             kind: "direct",
             label: "Session A",
-            reasoningLevel: "high",
+            reasoningLevel: "on",
             updatedAt: 2,
           },
           {
@@ -215,7 +215,7 @@ suite.define(() => {
             sessionId: "trace-session",
             kind: "direct",
             label: "Session B",
-            reasoningLevel: "high",
+            reasoningLevel: "on",
             updatedAt: 1,
           },
         ]),

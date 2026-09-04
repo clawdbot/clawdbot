@@ -7,6 +7,7 @@ import {
   readNestedToolActivity,
   nestedToolActivityContent,
 } from "../sessions/nested-tool-activity.js";
+import { formatProviderRefusalText } from "../shared/assistant-error-format.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
@@ -133,9 +134,12 @@ function isContextOverflowAssistantError(message: Record<string, unknown>): bool
 }
 
 function getAssistantErrorFallbackText(message: Record<string, unknown>): string {
-  return isContextOverflowAssistantError(message)
-    ? GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT
-    : GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT;
+  return (
+    formatProviderRefusalText(message) ??
+    (isContextOverflowAssistantError(message)
+      ? GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT
+      : GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT)
+  );
 }
 
 function sanitizeAssistantErrorDisplayMessage(

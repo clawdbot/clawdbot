@@ -4,24 +4,33 @@
  * Resolves generated contract artifacts through runtime records with local workspace fallback.
  */
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { vi } from "vitest";
 import { listBundledChannelPluginMetadata } from "../../../../plugins/bundled-channel-runtime.js";
 import { resolvePluginRuntimeModulePath } from "../../../../plugins/runtime/runtime-plugin-boundary.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../../test-utils/bundled-plugin-public-surface.js";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
 
-/** Loads a public source artifact when a host contract must mock its transport dependency. */
+/** Installs plugin-owned transport mocks before loading a public source artifact. */
 export async function importBundledChannelContractSourceArtifact<T extends object>(
   pluginId: string,
   artifactBasename: string,
+  mockFactories: Record<string, () => Record<string, unknown>>,
 ): Promise<T> {
   const moduleId = resolveRelativeBundledPluginPublicModuleId({
     fromModuleUrl: import.meta.url,
     pluginId,
     artifactBasename,
   });
+  const requirePlugin = createRequire(new URL(moduleId, import.meta.url));
+  // Lazy transport imports still need these mocks after this loader returns;
+  // the test runner clears the mock registry between files.
+  for (const [dependency, factory] of Object.entries(mockFactories)) {
+    vi.doMock(requirePlugin.resolve(dependency), factory);
+  }
   return (await import(moduleId)) as T;
 }
 

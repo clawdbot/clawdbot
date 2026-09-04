@@ -75,7 +75,7 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     {
       hostRoot: path.resolve(sandbox.workspaceDir),
       containerRoot: normalizeContainerPathCore(sandbox.containerWorkdir),
-      writable: sandbox.workspaceAccess === "rw",
+      writable: sandbox.workspaceAccess !== "ro",
       source: "workspace",
     },
   ];
@@ -128,6 +128,14 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     });
   }
 
+  for (const resource of sandbox.readOnlyResourceMounts ?? []) {
+    mounts.push({
+      hostRoot: resource.hostPath,
+      containerRoot: resource.containerPath,
+      writable: false,
+      source: "protectedSkill",
+    });
+  }
   return dedupeMounts(mounts);
 }
 

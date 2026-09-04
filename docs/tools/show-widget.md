@@ -13,15 +13,15 @@ read_when:
 
 ## How widgets work
 
-When the agent calls `show_widget`, OpenClaw core validates `widget_code` and wraps it once in the canonical HTML document. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI renders the handle in a sandboxed iframe, while iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload; Quick Chat keeps the widget for its active reply.
+When the agent calls `show_widget`, OpenClaw core validates `widget_code` and wraps it once in the canonical HTML document. For an inline client, core stores that document as a Canvas document and returns a preview handle. The Control UI reads the document over its authenticated Gateway connection and renders it through the dedicated-origin, double-iframe sandbox used by dashboard widgets and MCP Apps. The widget frame does not need its own login session. iOS, Android, macOS, and Linux Quick Chat use isolated web views. Full chat clients restore the widget after history reload; Quick Chat keeps the widget for its active reply.
 
 Channel plugins can register a contextual presenter behind the same core tool. In a configured Discord session, core hands the composed document to the Discord presenter, which stores it and posts the Activity button in the current channel. The model still makes one `show_widget` call; there is no transport-specific widget tool or content kind.
 
-In Control UI sessions, a Canvas widget can also be pinned to the session dashboard. Set `pin: true` in the tool call, or use **Pin to dashboard** on an existing transcript widget. Pinned HTML runs behind the same dedicated-origin, double-iframe sandbox host used by MCP Apps; the browser never resolves a widget data binding inside the untrusted frame.
+In Control UI sessions, a Canvas widget can also be pinned to the session dashboard. Set `pin: true` in the tool call, or use **Pin to dashboard** on an existing transcript widget. Pinning gives the dashboard copy its own identity and capability grants; the inline preview never inherits those grants. The browser never resolves a widget data binding inside the untrusted frame.
 
 For browser embedding, the wrapper document injects five small host bridges around the widget code:
 
-- A size reporter posts the rendered content height to the embedding chat, which clamps it and fits the iframe (48 to 1200 pixels).
+- A size reporter posts the rendered content height to the embedding chat, which clamps it and fits the iframe (48 to 8000 pixels).
 - A host bridge defines the legacy `sendPrompt(text)` helper plus the structured `openclaw.prompt`, `openclaw.state`, `openclaw.data`, and `openclaw.cron` APIs. Inline chat prompts retain their private message channel; dashboard APIs use a view-ticket-bound request channel. See [Interactive widgets](#interactive-widgets) and [Dashboard capabilities](#dashboard-capabilities).
 - A theme bridge listens for the Control UI's current design tokens and applies them as CSS variables, on load and again on every theme change.
 - A snapshot bridge renders the current widget document as a PNG when the embedding chat requests an export.
@@ -30,6 +30,8 @@ For browser embedding, the wrapper document injects five small host bridges arou
 Everything else stays inside the frame: the document runs in an opaque origin with a strict Content Security Policy, so widget scripts cannot reach the Control UI, the Gateway, or the network.
 
 OpenClaw exposes `show_widget` only when the originating Gateway client declares the `inline-widgets` capability or exactly one registered current-channel presenter synchronously matches trusted run context. The Control UI and supported native apps declare the inline capability automatically. Linux Quick Chat stays text-only for Gateway connections that require a custom TLS leaf pin because its platform WebView cannot bind that pin. Discord matches only when Activities are configured for the current account and a concrete channel is available. Other channel runs without an inline client or matching presenter do not receive the tool.
+
+An agent-turn automation bound to a persistent session and carrying a server-authored scheduled tool policy may explicitly allow `show_widget` without an inline client. That scheduled surface is pinned-only: every call requires `pin: true`, writes to the bound session dashboard, and cannot set `presentation.target`. Detached cron-run sessions, ordinary capless channel runs, and scheduled jobs without an explicit tool cap remain excluded. The originating-client capability remains mandatory for inline presentation.
 
 Capability transport covers embedded, Codex app-server, and CLI-backed model backends. Grant-authenticated MCP callers without `inline-widgets` remain fail closed unless their trusted run context matches a presenter. Authenticated direct HTTP `tools/invoke` requests cannot request inline rendering, but a request carrying eligible current-channel context can use the matching presenter. Authentication never bypasses presenter or route eligibility.
 
@@ -95,7 +97,7 @@ Discord also accepts optional `button_label` text for the Activity launch button
 
 The core `show_widget` tool also accepts these optional dashboard placement fields, including when Discord is the presentation destination:
 
-- `pin`: also place the widget on the session dashboard.
+- `pin`: also place the widget on the session dashboard. Required on the pinned-only scheduled surface.
 - `name`: stable widget name; defaults to a slug of `title`.
 - `tab`: destination tab slug.
 - `size`: one of `sm`, `md`, `lg`, `xl`, or `full`.
@@ -104,6 +106,12 @@ The core `show_widget` tool also accepts these optional dashboard placement fiel
 - `capabilities`: access requested by a pinned widget. `netOrigins` contains exact HTTPS origins; `tools` contains `prompt`, an allowlisted read binding, or an exact `cron.trigger:<jobId>` action.
 
 An inline result includes a Canvas preview handle, so the Control UI and supported native apps render the widget directly from the tool call and restore it after history reload. A successful current-channel presentation returns a generic message receipt describing what became visible. Pinned results retain the board widget name so the Control UI does not offer a duplicate pin after transcript reload.
+
+Pinned results also report `capabilityState`: `none`, `pending`, `rejected`, or
+`granted`. A saved widget is not necessarily authorized to read data. For
+`pending`, ask the operator to review the dashboard permission card. For
+`rejected`, review the requested access and session permission policy with the
+operator before retrying. The inline preview does not inherit dashboard grants.
 
 If current-channel presentation fails, core falls back inline only when the originating client actually supports inline widgets. Otherwise the tool fails visibly. When `pin: true` succeeded before presentation failed, the result is explicitly partial and names the durable board widget; presentation failure never rolls back that unrelated board state.
 
@@ -139,7 +147,7 @@ Pinned widgets expose one ticket-bound host API. An explicit [session permission
 - `openclaw.host.controlUiBaseUrl` exposes the Control UI origin plus its configured base path after the dashboard host initializes. It is `null` before initialization and outside the dashboard, so read it in the link's click handler rather than when the widget script first runs.
 - `openclaw.prompt.send(text)` requires transient user activation and posts a visible composer message. Declaring and receiving the `prompt` tool grant skips the extra per-click confirmation; validation, focus checks, and rate limits still apply.
 - `openclaw.state.emit(payload)` adds a session notice. Payloads are capped at 8 KiB, and identical client emissions within five seconds are coalesced.
-- `openclaw.data.read(bindingId, params?)` resolves only at the Gateway. Grantable bindings are `sessions.list`, `usage.status`, `usage.cost`, `cron.list`, `cron.status`, `agents.list`, and `health`.
+- `openclaw.data.read(bindingId, params?)` resolves only at the Gateway. Core bindings are `sessions.list`, `usage.status`, `usage.cost`, `cron.list`, `cron.status`, `agents.list`, `health`, and the repository-scoped `github.actions.runs` binding below.
 - `openclaw.action.run(actionId, params?)` invokes an operator-granted plugin dashboard action verb through its write-scoped Gateway method.
 - `openclaw.cron.trigger(jobId)` runs an existing job now only when the exact `cron.trigger:<jobId>` capability was granted.
 
@@ -147,11 +155,78 @@ User-clicked links to `http` or `https` destinations are forwarded to the Contro
 
 Network access is separate from host tools. Put exact HTTPS origins in `capabilities.netOrigins`; once the session policy grants them, only those origins enter the widget's `connect-src`. Wildcards, credentials, paths, query strings, and undeclared origins remain blocked. A literal port is allowed only when it is part of the declared origin.
 
+The tool schema describes currently active plugin read bindings and action
+verbs, including action parameter schemas when provided. This discovery text is
+bounded: it includes complete entries and reports when entries were omitted.
+Disabled plugins are not advertised.
+
+### Read GitHub Actions runs
+
+With a usable connected agent GitHub identity, use the host binding instead of
+fetching GitHub directly from widget code. For example, give `show_widget` this
+input, replacing `owner/repo` in both places:
+
+```json
+{
+  "title": "Workflow runs",
+  "name": "workflow-runs",
+  "pin": true,
+  "capabilities": { "tools": ["github.actions.runs:owner/repo"] },
+  "widget_code": "<pre id='runs'>Loading…</pre><script>openclaw.data.read('github.actions.runs',{repository:'owner/repo',perPage:20}).then(data=>{document.getElementById('runs').textContent=data.workflow_runs.map(run=>run.display_title+': '+(run.conclusion||run.status)).join('\\n')}).catch(error=>{document.getElementById('runs').textContent=String(error)});</script>"
+}
+```
+
+The read runs in the pinned dashboard after approval, not the inline preview.
+No `netOrigins` declaration or token is needed. Repository names are
+case-insensitive and grants use lowercase spelling. A grant for one repository
+cannot read another; granting only `https://api.github.com` network access does
+not authorize this binding.
+
+**Approval shares Actions metadata with the widget and its session audience,
+including metadata from private repositories accessible to the selected agent
+identity.** The host selects the agent override, then the configured System
+identity, then native GitHub authentication. It never uses the Control UI
+preview credential or a human's publication-only **My GitHub** connection.
+A configured but unavailable identity fails closed with reconnect guidance;
+it does not retry anonymously or fall through to another account.
+
+Before saving an HTML or registered widget declaring this binding, the Gateway
+verifies the selected identity. An unavailable identity or retired caller fails
+without replacing an existing widget, creating a pending grant, or broadcasting
+a change. Reconnect the agent's GitHub identity in Settings and retry. Pinning
+does not query Actions or verify repository permission; those checks happen on
+read. Ordinary widgets and MCP App tool names do not trigger this identity check.
+
+| Parameter             | Contract                                                                                                                                                                               |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `repository`          | Required `owner/repo`.                                                                                                                                                                 |
+| `workflow`            | Optional positive numeric workflow ID or workflow filename, such as `ci.yml`. Omit to list repository runs.                                                                            |
+| `perPage`             | Integer from 1 to 30; default 20. No pagination.                                                                                                                                       |
+| `branch`              | Optional branch name, at most 255 characters.                                                                                                                                          |
+| `status`              | Optional `completed`, `action_required`, `cancelled`, `failure`, `neutral`, `skipped`, `stale`, `success`, `timed_out`, `in_progress`, `queued`, `requested`, `waiting`, or `pending`. |
+| `created`             | Optional ISO day (`2026-09-01`), comparison (`>=2026-09-01`), or inclusive day range (`2026-08-01..2026-09-01`).                                                                       |
+| `excludePullRequests` | Boolean; default `true`. GitHub omits embedded pull-request objects, not pull-request-triggered runs.                                                                                  |
+
+Other fields, including identity overrides, URLs, headers, and methods, are
+rejected. The result keeps GitHub's `{ total_count, workflow_runs }` shape.
+Each run contains only `id`, `name`, `display_title`, `head_branch`, `status`,
+`conclusion`, `html_url`, `run_started_at`, `created_at`, `updated_at`, `event`,
+`workflow_id`, and `run_attempt`. No credentials or raw repository objects are
+returned. The upstream response is capped at 1 MiB and the projected run list
+at 30 entries. Successful reads are cached for about 30 seconds within the
+current Gateway, board identity, credential, repository, and filter scope.
+
+Rate limits, access denial, unavailable identity, and upstream failure return
+sanitized guidance. Redirects are refused; for a renamed repository, verify its
+new name and update both the read and grant. Each caller revalidates its widget,
+Gateway, and identity before receiving data, including shared reads and cache
+hits. Removing one widget does not fail another authorized widget's shared read.
+
 ## Security and storage
 
-Widget documents use restrictive Content Security Policies. Inline style and script are allowed, while external resource loads remain blocked. Inline transcript widgets cannot fetch the network. A pinned dashboard widget can fetch only exact HTTPS origins that the agent declared and the session policy granted.
+Widget documents use restrictive Content Security Policies. Inline style and script are allowed, while arbitrary external resource loads remain blocked. Registered content kinds can load their explicitly public static renderer assets from the isolated sandbox origin. Inline transcript widgets cannot fetch the network. A pinned dashboard widget can fetch only exact HTTPS origins that the agent declared and the session policy granted.
 
-The Control UI iframe always omits `allow-same-origin`, even when the global embed mode is `trusted`, so widget scripts cannot read the parent application origin. Native clients use isolated, nonpersistent web views and block navigation away from the hosted widget. The core document host also serves widgets with a `Content-Security-Policy: sandbox allow-scripts` response header, so direct rendering still runs the widget in an opaque origin instead of an application origin. Only render widget code you are willing to execute in that isolated frame.
+The Control UI's widget content iframe always omits `allow-same-origin`, even when the global embed mode is `trusted`, so widget scripts cannot read the parent application origin. With scripts enabled, the outer proxy runs on a dedicated origin and relays messages across the frame boundary. In `strict` mode, the Control UI still reads the document through its authenticated Gateway connection, but renders it without scripts or scripted interactions. Native clients use isolated, nonpersistent web views and block navigation away from the hosted widget. The core document host also serves widgets with a `Content-Security-Policy: sandbox allow-scripts` response header, so direct rendering still runs the widget in an opaque origin instead of an application origin. Only render widget code you are willing to execute in that isolated frame.
 
 The iframe also follows [`gateway.controlUi.embedSandbox`](/web/control-ui#hosted-embeds). The default `scripts` tier supports interactive widgets while preserving origin isolation.
 

@@ -75,6 +75,8 @@ describe("handleAbortChat", () => {
     const request = vi.fn(async () => ({ status: "aborted" }));
     const host = makeAbortHost({
       client: { request } as unknown as GatewayBrowserClient,
+      chatMessage: "@Alex interrupted draft",
+      chatMentions: [{ profileId: "alex-profile", start: 0, end: 5 }],
       sessionsResult: makeSessionsResult([
         {
           key: "agent:main",
@@ -93,6 +95,8 @@ describe("handleAbortChat", () => {
       key: "agent:main",
       clearQueued: true,
     });
+    expect(host.chatMessage).toBe("");
+    expect(host.chatMentions).toEqual([]);
   });
 
   it("routes recovered embedded Stop through sessions.abort with its run id", async () => {
@@ -141,7 +145,8 @@ describe("handleAbortChat", () => {
       client,
       connected: false,
       chatRunId: "run-main",
-      chatMessage: "keep this draft",
+      chatMessage: "@Alex keep this draft",
+      chatMentions: [{ profileId: "alex-profile", start: 0, end: 5 }],
     });
 
     await handleAbortChat(host, { preserveDraft: true });
@@ -151,7 +156,8 @@ describe("handleAbortChat", () => {
       sessionKey: "agent:main",
       runId: "run-main",
     });
-    expect(host.chatMessage).toBe("keep this draft");
+    expect(host.chatMessage).toBe("@Alex keep this draft");
+    expect(host.chatMentions).toEqual([{ profileId: "alex-profile", start: 0, end: 5 }]);
     expect(host.chatError ?? null).toBeNull();
     expect(request).not.toHaveBeenCalled();
   });

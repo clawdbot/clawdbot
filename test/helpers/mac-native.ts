@@ -1,6 +1,7 @@
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { runMacFixtureTool } from "../scripts/mac-native-fixtures.test-support.js";
+import type { MacScriptFixture } from "../scripts/mac-script-fixture.test-support.js";
 
 // SDK mach-o/{loader,fat}.h layouts; classification uses the host's real tools.
 export function machoFixture(bits = 64, little = true, fat = false, fileType = 2): Buffer {
@@ -35,75 +36,83 @@ export function machoFixture(bits = 64, little = true, fat = false, fileType = 2
   return result;
 }
 
-function runNativeFixtureTool(command: string, args: string[], input?: string) {
-  const result = spawnSync(command, args, { encoding: "utf8", input });
-  if (result.status !== 0) {
-    throw new Error(`Could not create native fixture with ${command}: ${result.stderr}`);
-  }
-}
-
-function writeNativeObject(filename: string, arch: string) {
-  runNativeFixtureTool(
+async function writeNativeObject(filename: string, arch: string, mac: MacScriptFixture) {
+  const source = `${filename}.c`;
+  await writeFile(source, "int native_fixture(void) { return 0; }\n");
+  await runMacFixtureTool(
     "/usr/bin/xcrun",
-    ["clang", "-arch", arch, "-x", "c", "-c", "-", "-o", filename],
-    "int native_fixture(void) { return 0; }\n",
+    ["clang", "-arch", arch, "-x", "c", "-c", source, "-o", filename],
+    path.dirname(filename),
+    mac,
   );
 }
 
-export function nativeObjectFixture(root: string, format: "thin" | "fat32" | "fat64"): Buffer {
-  mkdirSync(root);
-  const inputs = (format === "thin" ? ["arm64"] : ["arm64", "x86_64"]).map((arch) => {
+export async function nativeObjectFixture(
+  root: string,
+  format: "thin" | "fat32" | "fat64",
+  mac: MacScriptFixture,
+): Promise<Buffer> {
+  await mkdir(root);
+  const inputs = [];
+  for (const arch of format === "thin" ? ["arm64"] : ["arm64", "x86_64"]) {
     const filename = path.join(root, `${arch}.o`);
-    writeNativeObject(filename, arch);
-    return filename;
-  });
+    await writeNativeObject(filename, arch, mac);
+    inputs.push(filename);
+  }
   if (format === "thin") {
-    return readFileSync(path.join(root, "arm64.o"));
+    return readFile(path.join(root, "arm64.o"));
   }
   const filename = path.join(root, "object");
-  runNativeFixtureTool("/usr/bin/lipo", [
-    "-create",
-    ...(format === "fat64" ? ["-fat64"] : []),
-    ...inputs,
-    "-output",
-    filename,
-  ]);
-  return readFileSync(filename);
+  await runMacFixtureTool(
+    "/usr/bin/lipo",
+    ["-create", ...(format === "fat64" ? ["-fat64"] : []), ...inputs, "-output", filename],
+    root,
+    mac,
+  );
+  return readFile(filename);
 }
 
-export function writeFat64Fixture(filename: string): Buffer {
-  runNativeFixtureTool("/usr/bin/lipo", [
-    "-create",
-    "-fat64",
-    "/usr/bin/true",
-    "-output",
-    filename,
-  ]);
-  return readFileSync(filename);
+export async function writeFat64Fixture(filename: string, mac: MacScriptFixture): Promise<Buffer> {
+  await runMacFixtureTool(
+    "/usr/bin/lipo",
+    ["-create", "-fat64", "/usr/bin/true", "-output", filename],
+    path.dirname(filename),
+    mac,
+  );
+  return readFile(filename);
 }
 
-export function universalArchiveFixture(root: string, fat64: boolean, mixed: boolean): Buffer {
-  mkdirSync(root);
+export async function universalArchiveFixture(
+  root: string,
+  fat64: boolean,
+  mixed: boolean,
+  mac: MacScriptFixture,
+): Promise<Buffer> {
+  await mkdir(root);
   const inputs: string[] = [];
   for (const arch of ["arm64", "x86_64"]) {
     const object = path.join(root, `${arch}.o`);
     if (mixed && arch === "x86_64") {
-      runNativeFixtureTool("/usr/bin/lipo", ["-thin", arch, "/usr/bin/true", "-output", object]);
+      await runMacFixtureTool(
+        "/usr/bin/lipo",
+        ["-thin", arch, "/usr/bin/true", "-output", object],
+        root,
+        mac,
+      );
       inputs.push(object);
       continue;
     }
-    writeNativeObject(object, arch);
+    await writeNativeObject(object, arch, mac);
     const archive = path.join(root, `${arch}.a`);
-    runNativeFixtureTool("/usr/bin/ar", ["rcs", archive, object]);
+    await runMacFixtureTool("/usr/bin/ar", ["rcs", archive, object], root, mac);
     inputs.push(archive);
   }
   const filename = path.join(root, "universal");
-  runNativeFixtureTool("/usr/bin/lipo", [
-    "-create",
-    ...(fat64 ? ["-fat64"] : []),
-    ...inputs,
-    "-output",
-    filename,
-  ]);
-  return readFileSync(filename);
+  await runMacFixtureTool(
+    "/usr/bin/lipo",
+    ["-create", ...(fat64 ? ["-fat64"] : []), ...inputs, "-output", filename],
+    root,
+    mac,
+  );
+  return readFile(filename);
 }
