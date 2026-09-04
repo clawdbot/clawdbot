@@ -1755,8 +1755,8 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
-    const initInput = expectInitializeSessionFields({ agent: "codex" });
-    expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+    const initInput = expectInitializeSessionFields({ agentId: "reviewer", agent: "codex" });
+    expect(initInput.sessionKey).toMatch(/^agent:reviewer:acp:/);
   });
 
   it("inherits subagent envelope fields onto ACP children", async () => {
