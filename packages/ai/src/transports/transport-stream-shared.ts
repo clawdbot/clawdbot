@@ -169,10 +169,15 @@ export function createWritableTransportEventStream() {
  * already emits rather than churning it.
  */
 export function transportAbortError(signal?: AbortSignal): Error {
-  const reason: unknown = unwrapRunFailure(signal?.reason);
-  return reason instanceof Error && typeof (reason as { code?: unknown }).code === "string"
-    ? reason
-    : new Error("Request was aborted");
+  try {
+    const reason = unwrapRunFailure(signal?.reason);
+    if (reason instanceof Error && typeof (reason as { code?: unknown }).code === "string") {
+      return reason;
+    }
+  } catch {
+    // Foreign cause inspection must not replace the recorded abort with a new failure.
+  }
+  return new Error("Request was aborted");
 }
 
 export type ProviderAcceptance =

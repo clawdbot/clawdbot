@@ -435,10 +435,8 @@ export class CodexAppServerEventProjector {
 
   markTimedOut(): void {
     this.aborted = true;
-    this.terminalFailure.promptError = withRunFailureOrigin(
-      "codex app-server attempt timed out",
-      "runtime",
-    );
+    const error = "codex app-server attempt timed out";
+    this.terminalFailure.promptError = withRunFailureOrigin(error, "runtime");
     this.terminalFailure.promptErrorSource = "prompt";
   }
 

@@ -3,7 +3,7 @@
  *
  * Centralizes zero-cost usage records and assistant message construction for simple stream transports.
  */
-import { appendRuntimeFailureDiagnostic, unwrapRunFailure } from "@openclaw/llm-core/diagnostics";
+import { appendRuntimeFailureDiagnostic } from "@openclaw/llm-core/diagnostics";
 import type { AssistantMessage, StopReason, Usage } from "../llm/types.js";
 
 type StreamModelDescriptor = {
@@ -92,9 +92,9 @@ export function buildStreamErrorAssistantMessage(params: {
   signal?: AbortSignal;
   timestamp?: number;
 }): AssistantMessage & { stopReason: "error"; errorMessage: string } {
-  const original = unwrapRunFailure(params.error);
   const errorMessage =
-    params.errorMessage ?? (original instanceof Error ? original.message : String(original));
+    params.errorMessage ??
+    (params.error instanceof Error ? params.error.message : String(params.error));
   const message = {
     ...buildAssistantMessageWithZeroUsage({
       model: params.model,

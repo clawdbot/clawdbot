@@ -5,7 +5,6 @@ import type { AssistantMessage, AssistantMessageEvent } from "openclaw/plugin-sd
 import {
   appendRuntimeFailureDiagnostic,
   createAssistantMessageEventStream,
-  unwrapRunFailure,
 } from "openclaw/plugin-sdk/llm";
 import { asPositiveFiniteNumber as validTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -121,8 +120,7 @@ function buildCaughtErrorEvent(
   model: Parameters<ProviderStreamFn>[0],
   signal: AbortSignal,
 ): AssistantMessageEvent {
-  const cause = unwrapRunFailure(error);
-  const errorMessage = cause instanceof Error ? cause.message : String(cause);
+  const errorMessage = error instanceof Error ? error.message : String(error);
   const message: AssistantMessage = partial
     ? {
         ...partial,

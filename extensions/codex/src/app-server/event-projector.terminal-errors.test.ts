@@ -1,4 +1,7 @@
-import { getRunFailureOrigin } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  getRunFailureOrigin,
+  resolveAssistantErrorPresentation,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -298,6 +301,13 @@ describe("CodexAppServerEventProjector terminal errors", () => {
             candidate.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal"),
         ),
       ).toHaveLength(1);
+
+      projector.markTimedOut();
+      const timedOut = projector.buildResult(buildEmptyToolTelemetry());
+      expect(getRunFailureOrigin(readAttemptTerminal(timedOut).promptError)).toBe("runtime");
+      expect(resolveAssistantErrorPresentation(timedOut.currentAttemptAssistant!).attribution).toBe(
+        "runtime",
+      );
     },
   );
 

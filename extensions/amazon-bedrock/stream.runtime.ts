@@ -405,7 +405,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         output.content = [];
       }
       output.stopReason = options.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = formatBedrockError(unwrapRunFailure(error));
+      output.errorMessage = formatBedrockError(error);
       appendRuntimeFailureDiagnostic(output, error, options.signal);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
@@ -441,9 +441,14 @@ const BEDROCK_ERROR_PREFIXES: Record<string, string> = {
  */
 function formatBedrockError(error: unknown): string {
   const message = error instanceof Error ? error.message : JSON.stringify(error);
-  if (error instanceof BedrockRuntimeServiceException) {
-    const prefix = BEDROCK_ERROR_PREFIXES[error.name] ?? error.name;
-    return `${prefix}: ${message}`;
+  try {
+    const cause = unwrapRunFailure(error);
+    if (cause instanceof BedrockRuntimeServiceException) {
+      const prefix = BEDROCK_ERROR_PREFIXES[cause.name] ?? cause.name;
+      return `${prefix}: ${message}`;
+    }
+  } catch {
+    // A tagged error retains safe text when its foreign cause cannot be inspected.
   }
   return message;
 }
