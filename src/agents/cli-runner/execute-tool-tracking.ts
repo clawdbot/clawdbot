@@ -81,6 +81,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let yieldAcknowledgment: string | undefined;
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
+  let sourceReplyDelivered: true | undefined;
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
@@ -249,6 +250,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       return;
     }
     didSendViaMessagingTool = true;
+    // Implicit source replies can settle without an argument-derived target.
+    if (deliveryFact?.sourceReplyDelivered === true) {
+      sourceReplyDelivered = true;
+    }
     const toolArgs = params.args ?? {};
     const isMessagingSend = isMessagingToolSendAction(params.toolName, toolArgs);
     const content = isMessagingSend ? extractCliMessagingContent(toolArgs, params.result) : {};
@@ -649,6 +654,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const evidence = () => ({
     didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool,
+    sourceReplyDelivered,
     messagingToolSentTexts,
     messagingToolSentMediaUrls,
     messagingToolSentTargets,
@@ -675,6 +681,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ...(current.didDeliverSourceReplyViaMessageTool
           ? { didDeliverSourceReplyViaMessageTool: true }
           : {}),
+        ...(current.sourceReplyDelivered ? { sourceReplyDelivered: true as const } : {}),
         ...(current.messagingToolSentTexts.length > 0
           ? { messagingToolSentTexts: current.messagingToolSentTexts.slice() }
           : {}),

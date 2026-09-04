@@ -42,7 +42,7 @@ Generated locale trees and live translation memory now live in the publish repo:
 - `glossary.<lang>.json` — preferred term mappings used as prompt guidance.
 - `zh-Hans-navigation.json` — curated zh-Hans tab and group labels overlaid onto the current English navigation tree during publish sync.
 - `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `id-navigation.json`, `it-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pl-navigation.json`, `pt-BR-navigation.json`, and `tr-navigation.json` — starter locale labels kept alongside the source repo. Publish sync clones the full English navigation tree, prefixes locale routes, and overlays translated labels by matching shared page anchors.
-- `<lang>.tm.jsonl` — translation memory keyed by workflow + model + text hash.
+- `<lang>.tm.jsonl` — translation memory keyed by workflow, prompt version, language, and text hash.
 
 In this repo, generated locale TM files such as `docs/.i18n/zh-CN.tm.jsonl`, `docs/.i18n/zh-TW.tm.jsonl`, `docs/.i18n/ja-JP.tm.jsonl`, `docs/.i18n/es.tm.jsonl`, `docs/.i18n/pt-BR.tm.jsonl`, `docs/.i18n/ko.tm.jsonl`, `docs/.i18n/de.tm.jsonl`, `docs/.i18n/fr.tm.jsonl`, `docs/.i18n/ar.tm.jsonl`, `docs/.i18n/it.tm.jsonl`, `docs/.i18n/vi.tm.jsonl`, `docs/.i18n/nl.tm.jsonl`, `docs/.i18n/fa.tm.jsonl`, `docs/.i18n/tr.tm.jsonl`, `docs/.i18n/uk.tm.jsonl`, `docs/.i18n/id.tm.jsonl`, `docs/.i18n/pl.tm.jsonl`, and `docs/.i18n/th.tm.jsonl` are intentionally no longer committed.
 
@@ -66,8 +66,10 @@ Fields:
 
 - `scripts/docs-i18n` still owns translation generation.
 - Translation rules and glossary guidance are passed as Codex developer instructions; document text is user input, and repository `AGENTS.md` instructions are excluded from translation calls. Placeholder spelling and occurrence counts must match the input, even when the target language restructures comparisons or references.
-- Doc mode writes `x-i18n.source_hash` into each translated page.
-- The publish workflow precomputes a pending file list by comparing the current English source hash to the stored locale `x-i18n.source_hash`.
+- Model selection comes from `OPENCLAW_DOCS_I18N_MODEL`; an optional `OPENCLAW_DOCS_I18N_FALLBACK_MODEL` is used only when the selected model is missing or unsupported. Each worker retains the fallback for its remaining translations. Authentication, quota, network, and generic service failures do not select a different model.
+- Automated workflows inject model selections from repository secrets. Generated frontmatter, translation memory, cache keys, and failure logs omit model identifiers. Raw Codex diagnostics are not forwarded to workflow logs.
+- Doc mode writes `x-i18n.source_hash` into each translated page and requires current workflow and prompt versions before reusing it. Older workflow outputs are regenerated during incremental translation so retired metadata is removed.
+- The publish workflow precomputes a pending file list by comparing the current English source hash to the stored locale `x-i18n.source_hash`, and queues pages containing retired model/provider metadata for regeneration.
 - If the pending count is `0`, the expensive translation step is skipped entirely.
 - If there are pending files, the workflow translates only those files.
 - Locale workers retry transient model-format failures, but unchanged files stay skipped because the same hash check runs on each retry.

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { connectRfbAttachment, type DesktopRfbAttachment } from "./attachment.js";
 import {
@@ -20,6 +21,16 @@ const TOKEN_PATTERN = /^[a-f0-9]{48}$/u;
 const MAX_PAYLOAD_BYTES = 1024 * 1024;
 const PAUSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 const RESUME_CHECK_MS = 25;
+const observerLog = createSubsystemLogger("gateway/desktop");
+
+type DesktopCloseTrigger =
+  | "owner-close"
+  | "browser-close"
+  | "browser-error"
+  | "stream-close"
+  | "stream-error"
+  | "invalid-view-only-stream"
+  | "authentication-failed";
 
 type DesktopObserverTokenEntry = {
   sourceKey: string;
@@ -205,7 +216,7 @@ export function handleDesktopObserveUpgrade(
       control: entry.control,
       ownerEpoch: entry.ownerEpoch,
       // Retire the stream and keepalive before the close handshake can wait on a paused peer.
-      close: (code, reason) => closeBoth(code, reason),
+      close: (code, reason) => closeBoth(code, reason, "owner-close"),
     });
     if (!observer) {
       claimedStream?.destroy();
@@ -219,16 +230,17 @@ export function handleDesktopObserveUpgrade(
       ws.close(1013, "desktop stream unavailable");
       return;
     }
-    let closed = false;
+    let closeCause: { trigger: DesktopCloseTrigger; code: number } | undefined;
     let negotiating = Boolean(entry.preauth);
     let resumeTimer: ReturnType<typeof setInterval> | undefined;
     const stopKeepalive = startWebSocketKeepalive(ws);
 
-    const closeBoth = (code: number, reason: string) => {
-      if (closed) {
+    const closeBoth = (code: number, reason: string, trigger: DesktopCloseTrigger) => {
+      if (closeCause) {
         return;
       }
-      closed = true;
+      // Keep the first cleanup decision when its destroyed stream emits a later close.
+      closeCause = { trigger, code };
       stopKeepalive();
       clearInterval(resumeTimer);
       resumeTimer = undefined;
@@ -252,7 +264,7 @@ export function handleDesktopObserveUpgrade(
         }
         const result = clientMessageFilter.filter(chunk);
         if ("error" in result) {
-          closeBoth(1008, "invalid view-only RFB stream");
+          closeBoth(1008, "invalid view-only RFB stream", "invalid-view-only-stream");
           return;
         }
         if (result.forward.length > 0) {
@@ -260,13 +272,13 @@ export function handleDesktopObserveUpgrade(
         }
       };
       ws.on("message", (data, isBinary) => {
-        if (!isBinary || closed) {
+        if (!isBinary || closeCause) {
           return;
         }
         forwardClientChunk(rawDataBuffer(data));
       });
       desktopSocket.on("data", (chunk) => {
-        if (closed || ws.readyState !== WebSocket.OPEN) {
+        if (closeCause || ws.readyState !== WebSocket.OPEN) {
           return;
         }
         ws.send(chunk, { binary: true });
@@ -289,13 +301,24 @@ export function handleDesktopObserveUpgrade(
       }
     };
 
-    ws.once("close", () => closeBoth(1000, "desktop observer closed"));
-    ws.once("error", () => closeBoth(1011, "desktop observer failed"));
-    desktopSocket.once("close", () => closeBoth(1000, "desktop stream closed"));
+    ws.once("close", (closeCode) => {
+      closeBoth(1000, "desktop observer closed", "browser-close");
+      observerLog.info("desktop observer closed", {
+        sourceKey: entry.sourceKey,
+        ownerEpoch: entry.ownerEpoch,
+        ...(entry.attachment.kind === "stream" ? { streamId: entry.attachment.streamId } : {}),
+        trigger: closeCause?.trigger,
+        cleanupCode: closeCause?.code,
+        closeCode,
+      });
+    });
+    ws.once("error", () => closeBoth(1011, "desktop observer failed", "browser-error"));
+    desktopSocket.once("close", () => closeBoth(1000, "desktop stream closed", "stream-close"));
     desktopSocket.once("error", () =>
       closeBoth(
         negotiating ? 1008 : 1011,
         negotiating ? "desktop authentication failed" : "desktop stream failed",
+        "stream-error",
       ),
     );
 
@@ -312,7 +335,7 @@ export function handleDesktopObserveUpgrade(
         const remainder = browser.detach();
         entry.preauth = undefined;
         negotiating = false;
-        if (!closed) {
+        if (!closeCause) {
           startSplice(remainder, true);
         }
       } catch (error) {
@@ -323,6 +346,7 @@ export function handleDesktopObserveUpgrade(
           error instanceof RfbPreauthTimeoutError
             ? "desktop authentication timed out"
             : `desktop ${preauth.auth === "ard-account" ? "ARD" : "VNC"} authentication failed`,
+          "authentication-failed",
         );
       }
     })();

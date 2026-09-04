@@ -183,6 +183,7 @@ export function prepareEmbeddedRunTerminal(input: {
         responseModel,
       },
       successfulToolNames,
+      sourceReplyDelivered: attempt.sourceReplyDelivered,
       rerouted:
         reportedModelRef.provider !== input.provider ||
         reportedModelRef.model !== input.model ||

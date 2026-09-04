@@ -89,7 +89,11 @@ export async function prepareSessionWorktree(params: {
           ),
         );
       }
-      if ((params.name && existing.name !== params.name) || (params.baseRef && boundId)) {
+      // Replaying the recorded selection reuses the checkout; changing it must not rebase it.
+      if (
+        (params.name && existing.name !== params.name) ||
+        (params.baseRef && existing.baseRef !== params.baseRef)
+      ) {
         return err(
           errorShape(
             ErrorCodes.INVALID_REQUEST,

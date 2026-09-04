@@ -11,7 +11,7 @@ import { recordSessionParticipantBestEffort } from "../../sessions/session-parti
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
-import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
+import { waitForAgentRunReply } from "../run-wait.js";
 import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
@@ -142,11 +142,8 @@ export async function runAgentStep(params: {
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
-  // Gateway agent calls can return before the assistant reply is persisted.
-  const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+  const result = await waitForAgentRunReply({
     runId: resolvedRunId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
     callGateway: gatewayCall,
   });

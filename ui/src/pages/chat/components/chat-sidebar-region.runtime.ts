@@ -75,6 +75,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) callbacks: SidebarRegionCallbacks | null = null;
   @property({ type: Boolean }) narrow = false;
   @property({ type: Number }) availableWidth = 0;
+  private panelMounted = false;
 
   deliverPanelEvent(slot: SidebarSlotId, event: Event): boolean {
     const panel = this.parentElement?.querySelector<HTMLElement>(
@@ -294,7 +295,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           data-panel-slot=${panel.slot}
           ?hidden=${panel.id !== column.activePanelId}
         >
-          ${this.panelTemplates[panel.slot] ?? this.renderEmpty(panel)}
+          ${
+            this.layout.open || panelType(this.panelDefinitions, panel.slot).retainWhenClosed
+              ? (this.panelTemplates[panel.slot] ?? this.renderEmpty(panel))
+              : nothing
+          }
         </div>`,
       )}
     </div>`;
@@ -346,15 +351,28 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderPanel() {
-    if (this.layout.open !== true) {
+    const open = this.layout.open === true;
+    const column = this.layout.columns[0];
+    // Retained app documents own unsaved state. Hide their existing DOM when
+    // minimizing; removing it reloads the iframe and discards that state.
+    if (
+      !open &&
+      (!this.panelMounted ||
+        !column?.panels.some(
+          (panel) => panelType(this.panelDefinitions, panel.slot).retainWhenClosed,
+        ))
+    ) {
+      this.panelMounted = false;
       return nothing;
     }
-    const column = this.layout.columns[0];
+    this.panelMounted = true;
     const dock = sidebarDock(this.layout);
     const width = this.layout.expanded || dock === "bottom" ? "100%" : `${column?.width ?? 480}px`;
     const height = this.layout.expanded || dock === "right" ? "100%" : `${column?.height ?? 360}px`;
     return html`${
-        !this.narrow && !this.layout.expanded && column ? this.renderDivider(column) : nothing
+        open && !this.narrow && !this.layout.expanded && column
+          ? this.renderDivider(column)
+          : nothing
       }
       <section
         class="sidebar-column side-panel ${this.narrow ? "side-panel--narrow" : ""} ${
@@ -362,6 +380,8 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         } ${dock === "bottom" ? "side-panel--bottom" : ""}"
         style=${styleMap({ width, height })}
         aria-label=${t("chat.sidePanel.label")}
+        ?hidden=${!open}
+        ?inert=${!open}
       >
         ${
           column?.panels.length

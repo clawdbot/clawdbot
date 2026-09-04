@@ -3,8 +3,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
-import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
 import { clampText } from "../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -166,8 +166,6 @@ export type ResolvedBoardView = {
   hasBoard: boolean;
   face: BoardFace;
   activeTabId: string;
-  dock: BoardTab["chatDock"];
-  reopenDock: BoardVisibleChatDock;
 };
 
 export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;

@@ -103,7 +103,7 @@ suite.define(() => {
         await page.screenshot({ path: path.join(proofDir, "03-split-dashboard.png") });
       }
       await page.locator(".side-panel__minimize").click();
-      await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
+      await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
       await page.locator(".chat-thread").waitFor();
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "04-chat-only.png") });

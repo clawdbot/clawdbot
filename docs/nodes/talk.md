@@ -148,6 +148,9 @@ selects that agent. Otherwise, Talk uses `talk.agentId`, then the configured sys
 agent or an unambiguous default agent. Without an owner in a multi-agent Gateway,
 set `talk.agentId` or send an agent-prefixed key.
 
+`talk.catalog` also requires an unambiguous Talk owner and checks it before
+discovering providers, so missing ownership returns its setup error promptly.
+
 Omitting `sessionKey` selects the same owned main session as a bare `main` key;
 both enforce sharing, incognito, and operator-role restrictions. Main aliases
 honor `session.scope` and the configured [main session](/concepts/main-session) key. A shared fixed store retains

@@ -577,8 +577,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       refreshOutcomeRevision > previousOutcomeRevision ? lastRefreshOutcome : { status: "stale" },
     );
   };
-  const refreshReplacement = (agentId?: string | null) =>
-    refreshReplacementResult(agentId).then(() => undefined);
   return {
     primaryList: () => primaryList,
     get requestRevision() {
@@ -648,7 +646,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     bootstrap(options: SessionRefreshOptions) {
       return refreshInternal(options, true);
     },
-    refreshReplacement,
+    refreshReplacement: (agentId?: string | null) =>
+      refreshReplacementResult(agentId).then(() => undefined),
     refreshReplacementResult,
     invalidateForegroundPublication: () => void ++foregroundPublicationGeneration,
     /** The row as currently published. The archived/all sidebars render their
@@ -692,13 +691,14 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     // Gateway-owned membership filters require an authoritative list refresh.
     canApplyPrimarySnapshot: () => isPrimarySessionListQuery(lastListOptions),
     scheduleEvent(options: { agentId?: string | null; primarySnapshotApplied?: boolean } = {}) {
-      if (!options.primarySnapshotApplied) {
+      const agentId = options.agentId ? normalizeAgentId(options.agentId) : null;
+      const matchesAgent = (queryAgentId?: string) =>
+        !agentId || !queryAgentId?.trim() || normalizeAgentId(queryAgentId) === agentId;
+      if (!options.primarySnapshotApplied && matchesAgent(lastListOptions.agentId)) {
         eventRefreshCoordinator.schedule();
       }
-      const agentId = options.agentId ? normalizeAgentId(options.agentId) : null;
       for (const entry of managedLists.values()) {
-        const queryAgentId = managedSessionListAgentId(entry);
-        if (!agentId || !queryAgentId || normalizeAgentId(queryAgentId) === agentId) {
+        if (matchesAgent(managedSessionListAgentId(entry))) {
           entry.coordinator.schedule();
         }
       }

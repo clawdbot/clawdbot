@@ -528,6 +528,11 @@ middleware, but new result transforms should use the runtime-neutral API. The
 embedded-runner-only `api.registerEmbeddedExtensionFactory(...)` hook has been
 removed; embedded tool-result transforms must use runtime-neutral middleware.
 
+Retain `details.messageDelivery.sourceReplyDelivered` from the host message tool
+before middleware transforms its result, and carry it into the attempt result.
+This confirms a final external source reply and does not depend on destination
+arguments or transcript mirrors.
+
 ### Terminal outcome classification
 
 Native harnesses that own their own protocol projection can use

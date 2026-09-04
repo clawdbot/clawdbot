@@ -282,26 +282,12 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       ? saved?.activeTabId
       : undefined;
     const activeTabId = savedTab ?? snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
-    const tab = snapshot.tabs.find((candidate) => candidate.tabId === activeTabId);
-    const commandDock =
-      this.boardCommandDock?.sessionKey === sessionKey &&
-      this.boardCommandDock.tabId === activeTabId
-        ? this.boardCommandDock.dock
-        : undefined;
-    const dock = commandDock ?? tab?.chatDock ?? "right";
-    const dockKey = `${sessionKey}:${activeTabId}`;
-    if (dock !== "hidden") {
-      this.lastVisibleBoardDock.set(dockKey, dock);
-    }
     return {
       provider,
       snapshot,
       hasBoard,
       face: hasBoard ? this.routeFace : "chat",
       activeTabId,
-      dock,
-      reopenDock:
-        this.lastVisibleBoardDock.get(dockKey) ?? saved?.reopenDockByTab?.[activeTabId] ?? "right",
     };
   }
 
@@ -347,7 +333,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           applyOps: (ops) => board.provider.applyOps(ops),
           grant: (name, decision) => board.provider.grant(name, decision),
           selectTab: (tabId) => {
-            this.boardCommandDock = null;
             this.persistBoardSessionView({ face: "dashboard", activeTabId: tabId });
           },
           frameLoadFailed: (name) => board.provider.refreshWidgetFrame(name),
@@ -387,7 +372,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const command = event.command;
     if (command.kind === "focus_tab") {
       if (board.snapshot.tabs.some((tab) => tab.tabId === command.tabId)) {
-        this.boardCommandDock = null;
         this.persistBoardSessionView({ activeTabId: command.tabId });
         this.showDashboard(false);
       }
@@ -396,7 +380,6 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!board.activeTabId) {
       return;
     }
-    this.boardCommandDock = null;
     this.showDashboard(command.dock === "hidden");
   }
 }

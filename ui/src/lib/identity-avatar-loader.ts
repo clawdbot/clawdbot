@@ -1,5 +1,9 @@
 import { AVATAR_MAX_BYTES } from "../../../src/shared/avatar-limits.js";
-import { readAvatarGatewayContext, registerAvatarGatewayReset } from "./identity-avatar-context.ts";
+import {
+  fetchGatewayContextResource,
+  readAvatarGatewayContext,
+  registerAvatarGatewayReset,
+} from "./identity-avatar-context.ts";
 import { resolveTrustedAvatarUrl } from "./identity-avatar.ts";
 
 const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
@@ -64,14 +68,9 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
     loaded: false,
     promise: Promise.resolve(null),
   };
-  const { authHeader } = readAvatarGatewayContext();
   entry.promise = (async () => {
     try {
-      const response = await fetch(url, {
-        credentials: "include",
-        ...(authHeader ? { headers: { Authorization: authHeader } } : {}),
-        signal: AbortSignal.timeout(IDENTITY_AVATAR_FETCH_TIMEOUT_MS),
-      });
+      const response = await fetchGatewayContextResource(url, IDENTITY_AVATAR_FETCH_TIMEOUT_MS);
       if (!response.ok) {
         return null;
       }
@@ -109,14 +108,14 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
 
 /** Fetch connected-gateway profile images once and render CSP-safe blobs. */
 export function resolveAvatarImageUrl(value: string): string | Promise<string | null> | null {
-  const { authHeader, origin, resourceBasePath } = readAvatarGatewayContext();
+  const { authTokens, origin, resourceBasePath } = readAvatarGatewayContext();
   const trusted = resolveTrustedAvatarUrl(value, origin, resourceBasePath);
   if (!trusted) {
     return null;
   }
   // Connected same-origin routes need the loader too: it resolves a missing
   // avatar before Lit can reconcile an <img> error back over its initials.
-  return origin || authHeader ? loadIdentityAvatar(trusted) : trusted;
+  return origin || authTokens.length ? loadIdentityAvatar(trusted) : trusted;
 }
 
 /** A blob stays live until its image has finished loading or definitively failed. */

@@ -285,9 +285,12 @@ export function sidebarPanelDefinitions(
           }
         : {}),
     }),
-    definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
-      available: params?.dashboard !== nothing,
-    }),
+    {
+      ...definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
+        available: params?.dashboard !== nothing,
+      }),
+      retainWhenClosed: true,
+    },
   ];
 }
 

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
+  prependAuthProfilePin,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
@@ -310,17 +311,10 @@ export function prepareAgentRuntimeAuth(
           forModel: params.modelId,
           readinessMode: "read-only",
         });
-  const automaticOrderResolution = userPinnedProfileId
-    ? {
-        ...resolvedAutomaticOrder,
-        profileIds: [
-          userPinnedProfileId,
-          ...resolvedAutomaticOrder.profileIds.filter(
-            (profileId) => profileId !== userPinnedProfileId,
-          ),
-        ],
-      }
-    : resolvedAutomaticOrder;
+  const automaticOrderResolution = prependAuthProfilePin(
+    resolvedAutomaticOrder,
+    userPinnedProfileId,
+  );
   const providerPreferredProfileId =
     harnessAllowsAuthProfileForwarding &&
     !selectedProfileId &&
