@@ -71,6 +71,53 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     );
   });
 
+  it("remaps injected paths into the prompt workspace while accounting keeps source paths", async () => {
+    // Sandbox runs show the model the copy path; injection accounting still has
+    // to recognize the host file it loaded, or its bytes read as never injected.
+    const workspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-remap-workspace-")),
+    );
+    const promptWorkspace = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-remap-prompt-")),
+    );
+    tempDirs.push(workspace, promptWorkspace);
+    const agents = "Sandboxed agent instructions";
+    await fs.writeFile(path.join(workspace, "AGENTS.md"), agents);
+
+    const result = await prepareEmbeddedAttemptBootstrap({
+      attempt: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        trigger: "user",
+        isCanonicalWorkspace: true,
+        config: { agents: { defaults: { workspace } } },
+      } as EmbeddedRunAttemptParams,
+      bootstrapWorkspaceDir: workspace,
+      effectiveWorkspace: promptWorkspace,
+      hasReadTool: true,
+      isRawModelRun: false,
+      markStage: () => undefined,
+      resolvedWorkspace: workspace,
+      sessionAgentId: "main",
+      sessionLabel: "agent:main:session-1",
+    });
+
+    expect(result.contextFiles).toContainEqual(
+      expect.objectContaining({
+        path: path.join(promptWorkspace, "AGENTS.md"),
+        content: agents,
+      }),
+    );
+    expect(result.bootstrapInjectionStats).toContainEqual(
+      expect.objectContaining({
+        path: path.join(workspace, "AGENTS.md"),
+        rawChars: agents.length,
+        injectedChars: agents.length,
+        truncated: false,
+      }),
+    );
+  });
+
   it("keeps same-workspace bootstrap output byte-identical", async () => {
     const workspace = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-same-workspace-")),

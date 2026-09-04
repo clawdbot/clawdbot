@@ -72,6 +72,39 @@ describe("noteBootstrapFileSize", () => {
     );
   });
 
+  it("reports a budget-dropped file that repeats a sibling basename as fully truncated", async () => {
+    resolveBootstrapTotalMaxChars.mockReturnValueOnce(1_000);
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
+      bootstrapFiles: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/workspace/AGENTS.md",
+          content: "a".repeat(1_000),
+          missing: false,
+        },
+        {
+          name: "AGENTS.md",
+          path: "/tmp/workspace/packages/core/AGENTS.md",
+          content: "b".repeat(500),
+          missing: false,
+        },
+      ],
+      contextFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(1_000) }],
+    });
+    await noteBootstrapFileSize({} as OpenClawConfig);
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(note.mock.calls[0]?.[0]).toBe(
+      [
+        "Workspace bootstrap files exceed limits and will be truncated:",
+        "- AGENTS.md: 500 raw / 0 injected (100% truncated; max/total)",
+        "Total bootstrap injected chars: 1,000 (100% of max/total 1,000).",
+        "Total bootstrap raw chars (before truncation): 1,500.",
+        "",
+        "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
+      ].join("\n"),
+    );
+  });
+
   it("threads the default agent id through bootstrap size resolution", async () => {
     resolveDefaultAgentId.mockReturnValueOnce("custom-agent");
     listAgentIds.mockReturnValueOnce(["custom-agent"]);
