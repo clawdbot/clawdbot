@@ -1732,6 +1732,27 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("refuses a direct launch after an accepted task exits with an error", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      const failedTask = {
+        state: 3,
+        lastRunTime: "2026-09-04T01:50:00.0000000Z",
+        lastRunResult: 1,
+      };
+      addMissingTaskInstallResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        failedTask,
+        failedTask,
+      ]);
+
+      await expect(installGatewayScheduledTask(env)).rejects.toThrow("refusing a direct fallback");
+
+      expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses a direct launch when Task Scheduler records a clean exit without launch evidence", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();

@@ -129,7 +129,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   preLaunchGatewayPids: ReadonlySet<number>;
 }): Promise<boolean> {
   const readLaunchObservation = async (): Promise<{
-    state: "running" | "not-yet-run" | "stopped-success" | "other";
+    state: "running" | "not-yet-run" | "stopped-success" | "stopped-failure" | "other";
     signature: string;
   }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
@@ -155,7 +155,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     }
     return runtime.lastRunResult === "0"
       ? { state: "stopped-success", signature: runtimeSignature(runtime) }
-      : { state: "other", signature: runtimeSignature(runtime) };
+      : { state: "stopped-failure", signature: runtimeSignature(runtime) };
   };
 
   const hasLaunchEvidence = async (): Promise<boolean> => {
@@ -220,14 +220,14 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   };
 
   let previous = await readLaunchObservation();
-  if (previous.state !== "not-yet-run" && previous.state !== "stopped-success") {
+  if (previous.state === "running" || previous.state === "other") {
     return false;
   }
   const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
     const current = await readLaunchObservation();
-    if (current.state !== "not-yet-run" && current.state !== "stopped-success") {
+    if (current.state === "running" || current.state === "other") {
       return false;
     }
     if (
@@ -238,7 +238,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       return false;
     }
     // A queued task may finish before its process is observable; the reverse transition means a new run is starting.
-    if (previous.state === "stopped-success" && current.state === "not-yet-run") {
+    if (previous.state !== "not-yet-run" && current.state === "not-yet-run") {
       return false;
     }
     previous = current;
