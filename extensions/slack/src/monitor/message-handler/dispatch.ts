@@ -69,10 +69,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ...upstreamLifecycle,
     onDeferred: () => {
       const accepted = upstreamLifecycle.onDeferred?.();
-      if (accepted === false) {
-        return false;
+      if (accepted !== false) {
+        releaseDeferred ??= beginSessionRun();
       }
-      releaseDeferred ??= beginSessionRun();
       return accepted;
     },
     onSettled: () => {
@@ -81,11 +80,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   };
   const release = beginSessionRun();
-  try {
-    await dispatchSlackMessageWithSetup(setup, beginSessionRun, turnAdoptionLifecycle);
-  } finally {
-    release();
-  }
+  await dispatchSlackMessageWithSetup(setup, beginSessionRun, turnAdoptionLifecycle).finally(
+    release,
+  );
 }
 
 async function dispatchSlackMessageWithSetup(
