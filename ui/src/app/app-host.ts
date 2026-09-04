@@ -601,7 +601,10 @@ class OpenClawShell
   readonly handleDocumentKeydown = this.shellChrome.handleDocumentKeydown;
   readonly openPalette = this.shellChrome.openPalette;
   readonly refreshControlUi = (): Promise<boolean> =>
-    retryStaleChunkReloadWhenReachable({ timeoutMs: 0 });
+    retryStaleChunkReloadWhenReachable({
+      timeoutMs: 0,
+      canReload: () => this.context?.overlays.snapshot.controlUiRefreshRequired === true,
+    });
   readonly handleShellNavDrawerToggle = this.shellChrome.handleShellNavDrawerToggle;
   readonly openApprovals = this.shellChrome.openApprovals;
   readonly handleCommandPaletteSlashCommand = this.shellChrome.handleCommandPaletteSlashCommand;
