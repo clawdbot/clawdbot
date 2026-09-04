@@ -235,11 +235,14 @@ case "$path" in
     fi
     if [[ "$count" -le "\${FAKE_GH_ARTIFACT_HANGS:-0}" ]]; then
       # Simulate a stalled connection: accepts the request but never responds.
-      # Absolute path bypasses the fake sleep shim so the request really hangs.
       if [[ "\${FAKE_GH_ARTIFACT_TERM_RESISTANT:-0}" == "1" ]]; then
-        # Simulate a process that ignores SIGTERM; only KILL escalation stops it.
-        trap '' TERM
+        # exec removes this shell: a plain child sleep would die to the
+        # process-group TERM and end the script via set -e without ever
+        # reaching --kill-after. The replacement survives TERM, so only KILL
+        # escalation (status 137) can stop the request.
+        exec term-resistant-hang
       fi
+      # Absolute path bypasses the fake sleep shim so the request really hangs.
       /bin/sleep 30
     fi
     if [[ -n "\${FAKE_ARTIFACT_JSON:-}" ]]; then
@@ -275,6 +278,18 @@ esac
     `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$FAKE_SLEEP_LOG"
+`,
+  );
+
+  writeExecutable(
+    join(bin, "term-resistant-hang"),
+    `#!/usr/bin/env bash
+# Survive SIGTERM and record its delivery; only SIGKILL escalation stops this
+# process. No set -e: the TERM-killed sleep below must not end the loop.
+trap 'echo term-survived >> "$FAKE_GH_STATE/term-deliveries"' TERM
+while :; do
+  /bin/sleep 1
+done
 `,
   );
 
@@ -428,6 +443,12 @@ describe("shared Docker image artifacts", () => {
       expect(verified.stderr).toContain("request deadline");
       expect(verified.stderr).toContain(
         "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
+      );
+      // The fake recorded a survived TERM, so the retry could only have come
+      // from --kill-after KILL escalation (status 137): without it, timeout
+      // would wait forever on the surviving process instead of retrying.
+      expect(readFileSync(join(fixture.root, "gh-state", "term-deliveries"), "utf8").trim()).toBe(
+        "term-survived",
       );
       const calls = readFileSync(fixture.ghLog, "utf8");
       expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
