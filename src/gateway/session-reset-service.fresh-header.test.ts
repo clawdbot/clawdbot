@@ -1,6 +1,10 @@
 import { afterEach, expect, test } from "vitest";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../agents/sessions/session-manager.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceTranscriptEventsSync,
+} from "../config/sessions/session-accessor.js";
 import { appendTranscriptMessageSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { writeSessionStore } from "./test-helpers.js";
@@ -65,4 +69,43 @@ test("fresh /new reset persists a canonical session header before the reset even
   expect(SessionManager.openModelContext(scope).buildSessionContext().messages).toEqual([
     expect.objectContaining({ role: "user", content: "ping" }),
   ]);
+});
+
+test("reset on a nonempty headerless transcript does not insert a late header", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:telegram:direct:headerless-legacy";
+  const sessionId = "headerless-legacy-session";
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry(sessionId),
+    },
+  });
+  const scope = {
+    agentId: "main",
+    sessionId,
+    sessionKey,
+    storePath,
+  };
+  replaceTranscriptEventsSync(scope, [
+    {
+      type: "message",
+      id: "legacy-user",
+      parentId: null,
+      timestamp: "2026-09-03T00:00:00.000Z",
+      message: { role: "user", content: "old ping" },
+    },
+  ]);
+
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  await performGatewaySessionReset({
+    key: sessionKey,
+    reason: "new",
+    commandSource: "telegram:text",
+    workerPlacementContext: {},
+  });
+
+  const events = await loadTranscriptEvents(scope);
+  expect(events.some((event) => (event as { type?: unknown }).type === "session")).toBe(false);
+  expect(events).toContainEqual(expect.objectContaining({ type: "message" }));
+  expect(events).toContainEqual(expect.objectContaining({ type: "reset", reason: "new" }));
 });
