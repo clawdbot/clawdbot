@@ -10,9 +10,11 @@ import {
   type SessionGoalOperationResult,
 } from "../../config/sessions/goals-operations.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   recordSessionCreated,
   recordSessionGoalChanged,
@@ -392,8 +394,10 @@ async function handleChatSendWithOptions(
     }
     // Steer targets never reach reply dispatch, so document attachments would
     // otherwise reach the active run as bare media facts. Render their context
-    // up front; read-only on ctx, so a rejected injection falls back to reply
-    // dispatch and extracts exactly once through the full pipeline.
+    // up front. A failed lazy load or render must not abort a steerable
+    // message: normal reply dispatch tolerates media-understanding failures by
+    // proceeding with the raw content, so steer injection keeps the same
+    // contract and falls back to the original text.
     const steerDocumentContextText =
       messageInjectionTarget && !isInternalTextSlashCommandTurn
         ? await mediaDocumentContextLoader
@@ -401,6 +405,14 @@ async function handleChatSendWithOptions(
             .then((runtime) =>
               runtime.renderInboundDocumentContext({ ctx, cfg: preparedSession.value.cfg }),
             )
+            .catch((err: unknown) => {
+              // A poisoned lazy import must not be served to later steers.
+              mediaDocumentContextLoader.clear();
+              logVerbose(
+                `steer document render failed, injecting raw content: ${formatErrorMessage(err)}`,
+              );
+              return undefined;
+            })
         : undefined;
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,

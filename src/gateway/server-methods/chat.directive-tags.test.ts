@@ -128,6 +128,7 @@ const mockState = vi.hoisted(() => {
     emittedTranscriptUpdates: [] as TranscriptUpdate[],
     savedMediaResults: [] as Array<{ id?: string; path: string; contentType?: string }>,
     saveMediaError: null as Error | null,
+    steerDocumentRenderError: null as Error | null,
     savedMediaCalls: [] as Array<{ contentType?: string; subdir?: string; size: number }>,
     saveMediaWait: null as Promise<void> | null,
     activeSaveMediaCalls: 0,
@@ -232,6 +233,23 @@ const OFFLOAD_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 const TINY_JPEG_BASE64 =
   "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUXFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fICUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBEQACEQEDEQH/xAAXAAADAQAAAAAAAAAAAAAAAAAAAQMC/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEAMQAAAB6AAAAP/EABQQAQAAAAAAAAAAAAAAAAAAACD/2gAIAQEAAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQIBAT8Af//EABQRAQAAAAAAAAAAAAAAAAAAACD/2gAIAQMBAT8Af//Z";
+
+vi.mock("../../media-understanding/apply.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../media-understanding/apply.runtime.js")>(
+    "../../media-understanding/apply.runtime.js",
+  );
+  return {
+    ...actual,
+    renderInboundDocumentContext: (
+      params: Parameters<typeof actual.renderInboundDocumentContext>[0],
+    ) => {
+      if (mockState.steerDocumentRenderError) {
+        return Promise.reject(mockState.steerDocumentRenderError);
+      }
+      return actual.renderInboundDocumentContext(params);
+    },
+  };
+});
 
 vi.mock("../session-utils.js", async () => {
   const original =
@@ -2298,6 +2316,71 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // already carry the extracted document context.
     expect(injectedText).toContain('<file name="notes.txt" mime="text/plain">');
     expect(injectedText).toContain("steered document body");
+  });
+
+  it("keeps the raw steer when the lazy document render fails", async () => {
+    const { respond, send } = await createSqliteChatRequest("openclaw-chat-send-steer-doc-fail-");
+    mockState.hasMessageReceivedHooks = true;
+    const documentPath = path.join(suiteFixtureRoot, "openclaw-steer-doc-fail.txt");
+    fs.writeFileSync(documentPath, "steered document body");
+    setSavedMediaResults([documentPath, "text/plain"]);
+    mockState.steerDocumentRenderError = new Error("lazy media runtime unavailable");
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
+      runId: "active-run",
+      supportsQueueMessageImages: true,
+      taskSuggestionDeliveryMode: "gateway",
+      queueMessage,
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-document-render-failure",
+        requestParams: {
+          queueMode: "steer",
+          attachments: [
+            createFileAttachment(
+              "notes.txt",
+              "text/plain",
+              Buffer.from("steered document body", "utf8").toString("base64"),
+            ),
+          ],
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              version: "dev",
+              platform: "web",
+            },
+            caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+            scopes: ["operator.admin"],
+          },
+        },
+      });
+    } finally {
+      operation.complete();
+      mockState.steerDocumentRenderError = null;
+    }
+
+    // A failed render must not abort a steerable message: normal reply
+    // dispatch proceeds with raw content on media-understanding failure, so
+    // the steer injection keeps the same contract.
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(queueMessage).toHaveBeenCalledOnce();
+    const [injectedText] = vi.mocked(queueMessage).mock.calls[0] ?? [];
+    expect(injectedText).toBeDefined();
+    expect(injectedText).not.toContain('<file name="notes.txt"');
+    expect(injectedText).toContain("hello");
   });
 
   it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
