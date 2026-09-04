@@ -601,6 +601,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           recordLogRecord,
           recordSecurityEvent,
         }),
+        metricsActive
+          ? undefined
+          : tracesActive
+            ? { exclude: ["gateway.event_loop.sample"] }
+            : { include: ["log.record", "security.event"] },
       );
       if (tracesActive) {
         // Model/tool starts are queued while their lifecycle parents dispatch

@@ -1,6 +1,25 @@
 // Event-loop health tests cover delay, CPU, and utilization degradation classification.
 import type { monitorEventLoopDelay, performance } from "node:perf_hooks";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getInternalDiagnosticEventSequence,
+  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import {
+  createDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
+import {
+  startDiagnosticStabilityRecorder,
+  stopDiagnosticStabilityRecorder,
+} from "../../logging/diagnostic-stability.js";
+import { registerSkillUsageTracking } from "../../skills/workshop/curator.js";
 import { createGatewayEventLoopHealthMonitor } from "./event-loop-health.js";
 
 /**
@@ -268,5 +287,109 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       intervalMs: 1_000,
       delayMaxMs: 0,
     });
+  });
+});
+
+describe("event-loop measurement telemetry", () => {
+  beforeEach(resetDiagnosticEventsForTest);
+  afterEach(() => {
+    stopDiagnosticStabilityRecorder();
+    resetDiagnosticEventsForTest();
+  });
+
+  it("records completed windows once while later readiness recovers and cached readers reuse them", async () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    const events: DiagnosticEventPayload[] = [];
+    onInternalDiagnosticEvent((event) => events.push(event), {
+      include: ["gateway.event_loop.sample"],
+    });
+    const readerTrace = createDiagnosticTraceContext();
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(1_000);
+    const early = runWithDiagnosticTraceContext(readerTrace, () => {
+      const snapshot = harness.monitor.snapshot();
+      expect(getActiveDiagnosticTraceContext()?.traceId).toBe(readerTrace.traceId);
+      return snapshot;
+    });
+    expectSnapshotFields(early, { degraded: true, delayMaxMs: 1_500 });
+    harness.setNow(1_250);
+    expect(harness.monitor.snapshot()).toBe(early);
+    harness.setNow(2_000);
+    const recovered = harness.monitor.snapshot();
+    expectSnapshotFields(recovered, { degraded: false, delayMaxMs: 0 });
+    expect(harness.monitor.snapshot()).toBe(recovered);
+    expect(events).toEqual([]);
+
+    await waitForDiagnosticEventsDrained();
+
+    expect(events).toHaveLength(2);
+    expect(events).toMatchObject([
+      { type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 1_500 },
+      { type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 0 },
+    ]);
+    expect(events.map((event) => event.trace)).toEqual([undefined, undefined]);
+  });
+
+  it("keeps diagnostics-disabled readiness sampling unchanged without emitting telemetry", async () => {
+    const listener = vi.fn();
+    onInternalDiagnosticEvent(listener, { include: ["gateway.event_loop.sample"] });
+    setDiagnosticsEnabledForProcess(false);
+    const harness = createMonitorHarness();
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(1_000);
+
+    expectSnapshotFields(harness.monitor.snapshot(), { degraded: true, delayMaxMs: 1_500 });
+    await waitForDiagnosticEventsDrained();
+    expect(listener).not.toHaveBeenCalled();
+    expect(getInternalDiagnosticEventSequence()).toBe(0);
+  });
+
+  it.each([
+    { name: "no listener", subscribe: () => () => {} },
+    { name: "public listener", subscribe: () => onDiagnosticEvent(() => {}) },
+    {
+      name: "unrelated listener",
+      subscribe: () => onInternalDiagnosticEvent(() => {}, { include: ["diagnostic.heartbeat"] }),
+    },
+    {
+      name: "stability recorder",
+      subscribe: () => {
+        startDiagnosticStabilityRecorder();
+        return stopDiagnosticStabilityRecorder;
+      },
+    },
+    { name: "skill tracking", subscribe: () => registerSkillUsageTracking() },
+  ])("does not produce exporter samples with only $name", async ({ subscribe }) => {
+    const unsubscribe = subscribe();
+    try {
+      const harness = createMonitorHarness();
+      harness.setDelay({ maxMs: 1_500 });
+      harness.setNow(1_000);
+      expectSnapshotFields(harness.monitor.snapshot(), { delayMaxMs: 1_500 });
+      await waitForDiagnosticEventsDrained();
+      expect(getInternalDiagnosticEventSequence()).toBe(0);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("does not turn intentional reset or stop into extra completed windows", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    onInternalDiagnosticEvent((event) => events.push(event), {
+      include: ["gateway.event_loop.sample"],
+    });
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(1_000);
+    harness.monitor.reset();
+    harness.setNow(2_000);
+    expectSnapshotFields(harness.monitor.snapshot(), { degraded: false, delayMaxMs: 0 });
+    harness.monitor.stop();
+    expect(harness.monitor.snapshot()).toBeUndefined();
+    await waitForDiagnosticEventsDrained();
+    expect(events).toMatchObject([
+      { type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 0 },
+    ]);
+    expect(events).toHaveLength(1);
   });
 });

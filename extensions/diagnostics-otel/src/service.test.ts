@@ -107,7 +107,8 @@ const unhandledRejectionHandlerState = vi.hoisted(() => {
   };
 });
 
-vi.mock("@opentelemetry/api", () => ({
+vi.mock("@opentelemetry/api", async (importOriginal) => ({
+  ROOT_CONTEXT: (await importOriginal<typeof import("@opentelemetry/api")>()).ROOT_CONTEXT,
   context: {
     active: () => ({}),
   },
@@ -1795,14 +1796,14 @@ describe("diagnostics-otel service", () => {
     ]);
     expect(
       telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
-    ).toHaveBeenCalledTimes(1);
+    ).not.toHaveBeenCalled();
 
     await service.stop?.(ctx);
     await waitForDiagnosticEventsDrained();
     expect(events.map((event) => event.status)).toEqual(["started", "dropped"]);
     expect(
       telemetryState.counters.get("openclaw.telemetry.exporter.events")?.add,
-    ).toHaveBeenCalledTimes(1);
+    ).not.toHaveBeenCalled();
     unsubscribe();
   });
 
@@ -2734,7 +2735,7 @@ describe("diagnostics-otel service", () => {
         throw new TypeError("repeated private failure");
       });
 
-    const { ctx } = await startServiceFixture(["logs"]);
+    const { ctx } = await startServiceFixture(["metrics", "logs"]);
     for (const message of ["first failure", "second failure", "recovery"]) {
       await emitEventAndFlush("log.record", {
         message,
