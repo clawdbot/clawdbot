@@ -1408,6 +1408,7 @@ public struct HelloOk: Codable, Sendable {
     public let server: [String: AnyCodable]
     public let features: [String: AnyCodable]
     public let snapshot: Snapshot
+    public let controluiurl: String?
     public let controluitabs: [[String: AnyCodable]]?
     public let controluiwidgetkinds: [[String: AnyCodable]]?
     public let pluginsurfaceurls: [String: AnyCodable]?
@@ -1420,6 +1421,7 @@ public struct HelloOk: Codable, Sendable {
         server: [String: AnyCodable],
         features: [String: AnyCodable],
         snapshot: Snapshot,
+        controluiurl: String? = nil,
         controluitabs: [[String: AnyCodable]]? = nil,
         controluiwidgetkinds: [[String: AnyCodable]]? = nil,
         pluginsurfaceurls: [String: AnyCodable]? = nil,
@@ -1431,6 +1433,7 @@ public struct HelloOk: Codable, Sendable {
         self.server = server
         self.features = features
         self.snapshot = snapshot
+        self.controluiurl = controluiurl
         self.controluitabs = controluitabs
         self.controluiwidgetkinds = controluiwidgetkinds
         self.pluginsurfaceurls = pluginsurfaceurls
@@ -1444,6 +1447,7 @@ public struct HelloOk: Codable, Sendable {
         case server
         case features
         case snapshot
+        case controluiurl = "controlUiUrl"
         case controluitabs = "controlUiTabs"
         case controluiwidgetkinds = "controlUiWidgetKinds"
         case pluginsurfaceurls = "pluginSurfaceUrls"
@@ -6516,6 +6520,8 @@ public struct SessionRow: Codable, Sendable {
     public let estimatedcostusd: Double?
     public let model: String?
     public let modelprovider: String?
+    public let activemodel: String?
+    public let activemodelprovider: String?
     public let modeloverridesource: AnyCodable?
     public let tooloverrides: [String: AnyCodable]?
 
@@ -6593,6 +6599,8 @@ public struct SessionRow: Codable, Sendable {
         estimatedcostusd: Double? = nil,
         model: String? = nil,
         modelprovider: String? = nil,
+        activemodel: String? = nil,
+        activemodelprovider: String? = nil,
         modeloverridesource: AnyCodable? = nil,
         tooloverrides: [String: AnyCodable]? = nil)
     {
@@ -6669,6 +6677,8 @@ public struct SessionRow: Codable, Sendable {
         self.estimatedcostusd = estimatedcostusd
         self.model = model
         self.modelprovider = modelprovider
+        self.activemodel = activemodel
+        self.activemodelprovider = activemodelprovider
         self.modeloverridesource = modeloverridesource
         self.tooloverrides = tooloverrides
     }
@@ -6747,6 +6757,8 @@ public struct SessionRow: Codable, Sendable {
         case estimatedcostusd = "estimatedCostUsd"
         case model
         case modelprovider = "modelProvider"
+        case activemodel = "activeModel"
+        case activemodelprovider = "activeModelProvider"
         case modeloverridesource = "modelOverrideSource"
         case tooloverrides = "toolOverrides"
     }
@@ -11854,6 +11866,354 @@ public struct AuditListResult: Codable, Sendable {
     }
 }
 
+public struct UserProfileAuthLink: Codable, Sendable {
+    public let provider: String
+    public let authprofileid: String
+    public let updatedat: Int
+
+    public init(
+        provider: String,
+        authprofileid: String,
+        updatedat: Int)
+    {
+        self.provider = provider
+        self.authprofileid = authprofileid
+        self.updatedat = updatedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case authprofileid = "authProfileId"
+        case updatedat = "updatedAt"
+    }
+}
+
+public struct UserModelAccount: Codable, Sendable {
+    public let authprofileid: String
+    public let provider: String
+    public let label: String
+    public let authtype: AnyCodable
+    public let selected: Bool
+
+    public init(
+        authprofileid: String,
+        provider: String,
+        label: String,
+        authtype: AnyCodable,
+        selected: Bool)
+    {
+        self.authprofileid = authprofileid
+        self.provider = provider
+        self.label = label
+        self.authtype = authtype
+        self.selected = selected
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case authprofileid = "authProfileId"
+        case provider
+        case label
+        case authtype = "authType"
+        case selected
+    }
+}
+
+public struct UsersListModelAccountsParams: Codable, Sendable {
+    public let profileid: String?
+    public let cursor: String?
+
+    public init(
+        profileid: String? = nil,
+        cursor: String? = nil)
+    {
+        self.profileid = profileid
+        self.cursor = cursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case cursor
+    }
+}
+
+public struct UsersListModelAccountsResult: Codable, Sendable {
+    public let profileid: String
+    public let accounts: [UserModelAccount]
+    public let nextcursor: String?
+    public let links: [UserProfileAuthLink]
+
+    public init(
+        profileid: String,
+        accounts: [UserModelAccount],
+        nextcursor: String? = nil,
+        links: [UserProfileAuthLink])
+    {
+        self.profileid = profileid
+        self.accounts = accounts
+        self.nextcursor = nextcursor
+        self.links = links
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case accounts
+        case nextcursor = "nextCursor"
+        case links
+    }
+}
+
+public struct UsersSelectModelAccountParams: Codable, Sendable {
+    public let profileid: String?
+    public let authprofileid: String
+
+    public init(
+        profileid: String? = nil,
+        authprofileid: String)
+    {
+        self.profileid = profileid
+        self.authprofileid = authprofileid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case authprofileid = "authProfileId"
+    }
+}
+
+public struct UsersSelectModelAccountResult: Codable, Sendable {
+    public let links: [UserProfileAuthLink]
+
+    public init(
+        links: [UserProfileAuthLink])
+    {
+        self.links = links
+    }
+}
+
+public struct UsersListAuthLinksParams: Codable, Sendable {
+    public let profileid: String
+
+    public init(
+        profileid: String)
+    {
+        self.profileid = profileid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+    }
+}
+
+public struct UsersListAuthLinksResult: Codable, Sendable {
+    public let links: [UserProfileAuthLink]
+
+    public init(
+        links: [UserProfileAuthLink])
+    {
+        self.links = links
+    }
+}
+
+public struct UsersLinkAuthProfileParams: Codable, Sendable {
+    public let profileid: String
+    public let authprofileid: String
+
+    public init(
+        profileid: String,
+        authprofileid: String)
+    {
+        self.profileid = profileid
+        self.authprofileid = authprofileid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case authprofileid = "authProfileId"
+    }
+}
+
+public struct UsersLinkAuthProfileResult: Codable, Sendable {
+    public let links: [UserProfileAuthLink]
+
+    public init(
+        links: [UserProfileAuthLink])
+    {
+        self.links = links
+    }
+}
+
+public struct UsersUnlinkAuthProfileParams: Codable, Sendable {
+    public let profileid: String
+    public let provider: String
+
+    public init(
+        profileid: String,
+        provider: String)
+    {
+        self.profileid = profileid
+        self.provider = provider
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case provider
+    }
+}
+
+public struct UsersUnlinkAuthProfileResult: Codable, Sendable {
+    public let links: [UserProfileAuthLink]
+
+    public init(
+        links: [UserProfileAuthLink])
+    {
+        self.links = links
+    }
+}
+
+public struct UsersAuthConnectCatalogParams: Codable, Sendable {
+    public let profileid: String
+
+    public init(
+        profileid: String)
+    {
+        self.profileid = profileid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+    }
+}
+
+public struct UsersAuthConnectCatalogResult: Codable, Sendable {
+    public let providers: [[String: AnyCodable]]
+
+    public init(
+        providers: [[String: AnyCodable]])
+    {
+        self.providers = providers
+    }
+}
+
+public struct UsersAuthConnectStartParams: Codable, Sendable {
+    public let profileid: String
+    public let provider: String
+    public let method: String
+
+    public init(
+        profileid: String,
+        provider: String,
+        method: String)
+    {
+        self.profileid = profileid
+        self.provider = provider
+        self.method = method
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case provider
+        case method
+    }
+}
+
+public struct UsersAuthConnectStartResult: Codable, Sendable {
+    public let connectid: String
+    public let expiresatms: Int
+
+    public init(
+        connectid: String,
+        expiresatms: Int)
+    {
+        self.connectid = connectid
+        self.expiresatms = expiresatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case connectid = "connectId"
+        case expiresatms = "expiresAtMs"
+    }
+}
+
+public struct UsersAuthConnectAnswerParams: Codable, Sendable {
+    public let profileid: String
+    public let connectid: String
+    public let stepid: String
+    public let value: AnyCodable?
+
+    public init(
+        profileid: String,
+        connectid: String,
+        stepid: String,
+        value: AnyCodable? = nil)
+    {
+        self.profileid = profileid
+        self.connectid = connectid
+        self.stepid = stepid
+        self.value = value
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case connectid = "connectId"
+        case stepid = "stepId"
+        case value
+    }
+}
+
+public struct UsersAuthConnectStatusParams: Codable, Sendable {
+    public let profileid: String
+    public let connectid: String
+
+    public init(
+        profileid: String,
+        connectid: String)
+    {
+        self.profileid = profileid
+        self.connectid = connectid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case connectid = "connectId"
+    }
+}
+
+public struct UsersAuthConnectCancelParams: Codable, Sendable {
+    public let profileid: String
+    public let connectid: String
+
+    public init(
+        profileid: String,
+        connectid: String)
+    {
+        self.profileid = profileid
+        self.connectid = connectid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case connectid = "connectId"
+    }
+}
+
+public struct UsersAuthConnectResult: Codable, Sendable {
+    public let authprofileid: String
+    public let links: [UserProfileAuthLink]
+
+    public init(
+        authprofileid: String,
+        links: [UserProfileAuthLink])
+    {
+        self.authprofileid = authprofileid
+        self.links = links
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case authprofileid = "authProfileId"
+        case links
+    }
+}
+
 public struct PersonalGitHubStatus: Codable, Sendable {
     public let state: AnyCodable
     public let generation: AnyCodable
@@ -12843,6 +13203,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
     public let sensitive: Bool?
     public let wizardinputpending: Bool?
     public let action: AnyCodable
+    public let handoff: [String: AnyCodable]?
     public let agentdraft: String?
     public let agentid: String?
     public let needsapproval: Bool?
@@ -12856,6 +13217,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         sensitive: Bool? = nil,
         wizardinputpending: Bool? = nil,
         action: AnyCodable,
+        handoff: [String: AnyCodable]? = nil,
         agentdraft: String? = nil,
         agentid: String? = nil,
         needsapproval: Bool? = nil,
@@ -12868,6 +13230,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         self.sensitive = sensitive
         self.wizardinputpending = wizardinputpending
         self.action = action
+        self.handoff = handoff
         self.agentdraft = agentdraft
         self.agentid = agentid
         self.needsapproval = needsapproval
@@ -12882,6 +13245,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         case sensitive
         case wizardinputpending = "wizardInputPending"
         case action
+        case handoff
         case agentdraft = "agentDraft"
         case agentid = "agentId"
         case needsapproval = "needsApproval"
@@ -14667,17 +15031,20 @@ public struct ChannelsLogoutParams: Codable, Sendable {
 }
 
 public struct WebLoginStartParams: Codable, Sendable {
+    public let channel: String?
     public let force: Bool?
     public let timeoutms: Int?
     public let verbose: Bool?
     public let accountid: String?
 
     public init(
+        channel: String? = nil,
         force: Bool? = nil,
         timeoutms: Int? = nil,
         verbose: Bool? = nil,
         accountid: String? = nil)
     {
+        self.channel = channel
         self.force = force
         self.timeoutms = timeoutms
         self.verbose = verbose
@@ -14685,6 +15052,7 @@ public struct WebLoginStartParams: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case channel
         case force
         case timeoutms = "timeoutMs"
         case verbose
@@ -14693,21 +15061,29 @@ public struct WebLoginStartParams: Codable, Sendable {
 }
 
 public struct WebLoginWaitParams: Codable, Sendable {
+    public let channel: String?
+    public let sessionkey: String?
     public let timeoutms: Int?
     public let accountid: String?
     public let currentqrdataurl: String?
 
     public init(
+        channel: String? = nil,
+        sessionkey: String? = nil,
         timeoutms: Int? = nil,
         accountid: String? = nil,
         currentqrdataurl: String? = nil)
     {
+        self.channel = channel
+        self.sessionkey = sessionkey
         self.timeoutms = timeoutms
         self.accountid = accountid
         self.currentqrdataurl = currentqrdataurl
     }
 
     private enum CodingKeys: String, CodingKey {
+        case channel
+        case sessionkey = "sessionKey"
         case timeoutms = "timeoutMs"
         case accountid = "accountId"
         case currentqrdataurl = "currentQrDataUrl"
@@ -20508,18 +20884,22 @@ public struct QuestionRequestResult: Codable, Sendable {
 public struct QuestionWaitAnswerParams: Codable, Sendable {
     public let id: String
     public let timeoutms: Int?
+    public let includeresolutionid: Bool?
 
     public init(
         id: String,
-        timeoutms: Int? = nil)
+        timeoutms: Int? = nil,
+        includeresolutionid: Bool? = nil)
     {
         self.id = id
         self.timeoutms = timeoutms
+        self.includeresolutionid = includeresolutionid
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case timeoutms = "timeoutMs"
+        case includeresolutionid = "includeResolutionId"
     }
 }
 
@@ -22143,18 +22523,22 @@ public struct ChatHistoryResetResult: Codable, Sendable {
 
 public struct ChatMetadataParams: Codable, Sendable {
     public let agentid: String?
+    public let authprofileid: String?
     public let sessionkey: String?
 
     public init(
         agentid: String? = nil,
+        authprofileid: String? = nil,
         sessionkey: String? = nil)
     {
         self.agentid = agentid
+        self.authprofileid = authprofileid
         self.sessionkey = sessionkey
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
+        case authprofileid = "authProfileId"
         case sessionkey = "sessionKey"
     }
 }
@@ -24388,6 +24772,459 @@ public enum AuditRunIdentityV1: Codable, Sendable {
     }
 }
 
+public struct ChatAccountSelectionAutomatic: Codable, Sendable {
+    public let kind: String
+    public let label: String
+
+    public init(
+        label: String
+    )
+    {
+        self.kind = "automatic"
+        self.label = label
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case label
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["kind", "label"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for ChatAccountSelectionAutomatic: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedKind = try container.decode(String.self, forKey: .kind)
+        guard decodedKind == "automatic" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Expected kind to equal automatic"
+            )
+        }
+        self.kind = "automatic"
+        self.label = try container.decode(String.self, forKey: .label)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("automatic", forKey: .kind)
+        try container.encode(label, forKey: .label)
+    }
+}
+
+public struct ChatAccountSelectionPersonal: Codable, Sendable {
+    public let kind: String
+    public let label: String
+    public let authprofileid: String?
+    public let source: AnyCodable?
+
+    public init(
+        label: String,
+        authprofileid: String? = nil,
+        source: AnyCodable? = nil
+    )
+    {
+        self.kind = "personal"
+        self.label = label
+        self.authprofileid = authprofileid
+        self.source = source
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case label
+        case authprofileid = "authProfileId"
+        case source
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["kind", "label", "authProfileId", "source"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for ChatAccountSelectionPersonal: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedKind = try container.decode(String.self, forKey: .kind)
+        guard decodedKind == "personal" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Expected kind to equal personal"
+            )
+        }
+        self.kind = "personal"
+        self.label = try container.decode(String.self, forKey: .label)
+        self.authprofileid = try container.decodeIfPresent(String.self, forKey: .authprofileid)
+        self.source = try container.decodeIfPresent(AnyCodable.self, forKey: .source)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("personal", forKey: .kind)
+        try container.encode(label, forKey: .label)
+        try container.encodeIfPresent(authprofileid, forKey: .authprofileid)
+        try container.encodeIfPresent(source, forKey: .source)
+    }
+}
+
+public struct ChatAccountSelectionShared: Codable, Sendable {
+    public let kind: String
+    public let label: String
+    public let authprofileid: String
+    public let source: AnyCodable?
+
+    public init(
+        label: String,
+        authprofileid: String,
+        source: AnyCodable? = nil
+    )
+    {
+        self.kind = "shared"
+        self.label = label
+        self.authprofileid = authprofileid
+        self.source = source
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case label
+        case authprofileid = "authProfileId"
+        case source
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["kind", "label", "authProfileId", "source"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for ChatAccountSelectionShared: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedKind = try container.decode(String.self, forKey: .kind)
+        guard decodedKind == "shared" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Expected kind to equal shared"
+            )
+        }
+        self.kind = "shared"
+        self.label = try container.decode(String.self, forKey: .label)
+        self.authprofileid = try container.decode(String.self, forKey: .authprofileid)
+        self.source = try container.decodeIfPresent(AnyCodable.self, forKey: .source)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("shared", forKey: .kind)
+        try container.encode(label, forKey: .label)
+        try container.encode(authprofileid, forKey: .authprofileid)
+        try container.encodeIfPresent(source, forKey: .source)
+    }
+}
+
+public enum ChatAccountSelection: Codable, Sendable {
+    case automatic(ChatAccountSelectionAutomatic)
+    case personal(ChatAccountSelectionPersonal)
+    case shared(ChatAccountSelectionShared)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "automatic": self = try .automatic(ChatAccountSelectionAutomatic(from: decoder))
+        case "personal": self = try .personal(ChatAccountSelectionPersonal(from: decoder))
+        case "shared": self = try .shared(ChatAccountSelectionShared(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown ChatAccountSelection discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .automatic(let value): try value.encode(to: encoder)
+        case .personal(let value): try value.encode(to: encoder)
+        case .shared(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public struct UsersAuthConnectStatusResultPending: Codable, Sendable {
+    public let status: String
+    public let step: WizardStep?
+    public let error: String?
+
+    public init(
+        step: WizardStep? = nil,
+        error: String? = nil
+    )
+    {
+        self.status = "pending"
+        self.step = step
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case step
+        case error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "step", "error"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UsersAuthConnectStatusResultPending: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "pending" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal pending"
+            )
+        }
+        self.status = "pending"
+        self.step = try container.decodeIfPresent(WizardStep.self, forKey: .step)
+        self.error = try container.decodeIfPresent(String.self, forKey: .error)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("pending", forKey: .status)
+        try container.encodeIfPresent(step, forKey: .step)
+        try container.encodeIfPresent(error, forKey: .error)
+    }
+}
+
+public struct UsersAuthConnectStatusResultConnected: Codable, Sendable {
+    public let status: String
+    public let authprofileid: String
+    public let links: [UserProfileAuthLink]
+
+    public init(
+        authprofileid: String,
+        links: [UserProfileAuthLink]
+    )
+    {
+        self.status = "connected"
+        self.authprofileid = authprofileid
+        self.links = links
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case authprofileid = "authProfileId"
+        case links
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "authProfileId", "links"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UsersAuthConnectStatusResultConnected: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "connected" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal connected"
+            )
+        }
+        self.status = "connected"
+        self.authprofileid = try container.decode(String.self, forKey: .authprofileid)
+        self.links = try container.decode([UserProfileAuthLink].self, forKey: .links)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("connected", forKey: .status)
+        try container.encode(authprofileid, forKey: .authprofileid)
+        try container.encode(links, forKey: .links)
+    }
+}
+
+public struct UsersAuthConnectStatusResultCancelled: Codable, Sendable {
+    public let status: String
+
+    public init()
+    {
+        self.status = "cancelled"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UsersAuthConnectStatusResultCancelled: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "cancelled" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal cancelled"
+            )
+        }
+        self.status = "cancelled"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("cancelled", forKey: .status)
+    }
+}
+
+public struct UsersAuthConnectStatusResultFailed: Codable, Sendable {
+    public let status: String
+    public let reason: AnyCodable
+
+    public init(
+        reason: AnyCodable
+    )
+    {
+        self.status = "failed"
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case reason
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["status", "reason"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for UsersAuthConnectStatusResultFailed: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedStatus = try container.decode(String.self, forKey: .status)
+        guard decodedStatus == "failed" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .status,
+                in: container,
+                debugDescription: "Expected status to equal failed"
+            )
+        }
+        self.status = "failed"
+        self.reason = try container.decode(AnyCodable.self, forKey: .reason)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("failed", forKey: .status)
+        try container.encode(reason, forKey: .reason)
+    }
+}
+
+public enum UsersAuthConnectStatusResult: Codable, Sendable {
+    case pending(UsersAuthConnectStatusResultPending)
+    case connected(UsersAuthConnectStatusResultConnected)
+    case cancelled(UsersAuthConnectStatusResultCancelled)
+    case expired(ToolsGitHubAuthorizeExpiredResult)
+    case failed(UsersAuthConnectStatusResultFailed)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "status"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "pending": self = try .pending(UsersAuthConnectStatusResultPending(from: decoder))
+        case "connected": self = try .connected(UsersAuthConnectStatusResultConnected(from: decoder))
+        case "cancelled": self = try .cancelled(UsersAuthConnectStatusResultCancelled(from: decoder))
+        case "expired": self = try .expired(ToolsGitHubAuthorizeExpiredResult(from: decoder))
+        case "failed": self = try .failed(UsersAuthConnectStatusResultFailed(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown UsersAuthConnectStatusResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .pending(let value): try value.encode(to: encoder)
+        case .connected(let value): try value.encode(to: encoder)
+        case .cancelled(let value): try value.encode(to: encoder)
+        case .expired(let value): try value.encode(to: encoder)
+        case .failed(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
 public struct UsersGitHubAuthorizePollResultSuccess: Codable, Sendable {
     public let status: String
     public let personal: PersonalGitHubStatus
@@ -25835,25 +26672,29 @@ public struct QuestionWaitAnswerResultPending: Codable, Sendable {
 public struct QuestionWaitAnswerResultAnswered: Codable, Sendable {
     public let status: String
     public let answers: QuestionAnswers
+    public let resolutionid: String?
 
     public init(
-        answers: QuestionAnswers
+        answers: QuestionAnswers,
+        resolutionid: String? = nil
     )
     {
         self.status = "answered"
         self.answers = answers
+        self.resolutionid = resolutionid
     }
 
     private enum CodingKeys: String, CodingKey {
         case status
         case answers
+        case resolutionid = "resolutionId"
     }
 
     public init(from decoder: Decoder) throws {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["status", "answers"]).contains($0) }
+            .filter { !Set(["status", "answers", "resolutionId"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -25873,12 +26714,14 @@ public struct QuestionWaitAnswerResultAnswered: Codable, Sendable {
         }
         self.status = "answered"
         self.answers = try container.decode(QuestionAnswers.self, forKey: .answers)
+        self.resolutionid = try container.decodeIfPresent(String.self, forKey: .resolutionid)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode("answered", forKey: .status)
         try container.encode(answers, forKey: .answers)
+        try container.encodeIfPresent(resolutionid, forKey: .resolutionid)
     }
 }
 

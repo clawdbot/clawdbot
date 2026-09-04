@@ -141,6 +141,12 @@ recovery stops and reports the error without retrying with weaker options. Repai
 the reported failure, rerun `openclaw update`, and check `openclaw gateway status --deep`.
 See [Failed update recovery](/gateway/restart-recovery#recovery-after-a-failed-update).
 
+On macOS, if Doctor reports an installed but unloaded and disabled Gateway
+LaunchAgent after an interrupted update, finish update verification or Doctor and
+triage first. Then use the printed `openclaw gateway start` command, preserving
+its profile and state/config or custom-label overrides. `doctor --fix` diagnoses
+the disabled label but leaves an already-stopped Gateway stopped.
+
 Use channels to change the install type. The updater keeps your state, config,
 credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
 code install the CLI and gateway use.
@@ -301,13 +307,15 @@ openclaw doctor --lint --json
 
 When `openclaw update` manages a global npm install, it installs the target
 into a temporary npm prefix first. The candidate package validates the host
-Node version during `preinstall`; only then does OpenClaw verify the packaged
-`dist` inventory and swap the clean package tree into the real global prefix. A
-packed completion guard is omitted from the expected inventory and removed only
-after `preinstall` succeeds, so skipped lifecycle scripts also fail before the
-swap. The updater probes the owning npm before mutation. On npm 11.15 and
-earlier it omits the unsupported lifecycle-policy flag. On npm 12 and npm
-11.16+, it approves only the candidate OpenClaw lifecycle; transitive
+Node version during `preinstall`; OpenClaw verifies the packaged `dist` inventory
+before swapping the clean package tree into the real global prefix. Pending
+lifecycle work is recorded in `.openclaw-lifecycle-pending` at the package root,
+outside the `dist` inventory. `postinstall` removes that marker after completion.
+If package scripts were skipped, the CLI completes the pending lifecycle before
+running any command, including `--version`; failure stops the command with
+reinstall guidance. The updater probes the owning npm before mutation. On npm
+11.15 and earlier it omits the unsupported lifecycle-policy flag. On npm 12 and
+npm 11.16+, it approves only the candidate OpenClaw lifecycle; transitive
 dependency scripts remain unapproved.
 This avoids npm overlaying a new package onto stale files from the old one. If
 the install command fails, OpenClaw retries once with `--omit=optional`, which
@@ -349,11 +357,34 @@ bun add -g --trust openclaw@latest
 `--trust` allows OpenClaw's lifecycle scripts. The canonical `openclaw update`
 path applies the same OpenClaw-only Bun trust when it owns the install.
 
+### Package lifecycle and operator state
+
+Package lifecycle hooks validate the Node runtime and update only package-local
+artifacts: the installed `dist` tree and lifecycle markers. Plugin-registry and
+operator-state migration belong to Doctor, not package installation. Doctor also
+removes genuinely dangling global plugin-runtime links, but preserves shared and
+versioned runtime caches and valid links to them: other installs or profiles may
+still use them. `openclaw update` still runs Doctor after installing the candidate;
+after a manual package replacement, run `openclaw doctor --fix` before restarting
+the Gateway.
+
+`OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1` skips package-local postinstall
+cleanup, but still completes the lifecycle marker. It does not disable Doctor or
+Gateway startup migrations.
+
+<Warning>
+Older packages, including `2026.8.1`, can migrate the state database during
+installation even with that postinstall opt-out set. Back up before upgrading.
+To evaluate an affected package without changing a working Gateway, use a
+disposable environment with separate home, config, and state directories. A
+different npm prefix alone does not isolate operator state.
+</Warning>
+
 ### Advanced npm install topics
 
 <AccordionGroup>
   <Accordion title="Read-only package tree">
-    OpenClaw treats packaged global installs as read-only at runtime, even when the global package directory is writable by the current user. Plugin package installs live in OpenClaw-owned npm/git roots under the user config directory, and Gateway startup does not mutate the OpenClaw package tree.
+    After package lifecycle completion, OpenClaw treats packaged global installs as read-only at runtime, even when the global package directory is writable by the current user. Plugin package installs live in OpenClaw-owned npm/git roots under the user config directory, and Gateway startup does not mutate the OpenClaw package tree.
 
     Some Linux npm setups install global packages under root-owned directories such as `/usr/lib/node_modules/openclaw`. OpenClaw supports that layout because plugin install/update commands write outside that global package directory.
 
@@ -447,6 +478,11 @@ sent by the daily check and optional anonymous feature statistics.
 Disabling checks also cancels unfinished discovery and its campaign; a late
 response from the previous settings cannot start an update afterward.
 
+Gateway shutdown or replacement cancels unfinished update discovery and waits
+for its Git processes and temporary preflight cleanup to settle. Updates already
+handed off to the managed service updater remain under that separate updater’s
+control.
+
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this
 read-only hint path and the existing 24-hour hint interval, but never invoke
@@ -469,12 +505,13 @@ response includes `ackDelivered` so clients can distinguish a delivered
 acknowledgement from an unavailable or failed route. A synchronous failure after
 a delivered acknowledgement sends a second notice when no restart is scheduled.
 
-The Control UI includes its active session in the update request. After restart,
-updates without an originating session send their notice to the system main
-session when it has an external route, otherwise to the most recently used
-eligible direct chat. If neither exists, recovery keeps the system-session wake
-without an outbound chat notice. Session-less recovery never resumes a supplied
-continuation as another chat's turn.
+The Control UI includes its active session in the update request. Internal/webchat
+sessions receive the outcome as a transcript message after restart; sessions with
+an external delivery route receive a durable notice in that channel. Updates
+without an originating session send their notice through the system main
+session's external route when available. Otherwise, recovery keeps the
+system-session wake without an outbound chat notice. Session-less recovery never
+resumes a supplied continuation as another chat's turn.
 
 The Control UI sidebar update card shows **Update Gateway** when it will start
 this `update.run` flow directly. This covers browser-hosted Control UI, remote

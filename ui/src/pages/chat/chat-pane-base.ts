@@ -32,8 +32,7 @@ import type {
   BoardProvider,
   BoardProviderLease,
 } from "../../lib/board/provider.ts";
-import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
-import type { BoardTab } from "../../lib/board/types.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
@@ -276,11 +275,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
-  @litState() protected boardCommandDock: {
-    sessionKey: string;
-    tabId: string;
-    dock: BoardTab["chatDock"];
-  } | null = null;
   @litState() protected resetConfirmationOpen = false;
   protected deferredSessionHydrationRequestVersion = 0;
   protected sessionCompanionHydrationKey = "";
@@ -308,10 +302,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       return;
     }
     const renderedLayout = layout ?? state.sidebarLayout;
+    const nextLayout = setSidebarOpen(renderedLayout, open);
     if (renderedLayout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
-      this.setSessionObserverVisibility(open);
+      this.setSessionObserverVisibility(isSidebarSlotVisible(nextLayout, "companion"));
     }
-    this.commitSidebarLayout(setSidebarOpen(renderedLayout, open));
+    this.commitSidebarLayout(nextLayout);
   }
 
   protected requestSessionRail(intent: "open" | "toggle"): void {
@@ -385,7 +380,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
         resolve: (confirmed: boolean) => void;
       }
     | undefined;
-  protected readonly lastVisibleBoardDock = new Map<string, BoardVisibleChatDock>();
   protected retainedBoardSessionKey = "";
   protected readonly observedBoardPresence = new Map<string, boolean>();
   protected dashboardExpandedRouteKey = "";

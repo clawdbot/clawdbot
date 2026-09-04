@@ -93,15 +93,16 @@ async function mountMenu(
       .forkDisabled=${false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
-      .deleteAllowed=${options.deleteAllowed ??
-      (session.archived || (options.archiveAllowed ?? true))}
+      .deleteAllowed=${
+        options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true))
+      }
       .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
       .groups=${options.groups ?? []}
       .currentOwner=${options.currentOwner ?? null}
       .work=${options.work ?? null}
-      .workboard=${options.workboard === undefined
-        ? { captured: false, busy: false }
-        : options.workboard}
+      .workboard=${
+        options.workboard === undefined ? { captured: false, busy: false } : options.workboard
+      }
       .onAction=${options.onAction ?? (() => {})}
       .onClose=${options.onClose ?? (() => {})}
     ></openclaw-session-menu>`,
@@ -947,21 +948,15 @@ describe("session menu", () => {
     expect(keydown.defaultPrevented).toBe(true);
   });
 
-  it("keeps conversation destinations without showing absent workspace actions", async () => {
-    const menu = await mountMenu();
+  it.each([null, { loading: true, pullRequestUrl: null, worktreePath: null }])(
+    "keeps conversation destinations without unresolved workspace actions (work=%j)",
+    async (work) => {
+      const menu = await mountMenu({ work });
 
-    expect(menuItemLabels(menu)).not.toContain("Open PR");
-    expect(menuItemLabels(menuItem(menu, "Open in"))).toEqual(["New tab", "New window"]);
-  });
-
-  it("hides unresolved work actions while keeping conversation destinations available", async () => {
-    const menu = await mountMenu({
-      work: { loading: true, pullRequestUrl: null, worktreePath: null },
-    });
-
-    expect(menuItemLabels(menu)).not.toContain("Open PR");
-    expect(menuItemLabels(menuItem(menu, "Open in"))).toEqual(["New tab", "New window"]);
-  });
+      expect(menuItemLabels(menu)).not.toContain("Open PR");
+      expect(menuItemLabels(menuItem(menu, "Open in"))).toEqual(["New tab", "New window"]);
+    },
+  );
 
   it("dispatches open-pr with the resolved URL from click or the G shortcut", async () => {
     const url = "https://github.com/openclaw/openclaw/pull/12345";

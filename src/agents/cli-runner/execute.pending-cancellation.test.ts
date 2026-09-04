@@ -4,10 +4,15 @@ import { createProcessSupervisor } from "../../process/supervisor/supervisor.js"
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import * as failoverErrors from "../failover-error.js";
 import { executeDeps } from "./execute-deps.js";
-import { executePreparedCliRun } from "./execute.js";
-import { setCliRunnerExecuteTestDeps } from "./execute.test-support.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
+import {
+  setCliRunnerExecuteTestDeps,
+  wrapPreparedCliRunWithTestAdmission,
+} from "./execute.test-support.js";
 import { buildCliSupervisorScopeKey } from "./helpers.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
 const { createChildAdapterMock } = vi.hoisted(() => ({
   createChildAdapterMock:
@@ -57,6 +62,7 @@ function createRunContext(params: {
   runId: string;
   signal?: AbortSignal;
   beforeExecution?: () => Promise<void>;
+  assertCurrent?: () => void;
 }): PreparedCliRunContext {
   const backend = {
     command: "agent-cli",
@@ -81,6 +87,7 @@ function createRunContext(params: {
       timeoutMs: 1_000,
       runId: params.runId,
       ...(params.signal ? { abortSignal: params.signal } : {}),
+      ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     },
     started: Date.now(),
     workspaceDir: "/tmp",
@@ -213,7 +220,11 @@ describe("local CLI pending process cancellation", () => {
     createChildAdapterMock.mockResolvedValueOnce(adapter);
 
     const run = executePreparedCliRun(
-      createRunContext({ runId: "cli-normal", signal: controller.signal }),
+      createRunContext({
+        runId: "cli-normal",
+        signal: controller.signal,
+        assertCurrent: () => undefined,
+      }),
     );
     await vi.waitFor(() => {
       expect(supervisor.getRecord("cli-normal")).toMatchObject({ state: "running" });
@@ -368,27 +379,53 @@ describe("local CLI pending process cancellation", () => {
     expect(createChildAdapterMock).not.toHaveBeenCalled();
   });
 
-  it("does not spawn after cancellation during asynchronous backend preparation", async () => {
-    const controller = new AbortController();
-    const preparation = createDeferred();
-    const beforeExecution = vi.fn(async () => await preparation.promise);
-    const spawn = vi.spyOn(supervisor, "spawn");
-    const run = executePreparedCliRun(
-      createRunContext({
-        runId: "cli-preparation",
-        signal: controller.signal,
-        beforeExecution,
-      }),
-    );
+  it.each(["abort", "request authority"] as const)(
+    "does not spawn after %s closes during asynchronous backend preparation",
+    async (authority) => {
+      const controller = new AbortController();
+      const preparation = createDeferred();
+      const beforeExecution = vi.fn(async () => await preparation.promise);
+      const retired = new Error("request authority retired during preparation");
+      let current = true;
+      const adapter = createTestAdapter();
+      adapter.settle(0);
+      createChildAdapterMock.mockResolvedValueOnce(adapter);
+      const spawn = vi.spyOn(supervisor, "spawn");
+      const run = executePreparedCliRun(
+        createRunContext({
+          runId: "cli-preparation",
+          signal: controller.signal,
+          beforeExecution,
+          ...(authority === "request authority"
+            ? {
+                assertCurrent: () => {
+                  if (!current) {
+                    throw retired;
+                  }
+                },
+              }
+            : {}),
+        }),
+      );
 
-    await vi.waitFor(() => expect(beforeExecution).toHaveBeenCalledOnce());
-    controller.abort();
-    preparation.resolve();
+      await vi.waitFor(() => expect(beforeExecution).toHaveBeenCalledOnce());
+      if (authority === "abort") {
+        controller.abort();
+      } else {
+        current = false;
+      }
+      preparation.resolve();
 
-    await expect(run).rejects.toMatchObject({ name: "AbortError" });
-    expect(spawn).not.toHaveBeenCalled();
-    expect(createChildAdapterMock).not.toHaveBeenCalled();
-  });
+      if (authority === "abort") {
+        await expect(run).rejects.toMatchObject({ name: "AbortError" });
+      } else {
+        await expect(run).rejects.toBe(retired);
+        expect(controller.signal.aborted).toBe(false);
+      }
+      expect(spawn).not.toHaveBeenCalled();
+      expect(createChildAdapterMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("drops an aborted turn waiting behind the serialized CLI run queue", async () => {
     const firstPreparation = createDeferred();
@@ -405,6 +442,7 @@ describe("local CLI pending process cancellation", () => {
     const second = executePreparedCliRun(
       createRunContext({ runId: "cli-queue-aborted", signal: controller.signal }),
     );
+    const secondOutcome = Promise.allSettled([second]);
     controller.abort();
     firstPreparation.resolve();
 
@@ -412,7 +450,9 @@ describe("local CLI pending process cancellation", () => {
     firstAdapter.emitStdout("first");
     firstAdapter.settle(0);
     await expect(first).resolves.toMatchObject({ text: "first" });
-    await expect(second).rejects.toMatchObject({ name: "AbortError" });
+    await expect(secondOutcome).resolves.toEqual([
+      { status: "rejected", reason: expect.objectContaining({ name: "AbortError" }) },
+    ]);
     expect(createChildAdapterMock).toHaveBeenCalledOnce();
     expect(supervisor.getRecord("cli-queue-aborted")).toBeUndefined();
   });

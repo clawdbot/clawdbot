@@ -79,7 +79,7 @@ suite.define(() => {
                 sshVerify: false,
               },
             },
-            reload: { mode: "hot" },
+            reload: { mode: "hybrid" },
           },
           agents: {
             ...config.agents,
@@ -189,10 +189,15 @@ suite.define(() => {
               .toContain(
                 `Ask an administrator to approve the pending ${COMMAND} request, or pick another device.`,
               );
+            // Keep captures at the recorded viewport size: clips and larger full-page
+            // screenshots temporarily resize Chromium's shared screencast surface.
             await page.screenshot({
               animations: "disabled",
-              fullPage: true,
-              path: path.join(suite.artifactDir, "01-undeclared-and-pending.png"),
+              path: path.join(suite.artifactDir, "00-undeclared.png"),
+            });
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, "01-pending-approval.png"),
             });
             await page.keyboard.press("Escape");
 
@@ -214,8 +219,7 @@ suite.define(() => {
               },
               { interval: 250, timeout: 60_000 },
             );
-            await waitForReconnect(unauthorizedNode, unauthorizedHelloCount);
-            await publishSessionHost(unauthorizedNode);
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
 
             await page.reload();
             await page.locator("#new-session-where-trigger").click();
@@ -227,8 +231,40 @@ suite.define(() => {
               );
             await page.screenshot({
               animations: "disabled",
-              fullPage: true,
-              path: path.join(suite.artifactDir, "02-unauthorized-after-restart.png"),
+              path: path.join(suite.artifactDir, "02-unauthorized-after-hot-reload.png"),
+            });
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
+            await page.keyboard.press("Escape");
+
+            const deniedConfig = await operator.request<{ hash: string }>("config.get", {});
+            await operator.request("config.patch", {
+              raw: JSON.stringify({
+                gateway: { nodes: { commands: { allow: [COMMAND], deny: [] } } },
+              }),
+              baseHash: deniedConfig.hash,
+              replacePaths: ["gateway.nodes.commands.allow", "gateway.nodes.commands.deny"],
+            });
+            await vi.waitFor(
+              async () => {
+                expect(await readCommandState(unauthorizedIdentity.deviceId)).toEqual({
+                  command: COMMAND,
+                  state: "invocable",
+                });
+                expect(await readCommandState(pendingIdentity.deviceId)).toEqual({
+                  command: COMMAND,
+                  state: "pending-approval",
+                });
+              },
+              { interval: 250, timeout: 60_000 },
+            );
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
+            await page.reload();
+            await page.locator("#new-session-where-trigger").click();
+            await row(unauthorizedIdentity.deviceId).waitFor();
+            expect(await row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, "03-invocable-after-reallow.png"),
             });
           },
         );
@@ -430,13 +466,6 @@ async function publishSessionHost(node: GatewayClient): Promise<void> {
       environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
       capacity: { total: 1, available: 1 },
     },
-  });
-}
-
-async function waitForReconnect(client: GatewayClient, previousCount: number): Promise<void> {
-  await vi.waitFor(() => expect(helloCounts.get(client) ?? 0).toBeGreaterThan(previousCount), {
-    interval: 100,
-    timeout: 60_000,
   });
 }
 

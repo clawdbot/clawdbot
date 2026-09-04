@@ -411,6 +411,17 @@ describe("openclaw tool", () => {
     expect(toolText(memory)).toContain("copy-only memory import");
     expect(directiveRef.current).toEqual({ kind: "memory-import" });
 
+    const accounts = await tool.execute("t5-accounts", { action: "manage_model_accounts" });
+    expect(toolText(accounts)).toContain("Nothing has changed yet");
+    expect(toolText(accounts)).toContain("never request, repeat, or put credentials in chat");
+    expect(directiveRef.current).toEqual({ kind: "model-accounts" });
+    expect(
+      resolveSystemAgentDirectiveTransition({
+        args: { action: "manage_model_accounts" },
+        resultText: toolText(accounts),
+      }),
+    ).toEqual({ kind: "model-accounts" });
+
     const configureModel = await tool.execute("t6", {
       action: "configure_model_provider",
       workspace: "/tmp/work",
@@ -464,6 +475,7 @@ describe("openclaw tool", () => {
     { action: "configure_gateway" },
     { action: "import_memory" },
     { action: "configure_model_provider" },
+    { action: "manage_model_accounts" },
     { action: "open_agent" },
     { action: "open_setup", target: "channels" },
   ])("does not promise a delegated $action handoff", async (args) => {

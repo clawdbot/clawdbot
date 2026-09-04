@@ -13,8 +13,6 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
-import { recordReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
-import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -36,6 +34,7 @@ import {
   readSessionStoreForTest,
   seedHeartbeatScratchForTest,
   seedMainSessionStore,
+  setHeartbeatAgentTurnStatus,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 import { isRetryableHeartbeatSkipReason } from "./heartbeat-wake.js";
@@ -175,17 +174,6 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       throw new Error("Expected reply call");
     }
     return call;
-  }
-
-  function setAgentTurnStatus(
-    options: object | undefined,
-    status: "ok" | "failed" | "superseded" | "cancelled",
-  ) {
-    const runState = resolveReplyOperationRunState(options);
-    if (!runState) {
-      throw new Error("Expected heartbeat reply operation run state");
-    }
-    recordReplyOperationAgentTurn(runState, status);
   }
 
   function replyContext(replySpy: ReturnType<typeof vi.fn>): {
@@ -351,7 +339,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       enqueueSystemEvent("exec finished: backup completed", { sessionKey });
       const inspectedEvents = peekSystemEventEntries(sessionKey);
       replySpy.mockImplementationOnce(async (_ctx, options) => {
-        setAgentTurnStatus(options, turnStatus);
+        setHeartbeatAgentTurnStatus(options, turnStatus);
         return createHeartbeatToolResponsePayload({
           outcome: "progress",
           notify: true,
@@ -883,7 +871,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       enqueueSystemEvent("exec finished: retryable deployment check", { sessionKey });
       const inspectedEvents = peekSystemEventEntries(sessionKey);
       replySpy.mockImplementationOnce(async (_ctx, options) => {
-        setAgentTurnStatus(options, "failed");
+        setHeartbeatAgentTurnStatus(options, "failed");
         return { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true };
       });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
@@ -906,7 +894,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
 
       replySpy.mockImplementationOnce(async (_ctx, options) => {
-        setAgentTurnStatus(options, "ok");
+        setHeartbeatAgentTurnStatus(options, "ok");
         return createHeartbeatToolResponsePayload({
           outcome: "progress",
           notify: true,
@@ -937,7 +925,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       enqueueSystemEvent("exec finished: private retryable failure", { sessionKey });
       const inspectedEvents = peekSystemEventEntries(sessionKey);
       replySpy.mockImplementation(async (_ctx, options) => {
-        setAgentTurnStatus(options, "failed");
+        setHeartbeatAgentTurnStatus(options, "failed");
         return [
           {
             ...createHeartbeatToolResponsePayload({
@@ -974,7 +962,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       const cfg = createConfig({ tmpDir, storePath });
       await seedTelegramSession(storePath, cfg);
       replySpy.mockImplementation(async (_ctx, options) => {
-        setAgentTurnStatus(options, "failed");
+        setHeartbeatAgentTurnStatus(options, "failed");
         return [
           createHeartbeatToolResponsePayload({
             outcome: "no_change",
@@ -1001,7 +989,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       enqueueSystemEvent("cron finished: retryable silent failure", { sessionKey });
       const inspectedEvents = peekSystemEventEntries(sessionKey);
       replySpy.mockImplementation(async (_ctx, options) => {
-        setAgentTurnStatus(options, "failed");
+        setHeartbeatAgentTurnStatus(options, "failed");
         return { text: SILENT_REPLY_TOKEN };
       });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });

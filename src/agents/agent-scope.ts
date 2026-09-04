@@ -5,7 +5,10 @@ import {
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import {
+  resolveCollapsedSessionAuthPinSource,
+  resolveSessionAuthProfileOverrideSource,
+} from "../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -204,7 +207,7 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     return undefined;
   }
   const fallbackAuthProfileId = normalizeOptionalString(entry.authProfileOverride);
-  const fallbackAuthProfileIdSource = resolveSessionAuthProfileOverrideSource(entry);
+  const fallbackAuthProfileIdSource = resolveCollapsedSessionAuthPinSource(entry);
   return {
     provider: originProvider,
     model: originModel,

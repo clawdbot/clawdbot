@@ -635,7 +635,27 @@ describe("scripts/test-projects changed-target routing", () => {
         throw new Error(`Missing recovery test owner: ${file}`);
       }
       expect(plan.targets).toContain("test/scripts/upgrade-survivor-recovery-cleanup.test.ts");
+      if (file.endsWith("/run.sh")) {
+        expect(plan.targets).toContain("test/scripts/upgrade-survivor-watchos-direct-node.test.ts");
+      }
+      if (
+        file === "scripts/e2e/upgrade-survivor-docker.sh" ||
+        file === "scripts/e2e/lib/upgrade-survivor/run.sh"
+      ) {
+        expect(plan.targets).toContain("test/scripts/upgrade-survivor-mobile-pairing.test.ts");
+      }
     }
+    expectChangedTargets(
+      ["scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts"],
+      ["test/scripts/upgrade-survivor-mobile-pairing.test.ts"],
+    );
+  });
+
+  it("routes the watchOS survivor adapter to its contract test", () => {
+    expectChangedTargets(
+      ["scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs"],
+      ["test/scripts/upgrade-survivor-watchos-direct-node.test.ts"],
+    );
   });
 
   it("keeps force-test runner edits on its safe CLI tests", () => {
@@ -869,6 +889,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/changed-path-facts.test.ts",
         "test/scripts/ci-changed-node-test-plan.test.ts",
+        "test/scripts/ci-chrome-mcp-prewarm.test.ts",
         "test/scripts/ci-security-fast-workflow.test.ts",
         "test/scripts/docker-release-artifacts.test.ts",
         "test/scripts/full-release-artifacts.test.ts",
@@ -1156,6 +1177,7 @@ describe("scripts/test-projects changed-target routing", () => {
           ? [
               "test/scripts/ci-workflow-guards.test.ts",
               "test/scripts/ci-changed-node-test-plan.test.ts",
+              "test/scripts/labeler-size-label.test.ts",
             ]
           : ["test/scripts/ci-workflow-guards.test.ts"],
       );
@@ -1432,6 +1454,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes shared contract ownership and declarations through every affected lane", () => {
     const targets = [
       "test/scripts/test-projects.test.ts",
+      "test/vitest-projects-config.test.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
       "test/vitest/vitest.contracts-channel-config.config.ts",
       "test/vitest/vitest.contracts-channel-registry.config.ts",
@@ -1753,27 +1776,35 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("keeps tooling imports direct while preserving literal file references", () => {
-    withTinyGitRepo(
-      {
-        "scripts/fixture-source.mts": "export const value = 1;\n",
-        "scripts/fixture-bridge.mts": 'export * from "./fixture-source.mjs";\n',
-        "test/scripts/direct.consumer.test.ts": 'import "../../scripts/fixture-source.mjs";\n',
-        "test/scripts/transitive.consumer.test.ts": 'import "../../scripts/fixture-bridge.mjs";\n',
-        "test/scripts/literal.consumer.test.ts": 'const fixture = "scripts/fixture-source.mts";\n',
-        "test/scripts/substring.consumer.test.ts":
-          'const fixture = "scripts/fixture-source.mts.bak";\n',
-      },
-      (cwd) => {
-        expect(
-          resolveChangedTestTargetPlan(["scripts/fixture-source.mts"], { cwd }).targets,
-        ).toEqual([
-          "test/scripts/direct.consumer.test.ts",
-          "test/scripts/literal.consumer.test.ts",
-        ]);
-      },
-    );
-  });
+  it.each([
+    { name: "Git inventory", withRepo: withTinyGitRepo },
+    { name: "filesystem inventory", withRepo: withTinyFileTree },
+  ])(
+    "keeps tooling imports direct while preserving literal file references ($name)",
+    ({ withRepo }) => {
+      withRepo(
+        {
+          "scripts/fixture-source.mts": "export const value = 1;\n",
+          "scripts/fixture-bridge.mts": 'export * from "./fixture-source.mjs";\n',
+          "test/scripts/direct.consumer.test.ts": 'import "../../scripts/fixture-source.mjs";\n',
+          "test/scripts/transitive.consumer.test.ts":
+            'import "../../scripts/fixture-bridge.mjs";\n',
+          "test/scripts/literal.consumer.test.ts":
+            'const fixture = "scripts/fixture-source.mts";\n',
+          "test/scripts/substring.consumer.test.ts":
+            'const fixture = "scripts/fixture-source.mts.bak";\n',
+        },
+        (cwd) => {
+          expect(
+            resolveChangedTestTargetPlan(["scripts/fixture-source.mts"], { cwd }).targets,
+          ).toEqual([
+            "test/scripts/direct.consumer.test.ts",
+            "test/scripts/literal.consumer.test.ts",
+          ]);
+        },
+      );
+    },
+  );
 
   it("routes many explicit source files through one import-graph-backed owner set", () => {
     let plans: ReturnType<typeof buildVitestRunPlans> = [];
@@ -2486,24 +2517,27 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("prints wrapper help without starting a broad local suite", () => {
-    withTinyFileTree({}, (tempDir) => {
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", "scripts/test-projects.mts", "--help"],
-        {
-          encoding: "utf8",
-          // Own the child's tsx cache so unrelated host transforms cannot delay help.
-          env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
-          timeout: 5_000,
-        },
-      );
+  it.each(["--help", "-h"])(
+    "prints wrapper help for %s without starting a broad local suite",
+    (helpFlag) => {
+      withTinyFileTree({}, (tempDir) => {
+        const result = spawnSync(
+          process.execPath,
+          ["--import", "tsx", "scripts/test-projects.mts", helpFlag],
+          {
+            encoding: "utf8",
+            // Own the child's tsx cache so unrelated host transforms cannot delay help.
+            env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
+            timeout: 5_000,
+          },
+        );
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
-      expect(result.stderr).not.toContain("[test] starting");
-    });
-  });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
+        expect(result.stderr).not.toContain("[test] starting");
+      });
+    },
+  );
 
   it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
     expect(
@@ -3944,7 +3978,6 @@ describe("test selector native source facts", () => {
         ];
         const expectedFacts = {
           imports: ["./barrel.js", "./dynamic.mjs"],
-          reexports: ["./barrel.js"],
           matches: ["scripts/tool.mts", "scripts/tool"],
           references: ["scripts/tool.mts"],
         };
@@ -3982,7 +4015,6 @@ describe("test selector native source facts", () => {
             {
               file: "large.mts",
               imports: [],
-              reexports: [],
               matches: ["scripts/tool.mts"],
               references: ["scripts/tool.mts"],
             },
@@ -4881,6 +4913,8 @@ it.each([
   "test/scripts/ci-linux-git.test.ts",
   "test/scripts/ci-platform-checkout.test.ts",
   "test/scripts/fixtures/ci-platform-checkout.mjs",
+  "test/scripts/ci-windows-process-census.test-support.ts",
+  "test/scripts/fixtures/ci-windows-process-census.mjs",
   "test/scripts/fixtures/ci-windows-process-census.py",
 ])("routes shared Git ownership through all native tooling lanes: %s", (changedPath) => {
   const plan = resolveChangedTestTargetPlan([changedPath]);
@@ -4906,6 +4940,8 @@ it.each([
   "test/scripts/openclaw-performance-git-lifecycle.test.ts",
   "test/scripts/ci-git-owner.test-support.ts",
   "test/scripts/fixtures/ci-platform-checkout.mjs",
+  "test/scripts/ci-windows-process-census.test-support.ts",
+  "test/scripts/fixtures/ci-windows-process-census.mjs",
   "test/scripts/fixtures/ci-windows-process-census.py",
 ])("routes Performance lifecycle ownership: %s", (changedPath) => {
   expect(resolveChangedTestTargetPlan([changedPath]).targets).toEqual(

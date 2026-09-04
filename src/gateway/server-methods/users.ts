@@ -16,7 +16,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import {
-  ensureProfileForEmail,
   getUserProfileDisplay,
   getUserProfileListItem,
   linkEmail,
@@ -28,13 +27,18 @@ import {
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { usersAuthConnectHandlers } from "./users-auth-connect.js";
 import { usersGitHubHandlers } from "./users-github.js";
+import {
+  requireProfileMutationAccess,
+  resolveAuthenticatedProfileId,
+} from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
 function refreshConnectedProfile(
@@ -68,60 +72,8 @@ function profileError(error: unknown) {
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
 }
 
-function resolveAuthenticatedProfileId(
-  client: GatewayRequestHandlerOptions["client"],
-): string | undefined {
-  if (client?.authenticatedUserProfile?.profileId) {
-    return resolveUserProfileId(client.authenticatedUserProfile.profileId);
-  }
-  if (client?.authenticatedGitHubIdentitySync) {
-    return undefined;
-  }
-  const authenticatedUserId = client?.authenticatedUserId;
-  if (!authenticatedUserId) {
-    return undefined;
-  }
-  // A failed Tailscale profile snapshot must not recreate its provider login
-  // through the legacy email resolver on a later self-profile request.
-  if (client.authenticatedUserIsTailscaleProvider) {
-    return undefined;
-  }
-  return ensureProfileForEmail(authenticatedUserId).id;
-}
-
-function canMutateProfile(
-  client: GatewayRequestHandlerOptions["client"],
-  profileId: string,
-): boolean {
-  if (client?.connect.scopes?.includes(ADMIN_SCOPE)) {
-    return true;
-  }
-  const authenticatedProfileId = resolveAuthenticatedProfileId(client);
-  return (
-    authenticatedProfileId !== undefined &&
-    authenticatedProfileId === resolveUserProfileId(profileId)
-  );
-}
-
-function requireProfileMutationAccess(
-  client: GatewayRequestHandlerOptions["client"],
-  profileId: string,
-  respond: GatewayRequestHandlerOptions["respond"],
-): boolean {
-  // These methods are write-scoped so an identified caller can edit only its own profile;
-  // edits targeting any other profile remain admin-only.
-  if (canMutateProfile(client, profileId)) {
-    return true;
-  }
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.FORBIDDEN, "profile edits require the owning user or operator.admin"),
-  );
-  return false;
-}
-
 export const usersHandlers: GatewayRequestHandlers = {
+  ...usersAuthConnectHandlers,
   ...usersGitHubHandlers,
   "users.list": ({ params, respond }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
@@ -273,6 +225,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     try {
       const profile = linkEmail(email, params.targetProfileId);
       refreshConnectedProfile(context, profile);
+      broadcastChatMetadataChanged(context);
       respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));

@@ -159,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Start tunnel retirement before helper drains can consume the quit deadline.
         async let tunnelCleanup: Void = RemoteTunnelManager.shared.shutdown()
         async let gatewayCleanup: Void = GatewayConnection.shared.shutdown()
-        async let profileCleanup: Void = MacGatewayConnectionFleet.shared.shutdown()
+        async let profileCleanup = MacGatewayConnectionFleet.shared.shutdown()
         // CUA must drain its worker before the node closes the daemon socket.
         if AppLaunchRuntimePlan.current.allowsCuaComputerControl {
             await CuaDriverHostCoordinator.shared.shutdown()
@@ -388,10 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
         if launchPlan.shouldAutoOpenChat(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
-            Task { @MainActor in
-                let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                WebChatManager.shared.show(sessionKey: sessionKey)
-            }
+            WebChatManager.shared.show()
         }
         if launchPlan.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")

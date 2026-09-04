@@ -19,6 +19,10 @@ export type InputProvenance = {
 
 export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
 
+// Internal completion provenance is distinct from the webchat routing sentinel.
+// Reusing that sentinel here makes internal work look like browser input.
+export const INTERNAL_PROVENANCE_SOURCE_CHANNEL = "internal" as const;
+
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",

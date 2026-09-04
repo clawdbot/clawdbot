@@ -216,8 +216,9 @@ const slackThreadOrigin = {
 
 const sentDeliveryStatus = { status: "sent", resultCount: 1 } as const;
 
-function createGatewayMock(response: Record<string, unknown> = {}) {
+function createGatewayMock(response: Record<string, unknown> = {}, onCall?: () => void) {
   return vi.fn(async (opts: Parameters<typeof runtimeCallGateway>[0]) => {
+    onCall?.();
     opts.onAccepted?.({ status: "accepted" });
     return response;
   }) as unknown as typeof runtimeCallGateway;
@@ -319,11 +320,13 @@ function createQueueOutcomeMock(
 
 function createQueueOutcomeSequenceMock(
   queuedOutcomes: (boolean | EmbeddedAgentQueueFailureReason)[],
+  onCall?: () => void,
 ): ReturnType<typeof vi.fn<QueueEmbeddedAgentMessageWithOutcome>> {
   // Sequence mocks model retry paths where the embedded run can become
   // unavailable between announce attempts.
   let index = 0;
   return vi.fn((sessionId: string) => {
+    onCall?.();
     const outcome = queuedOutcomes[Math.min(index, queuedOutcomes.length - 1)] ?? false;
     index += 1;
     return outcome === true
@@ -677,7 +680,6 @@ async function deliverSlackChannelAnnouncement(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceSessionKey?: string;
-  sourceChannel?: string;
   sourceTool?: string;
   runtimeConfig?: Record<string, unknown>;
   requesterSessionEntry?: SessionEntry;
@@ -726,7 +728,6 @@ async function deliverSlackChannelAnnouncement(params: {
     internalEvents: params.internalEvents,
     sourceRunId: "run-generated-media",
     sourceSessionKey: params.sourceSessionKey,
-    sourceChannel: params.sourceChannel,
     sourceTool: params.sourceTool,
     isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
   });
@@ -1279,53 +1280,58 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
 
-  it("preserves best-effort steering for active runtimes without transcript wait support", async () => {
+  it("does not drop the transcript-commit gate for active runtimes without support", async () => {
     const queueEmbeddedAgentMessageWithOutcome = vi
       .fn<QueueEmbeddedAgentMessageWithOutcome>()
-      .mockImplementationOnce((sessionId: string) => ({
+      .mockImplementation((sessionId: string) => ({
         queued: false,
         sessionId,
         reason: "transcript_commit_wait_unsupported",
         gatewayHealth: "live",
-      }))
-      .mockImplementationOnce((sessionId: string) => ({
-        queued: true,
-        sessionId,
-        target: "embedded_run",
-        gatewayHealth: "live",
-        enqueuedAtMs: 4_100,
       }));
-    const callGateway = await deliverSteeredAnnouncement({
+    const callGateway = createGatewayMock();
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: true,
+      }),
       queueEmbeddedAgentMessageWithOutcome,
+      getRuntimeConfig: () =>
+        ({
+          messages: { queue: { mode: "followup" } },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
       requesterOrigin: {
         channel: "slack",
         to: "channel:C123",
         accountId: "acct-1",
       },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-no-external-route",
     });
 
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    // The unsupported backend must fall through to the requester-agent handoff
+    // instead of silently removing the requested transcript-commit wait.
+    expectDeliveryPath(result, "direct");
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
       1,
       "paperclip-session",
       "child done",
-      {
+      expect.objectContaining({
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
-      },
-    );
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
-      2,
-      "paperclip-session",
-      "child done",
-      {
-        steeringMode: "all",
-        debounceMs: 500,
-        deliveryTimeoutMs: 120_000,
-      },
+      }),
     );
   });
 
@@ -2882,12 +2888,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     },
   ])("does not credit stale thread completions after $name", async ({ deliveryStatus }) => {
-    const callGateway = createGatewayMock({ result: { payloads: [], deliveryStatus } });
+    const callOrder: string[] = [];
+    const callGateway = createGatewayMock({ result: { payloads: [], deliveryStatus } }, () => {
+      callOrder.push("gateway");
+    });
     const sendMessage = createSendMessageMock();
-    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
-      "transcript_commit_wait_unsupported",
-      "no_active_run",
-    ]);
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(
+      ["transcript_commit_wait_unsupported", "no_active_run"],
+      () => {
+        callOrder.push("queue");
+      },
+    );
     const result = await deliverSlackThreadAnnouncement({
       callGateway,
       sendMessage,
@@ -2913,7 +2924,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       to: "channel:C123",
       threadId: "171.222",
     });
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(3);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
       1,
       "requester-session-4",
@@ -2934,9 +2945,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         debounceMs: 500,
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
+        waitForTranscriptCommit: true,
         userTurnTranscriptRecorder: expect.any(Object),
       }),
     );
+    expect(callOrder).toEqual(["queue", "gateway", "queue"]);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -3862,7 +3875,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         },
         inputProvenance: {
           kind: "inter_session",
-          sourceChannel: "webchat",
+          sourceChannel: "internal",
           sourceTool: "image_generate",
         },
         sourceReplyDeliveryMode: "message_tool_only",
@@ -3891,7 +3904,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sourceTool: "image_generate",
       internalEvents: imageCompletionEvents(),
       sourceSessionKey: "image_generate:task-123",
-      sourceChannel: "internal",
     });
 
     expectDeliveryPath(result, "queued");
@@ -4930,6 +4942,28 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   ];
 
   const requesterSettleCases = [
+    ...["accepted", "in_flight"].map((status) => ({
+      name: `does not record ${status} handoff as a visible final`,
+      routes: requesterSettleRoutes,
+      response: { status },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    })),
+    {
+      name: "does not record a canceled partial answer as a visible final",
+      routes: requesterSettleRoutes.slice(1),
+      response: { status: "timeout", result: { payloads: [{ text: "partial answer" }] } },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
+      name: "records a non-yielded visible final without requiring a reply",
+      routes: requesterSettleRoutes.slice(1),
+      response: { result: { payloads: [{ text: "The consolidated answer." }] } },
+      requireVisibleReply: false,
+      recordsVisibleFinal: true,
+      expected: deliveredRequesterFinal,
+    },
     {
       name: "preserves an ordinary non-yielded direct settle turn",
       response: {},
@@ -4944,6 +4978,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a yielded requester's visible final answer",
+      recordsVisibleFinal: true,
       routes: requesterSettleRoutes.slice(1),
       response: { result: { payloads: [{ text: "The consolidated answer." }] } },
       requireVisibleReply: true,
@@ -4951,6 +4986,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a yielded requester's delivered external final answer",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [{ text: "The consolidated answer." }],
@@ -4962,6 +4998,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a yielded requester final already committed by automatic delivery",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [],
@@ -5047,6 +5084,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "preserves a visible answer with malformed supplemental media metadata",
+      recordsVisibleFinal: true,
       response: {
         result: {
           deliveryStatus: sentDeliveryStatus,
@@ -5199,6 +5237,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts an explicit source-matched final messaging delivery",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [{ text: "NO_REPLY" }],
@@ -5211,6 +5250,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts an automatic source-matched final without legacy intent markers",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [{ text: "NO_REPLY" }],
@@ -5223,6 +5263,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a source final after source progress in the same turn",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [],
@@ -5238,6 +5279,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
     {
       name: "accepts a committed source final when automatic delivery was suppressed",
+      recordsVisibleFinal: true,
       response: {
         result: {
           payloads: [{ text: "NO_REPLY" }],
@@ -5301,7 +5343,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     ),
   )("$route.name: $testCase.name", async ({ testCase, route }) => {
     const { response, requireVisibleReply, expected } = testCase;
-    const callGateway = createGatewayMock(response);
+    const callGateway = createGatewayMock({ status: "ok", ...response });
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     const sendMessage = createSendMessageMock();
     const origin = route.origin;
@@ -5333,7 +5375,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expect(result).toMatchObject(expected);
-    expect(result.requesterVisibleFinalDelivered).toBeUndefined();
+    expect(result.requesterVisibleFinalDelivered).toBe(
+      "recordsVisibleFinal" in testCase &&
+        testCase.recordsVisibleFinal &&
+        !("requesterIsSubagent" in route && route.requesterIsSubagent)
+        ? true
+        : undefined,
+    );
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
     const agentParams = expectGatewayAgentParams(callGateway, route.agentParams);

@@ -36,7 +36,6 @@ import type { JsonObject, JsonValue } from "./protocol-json.js";
 import type * as CodexMcpProtocol from "./protocol-mcp.js";
 
 export type {
-  CodexConfigEdit,
   CodexConfigReadResponse,
   CodexConfigRequirementsReadResponse,
   CodexPluginDetail,

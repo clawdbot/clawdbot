@@ -807,8 +807,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.isConnected &&
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway.snapshot.client === client &&
-      this.context.agentSelection.state.selectedId === agentId;
-    const promise = loadModelCatalog(client, { agentId, preparedOnly: true, rejectOnFailure: true })
+      this.context.agentSelection.state.selectedId === agentId &&
+      // Agent selection can cycle A -> B -> A while the first A load is still pending.
+      this.sessionObserverModelsRequest?.promise === promise;
+    const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
       .then(({ models }) => {
         if (isCurrent()) {
           this.sessionObserverModels = models;
@@ -1449,14 +1451,16 @@ export class ConfigPage extends OpenClawLightDomElement {
       asConfigRecord(configState.configForm ?? configState.configSnapshot?.config) ?? {};
     const body = this.renderAdvancedConfig(configObject);
     return html`
-      ${this.pageId === "memory"
-        ? nothing
-        : html`
-            ${renderSettingsPageHeader({
-              title: configPageTitle(this.pageId),
-              subtitle: renderConfigPageSubtitle(this.pageId),
-            })}
-          `}
+      ${
+        this.pageId === "memory"
+          ? nothing
+          : html`
+              ${renderSettingsPageHeader({
+                title: configPageTitle(this.pageId),
+                subtitle: renderConfigPageSubtitle(this.pageId),
+              })}
+            `
+      }
       ${renderSettingsWorkspace(body)}
     `;
   }

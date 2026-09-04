@@ -10,6 +10,7 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../../sessions/model-overrides.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
@@ -181,6 +182,7 @@ export async function applyInlineDirectiveOverrides(params: {
     typing,
     effectiveModelDirective,
   } = params;
+  const requesterProfileId = readSessionInputProfileId(ctx);
   let { directives } = params;
   let { provider, model } = params;
   let { contextTokens } = params;
@@ -301,6 +303,7 @@ export async function applyInlineDirectiveOverrides(params: {
       allowedModelCatalog: modelState.allowedModelCatalog,
       provider,
       agentId,
+      requesterProfileId,
     });
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
@@ -407,6 +410,7 @@ export async function applyInlineDirectiveOverrides(params: {
         allowedModelCatalog: modelState.allowedModelCatalog,
         provider,
         agentId,
+        requesterProfileId,
       });
       if (modelResolution.errorText) {
         typing.cleanup();
@@ -447,6 +451,7 @@ export async function applyInlineDirectiveOverrides(params: {
           modelCatalog: modelState.allowedModelCatalog,
           thinkingCatalog: modelState.allowedModelCatalog,
           canPersistStickyModelSelection,
+          validateAuthProfileSelection: modelResolution.validateAuthProfileSelection,
           ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
           request: {
             ...modelSelection,

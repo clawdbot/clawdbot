@@ -193,6 +193,87 @@ Personal publication receipts remain for the logical session's lifetime. Archive
 
 See the accepted [personal GitHub ownership and publication design](https://github.com/openclaw/openclaw/issues/133590) and the operator-facing [GitHub connections guide](/concepts/user-model#github-connections).
 
+## Personal model accounts
+
+Personal model accounts use the existing `secret_store_entries` identity scope, keyed by the canonical Gateway profile. A versioned `model-accounts` record owns provider selections, while each `model-account:<profile-id>` record owns one inline OAuth or token credential and its usage state. Each record retains the existing 64 KiB secret-store limit; connecting more accounts or merging profiles does not combine credentials under one size limit. This adds no table, column, index, or schema version. Generic secret-list/read methods and profile preferences do not expose these records.
+
+The credential and its selected link commit in one synchronous transaction after the Gateway revalidates the initiating authorization. Runtime loads only an explicitly selected credential and routes refresh and usage updates to that same owner. Shared and agent-local auth saves exclude the reserved personal-profile namespace, including runtime snapshots and CLI mirrors.
+
+Unlink records an explicit disconnected selection and retains credentials used by existing session pins. A verified identity merge transfers only the live source's records, preserving the target's selections and disconnections while retaining old credential IDs for pinned sessions. Credentials stranded on an alias by an older build are not adopted at runtime. A compatible downgrade leaves private records outside the older shared-account pool; re-upgrade can use retained records, while accounts stranded by older identity merges need reconnecting.
+
+See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for connection, cancellation, session billing, and unlink behavior.
+
+## Apple companion delivery journals
+
+Companion Watch chat has separate app-local storage. It does not change the
+Gateway control-plane or per-agent database schema, and `openclaw doctor`
+does not migrate it. Open the updated iPhone and Watch apps to use the new
+delivery protocol. See [Watch voice and chat](/platforms/ios#apple-watch-voice-and-chat)
+for delivery statuses and recovery.
+
+The iPhone's existing `client-state.sqlite` owns `watch_message_journal`.
+The named GRDB migration `client-state-watch-message-journal-v9` adds that table
+and a nullable `watch_route_generation TEXT` column to
+`gateway_routing_identity`. The generation changes after Forget and re-pairing;
+a late callback or queued command from the old pairing cannot become new work.
+Admission, accepted run identity and terminal receipt state share one journal
+owner, separate from the general chat outbox.
+The journal's nullable `command_fingerprint BLOB` stores SHA-256 of each
+admitted command's canonical bytes. Dismiss preserves this hash, so reusing an
+ID with changed content or submission time cannot return the original result
+after its command text is cleared. The hash expires with the row or is removed
+by Forget; legacy imports have no command fingerprint.
+The migration is registered by shared Apple client storage, so the Mac client
+also sees the additive schema; it does not process companion Watch delivery.
+
+The additive `client-state-watch-message-legacy-receipts-v1` migration creates
+`watch_message_legacy_imports`. It stores SHA-256 hashes of exact legacy command
+IDs and imported content, never the text or Gateway ID. A nullable content hash
+records the older app's ID-only recent-message suppression policy; it is not
+proof of a matching body or successful execution.
+
+Old Watch UserDefaults are decoded and reconciled in one SQLite transaction
+whenever the phone prepares its journal. Imported rows and their hash receipts
+commit together before cleanup checks that both source blobs are unchanged.
+This also recovers messages written by an older app after downgrade. Unprovable
+queued text becomes **Needs review**, never an automatic send. Conflicting IDs
+or unseen messages associated with a previously forgotten Gateway preserve the
+source and surface a recovery error instead of discarding or retargeting text.
+
+Imported text remains until explicit discard or Gateway Forget. Its hash-only
+receipt has no timed expiry and survives both actions, so an identical old
+snapshot cannot resurrect deleted text. This storage grows per legacy ID and is
+removed only by a full onboarding reset, which clears the old UserDefaults
+before deleting client state. New commands and their reply replay instead have
+an immutable 48-hour deadline. Dismiss hides a completed card without changing
+its receipt, acknowledgment state or deadline; active deliveries cannot be
+discarded or dismissed.
+Expired copies are pruned when delivery state is next used, including opening
+the phone's delivery list. An idle or suspended app does not promise immediate
+wall-clock erasure.
+
+The Watch owns its outbound commands and received results in its own SQLite
+journal. A 90-second speech timeout does not remove this delivery state or
+cancel the remote run. Both apps commit before issuing their application-level
+admission or terminal receipt. A permanent rejection is explicitly not an
+admission and creates no phone journal row. If dispatch became ambiguous before an accepted run was recorded,
+recovery reports uncertainty rather than automatically executing the message
+again. The phone retains its current WAL policy: this is app-termination
+recovery, not a claim of power-loss durability.
+
+Forget removes phone journal rows in the existing irreversible removal
+transaction, including rows imported without a routing parent. The phone first
+accounts for retained legacy source and refuses removal if that cannot be done
+safely. The additive
+schema leaves the old reader's explicit routing updates intact, and a deletion
+trigger keeps its Forget path effective after downgrade. An older app cannot
+offer the new receipt protocol. Do not remove migration markers or reset
+`client-state.sqlite` to downgrade: that file also contains other user-owned
+client state.
+
+The [accepted design](https://github.com/openclaw/openclaw/issues/136617) records
+the schema, migration, ownership, retention and validation boundaries.
+
 ## Review checkpoint for material changes
 
 Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.
@@ -334,11 +415,15 @@ Schema 9 stores an `agent_databases.path` value relative to the state directory 
 The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier owns the slower recurring full scan for live databases that do not need migration.
 Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
 
+Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
+
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 
 ## Troubleshooting
+
+`SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
 ### Why you cannot go back after updating to 2026.7.2
 

@@ -2,9 +2,11 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { setTimeout as realDelay } from "node:timers/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { killPidIfAlive } from "../../../test-utils/process-tree.js";
 import { createProcessSupervisor } from "../supervisor.js";
 import { createChildAdapter } from "./child.js";
 
@@ -35,9 +37,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (Date.now() >= deadline) {
       throw new Error("timed out waiting for process state");
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
+    await realDelay(20);
   }
 }
 
@@ -50,6 +50,7 @@ function parsePidPair(output: string): [number, number] {
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   delete process.env.OPENCLAW_SERVICE_MARKER;
   for (const pid of activePids) {
     try {
@@ -124,36 +125,62 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     { reason: "no-output-timeout" as const, timeoutMs: undefined, noOutputTimeoutMs: 100 },
   ])("removes the group before returning $reason", async (timing) => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    const run = await createProcessSupervisor().spawn({
-      mode: "child",
-      argv: [
-        "/bin/sh",
-        "-c",
-        'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
-      ],
-      stdinMode: "pipe-closed",
-      sessionId: "service-lifecycle-test",
-      backendId: "service-lifecycle-test",
-      timeoutMs: timing.timeoutMs,
-      noOutputTimeoutMs: timing.noOutputTimeoutMs,
-    });
-    const exit = await run.wait();
-    const [rootPid, descendantPid] = parsePidPair(exit.stdout);
-
-    expect(exit.reason).toBe(timing.reason);
-    await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+    // Deadlines include construction. Hold the clock until the real PID banner
+    // so this case tests admitted-group cleanup independently of startup speed.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const supervisor = createProcessSupervisor();
+    let output = "";
+    try {
+      const run = await supervisor.spawn({
+        mode: "child",
+        argv: [
+          "/bin/sh",
+          "-c",
+          'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
+        ],
+        stdinMode: "pipe-closed",
+        sessionId: "service-lifecycle-test",
+        backendId: "service-lifecycle-test",
+        timeoutMs: timing.timeoutMs,
+        noOutputTimeoutMs: timing.noOutputTimeoutMs,
+        onStdout: (chunk) => {
+          output += chunk;
+        },
+      });
+      await waitFor(() => /^\d+ \d+/u.test(output));
+      const [rootPid, descendantPid] = parsePidPair(output);
+      activePids.add(rootPid);
+      activePids.add(descendantPid);
+      expect(isAlive(rootPid) && isAlive(descendantPid)).toBe(true);
+      await vi.advanceTimersByTimeAsync(100);
+      const exit = await run.wait();
+      expect(exit.reason).toBe(timing.reason);
+      expect(parsePidPair(exit.stdout)).toEqual([rootPid, descendantPid]);
+      await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+    } finally {
+      vi.useRealTimers();
+      await supervisor.shutdown();
+    }
   });
 
-  it("bounds construction while secret delivery blocks and cleans the real command", async () => {
+  it("preserves construction cleanup uncertainty while the real command self-cleans", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const cwd = tempDirs.make("openclaw-service-secret-construction-");
     const pidPath = path.join(cwd, "command.pid");
+    const termPath = path.join(cwd, "command.term.pid");
     const command = `
+      process.on("SIGTERM", () => {
+        require("node:fs").writeFileSync(${JSON.stringify(termPath)}, String(process.pid));
+      });
       require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
       setInterval(() => {}, 1000);
     `;
     const supervisor = createProcessSupervisor();
+    const runId = "service-secret-construction";
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const pendingRun = supervisor.spawn({
+      runId,
+      scopeKey: runId,
       mode: "child",
       argv: [process.execPath, "-e", command],
       stdinMode: "pipe-closed",
@@ -165,17 +192,37 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
         createData: () => Buffer.alloc(8 * 1024 * 1024, 97),
       },
     });
-    const commandPid = await waitForPidFile(pidPath, 5_000);
-    activePids.add(commandPid);
-    expect(isAlive(commandPid)).toBe(true);
-
-    const run = await pendingRun;
-    await expect(run.wait()).resolves.toMatchObject({
-      reason: "overall-timeout",
-      timedOut: true,
-    });
-    await waitFor(() => !isAlive(commandPid));
-    await supervisor.shutdown();
+    let commandPid: number | undefined;
+    try {
+      const startedPid = await waitForPidFile(pidPath, 5_000, realDelay);
+      commandPid = startedPid;
+      activePids.add(startedPid);
+      expect(isAlive(startedPid)).toBe(true);
+      expect(supervisor.getRecord(runId)).toMatchObject({ state: "starting" });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(supervisor.getRecord(runId)).toMatchObject({
+        state: "exited",
+        terminationReason: "overall-timeout",
+      });
+      const run = await pendingRun;
+      await expect(run.wait()).resolves.toMatchObject({
+        reason: "overall-timeout",
+        timedOut: true,
+      });
+      await expect(supervisor.waitForScope(runId)).rejects.toThrow("cleanup identity lost");
+      await expect(run.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
+      await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+      // Observe the anchor's TERM before its unchanged grace; neither the timeout
+      // result nor the failed join may disable its independent group cleanup.
+      await waitForPidFile(termPath, 5_000, realDelay);
+      await waitFor(() => !isAlive(startedPid));
+    } finally {
+      vi.useRealTimers();
+      supervisor.cancel(runId);
+      killPidIfAlive(commandPid);
+      await pendingRun.catch(() => {});
+      await supervisor.shutdown().catch(() => {});
+    }
   });
 
   it("preserves root-result timing while retaining descendant cleanup ownership", async () => {

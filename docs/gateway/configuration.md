@@ -591,11 +591,17 @@ back to OpenClaw.
 | Gateway tools & nodes   | `gateway.tools`, `gateway.nodes.browser`, `gateway.nodes.pairing`, `gateway.nodes.commands`, `gateway.nodes.pluginTools.enabled`, `gateway.nodes.allowSkills`                | No                                     |
 | Gateway client features | `gateway.cliAgents`, selected `gateway.controlUi` settings below                                                                                                             | No                                     |
 | Gateway push            | `gateway.push.apns.relay`                                                                                                                                                    | No (next push)                         |
-| Gateway terminal        | `gateway.terminal.shell`, `gateway.terminal.detachedSessionTimeoutSeconds`                                                                                                   | No                                     |
+| Gateway terminal        | `gateway.terminal`                                                                                                                                                           | No                                     |
 | Gateway credentials     | `gateway.auth.token`, `gateway.auth.password`, with the same effective auth mode                                                                                             | No (old shared-auth clients reconnect) |
+| Gateway auth limits     | `gateway.auth.rateLimit`                                                                                                                                                     | No (retains limiter state)             |
+| Discovery visibility    | `discovery.mdns.mode`                                                                                                                                                        | No (replaces discovery advertisements) |
 | Browser defaults        | `browser.profiles`, `browser.defaultProfile`, `browser.headless`, `browser.executablePath`, `browser.attachOnly`, `browser.cdpUrl`, `browser.noSandbox`, `browser.extraArgs` | No                                     |
 | Gateway server          | Other `gateway.*` settings (port, bind, auth mode, roles, tailscale, TLS)                                                                                                    | **Yes**                                |
-| Infrastructure          | `discovery`, other `browser` settings, `plugins.load`, `plugins.installs`                                                                                                    | **Yes**                                |
+| Infrastructure          | Other `discovery` and `browser` settings, `plugins.load`, `plugins.installs`                                                                                                 | **Yes**                                |
+
+Changes to `channels.defaults` and `channels.modelByChannel` restart loaded
+channel runtimes to refresh their shared policy. Manually stopped accounts stay
+stopped, and the Gateway and its other connections keep running.
 
 Under `gateway.controlUi`, the `environment`, `github`, `toolTitles`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, and
@@ -618,12 +624,30 @@ paired devices remain paired. Terminal shell changes apply to newly opened
 terminals; active terminals keep their original shell. Detached-session timeout
 changes recalculate deadlines from each terminal's original disconnect time.
 Already-expired sessions close immediately; attached terminals keep running.
-Terminal enablement still requires a restart.
+Terminal enablement also hot-applies. Disabling terminals closes attached,
+detached, and conversation-owned sessions and cancels pending opens. Re-enabling
+allows fresh sessions; closed sessions do not return. Reload open Control UI
+pages to pick up the terminal's content security policy.
+An unrelated deferred restart does not delay a committed terminal enable or shell
+change. A pending restart can still keep earlier terminal or sandbox restrictions
+in force until that restart completes or its rejected changes are reverted.
 
 Browser default-profile changes apply on the next request. Launch-setting
 changes replace affected managed browser processes when next used; externally
 attached browsers stay running. Browser enablement, evaluation, SSRF policy,
 extension relay, and tab cleanup remain restart-owned.
+
+Authentication rate-limit changes retain recorded failures, earned lockout
+deadlines, and pending loopback delays. New limits and loopback exemptions apply
+to subsequent attempts; tightening the attempt limit can lock a client based on
+its retained failures. Removing `gateway.auth.rateLimit` restores the defaults.
+Browser-origin and node-reapproval budgets remain nonexempt.
+
+Discovery mode changes replace the current advertisements without interrupting
+Gateway connections. Switching from `full` to `minimal` removes extra TXT hints
+from LAN advertisements and any configured wide-area DNS-SD zone. `off` stops
+LAN advertisements while configured wide-area discovery remains enabled. The
+Bonjour plugin must already be enabled, and environment overrides still apply.
 
 Token and password rotation hot-applies only when the effective auth mode stays
 the same. Existing clients using the old shared credential must reconnect with

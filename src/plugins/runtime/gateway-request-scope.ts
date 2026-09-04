@@ -102,11 +102,31 @@ export function getPluginRuntimeGatewayNodeAuthorities() {
 export function getSharedGatewayContextResolver(
   owners: readonly object[],
 ): GatewayContextResolver | undefined {
-  const first = owners[0] ? gatewayContextResolvers.get(owners[0]) : undefined;
-  // Absence permits ambient routing; incompatible owners must retain a rejecting binding.
-  return owners.every((owner) => gatewayContextResolvers.get(owner) === first)
-    ? first
-    : () => undefined;
+  const resolvers = owners.map(getGatewayContextResolver);
+  if (resolvers.every((resolve) => !resolve)) {
+    return undefined;
+  }
+  // Separate caller wrappers may own one instance. Recheck every captured fence;
+  // never replace it with a current global resolver or permit mixed ambient routing.
+  return () => {
+    const contexts = resolvers.map((resolve) => {
+      try {
+        return resolve?.();
+      } catch {
+        return undefined;
+      }
+    });
+    if (resolvers.some((resolve) => !resolve)) {
+      throw new Error("incompatible Gateway bindings: bound and unbound owners");
+    }
+    if (contexts.some((context) => !context)) {
+      return undefined;
+    }
+    if (contexts.some((context) => context !== contexts[0])) {
+      throw new Error("incompatible Gateway instances");
+    }
+    return contexts[0];
+  };
 }
 
 /**

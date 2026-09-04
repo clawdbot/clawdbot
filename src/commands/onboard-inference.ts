@@ -143,9 +143,10 @@ async function detectClaudeLoginState(
     probeClaudeCliAuthStatus: (params: {
       command: string;
       env: NodeJS.ProcessEnv;
-    }) =>
+    }) => Promise<
       | { status: "available"; authMethod?: string; email?: string }
-      | { status: "missing" | "unreadable" };
+      | { status: "missing" | "unreadable" }
+    >;
   };
   try {
     const facade = await tryLoadActivatedBundledPluginPublicSurfaceModule<ClaudeAuthFacade>({
@@ -153,7 +154,7 @@ async function detectClaudeLoginState(
       artifactBasename: "cli-auth-api.js",
       env,
     });
-    const status = facade?.probeClaudeCliAuthStatus({ command, env });
+    const status = await facade?.probeClaudeCliAuthStatus({ command, env });
     if (status?.status !== "available") {
       return { credentials: status?.status === "missing" ? false : undefined };
     }

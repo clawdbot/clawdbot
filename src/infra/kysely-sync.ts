@@ -1,7 +1,14 @@
 // Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
+import { toUSVString } from "node:util";
 import type { Compilable, CompiledQuery, Kysely, QueryResult, RawBuilder } from "kysely";
-import { InsertQueryNode, Kysely as KyselyInstance, sql as kyselySql, SqliteDialect } from "kysely";
+import {
+  InsertQueryNode,
+  Kysely as KyselyInstance,
+  SelectQueryNode,
+  sql as kyselySql,
+  SqliteDialect,
+} from "kysely";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   kyselyByDatabase,
@@ -56,6 +63,14 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
   });
   kyselyByDatabase.set(db, kysely as Kysely<unknown>);
   return kysely;
+}
+
+/** A single bound set avoids SQLite parameter and JS variadic-call limits. */
+export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
+  // Match node:sqlite's UTF-8 binding of lone UTF-16 surrogates; JSON preserves them otherwise.
+  const encoded = JSON.stringify(values.map(toUSVString));
+  /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
+  return kyselySql<string>`(SELECT value FROM json_each(${encoded}))`;
 }
 
 function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {
@@ -226,7 +241,9 @@ function executeCompiledSqliteQuerySync<Row>(
   const parameters = compiledQuery.parameters as SQLInputValue[];
   try {
     return executeWithCachedStatement(db, compiledQuery.sql, parameters, (statement) => {
-      if (statement.columns().length > 0) {
+      // SELECT already guarantees a reader; avoid allocating native column metadata
+      // just to classify it. Raw SQL and other roots still need native classification.
+      if (SelectQueryNode.is(compiledQuery.query) || statement.columns().length > 0) {
         // Node's all() snapshots the column count before SQLite can reprepare
         // an expired statement. Eagerly consuming iterate() reads it after step.
         const iterator = statement.iterate(...parameters);
@@ -304,7 +321,7 @@ export function* iterateSqliteQuerySync<Row>(
     // Iterators keep statement state across yields. A private statement prevents
     // nested iteration of identical SQL from resetting an earlier iterator.
     const statement = db.prepare(compiledQuery.sql);
-    if (statement.columns().length === 0) {
+    if (!SelectQueryNode.is(compiledQuery.query) && statement.columns().length === 0) {
       return;
     }
     const parameters = compiledQuery.parameters as SQLInputValue[];

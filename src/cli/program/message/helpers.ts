@@ -32,6 +32,7 @@ import {
 } from "../../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
 import { createDefaultDeps } from "../../deps.js";
+import { requestExitAfterOneShotOutput } from "../../one-shot-exit.js";
 
 /** Shared helpers used by every message subcommand registration. */
 export type MessageCliHelpers = {
@@ -219,7 +220,7 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
         }
       }
       failed ||= result !== undefined && !resolveMessageActionOutcome(result).ok;
-      defaultRuntime.exit(failed ? 1 : 0);
+      requestExitAfterOneShotOutput(defaultRuntime, failed ? 1 : 0);
     },
   };
 }

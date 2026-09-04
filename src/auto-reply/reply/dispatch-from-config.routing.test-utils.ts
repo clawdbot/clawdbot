@@ -1160,7 +1160,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps tool-error fallbacks available when verbose is disabled during the run", async () => {
+  it("hides failed tool progress when verbose is disabled during the run", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "on",
@@ -1174,14 +1174,11 @@ describe("dispatchReplyFromConfig", () => {
       From: "whatsapp:group:789@g.us",
       SessionKey: "agent:main:whatsapp:group:789@g.us",
     });
-    let receivedOptions: GetReplyOptions | undefined;
-
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      receivedOptions = opts;
       const onToolResult = requireToolResultHandler(opts?.onToolResult);
       sessionStoreMocks.currentEntry = {
         verboseLevel: "off",
@@ -1198,7 +1195,6 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { suppressDefaultToolProgressMessages: true },
     });
 
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });

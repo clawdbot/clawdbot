@@ -56,6 +56,14 @@ export function createClaudeAgentSdkProcessOwner(
   currentContext: () => CliBackendExecuteContext | undefined,
   secretInput?: ClaudeAgentSdkSecretInput,
 ) {
+  const assertCurrent = () => {
+    const context = currentContext();
+    if (!context) {
+      throw new Error("Claude Agent SDK run is no longer active.");
+    }
+    context.assertCurrent?.();
+  };
+  assertCurrent();
   // Prepared credentials are destroyed after each turn; a warm child outlives that preparation.
   const credential = secretInput?.createData();
   let environment: SpawnOptions["env"] = {};
@@ -102,6 +110,7 @@ export function createClaudeAgentSdkProcessOwner(
       tail = "";
     },
     spawn: (options: SpawnOptions) => {
+      assertCurrent();
       environment = options.env;
       return spawnClaudeAgentSdkProcess(options, secretInput, observeStderr);
     },

@@ -84,6 +84,7 @@ describe("users gateway methods", () => {
     setDisplayName.mockReset();
     setUserProfileRole.mockReset();
     invalidateOperatorRolePolicy.mockReset();
+    getUserProfileListItem.mockReturnValue(profile);
     getUserProfileDisplay.mockReturnValue({
       id: profile.id,
       displayName: profile.displayName,
@@ -324,6 +325,7 @@ describe("users gateway methods", () => {
   it("validates and routes email links", async () => {
     linkEmail.mockReturnValue(profile);
     const refreshConnectedUserProfile = vi.fn();
+    const broadcast = vi.fn();
 
     const respond = await runUsersHandler(
       "users.linkEmail",
@@ -332,12 +334,13 @@ describe("users gateway methods", () => {
         targetProfileId: "profile-1",
       },
       undefined,
-      { refreshConnectedUserProfile },
+      { refreshConnectedUserProfile, broadcast },
     );
 
     expect(respond).toHaveBeenCalledWith(true, { profile });
     expect(validateUsersLinkEmailResult(respond.mock.calls[0]?.[1])).toBe(true);
     expect(linkEmail).toHaveBeenCalledWith("ada@example.com", "profile-1");
+    expect(broadcast).toHaveBeenCalledWith("chat.metadata.changed", {}, { dropIfSlow: true });
     expect(refreshConnectedUserProfile).toHaveBeenCalledWith({
       id: profile.id,
       displayName: profile.displayName,

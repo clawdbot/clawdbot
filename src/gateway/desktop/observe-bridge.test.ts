@@ -2,9 +2,12 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
 import {
   DESKTOP_OBSERVE_PATH,
   handleDesktopObserveUpgrade,
@@ -13,11 +16,30 @@ import {
 import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 
 const cleanup: Array<() => Promise<void>> = [];
+const logPaths = createSuiteLogPathTracker("desktop-observer-diagnostics-");
+const logCaptures: ReturnType<typeof createDiagnosticLogRecordCapture>[] = [];
+
+beforeAll(async () => logPaths.setup());
+beforeEach(() =>
+  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logPaths.nextPath() }),
+);
+afterAll(async () => logPaths.cleanup());
 
 afterEach(async () => {
-  vi.restoreAllMocks();
-  await Promise.all(cleanup.splice(0).map((run) => run()));
-  vi.useRealTimers();
+  try {
+    vi.restoreAllMocks();
+    await Promise.all(cleanup.splice(0).map((run) => run()));
+    await flushLogger();
+    for (const capture of logCaptures) {
+      await capture.flush();
+    }
+  } finally {
+    for (const capture of logCaptures.splice(0)) {
+      capture.cleanup();
+    }
+    resetLogger();
+    vi.useRealTimers();
+  }
 });
 
 describe("worker desktop observer tokens", () => {
@@ -148,6 +170,8 @@ async function expectUnauthorizedObserver(url: string): Promise<void> {
 
 describe.runIf(process.platform !== "win32")("worker desktop observer proxy", () => {
   it("keeps an idle observer alive without adding bytes to RFB and retires on owner close", async () => {
+    const logCapture = createDiagnosticLogRecordCapture();
+    logCaptures.push(logCapture);
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const harness = await createProxyHarness({ control: true });
     const pings: Buffer[] = [];
@@ -166,6 +190,20 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     });
     harness.closeObserver(1012, "desktop tunnel closed");
     await expect(closed).resolves.toBe(1012);
+    await expect
+      .poll(async () => {
+        await logCapture.flush();
+        return logCapture.records.filter((record) => record.message === "desktop observer closed");
+      })
+      .toHaveLength(1);
+    expect(logCapture.records[0]?.attributes).toMatchObject({
+      sourceKey: "worker:pump",
+      ownerEpoch: 2,
+      trigger: "owner-close",
+      cleanupCode: 1012,
+      closeCode: 1012,
+    });
+    expect(JSON.stringify(logCapture.records)).not.toContain(harness.observerUrl);
     expect(harness.release).toHaveBeenCalledOnce();
     vi.advanceTimersByTime(25_000);
     expect(pings).toHaveLength(2);
@@ -206,6 +244,8 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
   });
 
   it("drops view-only input while forwarding framebuffer requests", async () => {
+    const logCapture = createDiagnosticLogRecordCapture();
+    logCaptures.push(logCapture);
     const harness = await createProxyHarness();
     const fromDesktop = new Promise<Buffer>((resolve) => {
       harness.ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
@@ -228,6 +268,17 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     });
     harness.desktopPeer.destroy();
     await closed;
+    await expect
+      .poll(async () => {
+        await logCapture.flush();
+        return logCapture.records.filter((record) => record.message === "desktop observer closed");
+      })
+      .toHaveLength(1);
+    expect(logCapture.records[0]?.attributes).toMatchObject({
+      trigger: "stream-close",
+      cleanupCode: 1000,
+      closeCode: 1000,
+    });
     expect(harness.release).toHaveBeenCalledOnce();
   });
 
@@ -255,12 +306,27 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
   });
 
   it("propagates websocket close to the unix socket", async () => {
+    const logCapture = createDiagnosticLogRecordCapture();
+    logCaptures.push(logCapture);
     const harness = await createProxyHarness();
     const closed = new Promise<void>((resolve) => {
       harness.desktopPeer.once("close", resolve);
     });
-    harness.ws.close();
+    const token = new URL(harness.observerUrl).searchParams.get("token");
+    harness.ws.close(1001, `browser left\n${token}`);
     await closed;
+    await logCapture.flush();
+    expect(logCapture.records).toHaveLength(1);
+    expect(logCapture.records[0]?.attributes).toMatchObject({
+      trigger: "browser-close",
+      cleanupCode: 1000,
+      closeCode: 1001,
+    });
+    expect(logCapture.records[0]?.attributes?.closeReason).toBeUndefined();
+    const serialized = JSON.stringify(logCapture.records);
+    expect(serialized).not.toContain("browser left");
+    expect(serialized).not.toContain(token);
+    expect(serialized).not.toContain(harness.observerUrl);
     expect(harness.release).toHaveBeenCalledOnce();
   });
 

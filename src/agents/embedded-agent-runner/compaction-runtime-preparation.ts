@@ -152,10 +152,12 @@ export async function prepareCompactionHarnessAuth(params: {
 }> {
   const runtimeAuthProfileStore = isOpenAIProvider(params.provider)
     ? ensureAuthProfileStore(params.agentDir, {
+        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       })
     : ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+        profileId: params.authProfileId ?? params.reusableRuntimeAuthPlan?.forwardedAuthProfileId,
         allowKeychainPrompt: false,
       });
   const selectPreparedHarness = (attempts: readonly PreparedAgentRuntimeAuthAttempt[]) =>

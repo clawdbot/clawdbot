@@ -241,13 +241,11 @@ export async function scanMemoryManagerSources(
   if (!status.sourceCounts?.length) {
     return undefined;
   }
-  const sources = status.sourceCounts.map(
-    (entry): SourceScan => ({
-      source: entry.source,
-      totalFiles: entry.eligible ?? null,
-      issues: entry.issues ?? [],
-    }),
-  );
+  const sources = status.sourceCounts.map((entry): SourceScan => ({
+    source: entry.source,
+    totalFiles: entry.eligible ?? null,
+    issues: entry.issues ?? [],
+  }));
   const totalFiles = sources.some((entry) => entry.totalFiles === null)
     ? null
     : sources.reduce((total, entry) => total + (entry.totalFiles ?? 0), 0);

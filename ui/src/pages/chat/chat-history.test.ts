@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -13,7 +14,7 @@ import {
   publishChatSessionProjection,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
-import { handleChatDraftChange } from "./input-history.ts";
+import { appendChatDraftText, handleChatDraftChange } from "./input-history.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
@@ -69,6 +70,30 @@ function activeHistory(runId: string): ChatHistoryResult {
     },
   } satisfies ChatHistoryResult;
 }
+
+describe("appendChatDraftText", () => {
+  it("appends an inline command without changing an existing mention", () => {
+    const state = createState({ messages: [] }) as TestState &
+      Parameters<typeof handleChatDraftChange>[0] & {
+        handleChatDraftChange: (
+          next: string,
+          mentions?: readonly { profileId: string; start: number; end: number }[],
+        ) => void;
+      };
+    const mention = { profileId: "alex-profile", start: 7, end: 12 };
+    state.chatMessage = "Review @Alex";
+    state.chatMentions = [mention];
+    const handleDraftChange = vi.fn((next: string, mentions?: ChatState["chatMentions"]) =>
+      handleChatDraftChange(state, next, mentions),
+    );
+    state.handleChatDraftChange = handleDraftChange;
+
+    expect(appendChatDraftText(state, "/dashboard ")).toBe("Review @Alex /dashboard ");
+    expect(state.chatMessage).toBe("Review @Alex /dashboard ");
+    expect(state.chatMentions).toEqual([mention]);
+    expect(handleDraftChange).toHaveBeenCalledWith("Review @Alex /dashboard ", state.chatMentions);
+  });
+});
 
 it.each(["main", "workspace"])(
   "requests the configured default agent for global main alias %s",
@@ -207,16 +232,13 @@ describe("syncSelectedSessionMessageSubscription", () => {
   it("retries a stale generation's rejected subscription release", async () => {
     const stale = { key: "agent:main:stale", agentId: null };
     const selected = { key: "agent:main:selected", agentId: null };
-    let resolveStale: (subscription: typeof stale) => void = () => undefined;
-    const staleSubscription = new Promise<typeof stale>((resolve) => {
-      resolveStale = resolve;
-    });
+    const staleSubscription = createDeferred<typeof stale>();
     const unsubscribeMessages = vi
       .fn()
       .mockRejectedValueOnce(new Error("stale release temporarily failed"))
       .mockResolvedValueOnce(undefined);
     const subscribeMessages = vi.fn(async (key: string) =>
-      key === stale.key ? await staleSubscription : selected,
+      key === stale.key ? await staleSubscription.promise : selected,
     );
     const state = createState({ messages: [] }) as TestState & {
       chatSessionMessageSubscriptionRequestedKey: string | null;
@@ -236,7 +258,7 @@ describe("syncSelectedSessionMessageSubscription", () => {
     state.sessionKey = selected.key;
     await syncSelectedSessionMessageSubscription(state as never);
 
-    resolveStale(stale);
+    staleSubscription.resolve(stale);
     await staleSync;
 
     expect(state.chatSessionMessageSubscription).toBe(selected);

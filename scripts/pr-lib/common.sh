@@ -62,10 +62,50 @@ changelog_required_for_changed_files() {
 root_changelog_update_allowed_for_pr() {
   case "${OPENCLAW_ALLOW_ROOT_CHANGELOG_PR:-}" in
     1|true|TRUE|yes|YES|on|ON)
+      printf 'override\n'
       return 0
       ;;
   esac
-  return 1
+  local record="${1:-}" branch version base
+  branch=$(printf '%s\n' "$record" | jq -r '.headRefName // ""') || return 1
+  [[ "$branch" =~ ^release/([0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?)-main-closeout$ ]] || return 1
+  version="${BASH_REMATCH[1]}"
+  printf '%s\n' "$record" | jq -e --arg title "chore(release): close out $version on main" \
+    '.title == $title and .baseRefName == "main" and .isCrossRepository == false' >/dev/null || return 1
+  git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1 || return 1
+  base=$(git merge-base "$PR_MAIN_SHA" HEAD) || return 1
+  # Compare complete sections, not just added lines: a closeout must preserve
+  # every byte outside its released version, including removed historical text.
+  node - "$version" "$base" <<'EOF_NODE' || return 1
+const { execFileSync } = require("node:child_process");
+const [version, base] = process.argv.slice(2);
+const heading = `## ${version}\n`;
+function split(text, allowUnreleased = false) {
+  const parts = text.split(/(?=^## )/m);
+  let matches = parts.filter((part) => part.startsWith(heading));
+  if (!matches.length && allowUnreleased) {
+    // Older draft headings can be placeholders; newer trains remain outside this closeout.
+    matches = parts.filter((part) => {
+      const draft = /^## (?:Unreleased|([0-9]{4}\.[0-9]+\.[0-9]+(?:-[0-9]+)?) \(Unreleased\))\n/i.exec(part);
+      return draft && (!draft[1] || draft[1].localeCompare(version, "en", { numeric: true }) <= 0);
+    });
+  }
+  if (matches.length > 1) process.exit(1);
+  const index = parts.indexOf(matches[0]);
+  return index < 0 ? { rest: text } : {
+    prefix: parts.slice(0, index).join(""),
+    suffix: parts.slice(index + 1).join(""),
+  };
+}
+// Release history already exceeds execFileSync's default 1 MiB capture limit.
+const read = (ref) => execFileSync("git", ["show", `${ref}:CHANGELOG.md`], { encoding: "utf8", maxBuffer: Infinity });
+const before = split(read(base), true);
+const after = split(read("HEAD"));
+if (after.rest !== undefined || (before.rest !== undefined
+  ? before.rest !== after.prefix + after.suffix
+  : before.prefix !== after.prefix || before.suffix !== after.suffix)) process.exit(1);
+EOF_NODE
+  printf 'closeout\n'
 }
 
 print_review_stdout_summary() {

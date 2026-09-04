@@ -65,6 +65,7 @@ type ExecuteCliProcessOptions = {
 
 export async function executeCliProcess(params: {
   context: PreparedCliRunContext;
+  assertCurrent: () => void;
   backend: CliBackendConfig;
   deps: CliExecuteDeps;
   events: CliEventHandlers;
@@ -128,6 +129,7 @@ export async function executeCliProcess(params: {
             ? params.events.emitCliCommentaryText
             : undefined,
         onSessionId: params.observeForkSuccessor,
+        onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,
         onUsage: params.diagnostics?.observeUsage,
       })
@@ -181,6 +183,7 @@ export async function executeCliProcess(params: {
   let result: RunExit;
   runParams.assertCurrent?.();
   params.diagnostics?.observeRequestPayload(params.stdin ?? params.argsPrompt ?? "");
+  params.assertCurrent();
   if (params.nodePlacement) {
     const nodeRun = await executeNodeClaudeRun({
       context,
@@ -244,6 +247,7 @@ export async function executeCliProcess(params: {
           }
         : {}),
     }).catch((error: unknown) => {
+      runParams.assertCurrent?.();
       if (runParams.abortSignal?.aborted || params.events.hasObservedCliActivity()) {
         throw error;
       }
@@ -265,8 +269,8 @@ export async function executeCliProcess(params: {
     runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
     try {
       const managedRun = await supervisor.spawn({
+        assertCurrent: params.assertCurrent,
         runId: runParams.runId,
-        assertCurrent: runParams.assertCurrent,
         sessionId: runParams.sessionId,
         backendId: context.backendResolved.id,
         scopeKey,

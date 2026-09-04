@@ -89,7 +89,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
@@ -212,6 +212,7 @@ jobs:
           run_owner <<'PYTHON'
           # Generated from .github/actions/git-owner/owner.py; do not edit here.
           import base64
+          import builtins
           import json
           import os
           import re
@@ -222,6 +223,7 @@ jobs:
           import sys
           import tempfile
           import time
+          from types import TracebackType
 
           linux = os.environ.get("RUNNER_OS", sys.platform) in ("Linux", "linux")
           fetch_timeout_seconds = 120 if linux else 90
@@ -576,26 +578,30 @@ jobs:
 
           def checkout_harness(sha):
               action = ".github/actions/setup-node-env/action.yml"
+              evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
               harness = os.path.join(workspace, ".ci-harness")
               os.makedirs(harness, exist_ok=True)
               if sha == os.environ["WORKFLOW_SHA"]:
                   # Export the workflow revision from the freshly populated index, replacing
-                  # retained platform files without updating the index or trusting later edits.
+                  # retained harness files without updating the index or trusting later edits.
                   pathspecs = [".github/actions"]
-                  if kind == "preflight":
+                  if kind in ("platform", "linux-node"):
+                      pathspecs += evidence_scripts
+                  elif kind == "preflight":
                       pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
                   paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
                   run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
               else:
                   run_git(harness, "init", harness)
                   run_git(harness, "remote", "add", "origin", remote)
-                  # The harness only supplies .github/actions, so narrow the fetch before it runs:
-                  # sparse first, then blob-less. A full snapshot here downloads a second copy of
-                  # the repository that the checkout below immediately discards, and every extra
-                  # byte is amplified by the shared runner egress.
-                  run_git(harness, "sparse-checkout", "set", ".github/actions")
+                  sparse_paths = ["/.github/actions/"]
+                  if kind in ("platform", "linux-node"):
+                      sparse_paths += [f"/{path}" for path in evidence_scripts]
+                  # Rooted non-cone patterns keep the kind-owned workflow files exact.
+                  # Sparse first, then blob-less avoids downloading a second repository snapshot.
+                  run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)
                   fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
                         max_attempts=1, blobless=True)
                   # Checkout now materializes the sparse blobs over the network, so it carries the
@@ -716,6 +722,47 @@ jobs:
                   checkout_environment.clear()
 
 
+          def terminal_diagnostic(error, owner_code):
+              # Code identity, not a filename supplied by policy, proves source provenance.
+              codes = {id(owner_code): owner_code}
+              pending = [owner_code]
+              while pending:
+                  for value in pending.pop().co_consts:
+                      if type(value) is type(owner_code):
+                          codes[id(value)] = value
+                          pending.append(value)
+              names = {value: value.__name__ for value in vars(builtins).values()
+                       if isinstance(value, type) and issubclass(value, BaseException)}
+              names.update({FetchTimeout: "FetchTimeout", GitFailure: "GitFailure"})
+              records, seen, via = [], set(), "terminal"
+              while error is not None and id(error) not in seen and len(records) < 4:
+                  seen.add(id(error))
+                  record = {"type": names.get(type(error), "unknown"), "via": via}
+                  for field in ("errno", "winerror"):
+                      value = getattr(error, field, None)
+                      if type(value) is int and -(2 ** 31) <= value < 2 ** 32:
+                          record[field] = value
+                  frames, trace = [], error.__traceback__
+                  # Bound traversal as well as output; malformed metadata cannot stall exit.
+                  for _ in range(256):
+                      if trace is None:
+                          break
+                      if type(trace) is not TracebackType:
+                          raise TypeError
+                      frame, code = trace.tb_frame, trace.tb_frame.f_code
+                      if frame.f_globals is globals() and id(code) in codes and 0 < trace.tb_lineno < 2 ** 31:
+                          frames.append({"function": code.co_name[:64], "line": trace.tb_lineno})
+                          frames = frames[-6:]
+                      trace = trace.tb_next
+                  record["owner_frames"] = frames
+                  if trace is not None:
+                      record["traceback_truncated"] = 1
+                  records.append(record)
+                  cause = error.__cause__
+                  error, via = (cause, "cause") if cause is not None else (error.__context__, "context")
+              return records
+
+
           if __name__ == "__main__":
               try:
                   main()
@@ -724,8 +771,18 @@ jobs:
               except GitFailure as error:
                   raise SystemExit(error.code)
               except Exception as error:
-                  # Do not print command arguments or environment: Git may carry credentials.
-                  print(f"::error::Git ownership/setup failed ({type(error).__name__}); refusing reuse or retry", file=sys.stderr)
+                  name, diagnostic = "unknown", "unavailable"
+                  try:
+                      records = terminal_diagnostic(error, sys._getframe().f_code)
+                      diagnostic = json.dumps(records, separators=(",", ":"))
+                      name = records[0]["type"]
+                  except BaseException:
+                      pass  # Diagnostics must never replace the authoritative terminal exit.
+                  try:
+                      print(f"::error::Git ownership/setup failed ({name}); refusing reuse or retry", file=sys.stderr)
+                      print(f"[ci-git-owner] diagnostic={diagnostic}", file=sys.stderr)
+                  except BaseException:
+                      pass
                   raise SystemExit(125)
           PYTHON
 
@@ -1250,6 +1307,8 @@ jobs:
           const runNodeFastCiRouting =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
           const runPluginContractShards = runNodeFull || runNodeFastPluginContracts;
+          const pluginContractShards = runPluginContractShards ? createPluginContractTestShards() : [];
+          const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
           const runMacos =
             parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository;
           // Older selected checkouts report only run_macos; retain their native Node coverage.
@@ -1297,7 +1356,13 @@ jobs:
           const uiE2eJobCount = supportsUiE2eProjects
             ? (compactUiE2e ? 7 : 13)
             : usesHostedRunnerProfile ? 14 : 4;
-          const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
+          // The logical profile already owns contributor routing. Reuse the
+          // four-part plan only for normal hybrid first attempts on Blacksmith.
+          const compactHybridQaSmoke = runnerProfile === "hybrid" &&
+            isCanonicalRepository &&
+            (eventName === "push" || eventName === "pull_request") &&
+            process.env.GITHUB_RUN_ATTEMPT === "1";
+          const qaSmokeCiPartCount = usesHostedRunnerProfile && !compactHybridQaSmoke ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
             hasPackageScript("android:i18n:check") &&
@@ -1396,7 +1461,9 @@ jobs:
                 throw new Error(`Current PR CI target does not export ${name}`);
               }
             }
-            changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
+            changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+              dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
+            });
             if (changedNodeTestShards === null) {
               changedExtensionFallbackShards =
                 changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
@@ -1524,7 +1591,6 @@ jobs:
           const runNodeCoreDist =
             (changedNodeTestShards !== null && runBuildArtifacts) ||
             nodeTestDistShards.length > 0;
-          const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
           const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
           const runProtocolEventCoverage =
             protocolCoverageRequested &&
@@ -1586,7 +1652,7 @@ jobs:
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
             plugin_contracts_matrix: createContractMatrix(
-              runPluginContractShards ? createPluginContractTestShards() : [],
+              pluginContractShards,
               "contracts-plugins",
             ),
             run_channel_contracts_shards: channelContractShards.length > 0,
@@ -2516,6 +2582,32 @@ jobs:
       - *cache_playwright_chromium
       - *install_playwright_chromium
 
+      - name: Restore Chrome MCP npm cache
+        id: chrome-mcp-cache
+        if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: &chrome_mcp_npm_cache
+          path: |
+            ~/.npm/_cacache
+            ~/.npm/_npx
+          key: ${{ runner.os }}-${{ runner.arch }}-chrome-devtools-mcp@1.8.0-node24-v1
+
+      # Populate metadata and the executable before the 30-second MCP handshake.
+      - name: Pre-warm Chrome MCP
+        if: matrix.task == 'browser-extension' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
+        run: npx -y --audit=false chrome-devtools-mcp@1.8.0 --version
+
+      - name: Save Chrome MCP npm cache
+        if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: *chrome_mcp_npm_cache
+
+      - name: Configure offline Chrome MCP
+        if: matrix.task == 'browser-extension'
+        # npx revalidates cached pins; MCP filters npm_config_* and Vitest changes
+        # HOME. Project config keeps the warmed cache reachable without the registry.
+        run: npm config set cache="$HOME/.npm" offline=true --location=project
+
       - name: Test Control UI end-to-end
         if: matrix.task == 'control-ui'
         env:
@@ -2591,6 +2683,7 @@ jobs:
           extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
           extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
+          extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
@@ -2757,7 +2850,7 @@ jobs:
               pnpm check:coercion-helpers
               ;;
             baseline-ratchets)
-              for required_script in check:max-lines-ratchet check:assertion-safety; do
+              for required_script in check:max-lines-ratchet check:assertion-safety config:docs:check plugins:inventory:check; do
                 if ! has_package_script "$required_script"; then
                   echo "Current CI targets must provide ${required_script}." >&2
                   exit 1
@@ -2782,6 +2875,8 @@ jobs:
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
               pnpm check:assertion-safety --base "$base_ref"
+              pnpm config:docs:check
+              pnpm plugins:inventory:check
               ;;
             release-lint-core-*)
               stripe="${TASK#release-lint-core-}"
@@ -3616,13 +3711,15 @@ jobs:
               fi
               ;;
             test-types)
-              # The github/hybrid planner profile moves the 14 serial core-test
-              # graphs (~70% of this lane) into the dedicated hosted stripes
-              # job; this row keeps the extensions/root/scripts tail. Targets
-              # without stripe support run the whole lane here.
+              # The github/hybrid jobs pair the first four core-test stripes;
+              # this row owns the fifth before extensions/scripts/root. Targets
+              # without stripe support keep the whole lane here.
               root_covered=false
               if [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
                 grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
+                # Core stripes retain their safeguards; only the existing tail
+                # inherits this step's OPENCLAW_LOCAL_CHECK=0.
+                env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --stripe "5/5" --concurrency 2
                 pnpm tsgo:extensions:test
               else
                 pnpm check:test-types
@@ -3657,8 +3754,8 @@ jobs:
               ;;
           esac
 
-  # The github/hybrid planner profile aggregates core targets into five Programs
-  # across five hosted jobs. All-Blacksmith mode keeps one lint job.
+  # Keep five core Programs; ordinary hybrid runs pair them across three hosted jobs.
+  # GitHub, frozen and manual runs retain five jobs. All-Blacksmith keeps one lint job.
   check-lint-hosted-core-shard:
     permissions:
       contents: read
@@ -3671,7 +3768,7 @@ jobs:
       fail-fast: false
       max-parallel: 5
       matrix:
-        stripe: [1, 2, 3, 4, 5]
+        stripe: ${{ fromJSON(needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && !inputs.release_gate && (github.event_name == 'push' || github.event_name == 'pull_request') && '[1,2,3]' || '[1,2,3,4,5]') }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -3712,6 +3809,7 @@ jobs:
 
       - name: Run hosted core lint stripe
         env:
+          CORE_STRIPE: ${{ matrix.stripe }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_LOCAL_CHECK: "0"
           RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
@@ -3728,16 +3826,25 @@ jobs:
             echo "[skip] target does not support core lint stripes"
             exit 0
           fi
-          node --import tsx scripts/run-oxlint-shards.mts \
-            --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
-          if [ "$RUNNER_PROFILE" = "github" ] && [ "$RELEASE_GATE" != "true" ] &&
-            grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
-            node --import tsx scripts/run-oxlint-shards.mts \
-              --only=extensions --extension-stripe=${{ matrix.stripe }}/6 --threads=1
+          stripes=("$CORE_STRIPE")
+          if ${{ needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && !inputs.release_gate && (github.event_name == 'push' || github.event_name == 'pull_request') }}; then
+            stripes=("$((2 * CORE_STRIPE - 1))" "$((2 * CORE_STRIPE))")
           fi
+          for stripe in "${stripes[@]}"; do
+            if [ "$stripe" -gt 5 ]; then
+              continue
+            fi
+            node --import tsx scripts/run-oxlint-shards.mts \
+              --only=core --split-core --core-stripe="$stripe/5" --threads=1
+            if [ "$RUNNER_PROFILE" = "github" ] && [ "$RELEASE_GATE" != "true" ] &&
+              grep -q -- '--extension-stripe' scripts/run-oxlint-shards.mts 2>/dev/null; then
+              node --import tsx scripts/run-oxlint-shards.mts \
+                --only=extensions --extension-stripe="$stripe/6" --threads=1
+            fi
+          done
 
-  # Stripe core test-type graphs across five jobs; each graph can saturate a machine.
-  # check-test-types keeps the extensions/root/scripts tail in github/hybrid mode;
+  # Pair four original core stripes; check-test-types owns the fifth and its tail.
+  # Each stripe retains fresh compiler processes and its two-child limit;
   # all-Blacksmith mode uses one 32-vCPU test-types job for the full workload.
   check-test-types-hosted-core-shard:
     permissions:
@@ -3746,14 +3853,14 @@ jobs:
     needs: [preflight]
     if: ${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
     # The 8 label delivered only 2 CPUs/8 GiB; 32 delivered 8 CPUs/31 GiB.
-    # Preserve two graphs per stripe and hosted retries; see docs/ci.md#blacksmith-runner-capacity.
+    # Preserve two compiler children and hosted retries; see docs/ci.md#blacksmith-runner-capacity.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 2
       matrix:
-        stripe: [1, 2, 3, 4, 5]
+        stripe: [1, 2]
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -3773,7 +3880,9 @@ jobs:
             echo "[skip] target does not support core test-type stripes"
             exit 0
           fi
-          node scripts/run-tsgo-core-test-shards.mjs --stripe "${{ matrix.stripe }}/5" --concurrency 2
+          for stripe in "$((2 * ${{ matrix.stripe }} - 1))" "$((2 * ${{ matrix.stripe }}))"; do
+            node scripts/run-tsgo-core-test-shards.mjs --stripe "$stripe/5" --concurrency 2
+          done
 
   check-additional-shard:
     permissions:
@@ -4068,6 +4177,12 @@ jobs:
       - name: Check formatting
         if: needs.preflight.outputs.run_format_check == 'true'
         run: pnpm format:check
+
+      - name: Check config docs baseline
+        run: pnpm config:docs:check
+
+      - name: Check plugin inventory
+        run: pnpm plugins:inventory:check
 
       - name: Checkout ClawHub docs source
         shell: bash
@@ -4761,9 +4876,21 @@ jobs:
             -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
+            -only-testing:OpenClawTests/WatchMessagingInboundTransportTests \
+            -only-testing:OpenClawTests/WatchSessionActivationGateTests \
+            -only-testing:OpenClawTests/OpenClawTypographyTests \
             -only-testing:OpenClawTests/NotificationServingPreferenceTests \
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
+            test
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawUITests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=${simulator_id}" \
+            -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
             test
 
       - name: Run focused Apple Watch operation simulator tests
@@ -4952,10 +5079,10 @@ jobs:
             --fastlane-version "$fastlane_version"
             --node-version "$(node --version)"
           )
-          node scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
+          node .ci-harness/scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
           if [[ "$DEVICE_FAMILY" == "ipad-13" ]]; then
             collect_args[2]="watch"
-            node scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
+            node .ci-harness/scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
           fi
 
       - name: Upload iOS screenshot shard evidence
@@ -5012,7 +5139,7 @@ jobs:
           TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
-          node scripts/ios-screenshot-evidence.mjs reduce \
+          node .ci-harness/scripts/ios-screenshot-evidence.mjs reduce \
             --input apps/ios/build/ScreenshotEvidenceInputs \
             --output . \
             --target-sha "$TARGET_SHA" \

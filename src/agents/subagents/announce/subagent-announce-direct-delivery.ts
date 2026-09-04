@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Requester-agent handoff and direct delivery for subagent announcements.
  */
@@ -6,6 +7,7 @@ import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
+  INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../../sessions/input-provenance.js";
@@ -142,7 +144,6 @@ export async function sendSubagentAnnounceDirectly(params: {
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
   sourceSessionKey?: string;
-  sourceChannel?: string;
   sourceTool?: string;
   isSourceSessionEffectsAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
@@ -406,7 +407,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+        sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
         sourceTool: params.sourceTool ?? "subagent_announce",
       },
       ...(completionSourceReplyDeliveryMode
@@ -674,9 +675,14 @@ export async function sendSubagentAnnounceDirectly(params: {
     return {
       delivered: true,
       path: "direct",
-      ...(params.expectsCompletionMessage &&
-      !params.requesterIsSubagent &&
-      requesterVisibleFinalDelivered
+      // Synthetic wakes can commit their final to the requester transcript.
+      // A canceled partial payload or accepted handoff is not that receipt.
+      ...(!params.requesterIsSubagent &&
+      (requesterVisibleFinalDelivered ||
+        (!params.expectsCompletionMessage &&
+          asOptionalRecord(directAnnounceResponse)?.status === "ok" &&
+          hasVisibleNonSilentGatewayPayload &&
+          hasVisibleCompletionReply))
         ? { requesterVisibleFinalDelivered: true }
         : {}),
     };

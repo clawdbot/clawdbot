@@ -35,7 +35,7 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
     });
 
     expect(plan.auth).toEqual({
-      token: "test-token-placeholder",
+      token: undefined,
       bootstrapToken: undefined,
       deviceToken: "test-token-placeholder",
       password: undefined,

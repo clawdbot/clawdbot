@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
@@ -391,7 +392,7 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain("0 passed, 1 failed, 1 blocked, 1 skipped");
   });
 
-  it("renders passing evidence without impossible failed or blocked result counts", () => {
+  it("renders passing evidence with unique section jump targets", () => {
     const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
     const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
     writeQaEvidence({
@@ -416,6 +417,18 @@ describe("maturity docs renderer CLI", () => {
     expect(taxonomy).not.toMatch(
       /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,
     );
+    for (const [markdown, id] of [
+      [scorecard, "surface-explorer"],
+      [taxonomy, "product-areas"],
+    ]) {
+      const document = parseDocsDocument(markdown);
+      expect(document.links).toContain(`#${id}`);
+      expect(
+        document.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
+      expect(document.collisions).toEqual([]);
+    }
   });
 
   it("renders the maturity score from quality and completeness without coverage", () => {
