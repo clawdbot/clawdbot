@@ -510,8 +510,32 @@ export async function runAgentHarnessAttempt(
           harness,
           effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true,
         );
-        return pluginAttempt.runWithHostScope(() =>
-          runAgentHarnessLifecycleAttempt(harness, effectiveAttemptParams),
+        // Load the calculator only after admission and final host policy preparation.
+        return import("./tool-authority.runtime.js").then(
+          ({ withPreparedEmbeddedRunToolAuthority }) =>
+            withPreparedEmbeddedRunToolAuthority(
+              internalParams,
+              effectiveAttemptParams,
+              selection.builtIn
+                ? undefined
+                : (input) => {
+                    const policies = resolvePluginHarnessToolPolicies({
+                      ...input.run,
+                      modelId: input.run.model,
+                      sandboxSessionKey: input.run.runtimePolicySessionKey,
+                      messageChannel: input.originatingChannel,
+                      toolsAllow: input.toolsAllow,
+                      disableTools: input.disableTools,
+                    });
+                    return resolvePluginHarnessDenyAllToolPolicyPrompt(policies)
+                      ? { ...input, toolsAllow: [] }
+                      : input;
+                  },
+              (prepared) =>
+                pluginAttempt.runWithHostScope(() =>
+                  runAgentHarnessLifecycleAttempt(harness, prepared),
+                ),
+            ),
         );
       }),
     );

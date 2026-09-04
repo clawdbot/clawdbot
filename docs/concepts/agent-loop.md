@@ -103,7 +103,7 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 
 - The exact silent token `NO_REPLY` is filtered from outgoing payloads.
 - Messaging tool duplicates are removed from the final payload list.
-- If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted unless a messaging tool already sent a user-visible reply.
+- A fallback tool error warning appears only when a run ends with a tool failure and would otherwise leave the user with no reply. This guard is not configurable; a user-facing reply, including one already delivered by a messaging tool, prevents the warning.
 
 Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
 

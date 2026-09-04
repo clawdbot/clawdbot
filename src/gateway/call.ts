@@ -125,6 +125,7 @@ type CallGatewayBaseOptions = {
   expectFinal?: boolean;
   timeoutMs?: number | null;
   signal?: AbortSignal;
+  assertDispatchCurrent?: () => void;
   onAccepted?: GatewayClientRequestOptions["onAccepted"];
   onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
   clientName?: GatewayClientName;
@@ -994,6 +995,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
             if (!activeClient) {
               throw new Error("gateway client not initialized");
             }
+            // This check must stay synchronous with request -> ws.send. Moving
+            // an await into that chain requires moving enforcement to the send owner.
+            opts.assertDispatchCurrent?.();
             primaryRequestStarted = true;
             const result = await activeClient.request<T>(opts.method, opts.params, {
               expectFinal: opts.expectFinal,

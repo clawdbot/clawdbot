@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  claimPendingAgentQuestionAnswer,
-  type AgentHarnessQuestionGatewayCall,
-} from "./gateway-question.js";
+import type { AgentHarnessQuestionGatewayCall } from "./gateway-question-dispatch.js";
+import { claimPendingAgentQuestionAnswer } from "./gateway-question.js";
 import { runStructuredInput } from "./structured-input-execution.js";
 import {
   compileStructuredInputForm,

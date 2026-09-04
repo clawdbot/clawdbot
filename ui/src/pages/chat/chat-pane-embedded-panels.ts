@@ -216,12 +216,9 @@ export function sidebarPanelDefinitions(
     definePanel("workspace", "files", icons.fileText, workspaceContent, {
       shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     }),
-    definePanel(
-      "companion",
-      "companion",
-      icons.bot,
-      companion,
-      params
+    definePanel("companion", "companion", icons.bot, companion, {
+      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat),
+      ...(params
         ? {
             headerAction: html`<openclaw-tooltip .content=${t("chat.rail.clear")}>
               <button
@@ -235,8 +232,8 @@ export function sidebarPanelDefinitions(
               </button>
             </openclaw-tooltip>`,
           }
-        : undefined,
-    ),
+        : {}),
+    }),
     definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null, {
       headerAction: params
         ? html`<openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>

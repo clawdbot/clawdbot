@@ -1,25 +1,12 @@
 // Talk session runtime tests cover provider lifecycle and session events.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-  type RealtimeVoiceBridge,
+  type RealtimeVoiceBridgeCallbacks,
 } from "./provider-types.js";
 import { createRealtimeVoiceBridgeSession } from "./session-runtime.js";
-
-function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoiceBridge {
-  return {
-    acknowledgeMark: vi.fn(),
-    close: vi.fn(),
-    connect: vi.fn(async () => {}),
-    isConnected: vi.fn(() => true),
-    sendAudio: vi.fn(),
-    setMediaTimestamp: vi.fn(),
-    submitToolResult: vi.fn(),
-    triggerGreeting: vi.fn(),
-    ...overrides,
-  };
-}
+import { makeBridge } from "./session-runtime.test-support.js";
 
 function expectBridgeRequest(
   request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined,
@@ -108,14 +95,25 @@ describe("realtime voice bridge session runtime", () => {
       },
     };
 
+    expectTypeOf<() => Promise<void>>().toExtend<
+      NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>
+    >();
+    const handleDelegationInput = vi.fn(() => "control" as const);
+    const onTranscript = vi.fn();
     createRealtimeVoiceBridgeSession({
       provider,
+      handleDelegationInput,
+      onTranscript,
       agentId: "voice-agent",
       providerConfig: {},
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       audioSink: { sendAudio: vi.fn() },
     });
 
+    expect(expectBridgeRequest(request).handleDelegationInput?.("status", vi.fn())).toBe("control");
+    expect(handleDelegationInput).toHaveBeenCalledExactlyOnceWith("status", expect.any(Function));
+    expectBridgeRequest(request).onTranscript?.("user", "status", true);
+    expect(onTranscript).toHaveBeenCalledExactlyOnceWith("user", "status", true);
     expect(expectBridgeRequest(request).agentId).toBe("voice-agent");
     expect(expectBridgeRequest(request).audioFormat).toEqual(
       REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
