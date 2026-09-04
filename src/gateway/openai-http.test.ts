@@ -246,6 +246,22 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(selected.status).toBe(200);
       expect(firstAgentCommandOptions()?.sessionKey ?? "").toMatch(/^agent:main:/);
       await selected.text();
+
+      testState.agentsConfig = {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "scripts" }],
+      };
+      resetConfigRuntimeState();
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+      const bySessionKey = await postChatCompletions(
+        enabledPort,
+        { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+        { "x-openclaw-session-key": "agent:scripts:foobar" },
+      );
+      expect(bySessionKey.status).toBe(200);
+      expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:scripts:foobar");
+      await bySessionKey.text();
     } finally {
       testState.agentsConfig = undefined;
       resetConfigRuntimeState();

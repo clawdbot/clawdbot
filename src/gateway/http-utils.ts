@@ -10,6 +10,7 @@ import {
   AgentSelectionRequiredError,
   listAgentIds,
   resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
@@ -24,6 +25,7 @@ import {
   isSubagentSessionKey,
   isValidAgentId,
   normalizeAgentId,
+  parseAgentSessionKey,
 } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
@@ -127,7 +129,7 @@ export function resolveAgentIdFromModel(
   }
   const lowered = normalizeLowercaseStringOrEmpty(raw);
   if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
-    return resolveDefaultAgentId(cfg);
+    return tryResolveDefaultAgentId(cfg);
   }
 
   const m =
@@ -217,7 +219,16 @@ export async function resolveOpenAiCompatModelOverride(params: {
   return { modelOverride: raw };
 }
 
-/** Resolves the request agent from headers, model alias, or the configured default. */
+function resolveAgentIdFromSessionKeyHeader(req: IncomingMessage): string | undefined {
+  const explicit = getHeader(req, "x-openclaw-session-key")?.trim();
+  if (!explicit) {
+    return undefined;
+  }
+  const agentId = parseAgentSessionKey(explicit)?.agentId;
+  return agentId ? normalizeAgentId(agentId) : undefined;
+}
+
+/** Resolves the request agent from headers, model alias, session key, or the configured default. */
 export function resolveAgentIdForRequest(params: {
   req: IncomingMessage;
   model: string | undefined;
@@ -237,6 +248,12 @@ export function resolveAgentIdForRequest(params: {
   if (fromModel) {
     assertKnownAgentId(fromModel, cfg);
     return fromModel;
+  }
+
+  const fromSessionKey = resolveAgentIdFromSessionKeyHeader(params.req);
+  if (fromSessionKey) {
+    assertKnownAgentId(fromSessionKey, cfg);
+    return fromSessionKey;
   }
 
   return resolveDefaultAgentId(cfg);

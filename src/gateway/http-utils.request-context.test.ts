@@ -3,6 +3,7 @@
  */
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { resolveHttpSenderIsOwner } from "./http-auth-utils.js";
 import {
@@ -15,6 +16,9 @@ import {
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+const runtimeConfig = vi.hoisted(() => ({
+  value: {} as Record<string, unknown>,
+}));
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
@@ -26,6 +30,10 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => runtimeConfig.value,
+}));
+
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
 }
@@ -33,7 +41,10 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
 const tokenAuth = { mode: "token" as const };
 const noneAuth = { mode: "none" as const };
 
-beforeEach(() => sessionEntries.clear());
+beforeEach(() => {
+  sessionEntries.clear();
+  runtimeConfig.value = {};
+});
 
 describe("resolveGatewayRequestContext", () => {
   it("uses normalized x-openclaw-message-channel when enabled", () => {
@@ -173,6 +184,62 @@ describe("resolveGatewayRequestContext", () => {
         defaultMessageChannel: "webchat",
       }),
     ).toThrow("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
+  });
+
+  it("infers the owner from an agent-prefixed session key in an explicit multi-agent fleet", () => {
+    runtimeConfig.value = {
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "scripts" }],
+      },
+    };
+
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.agentId).toBe("scripts");
+    expect(result.sessionKey).toBe("agent:scripts:foobar");
+  });
+
+  it("selects the owner from x-openclaw-agent-id in an explicit multi-agent fleet", () => {
+    runtimeConfig.value = {
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "scripts" }],
+      },
+    };
+
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-agent-id": "scripts" }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.agentId).toBe("scripts");
+    expect(result.sessionKey).toMatch(/^agent:scripts:/);
+  });
+
+  it("still requires an explicit owner when a multi-agent fleet request has no session key or agent header", () => {
+    runtimeConfig.value = {
+      agents: {
+        ownership: "explicit",
+        list: [{ id: "main" }, { id: "scripts" }],
+      },
+    };
+
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq(),
+        model: "openclaw",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow(AgentSelectionRequiredError);
   });
 });
 
