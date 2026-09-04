@@ -800,6 +800,11 @@ openclaw-app {
   height: 100%;
 }
 
+/* Empty contribution hosts must not add layout boxes before the plugin runtime loads. */
+openclaw-plugin-contributions {
+  display: contents;
+}
+
 @media (display-mode: standalone) {
   @supports (height: 100dvh) {
     html,
