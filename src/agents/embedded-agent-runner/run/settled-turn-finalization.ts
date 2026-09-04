@@ -43,6 +43,12 @@ type CreateAttemptControls = ReturnType<
 const MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS = 2;
 const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
   "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
+
+function settledTurnFinalizationQuotesRecoveryPrompt(text: string, prompt: string): boolean {
+  const injected = prompt.trim();
+  return injected.length > 0 && text.includes(injected);
+}
+
 type TerminalPreparationBase = Omit<
   TerminalPreparationInput,
   | "attempt"
@@ -357,11 +363,31 @@ async function runPreparedSettledTurnFinalization(input: {
       input.settledAttempt,
       input.harness,
     );
+    let { outcome, result } = finalization;
+    if (
+      outcome === "answered" &&
+      settledTurnFinalizationQuotesRecoveryPrompt(
+        resolveSettledTurnFinalizationText(result),
+        input.prompt,
+      )
+    ) {
+      log.warn(
+        `settled-turn finalization quoted its recovery prompt: runId=${input.attempt.runId} sessionId=${input.attempt.sessionId} — treating as empty`,
+      );
+      outcome = "empty";
+      result = {
+        ...result,
+        assistant: {
+          ...result.assistant,
+          content: [{ type: "text", text: "" }],
+        },
+      };
+    }
     return {
-      outcome: finalization.outcome,
+      outcome,
       attempt: buildSettledTurnFinalizationAttemptResult({
-        outcome: finalization.outcome,
-        result: finalization.result,
+        outcome,
+        result,
         settledAttempt: input.settledAttempt,
         prompt: input.prompt,
         agentHarnessId: input.attempt.agentHarnessId,
