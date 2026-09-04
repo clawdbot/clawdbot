@@ -1,5 +1,7 @@
 // Control UI E2E tests cover chat composer catalog discovery.
 import { expect, it } from "vitest";
+import { buildGatewaySessionSnapshot } from "../../../src/gateway/session-event-payload.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
@@ -70,56 +72,95 @@ suite.define(() => {
     },
   );
 
-  it("shows the active fallback model while retaining the selected preference", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const selectedModel = { id: "gpt-5.5", name: "GPT-5.5", provider: "codex" };
-      const activeModel = { id: "qwen3.5:9b", name: "Qwen 3.5 9B", provider: "ollama" };
-      const gateway = await installMockGateway(page, {
-        agentModel: "codex/gpt-5.5",
-        models: [selectedModel, activeModel],
-        methodResponses: {
-          "sessions.list": {
-            count: 1,
-            defaults: { model: selectedModel.id, modelProvider: selectedModel.provider },
-            sessions: [
-              {
-                key: "main",
-                kind: "direct",
-                model: selectedModel.id,
-                modelProvider: selectedModel.provider,
-                activeModel: activeModel.id,
-                activeModelProvider: activeModel.provider,
-                status: "done",
-                updatedAt: Date.now(),
-              },
-            ],
-            path: "",
-            ts: Date.now(),
+  it("clears the active fallback model after recovery while retaining the selected preference", async () => {
+    const artifactDir = suite.artifactDir;
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, recordVideo: { dir: artifactDir } },
+      async ({ page }) => {
+        const selectedModel = { id: "gpt-5.5", name: "GPT-5.5", provider: "codex" };
+        const activeModel = { id: "qwen3.5:9b", name: "Qwen 3.5 9B", provider: "ollama" };
+        const session = {
+          key: "agent:main:fallback-recovery",
+          sessionId: "fallback-recovery-session",
+          kind: "direct",
+          model: selectedModel.id,
+          modelProvider: selectedModel.provider,
+          status: "done",
+          updatedAt: Date.now(),
+        } satisfies GatewaySessionRow;
+        const gateway = await installMockGateway(page, {
+          sessionKey: session.key,
+          agentModel: "codex/gpt-5.5",
+          models: [selectedModel, activeModel],
+          methodResponses: {
+            "sessions.list": {
+              count: 1,
+              defaults: { model: selectedModel.id, modelProvider: selectedModel.provider },
+              sessions: [
+                {
+                  ...session,
+                  activeModel: activeModel.id,
+                  activeModelProvider: activeModel.provider,
+                },
+              ],
+              path: "",
+              ts: Date.now(),
+            },
           },
-        },
-      });
+        });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      const composer = page.locator(".agent-chat__input");
-      const trigger = composer.locator('[data-chat-model-select="true"]');
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+        await gateway.waitForRequest("chat.startup");
+        const composer = page.locator(".agent-chat__input");
+        const trigger = composer.locator('[data-chat-model-select="true"]');
 
-      await expect.poll(() => trigger.textContent()).toContain("Qwen 3.5 9B");
-      await trigger.click();
-      await expect
-        .poll(() =>
-          composer
+        await expect.poll(() => trigger.textContent()).toContain("Qwen 3.5 9B");
+        await expect
+          .poll(() =>
+            composer
+              .locator('[data-chat-model-option="codex/gpt-5.5"]')
+              .getAttribute("aria-selected"),
+          )
+          .toBe("true");
+        await page.screenshot({ path: `${artifactDir}/active-fallback-model.png` });
+        const recovered = { ...session, updatedAt: session.updatedAt + 1 };
+        const message = {
+          role: "assistant",
+          content: "The selected model recovered.",
+          timestamp: recovered.updatedAt,
+        };
+        await gateway.setHistoryMessages([message]);
+        await gateway.setMethodResponse("chat.history", {
+          messages: [message],
+          sessionId: session.sessionId,
+          sessionInfo: recovered,
+        });
+        const listCount = (await gateway.getRequests("sessions.list")).length;
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey: session.key,
+          agentId: "main",
+          message,
+          messageId: "model-recovered",
+          messageSeq: 1,
+          ...buildGatewaySessionSnapshot({
+            sessionRow: recovered,
+            agentId: "main",
+            includeSession: true,
+            activeRunState: { active: false, runIds: [] },
+          }),
+        });
+        await gateway.waitForRequest("chat.history");
+        await page.getByText(message.content, { exact: true }).waitFor();
+        await page.screenshot({ path: `${artifactDir}/recovered-model.png` });
+        await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
+        expect(await gateway.getRequests("sessions.list")).toHaveLength(listCount);
+        expect(
+          await composer
             .locator('[data-chat-model-option="codex/gpt-5.5"]')
             .getAttribute("aria-selected"),
-        )
-        .toBe("true");
-      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
-        await composer.screenshot({
-          animations: "disabled",
-          path: `${suite.artifactDir}/active-fallback-model.png`,
-        });
-      }
-    });
+        ).toBe("true");
+      },
+    );
   });
 
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
