@@ -94,8 +94,12 @@ export function installPreCommitFixture(dir: string): string {
       path.join(dir, "scripts/pre-commit", name),
     );
   }
-  writeFileSync(path.join(dir, rulePath), `${literals.join("\n")}\n`, { mode: 0o600 });
-  run(dir, "git", ["config", "--local", ruleSetting, path.join(dir, rulePath)]);
+  const privateRules = path.resolve(
+    dir,
+    run(dir, "git", ["rev-parse", "--git-path", "private rules.txt"]),
+  );
+  writeFileSync(privateRules, `${literals.join("\n")}\n`, { mode: 0o600 });
+  run(dir, "git", ["config", "--local", ruleSetting, privateRules]);
   mkdirSync(path.join(dir, "node_modules/.bin"), { recursive: true });
   // Stdin mode must echo the blob or the hook treats the empty output as formatter failure.
   writeExecutable(
