@@ -1,5 +1,6 @@
 // Covers provider usage summary loading across auth and plugin paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
   getProviderUsageAuthWithPluginMock,
@@ -112,6 +113,58 @@ describe("provider-usage.load", () => {
     const summary = await loadUsageWithAuth(loadProviderUsageSummary, [], mockFetch);
     expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
   });
+
+  it.each(["async", "sync"])(
+    "keeps login-issued API keys out of provider-only %s candidate resolution",
+    async (helper) => {
+      const authStore: AuthProfileStore = {
+        version: 1,
+        order: { openrouter: ["openrouter:login", "openrouter:billing"] },
+        profiles: {
+          "openrouter:login": {
+            type: "api_key",
+            provider: "openrouter",
+            key: "synthetic-login-key",
+            metadata: { authFlow: "oauth-pkce" },
+          },
+          "openrouter:billing": {
+            type: "api_key",
+            provider: "openrouter",
+            key: "synthetic-billing-key",
+          },
+        },
+      };
+      resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ context }) => {
+        const token =
+          helper === "async"
+            ? (await context.resolveApiKeyCandidatesFromConfigAndStore?.())?.[0]
+            : context.resolveApiKeyFromConfigAndStore();
+        return token ? { token } : undefined;
+      });
+      resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ context }) => ({
+        provider: "openrouter",
+        displayName: "OpenRouter",
+        windows: [{ label: context.token, usedPercent: 10 }],
+      }));
+      const options = { authStore, config: {}, env: {} };
+      const account = await loadProviderUsageSummary({
+        ...options,
+        authProfile: { provider: "openrouter", profileId: "openrouter:login" },
+      });
+      const provider = await loadProviderUsageSummary({
+        ...options,
+        providers: ["openrouter"],
+        providerOnly: true,
+      });
+      expect(account.providers[0]?.windows).toEqual([
+        { label: "synthetic-login-key", usedPercent: 10 },
+      ]);
+      expect(provider.providers[0]?.windows).toEqual([
+        { label: "synthetic-billing-key", usedPercent: 10 },
+      ]);
+      expect(authStore.profiles["openrouter:login"]).toBeDefined();
+    },
+  );
 
   it("does not fetch an account fallback for provider-only billing", async () => {
     resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({

@@ -180,7 +180,7 @@ export async function loadProviderUsageSummary(
           (
             await resolveProviderAuths({
               providers: [provider],
-              preserveAuthProfileId: opts.providerOnly,
+              providerOnly: opts.providerOnly,
               agentDir: opts.agentDir,
               config,
               env,

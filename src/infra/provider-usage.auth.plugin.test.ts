@@ -291,7 +291,7 @@ describe("resolveProviderAuths plugin boundary", () => {
     ).rejects.toBe(secretError);
   });
 
-  it("optionally reports the saved profile selected by unscoped auth", async () => {
+  it("excludes OAuth profiles from provider-only usage", async () => {
     const profileId = "openai:first";
     const store = {
       profiles: {
@@ -323,9 +323,9 @@ describe("resolveProviderAuths plugin boundary", () => {
         providers: ["openai"],
         store: store as never,
         env: {},
-        preserveAuthProfileId: true,
+        providerOnly: true,
       }),
-    ).resolves.toEqual([{ provider: "openai", token: "first-access", authProfileId: profileId }]);
+    ).resolves.toEqual([]);
     await expect(
       resolveProviderAuthsForTest({
         providers: ["openai"],

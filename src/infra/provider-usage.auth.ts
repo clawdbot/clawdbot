@@ -47,6 +47,7 @@ type UsageAuthState = {
   env: NodeJS.ProcessEnv;
   agentDir?: string;
   allowAuthProfileStore: boolean;
+  providerOnly?: boolean;
   getStore?: () => AuthStore;
   store?: AuthStore;
 };
@@ -57,7 +58,19 @@ function resolveUsageAuthStore(state: UsageAuthState): AuthStore {
     ensureAuthProfileStore(state.agentDir, {
       allowKeychainPrompt: false,
     });
-  return state.store;
+  if (!state.providerOnly) {
+    return state.store;
+  }
+  // Filter before string-only plugin helpers erase credential ownership. Login
+  // keys belong to exact-account usage, even when stored as API-key credentials.
+  return {
+    ...state.store,
+    profiles: Object.fromEntries(
+      Object.entries(state.store.profiles).filter(
+        ([, credential]) => credential.type === "api_key" && !credential.metadata?.authFlow,
+      ),
+    ),
+  };
 }
 
 function resolveProviderApiKeyFromConfig(params: {
@@ -581,7 +594,7 @@ export async function resolveProviderAuths(params: {
   agentDir?: string;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  preserveAuthProfileId?: boolean;
+  providerOnly?: boolean;
   onError?: (provider: UsageProviderId, error: unknown) => void;
 }): Promise<ProviderAuth[]> {
   if (params.auth) {
@@ -592,6 +605,7 @@ export async function resolveProviderAuths(params: {
     cfg: params.config ?? getRuntimeConfig(),
     env: params.env ?? process.env,
     agentDir: params.agentDir,
+    providerOnly: params.providerOnly,
   };
   const authProfileSourceState: UsageAuthState = {
     ...stateBase,
@@ -610,7 +624,7 @@ export async function resolveProviderAuths(params: {
     hasAnyAuthProfileStoreSource(params.agentDir);
   const auths: ProviderAuth[] = [];
   const appendAuth = (auth: ProviderAuth) => {
-    if (params.preserveAuthProfileId) {
+    if (params.providerOnly) {
       auths.push(auth);
       return;
     }
