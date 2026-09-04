@@ -285,12 +285,7 @@ extension OpenClawChatViewModel {
             existing: existing,
             snapshot: snapshot,
             phase: phase,
-            activeRunIDs: change.activeRunIds,
-            activeRunIDsPresent: change.activeRunIdsPresent,
-            hasActiveSubagentDescendantRun: change.hasActiveSubagentDescendantRun,
-            hasActiveSubagentDescendantRunPresent: change.hasActiveSubagentDescendantRunPresent,
-            color: change.color,
-            colorPresent: change.colorPresent)
+            change: change)
         self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
         self.persistSessionsToCache(
             self.sessions,
@@ -359,16 +354,11 @@ extension OpenClawChatViewModel {
         existing: OpenClawChatSessionEntry,
         snapshot: OpenClawChatSessionEntry,
         phase: String,
-        activeRunIDs: [String]?,
-        activeRunIDsPresent: Bool,
-        hasActiveSubagentDescendantRun: Bool?,
-        hasActiveSubagentDescendantRunPresent: Bool,
-        color: String?,
-        colorPresent: Bool) -> OpenClawChatSessionEntry
+        change: OpenClawChatSessionsChangedEvent) -> OpenClawChatSessionEntry
     {
         var merged = existing
-        if colorPresent {
-            merged.color = color
+        if change.colorPresent {
+            merged.color = change.color
         }
         merged.updatedAt = snapshot.updatedAt ?? existing.updatedAt
         merged.status = snapshot.status ?? existing.status
@@ -379,11 +369,11 @@ extension OpenClawChatViewModel {
             merged.lastRunError = snapshot.lastRunError ?? existing.lastRunError
         }
 
-        if activeRunIDsPresent {
-            merged.activeRunIds = activeRunIDs
+        if change.activeRunIdsPresent {
+            merged.activeRunIds = change.activeRunIds
         }
-        if hasActiveSubagentDescendantRunPresent {
-            merged.hasActiveSubagentDescendantRun = hasActiveSubagentDescendantRun
+        if change.hasActiveSubagentDescendantRunPresent {
+            merged.hasActiveSubagentDescendantRun = change.hasActiveSubagentDescendantRun
         }
 
         switch phase {
