@@ -7,6 +7,10 @@
   background: var(--bg);
 }
 
+.side-panel[hidden] {
+  display: none;
+}
+
 :root[data-theme-mode="dark"] .side-panel {
   --rail-header-background: var(--bg-accent);
   background: var(--bg-accent);

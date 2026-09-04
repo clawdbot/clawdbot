@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../../components/resizable-divider.ts";
 import {
   openSlot,
+  closeSlot,
   setSidebarOpen,
   setSidebarDock,
   setSidebarExpanded,
@@ -362,5 +363,43 @@ describe("chat sidebar region", () => {
     const region = await createRegion({ ...openSlot({ columns: [] }, "detail"), open: false });
     expect(root(region).querySelector(".side-panel")).toBeNull();
     expect(root(region).querySelector("[data-primary]")).not.toBeNull();
+  });
+
+  it("retains opted-in app input while minimizing and releases other panel content", async () => {
+    const region = await createRegion(
+      setSidebarOpen(openSlot(openSlot({ columns: [] }, "terminal"), "dashboard"), false),
+    );
+    region.panelTemplates = {
+      ...region.panelTemplates,
+      dashboard: html`<input aria-label="Unsaved app input" />`,
+    };
+    await region.updateComplete;
+    expect(root(region).querySelector(".side-panel")).toBeNull();
+    region.layout = setSidebarOpen(region.layout, true);
+    await region.updateComplete;
+    const input = root(region).querySelector<HTMLInputElement>("input")!;
+    input.value = "Unsaved note";
+    const terminal = root(region).querySelector('[data-panel="terminal"]')!;
+
+    region.layout = setSidebarOpen(region.layout, false);
+    await region.updateComplete;
+    const panel = root(region).querySelector<HTMLElement>(".side-panel")!;
+    expect(panel.hidden).toBe(true);
+    expect(panel.hasAttribute("inert")).toBe(true);
+    expect(root(region).querySelector("resizable-divider")).toBeNull();
+    expect(input.isConnected).toBe(true);
+    expect(terminal.isConnected).toBe(false);
+
+    region.layout = setSidebarOpen(region.layout, true);
+    await region.updateComplete;
+    expect(root(region).querySelector("input")).toBe(input);
+    expect(input.value).toBe("Unsaved note");
+    expect(panel.hidden).toBe(false);
+    expect(panel.hasAttribute("inert")).toBe(false);
+    expect(root(region).querySelector('[data-panel="terminal"]')).not.toBeNull();
+
+    region.layout = closeSlot(region.layout, "dashboard");
+    await region.updateComplete;
+    expect(input.isConnected).toBe(false);
   });
 });

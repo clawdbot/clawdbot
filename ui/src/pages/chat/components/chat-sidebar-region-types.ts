@@ -9,6 +9,7 @@ export type SidebarPanelDefinition = {
   icon: TemplateResult;
   shortcut?: string;
   available: boolean;
+  retainWhenClosed?: boolean;
   content: TemplateResult | typeof nothing | null;
   loading: TemplateResult;
   headerAction?: TemplateResult;

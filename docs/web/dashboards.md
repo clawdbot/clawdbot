@@ -12,6 +12,8 @@ widget is pinned, the dashboard opens beside the conversation in a resizable
 side panel. Use **Expand side panel** to give the dashboard the full task area,
 **Collapse** to return to the split layout, or close the panel to return to chat
 alone. Later widget updates leave your current panel layout unchanged.
+Closing and reopening the panel does not restart loaded widgets or discard their
+unsaved input. Reloading the page starts fresh widget views.
 
 There is nothing to set up and no separate app to configure: dashboards are a
 core feature, owned by the thread, stored with the agent, and they survive

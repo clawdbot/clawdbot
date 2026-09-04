@@ -399,7 +399,7 @@ suite.define(() => {
       });
     }
     await page.locator(".side-panel__minimize").click();
-    await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
+    await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
     await page.locator(".chat-thread").waitFor();
     if (recordProof) {
       await page.screenshot({
@@ -657,13 +657,14 @@ suite.define(() => {
       });
       const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
       await page.locator(".side-panel__minimize").click();
-      await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
+      await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
       await expect
         .poll(() =>
           cardElement?.evaluate(
             (element) =>
               element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
-              !element.isConnected,
+              element.isConnected &&
+              Reflect.get(element, "active") === false,
           ),
         )
         .toBe(true);
