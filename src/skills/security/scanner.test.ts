@@ -236,6 +236,34 @@ const result = eval (code);
       expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
     },
     {
+      name: "detects eval called as the right side of a subtraction",
+      source: `
+const result = 0-eval(payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval subtracted from a call result",
+      source: `
+const result = foo()-eval(payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval after a spaced minus",
+      source: `
+const result = x -eval(payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
+      name: "detects eval under a unary minus",
+      source: `
+const result = -eval(payload);
+`,
+      expected: { ruleId: "dynamic-code-execution", severity: "critical" as const },
+    },
+    {
       name: "detects new Function constructor",
       source: `
 const fn = new Function("a", "b", "return a + b");

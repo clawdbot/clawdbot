@@ -169,8 +169,10 @@ const LINE_RULES: LineRule[] = [
     message: "Dynamic code execution detected",
     // `\b` counts `-` and `$` as identifier boundaries, so hyphenated prose
     // ("Self-eval (") and unrelated identifiers (`scope.$eval(`) matched as
-    // critical. Require an identifier start; `.`/`(`/space callers still fire.
-    pattern: /(?<![\w$-])eval\s*\(|new\s+Function\s*\(/,
+    // critical. `eval(` with no space is a call unless an identifier character
+    // precedes it, so `0-eval(x)`, `)-eval(x)`, and unary `-eval(x)` still fire;
+    // only the spaced form treats a leading hyphen as prose.
+    pattern: /(?<![\w$])eval\(|(?<![\w$-])eval\s+\(|new\s+Function\s*\(/,
   },
   {
     ruleId: "crypto-mining",
