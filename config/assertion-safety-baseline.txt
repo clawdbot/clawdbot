@@ -9,11 +9,10 @@ extensions/acpx/src/process-lease.ts	3
 extensions/acpx/src/runtime.ts	15
 extensions/acpx/src/service.ts	2
 extensions/acpx/src/state.ts	1
-extensions/active-memory/config.ts	4
+extensions/active-memory/config.ts	2
 extensions/active-memory/doctor-contract-api.ts	3
-extensions/active-memory/index.ts	6
+extensions/active-memory/index.ts	3
 extensions/active-memory/query.ts	2
-extensions/active-memory/session.ts	4
 extensions/active-memory/transcript-result.ts	2
 extensions/admin-http-rpc/src/handler.ts	1
 extensions/amazon-bedrock-mantle/discovery.ts	3
@@ -737,7 +736,6 @@ extensions/memory-core/src/dreaming-phases.ts	2
 extensions/memory-core/src/dreaming.ts	1
 extensions/memory-core/src/memory/embeddings.ts	2
 extensions/memory-core/src/memory/hybrid.ts	1
-extensions/memory-core/src/memory/manager-cache.ts	4
 extensions/memory-core/src/memory/manager-db.ts	5
 extensions/memory-core/src/memory/manager-embedding-cache.ts	1
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2

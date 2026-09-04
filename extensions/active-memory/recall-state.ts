@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveActiveMemoryCleanupConfig } from "./config.js";
+import { readActiveMemoryConfig } from "./config.js";
 import {
   CACHE_SWEEP_INTERVAL_MS,
   DEFAULT_MAX_CACHE_ENTRIES,
@@ -75,9 +75,9 @@ function scheduleMemorySearchCleanupAfterTimeout(
   agentId: string,
 ): Promise<void> {
   return new Promise((resolve) => {
-    const cfg = resolveActiveMemoryCleanupConfig(api);
+    const cfg = readActiveMemoryConfig(api);
     setTimeout(() => {
-      void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
+      void closeActiveMemorySearchManager({ cfg, agentId })
         .then(() => {
           api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
         })
@@ -238,19 +238,8 @@ function sweepExpiredCacheEntries(now = asDateTimestampMs(Date.now())): void {
   }
 }
 
-function toSingleLineLogValue(value: unknown): string {
-  const raw =
-    typeof value === "string"
-      ? value
-      : typeof value === "number" ||
-          typeof value === "boolean" ||
-          typeof value === "bigint" ||
-          typeof value === "symbol"
-        ? String(value)
-        : value == null
-          ? ""
-          : JSON.stringify(value);
-  const singleLine = raw
+function toSingleLineLogValue(value: string): string {
+  const singleLine = value
     .replace(/[\r\n\t]/g, " ")
     .replace(/\s+/g, " ")
     .trim();

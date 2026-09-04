@@ -12,6 +12,7 @@ import {
   patchSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   isMissingRegisteredMemoryToolsError,
@@ -28,11 +29,7 @@ import {
   readMemoryToolResultEvidence,
   readPartialAssistantTextFromSources,
 } from "./transcript-result.js";
-import {
-  readActiveMemorySearchDebugFromRunResult,
-  readActiveMemorySessionFileFromRunResult,
-  readMergedActiveMemoryTranscriptState,
-} from "./transcript-watch.js";
+import { readMergedActiveMemoryTranscriptState } from "./transcript-watch.js";
 import { fileTranscriptSource, transcriptSourceFromReturnedSessionFile } from "./transcript.js";
 import {
   ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS,
@@ -356,7 +353,7 @@ async function runRecallSubagent(params: {
       .finally(params.onEmbeddedRunSettled);
     resultStatus = result.meta.error ? "failed" : undefined;
     const activeSessionFile =
-      readActiveMemorySessionFileFromRunResult(result) ?? runtimeSessionFile;
+      normalizeOptionalString(result.meta.agentMeta?.sessionFile) ?? runtimeSessionFile;
     transcriptSources = collectActiveMemoryTranscriptSources({
       artifactSessionFile,
       runtimeSource,
@@ -393,13 +390,11 @@ async function runRecallSubagent(params: {
       sources: transcriptSources,
       toolsAllow: params.config.toolsAllow,
     });
-    const searchDebug =
-      transcriptState.searchDebug ?? readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
       resultStatus,
       transcriptPath: params.config.persistTranscripts ? artifactSessionFile : undefined,
-      searchDebug,
+      searchDebug: transcriptState.searchDebug,
       hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
       hasUnavailableMemorySearchResult:
         transcriptState.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
