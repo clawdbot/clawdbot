@@ -289,12 +289,12 @@ async function runQueuedUsageCostRefresh(
   try {
     do {
       await waitForUsageCostRefresh(signal, retryDelayMs);
+      if (signal?.aborted) {
+        return;
+      }
       retryDelayMs = 0;
       try {
-        while (
-          !signal?.aborted &&
-          (state.fullRefreshRequested || state.pendingSessionFiles.size > 0)
-        ) {
+        while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
           const fullRefreshRequested = state.fullRefreshRequested;
           const sessionFiles = fullRefreshRequested ? [] : [...state.pendingSessionFiles];
           if (!fullRefreshRequested) {
@@ -308,6 +308,9 @@ async function runQueuedUsageCostRefresh(
             sessionsDir: state.sessionsDir,
             sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
           });
+          if (signal?.aborted) {
+            return;
+          }
           if (result === "busy") {
             if (fullRefreshRequested) {
               state.fullRefreshRequested = true;
@@ -325,11 +328,11 @@ async function runQueuedUsageCostRefresh(
         }
       } catch (error) {
         logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
+        if (signal?.aborted) {
+          return;
+        }
       }
-    } while (
-      !signal?.aborted &&
-      (state.fullRefreshRequested || state.pendingSessionFiles.size > 0)
-    );
+    } while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0);
   } finally {
     // Remove synchronously with completion; a late request must enqueue a new owner.
     refreshes.delete(state.databasePath);

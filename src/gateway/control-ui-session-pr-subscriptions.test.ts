@@ -522,8 +522,9 @@ describe("control UI session PR subscriptions", () => {
       const refresh = active.replace("conn-a", ["session"], new Set(["session"]));
       await vi.advanceTimersByTimeAsync(0);
 
+      const operations = [poll, refresh];
       if (cleanup === "stop") {
-        active.stop();
+        operations.push(active.stop());
       } else if (cleanup === "disconnect") {
         active.unsubscribe("conn-a");
       } else {
@@ -531,7 +532,7 @@ describe("control UI session PR subscriptions", () => {
       }
       broadcastToConnIds.mockClear();
       normal.resolve(READY);
-      await Promise.all([poll, refresh]);
+      await Promise.all(operations);
 
       expect(load).toHaveBeenCalledTimes(2);
       expect(broadcastToConnIds).not.toHaveBeenCalled();

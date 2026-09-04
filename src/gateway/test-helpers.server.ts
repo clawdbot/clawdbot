@@ -793,13 +793,14 @@ export async function startGatewayServerWithRetries(params: {
 async function openTrackedWebSocket(params: {
   port: number;
   headers?: Record<string, string>;
+  authenticate?: (ws: WebSocket) => Promise<unknown>;
 }): Promise<WebSocket> {
   const ws = new WebSocket(
     `ws://127.0.0.1:${params.port}`,
     params.headers ? { headers: params.headers } : undefined,
   );
   trackConnectChallengeNonce(ws);
-  return await acquireGatewayTestWebSocket(ws, 10_000);
+  return await acquireGatewayTestWebSocket(ws, 10_000, params.authenticate);
 }
 
 export async function withGatewayServer<T>(
@@ -850,7 +851,7 @@ export async function createGatewaySuiteHarness(opts?: {
 
 export async function startServer(token?: string, opts?: GatewayServerOptions) {
   gatewayFixtureLifetime.assertAdmission();
-  let port = await getGatewayTestPort();
+  const port = await getGatewayTestPort();
   gatewayFixtureLifetime.assertAdmission();
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -876,42 +877,68 @@ export async function startServer(token?: string, opts?: GatewayServerOptions) {
         }
       : (opts ?? {});
 
-  const started = await startGatewayServerWithRetries({ port, opts: resolvedGatewayOpts });
-  port = started.port;
-  const server = started.server;
-
-  return {
-    server,
-    port,
-    prevToken: prev,
-    envSnapshot: {
-      restore() {
-        if (gatewayFixtureLifetime.canReleaseState(server)) {
-          envSnapshot.restore();
-        }
+  try {
+    const started = await startGatewayServerWithRetries({ port, opts: resolvedGatewayOpts });
+    return {
+      ...started,
+      prevToken: prev,
+      envSnapshot: {
+        restore() {
+          if (gatewayFixtureLifetime.canReleaseState(started.server)) {
+            envSnapshot.restore();
+          }
+        },
       },
-    },
-  };
+    };
+  } catch (error) {
+    if (gatewayFixtureLifetime.canAdmit()) {
+      envSnapshot.restore();
+    }
+    throw error;
+  }
+}
+
+async function acquireGatewayServerClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+  authenticate?: (ws: WebSocket) => Promise<unknown>,
+) {
+  const { wsHeaders, ...gatewayOpts } = opts ?? {};
+  const started = await startServer(token, gatewayOpts);
+  try {
+    const ws = await openTrackedWebSocket({
+      port: started.port,
+      headers: wsHeaders,
+      authenticate,
+    });
+    return { ...started, ws };
+  } catch (error) {
+    await runQaGatewayFixture(
+      async () => {
+        throw error;
+      },
+      async () => {
+        // A failed server close still owns its startup environment.
+        await started.server.close();
+        started.envSnapshot.restore();
+      },
+    );
+    throw error;
+  }
 }
 
 export async function startServerWithClient(
   token?: string,
   opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
 ) {
-  const { wsHeaders, ...gatewayOpts } = opts ?? {};
-  const started = await startServer(token, gatewayOpts);
-  const { server, port, prevToken, envSnapshot } = started;
-  const ws = await openTrackedWebSocket({ port, headers: wsHeaders });
-  return { server, ws, port, prevToken, envSnapshot };
+  return await acquireGatewayServerClient(token, opts);
 }
 
 export async function startConnectedServerWithClient(
   token?: string,
   opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
 ) {
-  const started = await startServerWithClient(token, opts);
-  await connectOk(started.ws);
-  return started;
+  return await acquireGatewayServerClient(token, opts, connectOk);
 }
 
 type ConnectResponse = {
@@ -1242,19 +1269,17 @@ export async function connectWebchatClient(params: {
   scopes?: string[];
 }): Promise<WebSocket> {
   const origin = params.origin ?? `http://127.0.0.1:${params.port}`;
-  const ws = await openTrackedWebSocket({ port: params.port, headers: { origin } });
-  await connectOk(ws, {
-    scopes: params.scopes,
-    client:
-      params.client ??
-      ({
-        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
-        version: "1.0.0",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      } as NonNullable<Parameters<typeof connectReq>[1]>["client"]),
+  const client = params.client ?? {
+    id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+    version: "1.0.0",
+    platform: "test",
+    mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+  };
+  return await openTrackedWebSocket({
+    port: params.port,
+    headers: { origin },
+    authenticate: (ws) => connectOk(ws, { scopes: params.scopes, client }),
   });
-  return ws;
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Gateway test RPC helper lets callers ascribe response payload shape.
