@@ -163,6 +163,9 @@ verify lease cleanup; never stop the operator's Gateway.
 2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
 3. `pnpm test` only when you intentionally need the full local Vitest suite.
 
+The project runner prints wrapper usage for a sole `--help` or `-h` request.
+Compound requests, including `--help --no-help`, follow native Vitest option semantics.
+
 An existing UI directory target stays scoped to that directory, including when
 combined with explicit E2E test files. Tests retain their owning shared, isolated,
 or browser lane. UI source/support-file targets that need whole-lane coverage
