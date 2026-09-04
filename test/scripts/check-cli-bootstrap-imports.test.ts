@@ -130,6 +130,15 @@ describe("check-cli-bootstrap-imports", () => {
     ]);
   });
 
+  it("requires the relay in current builds but accepts older package inventories", () => {
+    const rootDir = makeTempRoot();
+
+    expect(collectNativeHookRelayBundleErrors({ rootDir })).toEqual([]);
+    expect(collectNativeHookRelayBundleErrors({ rootDir, requireNativeHookRelay: true })).toEqual([
+      "CLI bootstrap import guard could not read dist/native-hook-relay/entry.js. Run pnpm build first.",
+    ]);
+  });
+
   it("accepts a bounded native hook relay graph isolated from the unified dist", () => {
     const root = makeTempRoot();
     writeFixture(

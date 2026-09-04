@@ -52,6 +52,7 @@ type CliBootstrapCheckParams = {
   distDir?: string;
   gatewayRunChunkMaxBytes?: number;
   nativeHookRelayEntrypoint?: string;
+  requireNativeHookRelay?: boolean;
   nativeHookRelayStaticMaxBytes?: number;
   fs?: typeof fs;
   logger?: { error(message: string): void };
@@ -258,6 +259,11 @@ export function collectNativeHookRelayBundleErrors(params: CliBootstrapCheckPara
   const fsImpl = params.fs ?? fs;
   const entrypoint = params.nativeHookRelayEntrypoint ?? DEFAULT_NATIVE_HOOK_RELAY_ENTRYPOINT;
   const entrypointPath = path.resolve(rootDir, entrypoint);
+  // Release tooling also validates older packages whose supported relay is the general CLI.
+  // Current builds require this artifact; every present relay is checked in either mode.
+  if (!params.requireNativeHookRelay && !fsImpl.existsSync(entrypointPath)) {
+    return [];
+  }
   const bundleDir = path.dirname(entrypointPath);
   const maxBytes =
     params.nativeHookRelayStaticMaxBytes ?? DEFAULT_NATIVE_HOOK_RELAY_STATIC_MAX_BYTES;
@@ -520,7 +526,7 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
-    checkCliBootstrapExternalImports();
+    checkCliBootstrapExternalImports({ requireNativeHookRelay: true });
     console.log("CLI bootstrap import guard passed.");
   } catch {
     process.exit(1);
