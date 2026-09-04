@@ -112,8 +112,9 @@ describe("delivery queue SQLite dispatch ownership", () => {
           expect(
             transitionOwnedDeliveryQueueEntry(
               { ...params, platformSendAttemptId: claimed.claimId },
-              (_entry, database) =>
-                deleteDeliveryQueueEntryInDatabase(database, queueName, params.id),
+              (_entry, database) => {
+                deleteDeliveryQueueEntryInDatabase(database, queueName, params.id);
+              },
             ),
           ).toBe(true);
           expect(loadDeliveryQueueEntry(queueName, params.id, params.stateDir)).toBeNull();

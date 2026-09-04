@@ -139,7 +139,7 @@ export function assertCronJobsStoreUnchanged(
   db: DatabaseSync,
   storePath: string,
   expectedJobsFingerprint: string,
-): void {
+): undefined {
   const resolvedStorePath = path.resolve(storePath);
   if (readCronJobsFingerprint(db, cronStoreKey(resolvedStorePath)) !== expectedJobsFingerprint) {
     throw new CronJobsStoreChangedError(resolvedStorePath);
