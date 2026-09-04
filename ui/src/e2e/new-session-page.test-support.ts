@@ -123,6 +123,20 @@ export async function expectDecodedThumbnail(image: Locator, expectedNaturalWidt
     .toBe(true);
 }
 
+export async function expectPastedPngImage(image: Locator) {
+  await image.waitFor({ state: "visible" });
+  const decoded = await image.evaluate(async (element: HTMLImageElement) => {
+    await element.decode();
+    const bytes = new Uint8Array(await (await fetch(element.currentSrc)).arrayBuffer());
+    return {
+      width: element.naturalWidth,
+      height: element.naturalHeight,
+      base64: btoa(String.fromCharCode(...bytes)),
+    };
+  });
+  expect(decoded).toEqual({ width: 1, height: 1, base64: ONE_PIXEL_PNG_B64 });
+}
+
 export async function expectPendingNewSessionPresentation(page: Page) {
   const presentation = await page.locator(".new-session-page__starting").evaluate((thread) => {
     const user = thread.querySelector<HTMLElement>(".chat-group.user")!;

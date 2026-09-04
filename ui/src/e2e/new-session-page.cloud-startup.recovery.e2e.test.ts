@@ -6,6 +6,7 @@ import {
   WORKSPACE,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
+  expectPastedPngImage,
   installMockGateway,
   ONE_PIXEL_PNG_B64,
   pastePng,
@@ -657,9 +658,7 @@ suite.define(() => {
           }),
         );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
-      await retainedTurn
-        .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)
-        .waitFor({ state: "visible" });
+      await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
       await expect
         .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
         .toBe(true);
