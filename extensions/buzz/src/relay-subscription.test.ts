@@ -183,11 +183,9 @@ describe("queryBuzzRelaySnapshot query capacity", () => {
     );
 
     const pending = queryBuzzRelaySnapshot(snapshotParams(relay));
-    const rejection = expect(pending).rejects.toThrow("timed out");
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 80);
-    });
-    await rejection;
+    // Awaiting the rejection is what waits for the timeout; a fixed sleep would
+    // race the timer on a loaded runner.
+    await expect(pending).rejects.toThrow("timed out");
 
     // The REQ is still in flight, so the subscription is still open and this
     // slot must stay taken: admitting a replacement now would put the relay
@@ -206,12 +204,15 @@ describe("queryBuzzRelaySnapshot query capacity", () => {
 
     // Once the frame lands the close runs and only then is the slot returned.
     releaseSend?.();
-    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
-    const returned = await vi.waitFor(async () => {
-      const release = await acquireBuzzQueryLease(relay, { wait: false });
-      expect(release).not.toBeNull();
-      return release;
-    });
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    const returned = await vi.waitFor(
+      async () => {
+        const release = await acquireBuzzQueryLease(relay, { wait: false });
+        expect(release).not.toBeNull();
+        return release;
+      },
+      { timeout: 5_000 },
+    );
 
     returned?.();
     for (const release of saturating) {
@@ -229,11 +230,9 @@ describe("queryBuzzRelaySnapshot query capacity", () => {
     );
 
     const pending = queryBuzzRelaySnapshot(snapshotParams(relay));
-    const rejection = expect(pending).rejects.toThrow("timed out");
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 80);
-    });
-    await rejection;
+    // Awaiting the rejection is what waits for the timeout; a fixed sleep would
+    // race the timer on a loaded runner.
+    await expect(pending).rejects.toThrow("timed out");
 
     // The REQ is still in flight: closing now could overtake it server-side.
     expect(close).not.toHaveBeenCalled();
