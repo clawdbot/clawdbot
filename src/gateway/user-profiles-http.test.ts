@@ -1,24 +1,42 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { repairMergedGatewayOwnerProfile } from "../state/user-profiles-owner-migration.js";
+import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
 const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn());
 const getProfileAvatar = vi.hoisted(() => vi.fn());
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
+const resolveHostAccountAvatar = vi.hoisted(() => vi.fn());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  });
+});
+
+vi.mock("../infra/host-account-avatar.js", () => ({ resolveHostAccountAvatar }));
 
 vi.mock("./http-auth-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./http-auth-utils.js")>()),
   authorizeControlUiReadRequestOrReply,
 }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig }));
-vi.mock("../state/user-profiles.js", () => ({
+vi.mock("../state/user-profiles.js", async () => ({
   formatUserProfileAvatarEtag: (sha256: string, mime: string) =>
     `"${sha256}-${mime.slice("image/".length)}"`,
   getProfileAvatar,
   getUserProfileListItem,
-  UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
+  UserProfileNotFoundError: (await import("../state/user-profiles-schema.js"))
+    .UserProfileNotFoundError,
 }));
 
 function emailHash(email: string): string {
@@ -51,6 +69,7 @@ describe("profile avatar HTTP endpoint", () => {
     getProfileAvatar.mockReset();
     getUserProfileListItem.mockReset();
     getRuntimeConfig.mockReset();
+    resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
     authorizeControlUiReadRequestOrReply.mockResolvedValue({});
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
@@ -105,6 +124,62 @@ describe("profile avatar HTTP endpoint", () => {
     expect(res.end).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
   });
 
+  it("uses the host photo only for the owner, after auth and saved-avatar precedence", async () => {
+    const hostAvatar = { bytes: Buffer.from([4, 5, 6]), mime: "image/jpeg", sha256: "host-photo" };
+    resolveHostAccountAvatar.mockResolvedValue(hostAvatar);
+    getUserProfileListItem.mockImplementation((id: string) => ({
+      id,
+      mergedInto: null,
+      emails: [],
+    }));
+    const pathname = "/api/users/gateway-owner/avatar";
+    const inferred = response();
+    await handleUserProfileAvatarHttpRequest(request(pathname), inferred.response, pathname, {
+      auth: {} as never,
+    });
+    expect(inferred.writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({ "Content-Type": "image/jpeg", ETag: '"host-photo-jpeg"' }),
+    );
+    expect(inferred.end).toHaveBeenCalledWith(hostAvatar.bytes);
+    expect(resolveHostAccountAvatar).toHaveBeenCalledOnce();
+
+    const other = response();
+    getUserProfileListItem.mockReturnValueOnce({
+      id: "gateway-owner",
+      mergedInto: null,
+      emails: [],
+    });
+    await handleUserProfileAvatarHttpRequest(
+      request(pathname),
+      other.response,
+      "/api/users/person/avatar",
+      {
+        auth: {} as never,
+      },
+    );
+    expect(other.response.statusCode).toBe(404);
+
+    getProfileAvatar.mockReturnValue({
+      bytes: Buffer.from([9]),
+      mime: "image/png",
+      sha256: "saved",
+    });
+    const saved = response();
+    await handleUserProfileAvatarHttpRequest(request(pathname), saved.response, pathname, {
+      auth: {} as never,
+    });
+    expect(saved.end).toHaveBeenCalledWith(Buffer.from([9]));
+
+    authorizeControlUiReadRequestOrReply.mockResolvedValue(null);
+    const unauthorized = response();
+    await handleUserProfileAvatarHttpRequest(request(pathname), unauthorized.response, pathname, {
+      auth: {} as never,
+    });
+    expect(unauthorized.end).not.toHaveBeenCalled();
+    expect(resolveHostAccountAvatar).toHaveBeenCalledOnce();
+  });
+
   it("rejects mutating methods before avatar authentication", async () => {
     const res = response();
     const req = { method: "POST", headers: {} } as unknown as IncomingMessage;
@@ -117,6 +192,55 @@ describe("profile avatar HTTP endpoint", () => {
     expect(res.setHeader).toHaveBeenCalledWith("Allow", "GET, HEAD");
     expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
     expect(getProfileAvatar).not.toHaveBeenCalled();
+  });
+
+  it("does not infer a host avatar for a missing owner profile", async () => {
+    getUserProfileListItem.mockImplementation(() => {
+      throw new UserProfileNotFoundError("gateway-owner");
+    });
+    const res = response();
+    const pathname = "/api/users/gateway-owner/avatar";
+    await handleUserProfileAvatarHttpRequest(request(pathname), res.response, pathname, {
+      auth: {} as never,
+    });
+    expect(res.response.statusCode).toBe(404);
+    expect(resolveHostAccountAvatar).not.toHaveBeenCalled();
+  });
+
+  it("does not inherit the host photo through a merged owner before Doctor repair", async () => {
+    const profiles = await vi.importActual<typeof import("../state/user-profiles.js")>(
+      "../state/user-profiles.js",
+    );
+    const options = { path: join(tempDirs.make("openclaw-owner-avatar-"), "openclaw.sqlite") };
+    const owner = profiles.ensureGatewayOwnerProfile("Local Owner", options);
+    const person = profiles.ensureProfileForEmail("person@example.test", options);
+    openOpenClawStateDatabase(options)
+      .db.prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
+      .run(person.id, owner.id);
+    getProfileAvatar.mockImplementation((id: string) => profiles.getProfileAvatar(id, options));
+    getUserProfileListItem.mockImplementation((id: string) =>
+      profiles.getUserProfileListItem(id, options),
+    );
+    const hostAvatar = { bytes: Buffer.from([4, 5, 6]), mime: "image/jpeg", sha256: "host-photo" };
+    resolveHostAccountAvatar.mockResolvedValue(hostAvatar);
+    const pathname = "/api/users/gateway-owner/avatar";
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    const before = response();
+    await handleUserProfileAvatarHttpRequest(request(pathname), before.response, pathname, {
+      auth: {} as never,
+      fetchImpl,
+    });
+    expect(before.response.statusCode).toBe(404);
+    expect(resolveHostAccountAvatar).not.toHaveBeenCalled();
+
+    expect(repairMergedGatewayOwnerProfile({ ...options, shouldRepair: true }).repaired).toBe(true);
+    const after = response();
+    await handleUserProfileAvatarHttpRequest(request(pathname), after.response, pathname, {
+      auth: {} as never,
+      fetchImpl,
+    });
+    expect(after.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+    expect(after.end).toHaveBeenCalledWith(hostAvatar.bytes);
   });
 
   it("authenticates and claims a malformed configured-base avatar route without profile lookup", async () => {

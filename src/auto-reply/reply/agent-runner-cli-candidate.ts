@@ -3,6 +3,7 @@ import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/
 import {
   clearCliSessionInStore,
   persistCliSessionBindingResult,
+  settleCliSessionResult,
 } from "../../agents/cli-session-store.js";
 import {
   getCliSessionBinding,
@@ -434,15 +435,20 @@ export async function runCliFallbackCandidate(
           },
         });
         if (droppedCliSessionReplacement) {
-          await clearCliSessionInStore({
-            provider: params.cliExecutionProvider,
-            expectedCliSessionId: cliSessionBinding?.sessionId,
-            expectedSessionId: sessionEntry?.sessionId,
-            assertCommitAllowed: assertSettlementCurrent,
-            sessionKey: turn.sessionKey,
-            sessionStore: turn.activeSessionStore,
-            storePath: turn.storePath,
-            activeSessionEntry: sessionEntry,
+          // The room-event transform removed native continuity; only its guarded
+          // invalidation remains, and failure must retain the returned turn.
+          return await settleCliSessionResult(candidateResult, async () => {
+            await clearCliSessionInStore({
+              provider: params.cliExecutionProvider,
+              expectedCliSessionId: cliSessionBinding?.sessionId,
+              expectedSessionId: sessionEntry?.sessionId,
+              assertCommitAllowed: assertSettlementCurrent,
+              sessionKey: turn.sessionKey,
+              sessionStore: turn.activeSessionStore,
+              storePath: turn.storePath,
+              activeSessionEntry: sessionEntry,
+            });
+            params.classifyResult(candidateResult);
           });
         }
         const classification = params.classifyResult(candidateResult);
@@ -452,7 +458,7 @@ export async function runCliFallbackCandidate(
             turn.followupRun.run.inputProvenance,
           )
         ) {
-          await persistCliSessionBindingResult({
+          return await persistCliSessionBindingResult({
             provider: params.cliExecutionProvider,
             result: candidateResult,
             sessionKey,

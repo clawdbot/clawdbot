@@ -655,7 +655,7 @@ export async function createBackupArchive(
                         archiveRoot,
                         entryPath: archiveEntryPath,
                         linkpath: entry.linkpath,
-                        assetArchivePaths: manifest.assets.map((asset) => asset.archivePath),
+                        assets: manifest.assets,
                       });
                     } catch (error) {
                       archiveSymlinkViolation =
