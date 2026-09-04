@@ -25,6 +25,7 @@ import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "../embedded-agent-runner/active-run-projections.js";
+import { resolveExecDefaults } from "../exec-defaults.js";
 import {
   getMainSessionRecoveryRetryCount,
   isMainRestartRecoveryAggregateTerminalOnly,
@@ -608,13 +609,30 @@ export async function recoverStore(params: {
       continue;
     }
 
+    const execPolicy = resolveExecDefaults({
+      cfg: params.cfg,
+      agentId,
+      sessionKey: dispatchSessionKey,
+      sessionEntry: entry,
+    });
+    const fullAccess =
+      execPolicy.mode === "full" &&
+      execPolicy.security === "full" &&
+      execPolicy.ask === "off" &&
+      entry.restartRecoveryDeliveryMediaUrls === undefined &&
+      entry.restartRecoveryDisableMessageTool !== true &&
+      entry.restartRecoverySuppressTextDelivery !== true;
+    const retainedSafeTools =
+      entry.restartRecoveryForceSafeTools === true &&
+      (!fullAccess || hasReplaySafeCodeModeCheckpointInCurrentTurn(messages));
     const resumePolicy = resolveMainSessionResumePolicy(
       messages,
-      entry.restartRecoveryForceSafeTools === true,
+      retainedSafeTools,
       expectedRecoverySourceRunId,
       entry.restartRecoveryBeforeAgentReplyState,
       entry.restartRecoveryDeliveryReceiptState,
       entry.restartRecoveryDeliveryToolCallId,
+      fullAccess,
     );
     if (resumePolicy.action === "complete") {
       if (stopped()) {
@@ -646,8 +664,7 @@ export async function recoverStore(params: {
     }
 
     await resumeCurrent({
-      forceRestartSafeTools:
-        entry.restartRecoveryForceSafeTools === true || resumePolicy.forceRestartSafeTools,
+      forceRestartSafeTools: retainedSafeTools || resumePolicy.forceRestartSafeTools,
       forceCodeModeTools: resumePolicy.forceCodeModeTools === true,
     });
   }

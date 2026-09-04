@@ -371,6 +371,7 @@ export function resolveMainSessionResumePolicy(
   beforeAgentReplyState?: SessionEntry["restartRecoveryBeforeAgentReplyState"],
   deliveryReceiptState?: SessionEntry["restartRecoveryDeliveryReceiptState"],
   deliveryToolCallId?: string,
+  fullAccess = false,
 ): MainSessionResumePolicy {
   const mirroredToolCallId = readDeliveredTerminalSourceReplyToolCallId(
     messages,
@@ -402,6 +403,12 @@ export function resolveMainSessionResumePolicy(
   }
   if (beforeAgentReplyState === "handled-unrecoverable") {
     return { action: "resume", forceRestartSafeTools: true };
+  }
+  // A fresh continuation must be able to inspect an interrupted side effect.
+  // Full access keeps ordinary tools; explicit replay-safe reconstruction and
+  // delivery reconciliation above retain their narrower execution contract.
+  if (fullAccess && !hasReplaySafeCodeModeCheckpointInCurrentTurn(messages)) {
+    return { action: "resume", forceRestartSafeTools: false };
   }
   // Progress can commit after the recovery mark while the old run is winding
   // down. It is not a terminal turn boundary; preserve it in the transcript
