@@ -358,6 +358,49 @@ describe("handleInlineActions", () => {
     });
   });
 
+  it("propagates skill selections returned by a continuing built-in command", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({ Body: "/dashboard", CommandBody: "/dashboard" });
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: true,
+      explicitSkillSelections: [
+        { name: "control_ui", path: "/tmp/skills/control-ui/SKILL.md" },
+        { name: "release_notes", path: "/tmp/skills/release-notes/SKILL.md" },
+      ],
+    });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: "/dashboard",
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: "/dashboard",
+        commandBodyNormalized: "/dashboard",
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands: [
+          {
+            name: "release_notes",
+            skillName: "release-notes",
+            description: "Release notes",
+            skillFile: "/tmp/skills/release-notes/SKILL.md",
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "continue",
+      explicitSkillSelections: [
+        { name: "control_ui", path: "/tmp/skills/control-ui/SKILL.md" },
+        { name: "release_notes", path: "/tmp/skills/release-notes/SKILL.md" },
+      ],
+    });
+  });
+
   it("delivers a continuing mixed directive ack as a status block without losing metadata", async () => {
     const typing = createTypingController();
     const ctx = buildTestCtx({

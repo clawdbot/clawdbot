@@ -344,7 +344,7 @@ describe("extension relay WebSocket auth v2 frame boundary", () => {
   });
 });
 
-describe.sequential("extension relay HTTP auth v2", () => {
+describe("extension relay HTTP auth v2", { concurrent: false }, () => {
   let stateDir: string;
   let previousStateDir: string | undefined;
   let handle: ExtensionRelayHandle | null = null;

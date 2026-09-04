@@ -18,7 +18,8 @@ scenario:
     - The failed tool call is never replayed or described as successful.
     - The model receives one ordinary continuation with its failed result and qa-channel delivers exactly one visible reply.
   codeRefs:
-    - src/agents/embedded-agent-runner/run/code-mode-outcome.ts
+    - packages/agent-core/src/agent-loop.ts
+    - src/agents/embedded-agent-runner/extensions.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow

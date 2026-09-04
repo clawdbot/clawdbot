@@ -203,7 +203,8 @@ export type OpenAIResponsesRequestParams = {
   top_p?: number;
   text?: ResponseCreateParamsStreaming["text"];
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
-  tools?: FunctionTool[];
+  tools?: Array<FunctionTool & { async?: boolean }>;
+  multi_agent?: { enabled?: boolean };
   tool_choice?: ResponseCreateParamsStreaming["tool_choice"];
   reasoning?:
     | { effort: OpenAIApiReasoningEffort }

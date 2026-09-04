@@ -977,3 +977,231 @@ print("group contract passed")
     expect(result.stdout).toContain("group contract passed");
   },
 );
+
+const diagnosticSecret = "synthetic-diagnostic-secret";
+const diagnosticPrefix = "[ci-git-owner] diagnostic=";
+
+function runOwnerDiagnostic(policy: string) {
+  const result = spawnSync(
+    process.platform === "win32" ? "python" : "python3",
+    ["-I", "-S", path.resolve(".github/actions/git-owner/owner.py"), "--policy", "-"],
+    {
+      input: `import ci_git_owner as owner, os, sys
+secret = ${JSON.stringify(diagnosticSecret)}
+sys.argv.append(secret)
+os.environ["OWNER_DIAGNOSTIC_SECRET"] = secret
+${policy}`,
+      encoding: "utf8",
+      timeout: 15_000,
+      killSignal: "SIGKILL",
+    },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(125);
+  expect(result.signal).toBeNull();
+  expect(result.stdout).toBe("");
+  expect(result.stderr).not.toContain(diagnosticSecret);
+  expect(result.stderr).not.toContain(process.cwd());
+  expect(result.stderr).not.toContain("Traceback");
+  const lines = result.stderr.trim().split(/\r?\n/u);
+  expect(lines).toHaveLength(2);
+  expect(lines[0]).toMatch(
+    /^::error::Git ownership\/setup failed \([A-Za-z]+\); refusing reuse or retry$/u,
+  );
+  expect(lines[1]?.startsWith(diagnosticPrefix)).toBe(true);
+  expect(result.stderr.length).toBeLessThan(4_096);
+  return { annotation: lines[0], diagnostic: lines[1]!.slice(diagnosticPrefix.length) };
+}
+
+it.each([
+  { scenario: "direct denial", setup: "", types: ["PermissionError"] },
+  {
+    scenario: "timeout context",
+    setup: "error.__context__ = owner.FetchTimeout()",
+    types: ["PermissionError", "FetchTimeout"],
+  },
+  {
+    scenario: "explicit cause before context",
+    setup: "error.__cause__ = owner.FetchTimeout()\nerror.__context__ = ValueError(secret)",
+    types: ["PermissionError", "FetchTimeout"],
+  },
+  {
+    scenario: "cyclic context",
+    setup: "error.__context__ = error",
+    types: ["PermissionError"],
+  },
+  {
+    scenario: "bounded context",
+    setup:
+      "cursor = error\nfor _ in range(8):\n    cursor.__context__ = RuntimeError(secret)\n    cursor = cursor.__context__",
+    types: ["PermissionError", "RuntimeError", "RuntimeError", "RuntimeError"],
+  },
+])("retains bounded terminal diagnostics: $scenario", ({ scenario, setup, types }) => {
+  const { diagnostic } = runOwnerDiagnostic(`
+error = PermissionError(13, secret, secret + "/private-path")
+error.winerror = 5
+${setup}
+raise error
+`);
+  const chain = JSON.parse(diagnostic) as { type: string; via: string; owner_frames: unknown[] }[];
+  expect(chain.map((record) => record.type)).toEqual(types);
+  expect(chain.map((record) => record.via)).toEqual([
+    "terminal",
+    ...types.slice(1).map(() => (scenario.startsWith("explicit") ? "cause" : "context")),
+  ]);
+  expect(chain[0]).toEqual({
+    type: "PermissionError",
+    via: "terminal",
+    errno: 13,
+    winerror: 5,
+    owner_frames: [
+      { function: "<module>", line: expect.any(Number) },
+      { function: "main", line: expect.any(Number) },
+    ],
+  });
+  for (const record of chain.slice(1)) {
+    expect(record).toEqual({ type: record.type, via: record.via, owner_frames: [] });
+  }
+});
+
+it.each([
+  { errno: "secret", winerror: "True" },
+  { errno: "2 ** 100", winerror: "-(2 ** 100)" },
+  { errno: "type('NumericSecret', (int,), {})(13)", winerror: "None" },
+])("redacts terminal diagnostic metadata ($errno, $winerror)", ({ errno, winerror }) => {
+  const { annotation, diagnostic } = runOwnerDiagnostic(`
+error = type(secret, (Exception,), {"__module__": "builtins"})(secret)
+error.errno, error.winerror = ${errno}, ${winerror}
+# Even the owner's filename and globals cannot turn policy code into owner source.
+owner.diagnostic_error = error
+exec(compile("def synthetic_diagnostic_secret():\\n    raise diagnostic_error\\nsynthetic_diagnostic_secret()",
+             owner.__file__, "exec"), vars(owner))
+`);
+  expect(annotation).toContain("(unknown)");
+  expect(JSON.parse(diagnostic)).toEqual([
+    {
+      type: "unknown",
+      via: "terminal",
+      owner_frames: [
+        { function: "<module>", line: expect.any(Number) },
+        { function: "main", line: expect.any(Number) },
+      ],
+    },
+  ]);
+});
+
+it("bounds terminal diagnostics to the last six actual owner frames", () => {
+  const { diagnostic } = runOwnerDiagnostic(`
+import io, sys
+owner.diagnostic_depth = 0
+owner.diagnostic_policy = '''import ci_git_owner as owner, io, sys
+owner.diagnostic_depth += 1
+if owner.diagnostic_depth == 12:
+    raise ValueError("synthetic-diagnostic-secret")
+sys.stdin = io.StringIO(owner.diagnostic_policy)
+owner.main()
+'''
+sys.stdin = io.StringIO(owner.diagnostic_policy)
+owner.main()
+`);
+  expect(JSON.parse(diagnostic)).toEqual([
+    {
+      type: "ValueError",
+      via: "terminal",
+      owner_frames: Array.from({ length: 6 }, () => ({
+        function: "main",
+        line: expect.any(Number),
+      })),
+    },
+  ]);
+});
+
+it.each(["raises", "malformed traceback"])("keeps terminal exit 125 with %s metadata", (fault) => {
+  const { diagnostic } = runOwnerDiagnostic(`
+class BrokenMetadata(Exception):
+    def __getattribute__(self, name):
+        if name == "errno" and ${JSON.stringify(fault)} == "raises":
+            raise SystemExit(42)
+        if name == "__traceback__" and ${JSON.stringify(fault)} == "malformed traceback":
+            return self
+        return super().__getattribute__(name)
+raise BrokenMetadata(secret)
+`);
+  expect(diagnostic).toBe("unavailable");
+});
+
+it.each([...(process.platform === "win32" ? ["setup"] : []), "launch", "timeout-drain"])(
+  "distinguishes terminal diagnostic failure sites: %s",
+  (site) => {
+    const { diagnostic } = runOwnerDiagnostic(String.raw`
+import os, shlex, subprocess, sys, tempfile
+site = ${JSON.stringify(site)}
+if os.name == "nt":
+    import ctypes as c
+    from ctypes import wintypes as w
+    kernel = c.WinDLL("kernel32", use_last_error=True)
+    duplicate = kernel.DuplicateHandle
+    duplicate.argtypes = [w.HANDLE, w.HANDLE, w.HANDLE, c.POINTER(w.HANDLE), w.DWORD, w.BOOL, w.DWORD]
+    duplicate.restype = w.BOOL
+    current = kernel.GetCurrentProcess
+    current.argtypes, current.restype = [], w.HANDLE
+    def restricted_call(actual, rights, *args):
+        handle = w.HANDLE()
+        if not duplicate(current(), args[0], current(), c.byref(handle), rights, False, 0):
+            raise c.WinError(c.get_last_error())
+        try:
+            return actual(handle, *args[1:])
+        finally:
+            owner.close_handle(handle)
+    if site == "setup":
+        actual = owner.set_job
+        owner.set_job = lambda *args: restricted_call(actual, 0x4, *args)
+    elif site == "timeout-drain":
+        actual = owner.query_job
+        owner.query_job = lambda *args: restricted_call(actual, 0x8, *args)
+elif site == "timeout-drain":
+    actual_drain = owner.drain
+    def denied_drain(*args):
+        actual_drain(*args)
+        raise PermissionError(13, secret)
+    owner.drain = denied_drain
+
+# No files are created or removed after deliberately unverified Job cleanup.
+directory = tempfile.gettempdir()
+if site == "launch":
+    actual_popen = subprocess.Popen
+    def invalid_executable(*args, **kwargs):
+        kwargs["executable"] = directory
+        return actual_popen(*args, **kwargs)
+    subprocess.Popen = invalid_executable
+alias = "!" + shlex.join([sys.executable.replace("\\", "/"), "-I", "-S", "-c", "import time; time.sleep(30)"])
+owner.run_git(directory, "-c", "alias.diagnostic=" + alias, "diagnostic", timeout=0.1,
+              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+`);
+    const chain = JSON.parse(diagnostic) as {
+      type: string;
+      errno?: number;
+      winerror?: number;
+      owner_frames: { function: string; line: number }[];
+    }[];
+    expect(chain.map((record) => record.type)).toEqual(
+      site === "timeout-drain"
+        ? ["RuntimeError", "PermissionError", "FetchTimeout"]
+        : ["PermissionError"],
+    );
+    const denial = expectDefined(
+      chain.find((record) => record.type === "PermissionError"),
+      "recorded permission denial",
+    );
+    expect(denial.errno).toBe(13);
+    expect(denial.winerror).toBe(process.platform === "win32" ? 5 : undefined);
+    expect(denial.owner_frames.map((frame) => frame.function)).toContain("run_git");
+    expect(denial.owner_frames.some((frame) => frame.function === "drain")).toBe(
+      process.platform === "win32" && site === "timeout-drain",
+    );
+    for (const frame of chain.flatMap((record) => record.owner_frames)) {
+      expect(Number.isInteger(frame.line) && frame.line > 0).toBe(true);
+      expect(["<module>", "main", "run_git", "drain"]).toContain(frame.function);
+    }
+  },
+);

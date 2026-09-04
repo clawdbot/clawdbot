@@ -5,7 +5,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
+import { formatSkillsCompactForPrompt } from "../../skills/loading/skill-contract.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
@@ -566,8 +568,29 @@ describe("remote-exec skill resources", () => {
           expect(executableMode & 0o777).toBe(0o500);
           expect(dataMode & 0o777).toBe(0o400);
         }
-        expect(resources!.snapshot.prompt).toContain(remote);
-        expect(resources!.snapshot.resolvedSkills![0]!.filePath).toBe(filePath);
+        const selected = resources!.snapshot.resolvedSkills![0]!;
+        const instructions = await fs.readFile(filePath, "utf8");
+        expect(selected.filePath).toBe(`${remote}/SKILL.md`);
+        expect(selected.baseDir).toBe(remote);
+        expect(selected.sourceInfo).toEqual(snapshot.resolvedSkills![0]!.sourceInfo);
+        expect(snapshot.resolvedSkills![0]!.filePath).toBe(filePath);
+        for (const prompt of [
+          resources!.snapshot.prompt,
+          formatSkillsCompactForPrompt([selected], { descriptionMaxChars: 0 }),
+        ]) {
+          expect(prompt).toContain(`<location>${remote}/SKILL.md</location>`);
+          expect(prompt).not.toContain(filePath);
+        }
+        await fs.writeFile(filePath, "Instructions changed after transfer");
+        const [codeModeSkill] = resolveCodeModeSkills({
+          skillsPrompt: resources!.snapshot.prompt,
+          candidates: [selected],
+          reader: async () => {
+            throw new Error("Paired nodes have no Gateway filesystem bridge");
+          },
+        });
+        expect(await readCodeModeSkill(codeModeSkill!)).toBe(instructions);
+        expect(await fs.readFile(selected.filePath, "utf8")).toBe(instructions);
         if (outcome === "cancelled") {
           controller.abort();
         } else if (outcome === "retired") {

@@ -4,13 +4,17 @@ import type { ResponseInput, ResponseOutputItem } from "openai/resources/respons
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import {
+  replayResponsesReasoningUpdates,
+  type ResponsesConfigurationUpdate,
+} from "./openai-responses-reasoning-update.js";
 import { sha256Hex } from "./transport-utils.js";
 
 const HTTP_CONTINUATION_IDLE_TTL_MS = 5 * 60 * 1000;
 const TURN_HEADERS = new Set(["traceparent", "x-openclaw-turn-id", "x-openclaw-turn-attempt"]);
 
 export type ResponsesContinuationRequest = Record<string, unknown> & {
-  input?: ResponseInput;
+  input?: Array<ResponseInput[number] | ResponsesConfigurationUpdate>;
   previous_response_id?: string;
 };
 export type ResponsesContinuationState = {
@@ -87,19 +91,30 @@ function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse =
 export function resolveResponsesContinuationRequest(
   continuation: ResponsesContinuationState | undefined,
   request: ResponsesContinuationRequest,
-): { request: ResponsesContinuationRequest; continuationStatus: ResponsesContinuationStatus } {
+  options?: { allowNewReasoningUpdate?: boolean },
+): {
+  request: ResponsesContinuationRequest;
+  fullRequest?: ResponsesContinuationRequest;
+  continuationStatus: ResponsesContinuationStatus;
+} {
   if (!continuation) {
     return { request, continuationStatus: "no_previous_response" };
   }
   if (request.previous_response_id) {
     return { request, continuationStatus: "explicit_previous_response_id" };
   }
+  const prepared = replayResponsesReasoningUpdates(
+    continuation.lastRequest,
+    request,
+    continuation.lastResponseItems.length,
+    options,
+  );
   if (
-    !jsonValuesEqual(requestWithoutInput(request), requestWithoutInput(continuation.lastRequest))
+    !jsonValuesEqual(requestWithoutInput(prepared), requestWithoutInput(continuation.lastRequest))
   ) {
     return { request, continuationStatus: "request_changed" };
   }
-  const currentInput = request.input ?? [];
+  const currentInput = prepared.input ?? [];
   const previousInput = continuation.lastRequest.input ?? [];
   const baselineLength = previousInput.length + continuation.lastResponseItems.length;
   if (currentInput.length < baselineLength) {
@@ -119,10 +134,11 @@ export function resolveResponsesContinuationRequest(
   }
   return {
     request: {
-      ...request,
+      ...prepared,
       previous_response_id: continuation.lastResponseId,
       input: currentInput.slice(baselineLength),
     },
+    ...(prepared !== request ? { fullRequest: prepared } : {}),
     continuationStatus: "continued",
   };
 }
@@ -182,11 +198,15 @@ export function claimOpenAIResponsesHttpContinuation(
   const claimed = { kind: "claimed", sessionId: params.sessionId } as const;
   httpContinuationEntries.set(key, claimed);
   try {
+    const resolved = resolveResponsesContinuationRequest(
+      previous?.kind === "ready" ? previous.state : undefined,
+      params.request,
+    );
+    const fullRequest = resolved.fullRequest ?? params.request;
     return {
-      request: resolveResponsesContinuationRequest(
-        previous?.kind === "ready" ? previous.state : undefined,
-        params.request,
-      ).request,
+      // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.
+      request: params.request.store === false ? fullRequest : resolved.request,
+      fullRequest,
       commit: (effectiveRequest: ResponsesContinuationRequest, response: ContinuationResponse) => {
         if (httpContinuationEntries.get(key) !== claimed) {
           return;

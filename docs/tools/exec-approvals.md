@@ -622,6 +622,20 @@ When a prompt is required, the gateway broadcasts
 app resolve it via `exec.approval.resolve`, then the gateway forwards the
 approved request to the node host.
 
+The macOS approval panel keeps ordinary commands compact, with the supplied agent
+and host in one summary. It shows the working directory beneath the full,
+wrapping command; longer commands scroll. Expand **Details** to inspect the
+executable path. Directory and executable paths remain fully selectable.
+**Copy** copies the displayed command, including visible escapes for control and
+invisible characters. The host comes from the request; a gateway or node can be
+remote from the Mac displaying the panel.
+
+Choose **Allow Once** or press **Command-Return** to approve one execution.
+Return alone does not approve. **Escape** dismisses the panel, denying the request
+when **Don't Allow** is available; otherwise it closes without a decision.
+**Always Allow Here** appears only when the request's policy permits durable
+approval.
+
 For `host=node`, approval requests include a canonical `systemRunPlan`
 payload. The gateway uses that plan as the authoritative command/cwd/session
 context when forwarding approved `system.run` requests:
