@@ -1130,9 +1130,9 @@ func stripCommonIndent(text string) (string, string) {
 		indent := leadingIndent(trimmed)
 		if common == "" {
 			common = indent
-			continue
+		} else {
+			common = commonIndentPrefix(common, indent)
 		}
-		common = commonIndentPrefix(common, indent)
 		if common == "" {
 			return text, ""
 		}
