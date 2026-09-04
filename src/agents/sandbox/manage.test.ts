@@ -13,9 +13,7 @@ const configMocks = vi.hoisted(() => ({
 
 const registryMocks = vi.hoisted(() => ({
   readBrowserRegistry: vi.fn(),
-  readBrowserRegistryEntry: vi.fn(),
   readRegistry: vi.fn(),
-  readRegistryEntry: vi.fn(),
   removeBrowserRegistryEntry: vi.fn(),
   removeRegistryEntry: vi.fn(),
 }));
@@ -39,13 +37,9 @@ vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
 
 vi.mock("./registry.js", () => ({
   readBrowserRegistry: registryMocks.readBrowserRegistry,
-  readBrowserRegistryEntry: registryMocks.readBrowserRegistryEntry,
   readRegistry: registryMocks.readRegistry,
-  readRegistryEntry: registryMocks.readRegistryEntry,
   removeBrowserRegistryEntry: registryMocks.removeBrowserRegistryEntry,
-  removeBrowserRegistryEntryIfUnchanged: registryMocks.removeBrowserRegistryEntry,
   removeRegistryEntry: registryMocks.removeRegistryEntry,
-  removeRegistryEntryIfUnchanged: registryMocks.removeRegistryEntry,
 }));
 
 vi.mock("./docker-backend.js", () => ({
@@ -105,9 +99,7 @@ describe("listSandboxBrowsers", () => {
   beforeEach(async () => {
     configMocks.getRuntimeConfig.mockReset();
     registryMocks.readBrowserRegistry.mockReset();
-    registryMocks.readBrowserRegistryEntry.mockReset();
     registryMocks.readRegistry.mockReset();
-    registryMocks.readRegistryEntry.mockReset();
     registryMocks.removeBrowserRegistryEntry.mockReset();
     registryMocks.removeRegistryEntry.mockReset();
     backendMocks.describeRuntime.mockReset();
@@ -143,21 +135,9 @@ describe("listSandboxBrowsers", () => {
           lastUsedAtMs: 1,
           image: "stale-entry-image",
           cdpPort: 9222,
-          registryGeneration: 1,
         },
       ],
     });
-    registryMocks.readRegistry.mockResolvedValue({ entries: [] });
-    registryMocks.readBrowserRegistryEntry.mockImplementation(async (containerName) =>
-      (await registryMocks.readBrowserRegistry()).entries.find(
-        (entry: { containerName: string }) => entry.containerName === containerName,
-      ),
-    );
-    registryMocks.readRegistryEntry.mockImplementation(async (containerName) =>
-      (await registryMocks.readRegistry()).entries.find(
-        (entry: { containerName: string }) => entry.containerName === containerName,
-      ),
-    );
     backendMocks.describeRuntime.mockResolvedValue({
       running: true,
       actualConfigLabel: "openclaw-sandbox-browser:bookworm-slim",
@@ -202,9 +182,7 @@ describe("listSandboxBrowsers", () => {
     expect(removeInput?.entry?.configLabelKind).toBe("BrowserImage");
     expect(removeInput?.entry?.runtimeLabel).toBe("browser-1");
     expect(removeInput?.entry?.backendId).toBe("docker");
-    expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ containerName: "browser-1" }),
-    );
+    expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledWith("browser-1");
   });
 
   it("preserves a sandbox registry entry when its backend plugin is unavailable", async () => {

@@ -6,13 +6,13 @@
  */
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import express from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { listenBrowserHttpServer } from "./http-listen.js";
-import type { BrowserRouteRegistrar } from "./routes/types.js";
+import type { BrowserRequest, BrowserRouteHandler, BrowserRouteRegistrar } from "./routes/types.js";
 import { stopBrowserBridgeRuntime } from "./runtime-lifecycle.js";
 import type { BrowserServerState, ProfileContext } from "./server-context.js";
 import {
@@ -88,7 +88,7 @@ export async function startBrowserBridgeServer(params: {
   port?: number;
   authToken?: string;
   authPassword?: string;
-  acquireRequestActivity?: () => { release(): void } | null;
+  acquireRequestActivity?: () => Promise<{ release(): Promise<void> } | null>;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
   resolveSandboxNoVncToken?: (token: string) => ResolvedNoVncObserver | null;
 }): Promise<BrowserBridge> {
@@ -108,50 +108,67 @@ export async function startBrowserBridgeServer(params: {
   }
   installBrowserAuthMiddleware(app, { token: authToken, password: authPassword });
 
-  if (params.acquireRequestActivity) {
-    app.use((req, res, next) => {
-      const activity = params.acquireRequestActivity?.();
-      if (!activity) {
-        res.status(503).send("Sandbox browser is being recycled; retry the request.");
-        return;
-      }
-      let released = false;
-      const release = () => {
-        if (!released) {
-          released = true;
-          activity.release();
+  const wrapRequest = (
+    run: (req: Request, res: Response, signal: AbortSignal) => void | Promise<void>,
+  ) => {
+    return (req: Request, res: Response, next: NextFunction) => {
+      const abort = new AbortController();
+      const abortRequest = () => abort.abort(new Error("Browser bridge request disconnected."));
+      const abortIncompleteResponse = () => {
+        if (!res.writableFinished) {
+          abortRequest();
         }
       };
-      req.once("aborted", release);
-      res.once("finish", release);
-      res.once("close", release);
-      res.once("error", release);
-      next();
-    });
-  }
+      req.once("aborted", abortRequest);
+      res.once("close", abortIncompleteResponse);
+      void (async () => {
+        let activity: { release(): Promise<void> } | null = null;
+        try {
+          activity = (await params.acquireRequestActivity?.()) ?? null;
+          if (params.acquireRequestActivity && !activity) {
+            if (!abort.signal.aborted && !res.destroyed) {
+              res.status(503).send("Sandbox browser is being recycled; retry the request.");
+            }
+            return;
+          }
+          if (abort.signal.aborted || req.aborted || res.destroyed) {
+            return;
+          }
+          await run(req, res, abort.signal);
+        } finally {
+          req.off("aborted", abortRequest);
+          res.off("close", abortIncompleteResponse);
+          await activity?.release();
+        }
+      })().catch(next);
+    };
+  };
 
   if (params.resolveSandboxNoVncToken) {
-    app.get("/sandbox/novnc", (req, res) => {
-      if (!hasVerifiedBrowserAuth(req)) {
-        res.status(401).send("Unauthorized");
-        return;
-      }
-      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-      res.setHeader("Pragma", "no-cache");
-      res.setHeader("Expires", "0");
-      res.setHeader("Referrer-Policy", "no-referrer");
-      const rawToken = normalizeOptionalString(req.query?.token);
-      if (!rawToken) {
-        res.status(400).send("Missing token");
-        return;
-      }
-      const resolved = params.resolveSandboxNoVncToken?.(rawToken);
-      if (!resolved) {
-        res.status(404).send("Invalid or expired token");
-        return;
-      }
-      res.type("html").status(200).send(buildNoVncBootstrapHtml(resolved));
-    });
+    app.get(
+      "/sandbox/novnc",
+      wrapRequest((req, res) => {
+        if (!hasVerifiedBrowserAuth(req)) {
+          res.status(401).send("Unauthorized");
+          return;
+        }
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
+        res.setHeader("Referrer-Policy", "no-referrer");
+        const rawToken = normalizeOptionalString(req.query?.token);
+        if (!rawToken) {
+          res.status(400).send("Missing token");
+          return;
+        }
+        const resolved = params.resolveSandboxNoVncToken?.(rawToken);
+        if (!resolved) {
+          res.status(404).send("Invalid or expired token");
+          return;
+        }
+        res.type("html").status(200).send(buildNoVncBootstrapHtml(resolved));
+      }),
+    );
   }
 
   const state: BrowserServerState = {
@@ -169,7 +186,22 @@ export async function startBrowserBridgeServer(params: {
     getState: () => state,
     onEnsureAttachTarget: params.onEnsureAttachTarget,
   });
-  registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
+  const wrapBrowserRoute = (handler: BrowserRouteHandler) =>
+    wrapRequest(async (req, res, signal) => {
+      const browserRequest: BrowserRequest = {
+        params: req.params,
+        query: req.query,
+        body: req.body,
+        signal,
+      };
+      await handler(browserRequest, res);
+    });
+  const routeRegistrar: BrowserRouteRegistrar = {
+    get: (path, handler) => app.get(path, wrapBrowserRoute(handler)),
+    post: (path, handler) => app.post(path, wrapBrowserRoute(handler)),
+    delete: (path, handler) => app.delete(path, wrapBrowserRoute(handler)),
+  };
+  registerBrowserRoutes(routeRegistrar, ctx);
 
   const server = await listenBrowserHttpServer(app, port, host);
 

@@ -133,7 +133,6 @@ async function runStreamingSandboxHttpRequest(
     signal: notifications.signal,
   });
   const lifecycle = { failed: false };
-  remoteExec.bindActivityToken(execSpec.finalizeToken);
   const owner = await spawnSandboxChild({
     argv: execSpec.argv,
     env: execSpec.env,
@@ -146,7 +145,6 @@ async function runStreamingSandboxHttpRequest(
     },
     owners: execServer.children,
     terminateRemote: remoteExec.terminate,
-    cleanupRemote: remoteExec.terminate,
   });
   const child = owner.process;
   const abortOnSessionClose = () => {

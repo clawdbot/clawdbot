@@ -139,6 +139,39 @@ describe("registry race safety", () => {
     });
   });
 
+  it("preserves the physical runtime locator across usage updates", async () => {
+    await updateRegistry(
+      containerEntry({
+        backendId: "ssh",
+        cleanupMetadata: {
+          locatorVersion: "1",
+          target: "original.example",
+          workspaceRoot: "/srv/original",
+        },
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        backendId: "ssh",
+        lastUsedAtMs: 2,
+        cleanupMetadata: {
+          locatorVersion: "1",
+          target: "replacement.example",
+          workspaceRoot: "/srv/replacement",
+        },
+      }),
+    );
+
+    await expect(readRegistryEntry("container-a")).resolves.toMatchObject({
+      lastUsedAtMs: 2,
+      cleanupMetadata: {
+        locatorVersion: "1",
+        target: "original.example",
+        workspaceRoot: "/srv/original",
+      },
+    });
+  });
+
   it("reads registered runtime IDs for one backend and scope newest first", async () => {
     await updateRegistry(
       containerEntry({

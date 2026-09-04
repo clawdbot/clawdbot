@@ -871,7 +871,7 @@ export async function runExecProcess({
         workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
         env: shellRuntimeEnv,
         usePty: opts.usePty,
-        signal: startupSignal,
+        signal: initialStartupSignal,
       });
       sandboxFinalizeToken = backendExecSpec.finalizeToken;
       // Cleanup ownership transfers only after buildExecSpec resolves: moving this earlier can
@@ -1005,12 +1005,6 @@ export async function runExecProcess({
       let outcome: ExecProcessOutcome;
       try {
         const exit = await startedRun.wait();
-        // The root result can settle before descendants. Keep the runtime lease
-        // until the supervisor confirms the entire admitted process tree is gone.
-        if (opts.sandbox) {
-          await startedRun.waitForExtinction?.();
-          await opts.sandbox.terminateExec?.(sandboxFinalizeToken);
-        }
         outcome = buildExecExitOutcome({
           exit,
           aggregated: session.aggregated.trim(),
@@ -1019,19 +1013,8 @@ export async function runExecProcess({
           processContinuationAvailable: opts.processContinuationAvailable !== false,
         });
       } catch (error) {
-        let runtimeError = error;
-        if (opts.sandbox) {
-          try {
-            await opts.sandbox.terminateExec?.(sandboxFinalizeToken);
-          } catch (cleanupError) {
-            runtimeError = new AggregateError(
-              [error, cleanupError],
-              "Sandbox execution and descendant cleanup both failed",
-            );
-          }
-        }
         outcome = buildExecRuntimeErrorOutcome({
-          error: runtimeError,
+          error,
           aggregated: session.aggregated.trim(),
           durationMs: Date.now() - startedAt,
         });

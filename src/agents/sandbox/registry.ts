@@ -3,6 +3,7 @@
  *
  * Tracks runtime and browser containers in the shared state DB.
  */
+import { stableStringify } from "@openclaw/normalization-core";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
@@ -55,6 +56,20 @@ type SandboxRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "sandbox_regist
 type SandboxRegistryRow = Selectable<SandboxRegistryTable>;
 type SandboxRegistryInsert = Insertable<SandboxRegistryTable>;
 type SandboxRegistryUpdate = Updateable<SandboxRegistryTable>;
+
+/** Stable persisted identity for one physical runtime lifecycle. */
+export function resolveSandboxRegistryLifecycleId(entry: SandboxRegistryEntry): string {
+  const { lastUsedAtMs: _lastUsedAtMs, registryGeneration: _generation, ...identity } = entry;
+  return stableStringify(identity);
+}
+
+/** Stable persisted identity for one physical browser-runtime lifecycle. */
+export function resolveSandboxBrowserRegistryLifecycleId(
+  entry: SandboxBrowserRegistryEntry,
+): string {
+  const { lastUsedAtMs: _lastUsedAtMs, registryGeneration: _generation, ...identity } = entry;
+  return stableStringify(identity);
+}
 
 function getSandboxRegistryKysely(db: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SandboxRegistryDatabase>(db);
@@ -123,14 +138,15 @@ function rowToBrowserEntry(row: SandboxRegistryRow): SandboxBrowserRegistryEntry
 function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegistryEntry | null) {
   const next: SandboxRegistryEntry = {
     ...entry,
-    backendId: entry.backendId ?? existing?.backendId,
-    backendTarget: entry.backendTarget ?? existing?.backendTarget,
-    runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
+    backendId: existing?.backendId ?? entry.backendId,
+    backendTarget: existing?.backendTarget ?? entry.backendTarget,
+    runtimeLabel: existing?.runtimeLabel ?? entry.runtimeLabel,
+    sessionKey: existing?.sessionKey ?? entry.sessionKey,
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
     image: existing?.image ?? entry.image,
-    configLabelKind: entry.configLabelKind ?? existing?.configLabelKind,
-    configHash: entry.configHash ?? existing?.configHash,
-    cleanupMetadata: entry.cleanupMetadata ?? existing?.cleanupMetadata,
+    configLabelKind: existing?.configLabelKind ?? entry.configLabelKind,
+    configHash: existing?.configHash ?? entry.configHash,
+    cleanupMetadata: existing?.cleanupMetadata ?? entry.cleanupMetadata,
   };
   return {
     registry_kind: "container",
@@ -293,8 +309,8 @@ function removeRegistryRow(
   kind: SandboxRegistryKind,
   containerName: string,
   registryGeneration?: number,
-): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
+): boolean {
+  return runOpenClawStateWriteTransaction(({ db }) => {
     const stateDb = getSandboxRegistryKysely(db);
     let query = stateDb
       .deleteFrom("sandbox_registry_entries")
@@ -303,7 +319,7 @@ function removeRegistryRow(
     if (registryGeneration !== undefined) {
       query = query.where("updated_at", "=", registryGeneration);
     }
-    executeSqliteQuerySync(db, query);
+    return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
   });
 }
 
@@ -360,11 +376,15 @@ export function insertSandboxRegistryEntryIfMissing(entry: SandboxRegistryEntry)
 }
 
 /** Creates or updates one sandbox runtime registry entry, preserving immutable creation fields. */
-export async function updateRegistry(entry: SandboxRegistryEntry) {
-  runOpenClawStateWriteTransaction(({ db }) => {
+export async function updateRegistry(entry: SandboxRegistryEntry): Promise<SandboxRegistryEntry> {
+  return runOpenClawStateWriteTransaction(({ db }) => {
     const existingRow = readRegistryRowFromDb(db, "container", entry.containerName);
     const existing = existingRow ? rowToContainerEntry(existingRow) : null;
-    insertRegistryRow(db, containerEntryToRow(entry, existing));
+    const row = containerEntryToRow(entry, existing);
+    insertRegistryRow(db, row);
+    return normalizeSandboxRegistryEntry(
+      rowToContainerEntry(readRegistryRowFromDb(db, "container", entry.containerName)!)!,
+    );
   });
 }
 
@@ -375,7 +395,7 @@ export async function removeRegistryEntry(containerName: string) {
 
 /** Removes one runtime row only if no use or reprovision updated it since the snapshot. */
 export async function removeRegistryEntryIfUnchanged(entry: SandboxRegistryEntry) {
-  removeRegistryRow("container", entry.containerName, entry.registryGeneration);
+  return removeRegistryRow("container", entry.containerName, entry.registryGeneration);
 }
 
 /** Reads all registered browser sandbox containers from SQLite. */
@@ -395,11 +415,15 @@ export function insertSandboxBrowserRegistryEntryIfMissing(
 }
 
 /** Creates or updates one browser sandbox registry entry, preserving immutable creation fields. */
-export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
-  runOpenClawStateWriteTransaction(({ db }) => {
+export async function updateBrowserRegistry(
+  entry: SandboxBrowserRegistryEntry,
+): Promise<SandboxBrowserRegistryEntry> {
+  return runOpenClawStateWriteTransaction(({ db }) => {
     const existingRow = readRegistryRowFromDb(db, "browser", entry.containerName);
     const existing = existingRow ? rowToBrowserEntry(existingRow) : null;
-    insertRegistryRow(db, browserEntryToRow(entry, existing));
+    const row = browserEntryToRow(entry, existing);
+    insertRegistryRow(db, row);
+    return rowToBrowserEntry(readRegistryRowFromDb(db, "browser", entry.containerName)!)!;
   });
 }
 
@@ -410,5 +434,5 @@ export async function removeBrowserRegistryEntry(containerName: string) {
 
 /** Removes one browser row only if no use or reprovision updated it since the snapshot. */
 export async function removeBrowserRegistryEntryIfUnchanged(entry: SandboxBrowserRegistryEntry) {
-  removeRegistryRow("browser", entry.containerName, entry.registryGeneration);
+  return removeRegistryRow("browser", entry.containerName, entry.registryGeneration);
 }

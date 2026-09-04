@@ -142,7 +142,6 @@ async function runProcess(
     });
     throw new Error("process start cancelled");
   }
-  remoteExec.bindActivityToken(execSpec.finalizeToken);
   const owner = await spawnSandboxChild({
     argv: execSpec.argv,
     env: execSpec.env,
@@ -159,7 +158,6 @@ async function runProcess(
     },
     owners: execServer.children,
     terminateRemote: remoteExec.terminate,
-    cleanupRemote: remoteExec.terminate,
   });
   managed.child = owner;
   const child = owner.process;

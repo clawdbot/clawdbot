@@ -30,8 +30,6 @@ export type SandboxBackendCommandParams = {
   stdin?: Buffer | string;
   allowFailure?: boolean;
   signal?: AbortSignal;
-  /** Owner token for cleanup that must run under an existing exec activity lease. */
-  activityToken?: unknown;
 };
 
 /** Buffered command result returned by sandbox backend shell helpers. */
@@ -99,8 +97,6 @@ export type SandboxBackendHandle = {
     timedOut: boolean;
     token?: unknown;
   }) => Promise<void>;
-  /** Ends descendants owned by this exec before its activity lease is released. */
-  terminateExec?: (token: unknown) => Promise<void>;
   runShellCommand(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
   createFsBridge?: (params: { sandbox: SandboxFsBridgeContext }) => SandboxFsBridge;
 };

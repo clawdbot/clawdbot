@@ -148,11 +148,12 @@ describe("maybePruneSandboxes", () => {
     expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith(
       expect.objectContaining({ containerName: "sandbox-1" }),
     );
+    expect(backendMocks.removeRuntime.mock.invocationCallOrder[0]).toBeLessThan(
+      registryMocks.removeRegistryEntry.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
   });
 
-  it("keeps the registry entry when runtime removal fails", async () => {
-    // The registry is the retry source; keep it until the backend confirms the
-    // runtime was removed.
+  it("retains the cleanup locator when runtime removal fails", async () => {
     backendMocks.removeRuntime.mockRejectedValueOnce(new Error("docker rm failed"));
 
     await maybePruneSandboxes(buildPruneConfig());
@@ -161,6 +162,29 @@ describe("maybePruneSandboxes", () => {
     expect(runtimeMocks.error).toHaveBeenCalledWith(
       "Sandbox prune failed to remove sandbox-1: docker rm failed",
     );
+  });
+
+  it("does not destroy a runtime refreshed after the pruning snapshot", async () => {
+    const now = Date.now();
+    const snapshot = {
+      containerName: "sandbox-refreshed",
+      backendId: "docker",
+      sessionKey: "agent:main:main",
+      createdAtMs: now - 4 * 60 * 60 * 1000,
+      lastUsedAtMs: now - 2 * 60 * 60 * 1000,
+      image: "openclaw-sandbox:bookworm-slim",
+      registryGeneration: 1,
+    };
+    registryMocks.readRegistry
+      .mockResolvedValueOnce({ entries: [snapshot] })
+      .mockResolvedValueOnce({
+        entries: [{ ...snapshot, lastUsedAtMs: now, registryGeneration: 2 }],
+      });
+
+    await maybePruneSandboxes(buildPruneConfig());
+
+    expect(backendMocks.removeRuntime).not.toHaveBeenCalled();
+    expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
   });
 
   it("keeps the registry entry when its sandbox backend plugin is unavailable", async () => {

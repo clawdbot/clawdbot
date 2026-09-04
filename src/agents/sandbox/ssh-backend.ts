@@ -95,10 +95,12 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
   async removeRuntime({ entry, config, agentId }) {
     const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
     const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
-    const target = entry.cleanupMetadata?.target ?? cfg.ssh.target;
-    const workspaceRoot = entry.cleanupMetadata?.workspaceRoot ?? cfg.ssh.workspaceRoot;
-    if (!target) {
-      return;
+    const target = entry.cleanupMetadata?.target?.trim();
+    const workspaceRoot = entry.cleanupMetadata?.workspaceRoot?.trim();
+    if (entry.cleanupMetadata?.locatorVersion !== "1" || !target || !workspaceRoot) {
+      throw new Error(
+        `SSH sandbox runtime ${entry.containerName} has no authoritative cleanup locator; remove the recorded runtime manually after verifying its original target.`,
+      );
     }
     assertSshSandboxSecretOwnerAvailable({
       config,
@@ -196,6 +198,7 @@ class SshSandboxBackendImpl {
       configLabel: this.params.target,
       configLabelKind: "Target",
       cleanupMetadata: {
+        locatorVersion: "1",
         target: this.params.target,
         workspaceRoot: this.params.createParams.cfg.ssh.workspaceRoot,
       },

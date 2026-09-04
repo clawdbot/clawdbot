@@ -81,7 +81,7 @@ describe("sandbox prune activity coordination", () => {
     vi.clearAllMocks();
   });
 
-  it("drains an active old runtime and revalidates it before removal", async () => {
+  it("skips an active old runtime without blocking later input", async () => {
     const now = Date.now();
     const cfg = buildPruneConfig();
     let currentEntry: SandboxRegistryEntry = {
@@ -144,9 +144,13 @@ describe("sandbox prune activity coordination", () => {
 
       const { maybePruneSandboxes } = await import("./prune.js");
       const pruning = maybePruneSandboxes(cfg);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      const settledWhileActive = await Promise.race([
+        pruning.then(() => true),
+        new Promise<false>((resolve) => {
+          setTimeout(() => resolve(false), 200);
+        }),
+      ]);
+      expect(settledWhileActive).toBe(true);
       expect(removeRuntime).not.toHaveBeenCalled();
 
       currentEntry = { ...currentEntry, lastUsedAtMs: now + 1, registryGeneration: 2 };
@@ -156,8 +160,6 @@ describe("sandbox prune activity coordination", () => {
         timedOut: false,
         token: exec.finalizeToken,
       });
-      await pruning;
-
       expect(removeRuntime).not.toHaveBeenCalled();
       expect(registryMocks.removeRegistryEntry).not.toHaveBeenCalled();
 

@@ -42,7 +42,6 @@ export type BashSandboxConfig = {
     timedOut: boolean;
     token?: unknown;
   }) => Promise<void>;
-  terminateExec?: (token: unknown) => Promise<void>;
 };
 
 /** Builds the environment passed into sandboxed exec calls. */

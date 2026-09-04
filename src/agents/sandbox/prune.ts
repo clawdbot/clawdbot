@@ -21,9 +21,9 @@ import {
 } from "./registry.js";
 import {
   resolveSandboxRuntimeActivityKey,
-  withSandboxRuntimeMutations,
+  tryWithSandboxRuntimeMutations,
 } from "./runtime-activity.js";
-import { withSandboxScopeLocks } from "./scope-lock.js";
+import { withSandboxScopeLock } from "./scope-lock.js";
 import { resolveSandboxAgentId } from "./shared.js";
 import type { SandboxConfig } from "./types.js";
 
@@ -60,9 +60,9 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
   config: OpenClawConfig;
   runtimeKey: (entry: TEntry) => string;
   read: () => Promise<{ entries: TEntry[] }>;
-  remove: (entry: TEntry) => Promise<void>;
+  remove: (entry: TEntry) => Promise<boolean | void>;
   removeRuntime: (entry: TEntry) => Promise<void>;
-  beforeRemove?: (entry: TEntry) => Promise<void>;
+  prepareRemove?: (entry: TEntry) => Promise<void>;
 }) {
   const now = Date.now();
   const registry = await params.read();
@@ -70,8 +70,8 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
     if (!shouldPruneSandboxEntry(resolvePruneConfig(params.config, entry), now, entry)) {
       continue;
     }
-    await withSandboxScopeLocks([entry.sessionKey], async () => {
-      await withSandboxRuntimeMutations([params.runtimeKey(entry)], async (lifecycle) => {
+    await withSandboxScopeLock(entry.sessionKey, async () => {
+      await tryWithSandboxRuntimeMutations([params.runtimeKey(entry)], async (lifecycle) => {
         const current = (await params.read()).entries.find(
           (candidate) => candidate.containerName === entry.containerName,
         );
@@ -83,10 +83,11 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
           return;
         }
         try {
-          await params.beforeRemove?.(current);
+          await params.prepareRemove?.(current);
           await params.removeRuntime(current);
-          lifecycle.retire();
-          await params.remove(current);
+          if ((await params.remove(current)) !== false) {
+            lifecycle.retire();
+          }
         } catch (error) {
           const message =
             error instanceof Error
@@ -115,6 +116,14 @@ async function pruneSandboxContainers(config: OpenClawConfig) {
       ),
     read: readRegistry,
     remove: removeRegistryEntryIfUnchanged,
+    prepareRemove: async (entry) => {
+      const backendId = entry.backendId ?? "docker";
+      if (!getSandboxBackendManager(backendId)) {
+        throw new Error(
+          `Sandbox backend "${backendId}" is unavailable; enable its plugin before removing this runtime.`,
+        );
+      }
+    },
     removeRuntime: async (entry) => {
       const backendId = entry.backendId ?? "docker";
       const manager = getSandboxBackendManager(backendId);
@@ -156,7 +165,7 @@ async function pruneSandboxBrowsers(config: OpenClawConfig) {
         config,
       });
     },
-    beforeRemove: async (entry) => {
+    prepareRemove: async (entry) => {
       await stopCachedBrowserBridgesForContainer(entry.containerName);
     },
   });

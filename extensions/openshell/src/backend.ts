@@ -62,10 +62,6 @@ type PendingExec = {
   workspaceLease?: OpenShellWorkspaceLease;
 };
 
-function hasOpenShellWorkspaceLease(token: unknown): boolean {
-  return typeof token === "object" && token !== null && "workspaceLease" in token;
-}
-
 type OpenShellWorkspaceLease = {
   release: () => void;
 };
@@ -277,27 +273,30 @@ export function createOpenShellSandboxBackendManager(params: {
         configLabelMatch: entry.image === configuredSource,
       };
     },
-    async removeRuntime({ entry, config }) {
-      const recordedConfig = entry.cleanupMetadata
-        ? resolveOpenShellPluginConfig({
-            mode: entry.cleanupMetadata.mode,
-            command: entry.cleanupMetadata.command,
-            gateway: entry.cleanupMetadata.gateway || undefined,
-            gatewayEndpoint: entry.cleanupMetadata.gatewayEndpoint || undefined,
-            workspace: entry.cleanupMetadata.workspace || undefined,
-            from: entry.cleanupMetadata.from,
-            policy: entry.cleanupMetadata.policy || undefined,
-            providers: entry.cleanupMetadata.providers?.split(",").filter(Boolean),
-            gpu: entry.cleanupMetadata.gpu === "true",
-            autoProviders: entry.cleanupMetadata.autoProviders === "true",
-            remoteWorkspaceDir: entry.cleanupMetadata.remoteWorkspaceDir,
-            remoteAgentWorkspaceDir: entry.cleanupMetadata.remoteAgentWorkspaceDir,
-            timeoutSeconds: Number(entry.cleanupMetadata.timeoutMs) / 1000,
-          })
-        : undefined;
+    async removeRuntime({ entry }) {
+      const metadata = entry.cleanupMetadata;
+      const command = metadata?.command?.trim();
+      const gateway = metadata?.gateway?.trim();
+      const gatewayEndpoint = metadata?.gatewayEndpoint?.trim();
+      const workspace = metadata?.workspace?.trim();
+      if (
+        metadata?.locatorVersion !== "1" ||
+        !command ||
+        (!gateway && !gatewayEndpoint) ||
+        !workspace
+      ) {
+        throw new Error(
+          `OpenShell sandbox runtime ${entry.containerName} has no authoritative cleanup locator; remove it manually after selecting its original gateway and workspace.`,
+        );
+      }
+      const recordedConfig = resolveOpenShellPluginConfig({
+        command,
+        ...(gateway ? { gateway } : {}),
+        ...(gatewayEndpoint ? { gatewayEndpoint } : {}),
+        workspace,
+      });
       const execContext: OpenShellExecContext = {
-        config:
-          recordedConfig ?? resolveOpenShellPluginConfigFromConfig(config, params.pluginConfig),
+        config: recordedConfig,
         sandboxName: entry.containerName,
       };
       const result = await runOpenShellCli({
@@ -359,8 +358,7 @@ class OpenShellSandboxBackendImpl {
       return this.handle;
     }
     const runRemoteShellScript = (command: SandboxBackendCommandParams) =>
-      this.params.execContext.config.mode === "mirror" &&
-      !hasOpenShellWorkspaceLease(command.activityToken)
+      this.params.execContext.config.mode === "mirror"
         ? this.runWorkspaceOperation(() => this.runRemoteShellScript(command), command.signal)
         : this.runRemoteShellScript(command);
     const handle: OpenShellSandboxBackend = {
@@ -372,13 +370,15 @@ class OpenShellSandboxBackendImpl {
       mode: this.params.execContext.config.mode,
       configLabel: this.params.execContext.config.from,
       configLabelKind: "Source",
-      cleanupMetadata: Object.fromEntries(
-        Object.entries(this.params.execContext.config).flatMap(([key, value]) =>
-          value === undefined
-            ? []
-            : [[key, Array.isArray(value) ? value.join(",") : String(value)]],
-        ),
-      ),
+      cleanupMetadata: {
+        locatorVersion: "1",
+        command: this.params.execContext.config.command,
+        gateway: this.params.execContext.config.gateway ?? "",
+        gatewayEndpoint: this.params.execContext.config.gatewayEndpoint ?? "",
+        workspace:
+          this.params.execContext.config.workspace ??
+          (process.env.OPENSHELL_WORKSPACE?.trim() || "default"),
+      },
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       workdirRoots: [this.params.remoteWorkspaceDir, this.params.remoteAgentWorkspaceDir],

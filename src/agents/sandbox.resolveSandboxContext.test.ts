@@ -11,7 +11,8 @@ import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 
-const updateRegistryMock = vi.hoisted(() => vi.fn());
+const updateRegistryMock = vi.hoisted(() => vi.fn(async (entry) => entry));
+const readRegistryEntryMock = vi.hoisted(() => vi.fn(async () => null));
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
   vi.fn<() => Promise<SkillUsagePath[]>>(async () => []),
@@ -34,7 +35,9 @@ const containerEngineMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./sandbox/registry.js", () => ({
+  readRegistryEntry: readRegistryEntryMock,
   readRegisteredSandboxRuntimeIds: readRegisteredSandboxRuntimeIdsMock,
+  resolveSandboxRegistryLifecycleId: (entry: unknown) => JSON.stringify(entry),
   updateRegistry: updateRegistryMock,
 }));
 
