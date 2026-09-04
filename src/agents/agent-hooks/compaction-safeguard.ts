@@ -3,6 +3,11 @@
 import fs from "node:fs";
 import path from "node:path";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+  rawCharsWithinEstimate,
+} from "@openclaw/normalization-core/cjk-chars";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   capCompactionSummary,
@@ -81,9 +86,17 @@ const missedModelWarningSessions = new WeakSet<object>();
 const SPLIT_TURN_SECTION_HEADING = "**Turn Context (split turn):**";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
+// A finalized summary is persisted and replayed into the context window on every later
+// request, so it is bounded as a share of THAT window, charged the way replay charges it
+// (estimateStringChars, not raw length). A tenth leaves the rest for new work and keeps the
+// artifact well below the shouldCompact() trigger, so a boundary entry can never re-trigger
+// the compaction that produced it; it is also under MIN_CHUNK_RATIO, keeping the summary
+// smaller than one chunk of the history it stands in for.
+const SUMMARY_CONTEXT_WINDOW_RATIO = 0.1;
 const CONTEXT_TRUNCATED_MARKER = "\n\n[Earlier compaction context truncated to fit budget]\n\n";
 // Split-turn context supplements the generated summary and must not claim its
-// guaranteed half of the final artifact before common finalization runs.
+// guaranteed half of the final artifact before common finalization runs. Each
+// compaction caps it at floor(budget / 2); this constant is that cap at the floor.
 const MAX_SPLIT_TURN_CONTEXT_CHARS = Math.floor(MAX_COMPACTION_SUMMARY_CHARS / 2);
 const SPLIT_TURN_TRUNCATED_MARKER = "[Earlier split-turn messages truncated]\n";
 const PRESERVED_TURNS_TRUNCATED_MARKER = "[Earlier preserved messages truncated]\n";
@@ -508,10 +521,52 @@ function capCompactionSuffix(suffixInput: string | CompactionSuffix, maxChars: n
     : CONTEXT_TRUNCATED_MARKER;
 }
 
+/**
+ * Resolve the compaction summary finalization budget for one compaction, in the ESTIMATED
+ * chars estimateStringChars() counts and estimateTokens() divides by
+ * CHARS_PER_TOKEN_ESTIMATE — not raw UTF-16 length. Consumers convert with
+ * rawCharsWithinEstimate() before slicing.
+ *
+ *   ceiling = max(MAX_COMPACTION_SUMMARY_CHARS,
+ *                 floor(contextWindowTokens * SUMMARY_CONTEXT_WINDOW_RATIO)
+ *                   * CHARS_PER_TOKEN_ESTIMATE)
+ *   budget  = clamp(serializedChars, MAX_COMPACTION_SUMMARY_CHARS, ceiling)
+ *
+ * Both inputs are in that same estimated unit, which is what makes the ratio a real bound:
+ * `ceiling / CHARS_PER_TOKEN_ESTIMATE` is exactly the tokens replay charges the artifact,
+ * for CJK as well as Latin. Reading the window as raw chars instead put a CJK artifact at
+ * four times its share — 120,000 raw CJK chars on the deployed 300k window replay as
+ * 120,000 tokens, 40% of it, not the tenth this ratio names.
+ *
+ * serializedChars is the session text the artifact stands in for; a budget above it could
+ * never be spent. The ceiling keys off the context window rather than the summarizer's
+ * output cap because operators set maxTokens anywhere from a few thousand to the whole
+ * window, so an output-derived ceiling is a no-op on one deployment and no bound at all on
+ * the next. Windows at or below 40,000 tokens keep the 16,000-char floor exactly, leaving
+ * small models byte-identical to the legacy fixed cap; larger ones scale so a big session's
+ * required tail sections survive instead of being truncated into an auditSummaryQuality
+ * failure that no corrective retry can repair.
+ */
+function resolveCompactionSummaryBudgetChars(params: {
+  contextWindowTokens: number;
+  serializedChars: number;
+}): number {
+  // Compare instead of clamping: a non-finite window from bad model metadata fails closed
+  // to the legacy floor rather than poisoning every downstream cap with NaN.
+  const windowCeiling =
+    Math.floor(params.contextWindowTokens * SUMMARY_CONTEXT_WINDOW_RATIO) *
+    CHARS_PER_TOKEN_ESTIMATE;
+  const ceiling =
+    windowCeiling > MAX_COMPACTION_SUMMARY_CHARS ? windowCeiling : MAX_COMPACTION_SUMMARY_CHARS;
+  const requested =
+    params.serializedChars > 0 ? Math.floor(params.serializedChars) : MAX_COMPACTION_SUMMARY_CHARS;
+  return Math.min(Math.max(requested, MAX_COMPACTION_SUMMARY_CHARS), ceiling);
+}
+
 function budgetCompactionSummary(
   summaryBody: string,
   suffixInput: string | CompactionSuffix,
-  maxChars: number,
+  estimatedCharBudget: number,
   qualityRetention?: SummaryQualityRetention,
 ) {
   const suffix = normalizeCompactionSuffix(suffixInput);
@@ -522,6 +577,16 @@ function budgetCompactionSummary(
   const retentionPlan = qualityRetention
     ? createSummaryQualityRetentionPlan(summaryBody, SUMMARY_TRUNCATED_MARKER, qualityRetention)
     : null;
+  // The budget is denominated in the estimated chars estimateTokens() charges the replayed
+  // artifact under; every cap below spends raw UTF-16 offsets. Converting through the flat
+  // CHARS_PER_TOKEN_ESTIMATE would only be right for ASCII and let a CJK artifact cost four
+  // times its share of the window. The basis is every character that can reach the output:
+  // the candidate, plus the protected material the retention plan injects rather than
+  // slices from the body.
+  const maxChars = rawCharsWithinEstimate(
+    `${joined}${retentionPlan?.minimumText ?? ""}`,
+    estimatedCharBudget,
+  );
   if (maxChars <= 0 || (joined.length <= maxChars && !retentionPlan?.needsRebuild(maxChars))) {
     return {
       summary: joined,
@@ -537,7 +602,7 @@ function budgetCompactionSummary(
   const bodyFloor = Math.min(
     bodyCapacity,
     maxChars,
-    Math.max(1, Math.ceil(maxChars / 2), retentionPlan?.minimumChars ?? 0),
+    Math.max(1, Math.ceil(maxChars / 2), retentionPlan?.minimumText.length ?? 0),
   );
   const suffixReservation = Math.min(suffix.text.length, maxChars);
   const bodySlot = Math.min(bodyCapacity, Math.max(bodyFloor, maxChars - suffixReservation));
@@ -551,7 +616,8 @@ function budgetCompactionSummary(
     bodyBudget: bodySlot,
     bodyTrimmed: rendered ? rendered.trimmed : cappedBody.length < summaryBody.length,
     suffixTrimmed: cappedSuffix.length < suffix.text.length,
-    qualityRetentionInfeasible: retentionPlan !== null && retentionPlan.minimumChars > maxChars,
+    qualityRetentionInfeasible:
+      retentionPlan !== null && retentionPlan.minimumText.length > maxChars,
   };
 }
 
@@ -744,7 +810,7 @@ function formatContextSegments(messages: AgentMessage[]): string[] {
 function formatBoundedContextSection(params: {
   messages: AgentMessage[];
   heading: string;
-  maxChars: number;
+  estimatedCharBudget: number;
   truncatedMarker: string;
   truncatedLoss: CompactionLoss;
   onTruncated?: () => void;
@@ -756,7 +822,10 @@ function formatBoundedContextSection(params: {
 
   const completePrefix = `${params.heading}\n`;
   const complete = `${completePrefix}${segments.join("\n")}`;
-  if (complete.length <= params.maxChars) {
+  // Same unit conversion as budgetCompactionSummary: the caller's share of the summary
+  // budget is estimated chars, the segment arithmetic below is raw UTF-16.
+  const maxChars = rawCharsWithinEstimate(complete, params.estimatedCharBudget);
+  if (complete.length <= maxChars) {
     let offset = completePrefix.length;
     return {
       text: complete,
@@ -773,7 +842,7 @@ function formatBoundedContextSection(params: {
   let usedChars = prefix.length;
   for (const segment of segments.toReversed()) {
     const segmentChars = segment.length + (retained.length > 0 ? 1 : 0);
-    if (usedChars + segmentChars > params.maxChars) {
+    if (usedChars + segmentChars > maxChars) {
       break;
     }
     retained.unshift(segment);
@@ -792,11 +861,14 @@ function formatBoundedContextSection(params: {
   };
 }
 
-function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
+function buildPreservedTurnsSection(
+  messages: AgentMessage[],
+  estimatedCharBudget = MAX_SPLIT_TURN_CONTEXT_CHARS,
+): ContextSection {
   return formatBoundedContextSection({
     messages,
     heading: "\n\n## Recent turns preserved verbatim",
-    maxChars: MAX_SPLIT_TURN_CONTEXT_CHARS,
+    estimatedCharBudget,
     truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
     truncatedLoss: "preserved-turn-head",
   });
@@ -805,21 +877,28 @@ function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
 function buildSplitTurnContextSection(
   messages: AgentMessage[],
   onTruncated?: () => void,
+  estimatedCharBudget = MAX_SPLIT_TURN_CONTEXT_CHARS,
 ): ContextSection {
   return formatBoundedContextSection({
     messages,
     heading: "**Turn Context (split turn):**\n",
-    maxChars: MAX_SPLIT_TURN_CONTEXT_CHARS,
+    estimatedCharBudget,
     truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
     truncatedLoss: "split-turn-head",
     onTruncated,
   });
 }
 
-function formatGeneratedSplitTurnSection(summary: string, onTruncated?: () => void): string {
+function formatGeneratedSplitTurnSection(
+  summary: string,
+  onTruncated?: () => void,
+  estimatedCharBudget = MAX_SPLIT_TURN_CONTEXT_CHARS,
+): string {
   const heading = `${SPLIT_TURN_SECTION_HEADING}\n\n`;
-  const summaryBudget = MAX_SPLIT_TURN_CONTEXT_CHARS - heading.length;
   const nestedSummary = nestMarkdownHeadings(summary);
+  // The heading is ASCII, so it spends one estimated char per raw char; the rest of the
+  // budget converts against the nested summary, which may not be.
+  const summaryBudget = rawCharsWithinEstimate(nestedSummary, estimatedCharBudget - heading.length);
   const cappedSummary = capCompactionSummary(nestedSummary, summaryBudget);
   if (cappedSummary.length < nestedSummary.length) {
     onTruncated?.();
@@ -1006,6 +1085,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     };
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
     const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
+    // The finalization budget and the split-turn/preserved section cap (budget / 2) start
+    // at the legacy floor. The provider path finalizes there; the LLM path re-resolves
+    // both from the context window once it knows the summarizable session size.
+    let summaryBudgetChars = MAX_COMPACTION_SUMMARY_CHARS;
+    let splitTurnContextChars = MAX_SPLIT_TURN_CONTEXT_CHARS;
     const providerId = runtime?.provider;
     const turnPrefixMessages = baseTurnPrefixMessages;
     const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
@@ -1037,12 +1121,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fileOpsSummary,
         workspaceContext: await workspaceContextPromise,
       });
-      const finalized = budgetCompactionSummary(
-        body,
-        suffix,
-        MAX_COMPACTION_SUMMARY_CHARS,
-        qualityRetention,
-      );
+      const finalized = budgetCompactionSummary(body, suffix, summaryBudgetChars, qualityRetention);
       const losses = new Set(producerLosses);
       for (const section of Object.values(sections)) {
         if (typeof section !== "string" && section?.truncatedLoss) {
@@ -1096,11 +1175,18 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               providerResult,
               {
                 splitTurnSection: preparation.isSplitTurn
-                  ? buildSplitTurnContextSection(turnPrefixMessages, () => {
-                      producerLosses.add("split-turn-head");
-                    })
+                  ? buildSplitTurnContextSection(
+                      turnPrefixMessages,
+                      () => {
+                        producerLosses.add("split-turn-head");
+                      },
+                      splitTurnContextChars,
+                    )
                   : undefined,
-                preservedTurnsSection: buildPreservedTurnsSection(preservedMessages),
+                preservedTurnsSection: buildPreservedTurnsSection(
+                  preservedMessages,
+                  splitTurnContextChars,
+                ),
               },
               producerLosses,
             );
@@ -1252,7 +1338,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         recentTurnsPreserve,
       });
-      const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
+      // Resolve the summary budget BEFORE building bounded suffix sections so
+      // preserved/split-turn context scales with the session instead of a fixed half
+      // of the legacy 16k cap.
+      summaryBudgetChars = resolveCompactionSummaryBudgetChars({
+        contextWindowTokens,
+        serializedChars: [...summaryTargetMessages, ...turnPrefixMessages].reduce(
+          (total, message) => total + estimateStringChars(extractMessageText(message)),
+          0,
+        ),
+      });
+      splitTurnContextChars = Math.floor(summaryBudgetChars / 2);
+      const preservedTurnsSectionLocal = buildPreservedTurnsSection(
+        preservedRecentMessages,
+        splitTurnContextChars,
+      );
       const latestPreparedAsk = extractLatestUserAsk(messagesToSummarize);
       const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
       const includePreservedContext =
@@ -1323,9 +1423,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               previousSummary: undefined,
             });
             splitTurnSummaryLocal = prefixSummary;
-            splitTurnSectionLocal = formatGeneratedSplitTurnSection(prefixSummary, () => {
-              producerLosses.add("split-turn-tail");
-            });
+            splitTurnSectionLocal = formatGeneratedSplitTurnSection(
+              prefixSummary,
+              () => {
+                producerLosses.add("split-turn-tail");
+              },
+              splitTurnContextChars,
+            );
           }
         } catch (attemptError) {
           if (signal?.aborted) {
@@ -1381,7 +1485,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         if (finalized.qualityRetentionInfeasible) {
           log.warn(
             "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
-              `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
+              `requiredChars>${summaryBudgetChars} identifierCount=${identifiers.length}`,
           );
           setCompactionSafeguardCancellation(
             ctx.sessionManager,
@@ -1470,6 +1574,7 @@ const testing = {
   auditSummaryQuality,
   capCompactionSummary,
   budgetCompactionSummary,
+  resolveCompactionSummaryBudgetChars,
   formatFileOperations,
   computeAdaptiveChunkRatio,
   readWorkspaceContextForSummary,
@@ -1479,6 +1584,7 @@ const testing = {
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
   MAX_COMPACTION_SUMMARY_CHARS,
+  SUMMARY_CONTEXT_WINDOW_RATIO,
   MAX_FILE_OPS_SECTION_CHARS,
   MAX_FILE_OPS_LIST_CHARS,
   SUMMARY_TRUNCATED_MARKER,

@@ -3,7 +3,11 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
   estimateTokensFromChars,
+  rawCharsWithinEstimate,
 } from "./cjk-chars.js";
+
+/** U+4E2D, in the common-CJK range, so it weighs CHARS_PER_TOKEN_ESTIMATE per character. */
+const COMMON_CJK = "中";
 
 describe("normalization-core/cjk-chars", () => {
   it("keeps Latin text on the regular chars-per-token heuristic", () => {
@@ -84,5 +88,55 @@ describe("normalization-core/cjk-chars", () => {
 
   it("does not collapse non-CJK surrogate pairs", () => {
     expect(estimateStringChars("\uD83D\uDE00")).toBe(2);
+  });
+});
+
+describe("normalization-core/cjk-chars rawCharsWithinEstimate", () => {
+  it("converts Latin budgets one to one, so callers slicing raw offsets are unchanged", () => {
+    expect(rawCharsWithinEstimate("a".repeat(100), 40)).toBe(40);
+    expect(rawCharsWithinEstimate("a".repeat(100), 0)).toBe(0);
+    // Budget beyond the text is quoted, not clipped to the current draft: callers tell a
+    // producer how much room it has, and a short draft must not shrink that number.
+    expect(rawCharsWithinEstimate("a".repeat(100), 400)).toBe(400);
+    expect(rawCharsWithinEstimate("", 400)).toBe(400);
+  });
+
+  it("buys a quarter as many common CJK characters as the raw length would", () => {
+    expect(rawCharsWithinEstimate(COMMON_CJK.repeat(100), 40)).toBe(40 / CHARS_PER_TOKEN_ESTIMATE);
+    expect(estimateStringChars(COMMON_CJK.repeat(10))).toBe(40);
+  });
+
+  it("prices supplementary pairs per UTF-16 unit", () => {
+    const supplementary = String.fromCodePoint(0x20000).repeat(10);
+    const fits = rawCharsWithinEstimate(supplementary, 80);
+    expect(fits).toBe(10);
+    expect(estimateStringChars(supplementary.slice(0, fits))).toBeLessThanOrEqual(80);
+  });
+
+  it("only quotes past the text length once the whole text is within budget", () => {
+    // The cap stays safe despite quoting the remainder: it can exceed text.length only
+    // when every character of the text was funded at its own weight.
+    const text = `${"a".repeat(100)}${COMMON_CJK.repeat(100)}`;
+    expect(estimateStringChars(text)).toBe(500);
+    expect(rawCharsWithinEstimate(text, 500)).toBeGreaterThanOrEqual(text.length);
+    expect(rawCharsWithinEstimate(text, 499)).toBeLessThan(text.length);
+  });
+
+  it("funds the heaviest characters present, so every slice of that length fits", () => {
+    // The contract is a bound for ANY selection, not the average: a caller that trims to
+    // the returned length cannot overrun the budget by keeping the denser half.
+    const text = `${"a".repeat(1_000)}${COMMON_CJK.repeat(1_000)}`;
+    const budget = 2_000;
+    const fits = rawCharsWithinEstimate(text, budget);
+    // 500 CJK characters at CHARS_PER_TOKEN_ESTIMATE each exhaust the budget on their own.
+    expect(fits).toBe(500);
+    for (const slice of [
+      text.slice(0, fits),
+      text.slice(-fits),
+      `${"a".repeat(fits / 2)}${COMMON_CJK.repeat(fits / 2)}`,
+    ]) {
+      expect(slice).toHaveLength(fits);
+      expect(estimateStringChars(slice)).toBeLessThanOrEqual(budget);
+    }
   });
 });

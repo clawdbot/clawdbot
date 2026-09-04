@@ -121,7 +121,13 @@ function hasRequiredSummarySections(summary: string): boolean {
 }
 
 type SummaryQualityRetentionPlan = {
-  minimumChars: number;
+  /**
+   * The protected material render() always emits: headings, marker, audited identifiers and
+   * ask context. Callers need its text, not just its size, because it is the only rendered
+   * content that is not a slice of the summary body, so a char-budget conversion that has
+   * to account for every character that can appear has to see it.
+   */
+  minimumText: string;
   /**
    * True when render() must rebuild even a body that fits: a strict source
    * fact is missing, or an audit-bearing section exceeds its share cap.
@@ -289,7 +295,7 @@ export function createSummaryQualityRetentionPlan(
       .every((content) => content.length <= protectedCapFor(maxChars));
 
   return {
-    minimumChars: minimumSummary.length,
+    minimumText: minimumSummary,
     needsRebuild: (maxChars) =>
       (!latestUnresolvedUserRequest && !bodyHasLatestAsk) ||
       !bodyHasRequiredAskContext ||
