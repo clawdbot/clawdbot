@@ -4,6 +4,7 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveAmbientOwnerAgentId,
 } from "../../agents/agent-scope.js";
+import { supportsChannelMessageAction } from "../../channels/plugins/helpers.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
@@ -71,12 +72,7 @@ function channelEntryCanSend(
   if (entry?.plugin?.outbound?.sendText ?? entry?.plugin?.message?.send?.text) {
     return true;
   }
-  const actions = entry?.plugin?.actions;
-  return (
-    requiredAction !== undefined &&
-    typeof actions?.handleAction === "function" &&
-    (!actions.supportsAction || actions.supportsAction({ action: requiredAction }))
-  );
+  return supportsChannelMessageAction(entry?.plugin?.actions, requiredAction);
 }
 
 function findChannelEntry(

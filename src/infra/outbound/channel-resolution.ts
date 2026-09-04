@@ -1,6 +1,7 @@
 // Channel resolution exposes read-only outbound runtime facades and performs
 // optional bootstrap for deliverable channels that are not loaded yet.
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
+import { supportsChannelMessageAction } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
@@ -96,10 +97,7 @@ function channelPluginHasRuntimeOutboundSurface(
   return Boolean(
     plugin?.outbound ??
     resolveSendCapableMessageAdapter(plugin) ??
-    (requiredAction &&
-      plugin?.actions?.handleAction &&
-      (!plugin.actions.supportsAction ||
-        plugin.actions.supportsAction({ action: requiredAction }))),
+    supportsChannelMessageAction(plugin?.actions, requiredAction),
   );
 }
 
@@ -111,10 +109,7 @@ function channelPluginHasActivatedOutboundSurface(
     plugin?.outbound?.sendText ||
     plugin?.outbound?.deliveryMode === "gateway" ||
     resolveSendCapableMessageAdapter(plugin) ||
-    (requiredAction &&
-      plugin?.actions?.handleAction &&
-      (!plugin.actions.supportsAction ||
-        plugin.actions.supportsAction({ action: requiredAction }))),
+    supportsChannelMessageAction(plugin?.actions, requiredAction),
   );
 }
 
