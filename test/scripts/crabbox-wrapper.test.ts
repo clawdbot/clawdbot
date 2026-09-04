@@ -1,13 +1,15 @@
 // Crabbox Wrapper tests cover crabbox wrapper script behavior.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -19,7 +21,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { buildSync } from "esbuild";
+import { build, buildSync } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   isProviderAdvertised,
@@ -32,6 +34,7 @@ const tempDirs: string[] = [];
 const invocationLogTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = process.cwd();
 const bundledWrapperPath = path.join(repoRoot, ".tmp", `crabbox-wrapper-test-${process.pid}.mjs`);
+const realBundledWrapperPath = bundledWrapperPath.replace(".mjs", "-real.mjs");
 const fakeCrabboxBinDirs = new Map<string, string>();
 const fakeGitBinDirs = new Map<string, string>();
 const timingPreloads = new Map<string, string>();
@@ -71,7 +74,7 @@ const defaultGitResponses: Record<string, { status?: number; stdout?: string; st
   [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
   [GIT_SPARSE_LIST_KEY]: { status: 1 },
 };
-const remoteTestboxBootstrap = `if [ -n "$(git status --porcelain=v1)" ]; then git add -A && git -c user.name=OpenClaw -c user.email=ci@openclaw.local -c commit.gpgsign=false commit --no-verify -qm remote-testbox-sync || exit $?; fi; export CI=true;`;
+const remoteTestboxBootstrap = "export CI=true;";
 
 function makeFakeCrabbox(helpText: string): string {
   const cached = fakeCrabboxBinDirs.get(helpText);
@@ -100,7 +103,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
   // The two cwd-loss modes distinguish active-child monitoring from the post-exit
   // guard; both must chdir away before deleting the temporary checkout.
   const script = String.raw`
-const fs = require("node:fs"); const path = require("node:path"); const { spawn } = require("node:child_process");
+const fs = require("node:fs"); const path = require("node:path"); const { spawn, execFileSync } = require("node:child_process");
 const args = process.argv.slice(2); const helpText = ${JSON.stringify(`${helpText}${fakeRunValueOptionHelp}`)};
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const optionValue = (name) => {
@@ -109,7 +112,14 @@ const optionValue = (name) => {
 };
 async function main() {
   if (process.env.OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG) fs.appendFileSync(process.env.OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG, JSON.stringify(args) + "\n");
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1"); return; }
+  if (args[0] === "sync-plan") {
+    const excluded = new Set(JSON.parse(process.env.OPENCLAW_FAKE_CRABBOX_PRIVACY_PATHS || "[]"));
+    const candidates = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean);
+    const topFiles = [...new Set(candidates)].filter((file) => !excluded.has(file) && fs.existsSync(path.dirname(file)) && (() => { try { return !fs.lstatSync(file).isDirectory(); } catch { return false; } })()).map((file) => ({ path: file }));
+    if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
+    process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
+  }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.37.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -176,15 +186,6 @@ async function main() {
   }
   const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
   if (process.env.OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO) fs.copyFileSync(bundlePath, process.env.OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO);
-  if (Object.hasOwn(process.env, "OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE")) {
-    const bundle = fs.existsSync(bundlePath) ? fs.readFileSync(bundlePath, "utf8") : null;
-    if (bundle !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE) { process.stderr.write("changed-gate bundle mismatch\n"); process.exit(67); }
-  }
-  if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES) {
-    const bytes = fs.existsSync(bundlePath) ? fs.statSync(bundlePath).size : -1;
-    if (bytes !== Number(process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES)) { process.stderr.write("changed-gate bundle size mismatch\n"); process.exit(67); }
-  }
-  if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD === "1" && !fs.existsSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER || "")) { process.stderr.write("changed-gate bundle was not force-added\n"); process.exit(67); }
   process.stdout.write(JSON.stringify({ args, cwd: process.cwd(), scriptContent }) + "\n");
 }
 main().catch((error) => { process.stderr.write(String(error?.stack || error) + "\n"); process.exit(1); });`;
@@ -198,7 +199,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
       crabboxPath,
       [
         'if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then',
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.22.1}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.37.0}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -218,7 +219,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  case "$arg" in --artifact-glob|-artifact-glob|--script|-script) fast_run=0 ;; esac',
         "done",
         'if { [ "$1" = "run" ] || [ "$1" = "warmup" ]; } && [ "$fast_run" -eq 1 ] &&',
-        '  [ -z "${OPENCLAW_FAKE_CRABBOX_CLAIM_PATH:-}${OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH:-}${OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID:-}${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT:-}${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_ONCE:-}${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE+x}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES:-}${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD:-}${OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO:-}" ]; then',
+        '  [ -z "${OPENCLAW_FAKE_CRABBOX_CLAIM_PATH:-}${OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH:-}${OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID:-}${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_AND_EXIT:-}${OPENCLAW_FAKE_CRABBOX_DELETE_CWD_ONCE:-}${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}${OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO:-}" ]; then',
         `  printf '${fakeCrabboxProtocol}\\000%s\\000' "$#"`,
         "  printf '%s\\000' \"$@\"",
         "  printf '%s\\000\\000' \"$PWD\"",
@@ -251,7 +252,7 @@ function makeSlowCrabbox(helpText: string, mode: "help" | "version", delayMs: nu
 const args = process.argv.slice(2); const mode = ${JSON.stringify(mode)};
 if (args[0] === "--version") {
   if (mode === "version") setTimeout(() => process.exit(0), ${delayMs});
-  else console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1");
+  else console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.37.0");
 } else if (args[0] === "run" && args[1] === "--help") {
   if (mode === "help") setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
   else process.stdout.write(${JSON.stringify(runHelpText)});
@@ -346,31 +347,15 @@ function makeFakeGit(
   const gitPath = path.join(binDir, "git");
   const script = String.raw`
 const fs = require("node:fs"); const path = require("node:path"); const args = process.argv.slice(2);
-const touch = (name) => { if (process.env[name]) fs.writeFileSync(process.env[name], ""); };
 if (args[0] === "worktree" && args[1] === "add") {
   fs.mkdirSync(args[3], { recursive: true });
-  if (process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET) fs.symlinkSync(process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET, path.join(args[3], ".openclaw-crabbox-changed-gate.bundle")); process.exit(0);
+  process.exit(0);
 }
-if (args[0] === "read-tree") { fs.writeFileSync(process.env.GIT_INDEX_FILE, ""); process.exit(0); }
-if (args[0] === "add" && process.env.GIT_INDEX_FILE) process.exit(0);
-if (args[0] === "write-tree") { process.stdout.write((process.env.OPENCLAW_FAKE_GIT_WORKTREE_TREE_SHA || "tree456") + "\n"); process.exit(0); }
 if (args[0] === "-C" && args[2] === "sparse-checkout" && args[3] === "disable") process.exit(0);
 if (args[0] === "-C" && args[2] === "rev-parse") {
   const value = args[3] === "HEAD" ? process.env.OPENCLAW_FAKE_GIT_HEAD_SHA || "def456" : args[3] === "HEAD^{tree}" ? process.env.OPENCLAW_FAKE_GIT_HEAD_TREE_SHA || "tree456" : args[3].endsWith("^{tree}") ? process.env.OPENCLAW_FAKE_GIT_BASE_TREE_SHA || "base-tree123" : process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123";
   process.stdout.write(value + "\n"); process.exit(0);
 }
-if (args[0] === "-C" && args[2] === "-c" && args[6] === "commit-tree") {
-  if (process.env.OPENCLAW_FAKE_GIT_EXPECT_COMMIT_TREE && args[7] !== process.env.OPENCLAW_FAKE_GIT_EXPECT_COMMIT_TREE) process.exit(69);
-  touch("OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER");
-  process.stdout.write((process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || "synthetic789") + "\n"); process.exit(0);
-}
-if (args[0] === "-C" && args[2] === "update-ref" && args[3] === "HEAD") { touch("OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER"); process.exit(0); }
-if (args[0] === "-C" && args[2] === "bundle" && args[3] === "create") {
-  const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0);
-  fs.writeFileSync(args[4], bytes ? "x".repeat(bytes) : process.env.OPENCLAW_FAKE_GIT_BUNDLE || "fake-bundle"); process.exit(0);
-}
-if (args[0] === "-C" && args[2] === "add" && args[3] === "-f") { touch("OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER"); process.exit(0); }
-if (args[0] === "-C" && args[2] === "reset" && args[3] === "--mixed") process.exit(0);
 if (args[0] === "worktree" && args[1] === "remove") { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }
 const response = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT_RESPONSES || "{}"))).get(args.join("\u0000"));
 if (!response) process.exit(1);
@@ -715,7 +700,8 @@ function testHomeEnv(home: string): Record<string, string> {
 }
 
 function expectGroupedShellCommand(remoteCommand: string, command: string): void {
-  expect(remoteCommand).toContain(`&& { ${command}`);
+  expect(remoteCommand).toContain("&& { ");
+  expect(remoteCommand).toContain(command);
   if (process.platform !== "win32") {
     expect(remoteCommand).toContain(`${command}\n}`);
   }
@@ -783,8 +769,7 @@ function runDelegatedBlacksmith(args: string[], env: Record<string, string>) {
 const remoteChangedGateEnvPrefix =
   "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1";
 const remoteChangedGateExport = `export ${remoteChangedGateEnvPrefix};`;
-const remoteChangedGateFetch =
-  'git fetch -q --depth=2 origin "$openclaw_changed_gate_base:refs/remotes/origin/main"';
+const remoteChangedGateFetch = "refs/remotes/origin/main";
 const sparseChangedGateOptions = {
   gitResponses: {
     [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
@@ -826,51 +811,66 @@ function runSparseShell(shellScript: string) {
 }
 
 function expectChangedGateGitBootstrap(remoteCommand: string): void {
-  expect(remoteCommand).toContain("command -v git");
-  expect(remoteCommand).toContain("openclaw_changed_gate_base=abc123");
-  expect(remoteCommand).toContain(
-    "openclaw_changed_gate_bundle=.openclaw-crabbox-changed-gate.bundle",
-  );
-  expect(remoteCommand).toContain("mktemp /tmp/openclaw-changed-gate.XXXXXX");
-  expect(remoteCommand).toContain('cp "$openclaw_changed_gate_bundle"');
-  const cleanupIndex = remoteCommand.indexOf(
-    'rm -rf -- "$openclaw_changed_gate_bundle" "$openclaw_changed_gate_bundle".* || exit 2',
-  );
-  expect(cleanupIndex).toBeGreaterThanOrEqual(0);
-  expect(cleanupIndex).toBeLessThan(remoteCommand.indexOf("rm -rf .git || exit 2"));
-  expect(remoteCommand).toContain("git init -q || exit 2");
-  expect(remoteCommand).toContain(`${remoteChangedGateFetch} || exit 2`);
-  expect(remoteCommand).toContain(
-    'git fetch -q "$openclaw_changed_gate_bundle_tmp" HEAD:refs/heads/openclaw-changed-gate-tree',
-  );
-  expect(remoteCommand).toContain("git rev-parse refs/heads/openclaw-changed-gate-tree^{tree}");
-  expect(remoteCommand).toContain(
-    'commit-tree "$openclaw_changed_gate_tree" -p refs/remotes/origin/main',
-  );
-  expect(remoteCommand).toContain(
-    'git update-ref refs/heads/openclaw-changed-gate-head "$openclaw_changed_gate_head"',
-  );
-  expect(remoteCommand).toContain(
-    'git reset --hard --quiet "$openclaw_changed_gate_target" || exit 2',
-  );
-  expect(remoteCommand).toContain("git clean -fd -q || exit 2");
-  expect(remoteCommand).toContain("changed-gate bundle disappeared before import");
-  expect(remoteCommand).not.toContain("git apply");
+  expect(remoteCommand).toContain("node -e");
+  expect(remoteCommand).toContain(".openclaw-crabbox-changed-gate.bundle");
+  expect(remoteCommand).toContain('"baseSha":"abc123"');
+  expect(remoteCommand).not.toMatch(/git (?:reset|clean|restore|commit) /u);
+  expect(remoteCommand).not.toContain("remote-testbox-sync");
   expect(remoteCommand).not.toContain("; &&");
 }
 
 afterAll(() => {
   rmSync(bundledWrapperPath, { force: true });
+  rmSync(realBundledWrapperPath, { force: true });
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
 describe("scripts/crabbox-wrapper", () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     mkdirSync(path.dirname(bundledWrapperPath), { recursive: true });
     buildSync({
       bundle: true,
+      entryPoints: [path.join(repoRoot, "scripts/crabbox-wrapper.mts")],
+      format: "esm",
+      logLevel: "silent",
+      outfile: realBundledWrapperPath,
+      platform: "node",
+      target: "node22",
+    });
+    // Argument routing tests isolate source preparation; the real-Git fixture below
+    // executes the unmocked producer and generated receiver together.
+    const producerStub = path.join(
+      makeTempDir(tempDirs, "openclaw-source-owner-stub-"),
+      "producer.mjs",
+    );
+    writeFileSync(
+      producerStub,
+      String.raw`
+      import fs from "node:fs";
+      import path from "node:path";
+      export function prepareCrabboxSourceCapsule({syncRoot, base}) {
+        fs.mkdirSync(syncRoot, {recursive:true});
+        const directory = fs.mkdtempSync(path.join(syncRoot,"openclaw-crabbox-sync-"));
+        const bundlePath = ".openclaw-crabbox-changed-gate.bundle";
+        fs.writeFileSync(path.join(directory,bundlePath), "fixture capsule");
+        return {directory,bundlePath,sourceSha:"d".repeat(40),baseSha:base === "origin/main" ? process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123" : base,tree:"e".repeat(40),carrier:"f".repeat(40),digest:"a".repeat(64),cleanup(){fs.rmSync(directory,{recursive:true,force:true});}};
+      }
+    `,
+    );
+    await build({
+      bundle: true,
+      plugins: [
+        {
+          name: "source-capsule-fixture",
+          setup(builder) {
+            builder.onResolve({ filter: /crabbox-source-capsule\.mts$/ }, () => ({
+              path: producerStub,
+            }));
+          },
+        },
+      ],
       entryPoints: [path.join(repoRoot, "scripts/crabbox-wrapper.mts")],
       format: "esm",
       logLevel: "silent",
@@ -1327,7 +1327,7 @@ describe("scripts/crabbox-wrapper", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("crabbox 0.22.1");
+    expect(result.stdout.trim()).toBe("crabbox 0.37.0");
     expect(result.stderr).not.toContain("route workload=");
   });
 
@@ -1335,7 +1335,7 @@ describe("scripts/crabbox-wrapper", () => {
     const result = runDefaultWrapper(["--version", "--workload", "surprise"]);
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("crabbox 0.22.1");
+    expect(result.stdout.trim()).toBe("crabbox 0.37.0");
     expect(result.stderr).not.toContain("unsupported Crabbox workload");
   });
 
@@ -1644,8 +1644,45 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=blacksmith-testbox requires Crabbox >= 0.22.0");
+    expect(result.stderr).toContain("source capsule requires Crabbox >= 0.37.0");
     expect(result.stderr).toContain("selected binary reported version=crabbox 0.21.9");
+  });
+
+  it.each([
+    ["blacksmith-testbox", ["echo", "ok"]],
+    ["aws", ["node", "scripts/check-changed.mjs"]],
+  ] as const)(
+    "requires the sync-plan API before capsule side effects for %s",
+    (provider, command) => {
+      const log = makeInvocationLog();
+      writeFileSync(log, "");
+      const result = runDefaultWrapper(["run", "--provider", provider, "--", ...command], {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.36.0",
+          OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: log,
+        },
+      });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("source capsule requires Crabbox >= 0.37.0");
+      expect(result.stderr).toContain("update Crabbox");
+      expect(result.stderr).not.toContain("syncing from temporary full checkout");
+      expect(
+        readInvocations(log).filter(([name]) => name === "sync-plan" || name === "run"),
+      ).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["run", "--provider", "blacksmith-testbox", "--help"],
+    ["warmup", "--provider", "blacksmith-testbox"],
+    ["status", "--provider", "blacksmith-testbox"],
+    ["run", "--provider", "aws", "--", "echo", "ok"],
+  ])("does not require the sync-plan API for %j", (...args) => {
+    const result = runDefaultWrapper(args, {
+      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.36.0" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain("source capsule requires");
   });
 
   it("applies the Blacksmith version gate to provider aliases", () => {
@@ -1654,16 +1691,16 @@ describe("scripts/crabbox-wrapper", () => {
     });
 
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("provider=blacksmith-testbox requires Crabbox >= 0.22.0");
+    expect(result.stderr).toContain("source capsule requires Crabbox >= 0.37.0");
   });
 
   it("rejects prerelease Crabbox builds at the Blacksmith minimum boundary", () => {
     const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
-      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.0-rc.1" },
+      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.37.0-rc.1" },
     });
 
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("selected binary reported version=crabbox 0.22.0-rc.1");
+    expect(result.stderr).toContain("selected binary reported version=crabbox 0.37.0-rc.1");
   });
 
   it("rejects unsafe Crabbox version numbers at the Blacksmith minimum gate", () => {
@@ -1679,7 +1716,7 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("accepts post-release Crabbox describe builds at the Blacksmith minimum boundary", () => {
     const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
-      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.0-3-gabc1234" },
+      env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.37.0-3-gabc1234" },
     });
 
     expect(result.status).toBe(0);
@@ -1729,9 +1766,10 @@ describe("scripts/crabbox-wrapper", () => {
       "blacksmith-testbox",
       "--id",
       "tbx_owned",
+      "--reclaim",
       "--shell",
       "--",
-      `${remoteTestboxBootstrap} ${remotePosixHydratedModulesBootstrap} 'echo ok'`,
+      expect.stringContaining("'echo ok'"),
     ]);
   });
 
@@ -1946,9 +1984,10 @@ describe("scripts/crabbox-wrapper", () => {
       "blacksmith-testbox",
       "--id",
       "blue-hermit",
+      "--reclaim",
       "--shell",
       "--",
-      `${remoteTestboxBootstrap} ${remotePosixHydratedModulesBootstrap} 'echo ok'`,
+      expect.stringContaining("'echo ok'"),
     ]);
   });
 
@@ -1962,13 +2001,15 @@ describe("scripts/crabbox-wrapper", () => {
       "cd packages && pnpm install && pnpm build",
     ]);
 
+    expect(output.args.at(-1)).toContain(remoteTestboxBootstrap);
+    expect(output.args.at(-1)).not.toContain("remote-testbox-sync");
     expect(output.args).toEqual([
       "run",
       "--provider",
       "blacksmith-testbox",
       "--shell",
       "--",
-      `${remoteTestboxBootstrap} ${remotePosixHydratedModulesBootstrap} cd packages && pnpm install && pnpm build`,
+      expect.stringContaining("cd packages && pnpm install && pnpm build"),
     ]);
   });
 
@@ -2007,7 +2048,6 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("prefers Azure for unqualified Windows runs", () => {
-    const dirtyTree = "dirty-wsl2-tree-123";
     const { output, result } = runSuccessfulWrapper(
       azureProviderHelp,
       [
@@ -2022,10 +2062,6 @@ describe("scripts/crabbox-wrapper", () => {
         "check:changed",
       ],
       {
-        env: {
-          OPENCLAW_FAKE_GIT_EXPECT_COMMIT_TREE: dirtyTree,
-          OPENCLAW_FAKE_GIT_WORKTREE_TREE_SHA: dirtyTree,
-        },
         gitResponses: {
           [GIT_STATUS_PORCELAIN_KEY]: { stdout: " M scripts/crabbox-wrapper.mts\n" },
           [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
@@ -2054,6 +2090,12 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("pnpm install --frozen-lockfile");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_wsl2_js || exit $?");
     expectChangedGateGitBootstrap(remoteCommand);
+    expect(remoteCommand.indexOf("node --version >&2 || return 1")).toBeLessThan(
+      remoteCommand.indexOf("node -e"),
+    );
+    expect(remoteCommand.indexOf("node -e")).toBeLessThan(
+      remoteCommand.indexOf("corepack enable --install-directory"),
+    );
     expect(remoteCommand).toContain(
       `{ openclaw_crabbox_env ${remoteChangedGateEnvPrefix} corepack pnpm check:changed\n}`,
     );
@@ -3478,9 +3520,7 @@ describe("scripts/crabbox-wrapper", () => {
     );
     expect(result.stderr).toContain("syncing from temporary full checkout");
     expect(result.stderr).toContain("overlaying the local worktree as changes from abc123");
-    expect(output.args.join(" ")).toContain(
-      "openclaw_changed_gate_bundle=.openclaw-crabbox-changed-gate.bundle",
-    );
+    expect(output.args.join(" ")).toContain(".openclaw-crabbox-changed-gate.bundle");
     expect(output.cwd).toContain("openclaw-crabbox-sync-");
   });
 
@@ -3513,9 +3553,9 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expectChangedGateGitBootstrap(remoteCommand);
     expectHydratedPosixShell({ output, remoteCommand }, "corepack pnpm check:changed");
-    expect(remoteCommand).toContain("refs/heads/openclaw-changed-gate-head");
+    expect(remoteCommand).toContain("refs/openclaw/source-capsule");
     expect(remoteCommand).toMatch(
-      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+      /; env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
   });
 
@@ -3545,13 +3585,8 @@ describe("scripts/crabbox-wrapper", () => {
       },
     );
     expect(result.stderr).toContain("overlaying the local worktree as changes from release123");
-    expect(remoteCommand).toContain("openclaw_changed_gate_base=release123");
-    expect(remoteCommand).toContain(
-      "openclaw_changed_gate_alias=refs/remotes/origin/release/2026.7.2",
-    );
-    expect(remoteCommand).toContain(
-      'git update-ref "$openclaw_changed_gate_alias" refs/remotes/origin/main',
-    );
+    expect(remoteCommand).toContain('"baseSha":"release123"');
+    expect(remoteCommand).toContain("refs/remotes/origin/release/2026.7.2");
     expect(remoteCommand).toContain(
       "corepack pnpm check:changed --base origin/release/2026.7.2 --head HEAD",
     );
@@ -3608,48 +3643,33 @@ describe("scripts/crabbox-wrapper", () => {
     );
   });
 
-  it("materializes the changed-gate bundle in the temporary sync checkout", () => {
-    const bundle = "synthetic-bundle";
-    const markerDir = makeTempDir(tempDirs, "openclaw-changed-gate-force-add-");
-    const forceAddMarker = path.join(markerDir, "force-added");
-    const syntheticCommitMarker = path.join(markerDir, "synthetic-commit");
-    const syntheticHeadMarker = path.join(markerDir, "synthetic-head");
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
-      {
-        env: {
-          OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE: bundle,
-          OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD: "1",
-          OPENCLAW_FAKE_GIT_BUNDLE: bundle,
-          OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER: forceAddMarker,
-          OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER: syntheticCommitMarker,
-          OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER: syntheticHeadMarker,
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
-        },
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("changed-gate bundle mismatch");
-    expect(existsSync(forceAddMarker)).toBe(true);
-    expect(existsSync(syntheticCommitMarker)).toBe(true);
-    expect(existsSync(syntheticHeadMarker)).toBe(true);
-  });
-
-  it.skipIf(process.platform === "win32").each([true, false])(
-    "reuses the fetched base while transporting the exact dirty tree (shallow=%s)",
-    (shallow) => {
+  it.skipIf(process.platform === "win32").each([
+    ["aws", true],
+    ["aws", false],
+    ["blacksmith-testbox", true],
+    ["blacksmith-testbox", false],
+  ] as const)(
+    "reuses the fetched base while transporting the exact dirty tree (provider=%s, shallow=%s)",
+    (provider, shallow) => {
       const root = makeTempDir(tempDirs, "openclaw-changed-gate-real-git-");
       const origin = path.join(root, "origin");
       const producer = path.join(root, "producer");
       const capturedBundle = path.join(root, "captured.bundle");
+      const deletedOwned = [
+        "committed-deleted.ignored",
+        "staged-deleted.ignored",
+        "index-only-deleted.ignored",
+        "deleted-dir.ignored/owned.txt",
+      ];
+      const retainedPrivate = ["protected-deleted.ignored", "runtime.ignored"];
+      const replacedHistory = provider === "aws" && shallow;
+      const deletionReferent = path.join(root, "deletion-referent");
+      mkdirSync(deletionReferent);
+      writeFileSync(path.join(deletionReferent, "canary.txt"), "private referent\n");
       const fakeBin = makeFakeCrabbox(defaultProviderHelp);
+      const home = path.join(root, "home");
       const env = {
-        ...testHomeEnv(path.join(root, "home")),
+        ...testHomeEnv(home),
         PATH: [fakeBin, path.dirname(process.execPath), process.env.PATH ?? ""].join(
           path.delimiter,
         ),
@@ -3664,15 +3684,42 @@ describe("scripts/crabbox-wrapper", () => {
         OPENCLAW_CRABBOX_SYNC_TMPDIR: path.join(root, "sync"),
         OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
         OPENCLAW_FAKE_CRABBOX_COPY_CHANGED_GATE_BUNDLE_TO: capturedBundle,
+        OPENCLAW_FAKE_CRABBOX_PRIVACY_PATHS: JSON.stringify([
+          "private-canary.txt",
+          "protected-deleted.ignored",
+        ]),
+      };
+      const runCommand = (
+        command: string,
+        args: string[],
+        options: SpawnSyncOptionsWithStringEncoding,
+      ) => {
+        const startedAt = Date.now();
+        const result = spawnSync(command, args, options);
+        return { ...result, elapsedMs: Date.now() - startedAt };
+      };
+      const failureDetail = (result: ReturnType<typeof runCommand>) =>
+        `${result.stderr}\n${result.error?.message ?? "no spawn error"}; signal=${result.signal}; elapsed=${result.elapsedMs}ms`;
+      const expectRejectedBeforeUpload = (result: ReturnType<typeof runCommand>) => {
+        const detail = failureDetail(result);
+        expect(result.error, detail).toBeUndefined();
+        expect(result.status, detail).toBeTypeOf("number");
+        expect(result.status, detail).not.toBe(0);
+        expect(existsSync(capturedBundle)).toBe(false);
       };
       const git = (cwd: string, args: string[]) => {
-        const result = spawnSync("git", args, { cwd, env, encoding: "utf8", timeout: 10_000 });
-        expect(result.status, `${args.join(" ")}\n${result.stderr}`).toBe(0);
+        const result = runCommand("git", args, { cwd, env, encoding: "utf8", timeout: 10_000 });
+        expect(result.status, `${args.join(" ")}\n${failureDetail(result)}`).toBe(0);
         return result.stdout.trim();
       };
       mkdirSync(path.join(origin, "scripts"), { recursive: true });
       git(origin, ["init", "-q", "-b", "main"]);
-      writeFileSync(path.join(origin, ".gitignore"), ".tmp/\n");
+      writeFileSync(path.join(origin, ".gitignore"), ".tmp/\n*.ignored\n!reincluded.ignored\n");
+      writeFileSync(path.join(origin, ".gitattributes"), "* text=auto eol=lf\n");
+      writeFileSync(
+        path.join(origin, ".crabbox.yaml"),
+        "sync:\n  exclude:\n    - private-canary.txt\n    - protected-deleted.ignored\n",
+      );
       const restored = "old content beyond the receiver's shallow history\n";
       mkdirSync(path.join(origin, "restored"));
       writeFileSync(path.join(origin, "restored", "old.txt"), restored);
@@ -3683,25 +3730,65 @@ describe("scripts/crabbox-wrapper", () => {
       git(origin, ["commit", "-qm", "remove old content"]);
       git(origin, ["commit", "--allow-empty", "-qm", "advance history"]);
       const unchanged = Buffer.concat(
-        Array.from({ length: 8192 }, (_, index) =>
+        Array.from({ length: 131072 }, (_, index) =>
           createHash("sha256").update(`unchanged-${index}`).digest(),
         ),
       );
       writeFileSync(path.join(origin, "unchanged.bin"), unchanged);
+      const hiddenPath = "sparse-only/data.bin";
+      const hiddenBytes = Buffer.from([0, 255, 13, 10, 128]);
+      mkdirSync(path.join(origin, "sparse-only"));
+      writeFileSync(path.join(origin, hiddenPath), hiddenBytes);
       for (const file of ["owner.txt", "deleted.txt", "rename-before.txt", "mode.sh"]) {
         writeFileSync(path.join(origin, file), "base\n");
       }
+      writeFileSync(path.join(origin, "tracked.ignored"), "tracked ignored base\n");
+      writeFileSync(path.join(origin, "reincluded.ignored"), "reincluded base\n");
+      if (replacedHistory) {
+        writeFileSync(path.join(origin, "removed-kind.ignored"), "old file kind\n");
+        git(origin, ["add", "-f", "removed-kind.ignored"]);
+      }
+      writeFileSync(path.join(origin, "raw-crlf.txt"), "base\n");
+      mkdirSync(path.join(origin, "source-dir"));
+      writeFileSync(path.join(origin, "source-dir", "kept.txt"), "source directory\n");
+      symlinkSync("source-dir", path.join(origin, "directory-alias"), "dir");
       symlinkSync("owner.txt", path.join(origin, "alias"));
+      git(origin, ["add", "-f", "tracked.ignored"]);
       // The leaf is deliberately inert: this test proves transport, not check lanes.
       writeFileSync(
         path.join(origin, "scripts/check-changed.mjs"),
         'process.stdout.write("transport fixture reached\\n");\n',
       );
+      copyFileSync(
+        path.join(origin, "scripts/check-changed.mjs"),
+        path.join(origin, "scripts/source-fixture.mjs"),
+      );
       git(origin, ["add", "-A"]);
       git(origin, ["commit", "-qm", "base"]);
       const base = git(origin, ["rev-parse", "HEAD"]);
-      git(root, ["clone", "-q", ...(shallow ? ["--depth=1"] : []), `file://${origin}`, producer]);
+      const partial = provider === "blacksmith-testbox" && shallow;
+      git(origin, ["config", "uploadpack.allowFilter", "true"]);
+      git(root, [
+        "clone",
+        "-q",
+        ...(shallow ? ["--depth=1"] : []),
+        ...(partial ? ["--filter=blob:none", "--no-checkout"] : []),
+        `file://${origin}`,
+        producer,
+      ]);
+      if (partial) {
+        git(producer, ["sparse-checkout", "set", "--no-cone", "/*", "!/sparse-only/"]);
+        git(producer, ["read-tree", "-mu", "HEAD"]);
+        const hiddenObject = git(origin, ["rev-parse", `HEAD:${hiddenPath}`]);
+        expect(git(producer, ["rev-list", "--objects", "--all", "--missing=print"])).toContain(
+          `?${hiddenObject}`,
+        );
+      }
       expect(git(producer, ["rev-parse", "--is-shallow-repository"])).toBe(String(shallow));
+      const alias = provider === "aws" ? "origin/release/fixture" : "";
+      if (alias) {
+        git(producer, ["update-ref", `refs/remotes/${alias}`, base]);
+      }
       if (!shallow) {
         git(producer, ["repack", "-adb"]);
         expect(
@@ -3712,25 +3799,103 @@ describe("scripts/crabbox-wrapper", () => {
       }
       const fixtureWrapper = path.join(producer, ".tmp", "crabbox-wrapper.mjs");
       mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
-      copyFileSync(bundledWrapperPath, fixtureWrapper);
-      const runSender = () => {
-        const result = spawnSync(
+      copyFileSync(realBundledWrapperPath, fixtureWrapper);
+      const sourceCommand =
+        provider === "blacksmith-testbox"
+          ? "scripts/source-fixture.mjs"
+          : "scripts/check-changed.mjs";
+      const sourceArgs = alias ? ["--base", alias] : [];
+      const shellCommand = ["node", sourceCommand, ...sourceArgs].join(" ");
+      const scriptBody = `#!/usr/bin/env bash\n${shellCommand}\n`;
+      const scriptInput = path.join(root, "input.sh");
+      writeFileSync(scriptInput, scriptBody);
+      const runSender = (mode: "direct" | "shell" | "script" | "stdin" = "direct") => {
+        const payload =
+          mode === "script"
+            ? ["--script", scriptInput]
+            : mode === "stdin"
+              ? ["--script-stdin"]
+              : mode === "shell"
+                ? ["--shell", "--", `true; ${shellCommand}`]
+                : ["--", "node", sourceCommand, ...sourceArgs];
+        const result = runCommand(
           process.execPath,
-          [fixtureWrapper, "run", "--provider", "aws", "--", "node", "scripts/check-changed.mjs"],
-          { cwd: producer, env, encoding: "utf8", timeout: 10_000 },
+          [fixtureWrapper, "run", "--provider", provider, ...payload],
+          {
+            cwd: producer,
+            env,
+            encoding: "utf8",
+            input: mode === "stdin" ? scriptBody : undefined,
+            timeout: 10_000,
+          },
         );
+        expect(result.status, failureDetail(result)).toBe(0);
         const run = expectSuccessfulWrapperRun(result);
         expect(existsSync(run.output.cwd)).toBe(false);
         expect(readdirSync(path.join(root, "sync"))).toEqual([]);
-        return { remoteCommand: run.remoteCommand, bundle: readFileSync(capturedBundle) };
+        return {
+          remoteCommand: run.output.scriptContent || run.remoteCommand,
+          bundle: readFileSync(capturedBundle),
+        };
       };
-      const receive = (name: string, remoteCommand: string, bundle?: Buffer, source = origin) => {
+      const receive = (
+        name: string,
+        remoteCommand: string,
+        bundle?: Buffer,
+        source = origin,
+        extraEnv: NodeJS.ProcessEnv = {},
+        nativeSeed = true,
+      ) => {
         const receiver = path.join(root, name);
-        mkdirSync(receiver);
+        if (source === origin && nativeSeed) {
+          git(root, ["clone", "-q", `file://${origin}`, receiver]);
+          if (lstatSync(path.join(producer, "source-dir")).isSymbolicLink()) {
+            rmSync(path.join(receiver, "source-dir"), { recursive: true });
+            symlinkSync(
+              readlinkSync(path.join(producer, "source-dir"), { encoding: "buffer" }),
+              path.join(receiver, "source-dir"),
+              "dir",
+            );
+          }
+          for (const file of [
+            "tracked.ignored",
+            "reincluded.ignored",
+            "unchanged.bin",
+            "alias",
+            "directory-alias",
+          ]) {
+            rmSync(path.join(receiver, file), { force: true });
+          }
+          writeFileSync(path.join(receiver, "owner.txt"), "native stale bytes\n");
+          chmodSync(path.join(receiver, "mode.sh"), 0o644);
+          // The base index has never known these ignored branch/staged paths.
+          for (const file of [...deletedOwned, ...retainedPrivate]) {
+            mkdirSync(path.dirname(path.join(receiver, file)), { recursive: true });
+            if (file === deletedOwned[2]) {
+              symlinkSync(deletionReferent, path.join(receiver, file), "dir");
+            } else {
+              writeFileSync(path.join(receiver, file), "stale ignored bytes\n");
+            }
+          }
+          writeFileSync(
+            path.join(receiver, "deleted-dir.ignored", "runtime.txt"),
+            "private runtime\n",
+          );
+          if (replacedHistory) {
+            rmSync(path.join(receiver, "removed-kind.ignored"));
+            mkdirSync(path.join(receiver, "removed-kind.ignored"));
+            writeFileSync(
+              path.join(receiver, "removed-kind.ignored", "owned.txt"),
+              "stale child\n",
+            );
+          }
+        } else {
+          mkdirSync(receiver);
+        }
         if (bundle) {
           writeFileSync(path.join(receiver, ".openclaw-crabbox-changed-gate.bundle"), bundle);
         }
-        const result = spawnSync("bash", ["-c", remoteCommand], {
+        const result = runCommand("bash", ["-c", remoteCommand], {
           cwd: receiver,
           encoding: "utf8",
           timeout: 10_000,
@@ -3741,19 +3906,46 @@ describe("scripts/crabbox-wrapper", () => {
             GIT_CONFIG_VALUE_0: "https://github.com/openclaw/openclaw.git",
             GIT_CONFIG_KEY_1: "protocol.file.allow",
             GIT_CONFIG_VALUE_1: "always",
+            ...extraEnv,
           },
         });
+        expect(result.error, failureDetail(result)).toBeUndefined();
         return { receiver, result };
       };
       const empty = runSender();
-      expect(empty.bundle.length).toBe(0);
+      expect(empty.bundle.length).toBeGreaterThan(0);
       const unchangedRun = receive("unchanged", empty.remoteCommand, empty.bundle);
-      expect(unchangedRun.result.status, unchangedRun.result.stderr).toBe(0);
-      expect(git(unchangedRun.receiver, ["rev-parse", "HEAD"])).toBe(base);
+      expect(unchangedRun.result.status, failureDetail(unchangedRun.result)).toBe(0);
+      expect(git(unchangedRun.receiver, ["rev-parse", "HEAD^{tree}"])).toBe(
+        git(origin, ["rev-parse", "HEAD^{tree}"]),
+      );
 
       writeFileSync(path.join(producer, "owner.txt"), "committed\n");
       git(producer, ["add", "owner.txt"]);
+      if (replacedHistory) {
+        rmSync(path.join(producer, "removed-kind.ignored"));
+        mkdirSync(path.join(producer, "removed-kind.ignored"));
+        writeFileSync(
+          path.join(producer, "removed-kind.ignored", "owned.txt"),
+          "new directory kind\n",
+        );
+        git(producer, ["add", "-A", "-f", "removed-kind.ignored"]);
+      }
+      for (const file of [...deletedOwned.slice(0, 2), deletedOwned[3]!, retainedPrivate[0]!]) {
+        mkdirSync(path.dirname(path.join(producer, file)), { recursive: true });
+        writeFileSync(path.join(producer, file), "branch-owned source\n");
+        git(producer, ["add", "-f", file]);
+      }
       git(producer, ["commit", "-qm", "committed change"]);
+      if (replacedHistory) {
+        rmSync(path.join(producer, "removed-kind.ignored"), { recursive: true });
+      }
+      writeFileSync(path.join(producer, deletedOwned[2]!), "new staged ignored source\n");
+      git(producer, ["add", "-f", deletedOwned[2]!]);
+      for (const file of [...deletedOwned, retainedPrivate[0]!]) {
+        rmSync(path.join(producer, file));
+      }
+      git(producer, ["add", "-u", "staged-deleted.ignored"]);
       writeFileSync(path.join(producer, "owner.txt"), "unstaged\n");
       writeFileSync(path.join(producer, "untracked.txt"), "untracked\n");
       mkdirSync(path.join(producer, "restored"));
@@ -3761,7 +3953,72 @@ describe("scripts/crabbox-wrapper", () => {
       rmSync(path.join(producer, "deleted.txt"));
       renameSync(path.join(producer, "rename-before.txt"), path.join(producer, "renamed.txt"));
       chmodSync(path.join(producer, "mode.sh"), 0o755);
+      writeFileSync(path.join(producer, "tracked.ignored"), "changed tracked ignored\r\n");
+      writeFileSync(path.join(producer, "reincluded.ignored"), "changed reincluded\r\n");
+      writeFileSync(path.join(producer, "raw-crlf.txt"), "raw bytes\r\nsecond line\r\n");
+      writeFileSync(
+        path.join(producer, "dirty.bin"),
+        Buffer.concat(
+          Array.from({ length: 65536 }, (_, index) =>
+            createHash("sha256").update(`dirty-${index}`).digest(),
+          ),
+        ),
+      );
+      writeFileSync(path.join(producer, "staged.ignored"), "new ignored staged\r\n");
+      git(producer, ["add", "-f", "staged.ignored"]);
+      const external = path.join(root, "external");
+      mkdirSync(external);
+      writeFileSync(path.join(external, "canary.txt"), "external referent must stay local\n");
+      writeFileSync(path.join(external, "kept.txt"), "shadowed tracked referent must stay local\n");
+      rmSync(path.join(producer, "source-dir"), { recursive: true });
+      symlinkSync(external, path.join(producer, "source-dir"), "dir");
+      rmSync(path.join(producer, "directory-alias"));
+      symlinkSync(external, path.join(producer, "directory-alias"), "dir");
+      rmSync(path.join(producer, "alias"));
+      symlinkSync(Buffer.from([46, 47, 255, 10]), path.join(producer, "alias"));
+      const privatePaths = [
+        "private-canary.txt",
+        "global-canary.txt",
+        "info-canary.txt",
+        "secret.ignored",
+      ];
+      writeFileSync(path.join(producer, ".git", "info", "exclude"), "info-canary.txt\n");
+      mkdirSync(home, { recursive: true });
+      const globalExclude = path.join(home, "git-exclude");
+      const localExcludes =
+        provider === "aws" && !shallow
+          ? "relative"
+          : provider === "blacksmith-testbox" && shallow
+            ? "empty"
+            : "";
+      writeFileSync(globalExclude, "global-canary.txt\n" + (localExcludes ? "keep.txt\n" : ""));
+      writeFileSync(path.join(home, ".gitconfig"), `[core]\n excludesFile = ${globalExclude}\n`);
+      env.GIT_CONFIG_GLOBAL = path.join(home, ".gitconfig");
+      if (localExcludes) {
+        writeFileSync(path.join(producer, "keep.txt"), "eligible under the local override\n");
+        const policy = path.join(root, "local-exclude-policy");
+        writeFileSync(policy, "global-canary.txt\n");
+        symlinkSync(policy, path.join(producer, "exclusion-policy"));
+        writeFileSync(
+          path.join(producer, ".git", "info", "exclude"),
+          "info-canary.txt\nexclusion-policy\nglobal-canary.txt\n",
+        );
+        git(producer, [
+          "config",
+          "--local",
+          "core.excludesFile",
+          localExcludes === "empty" ? "" : "exclusion-policy",
+        ]);
+      }
+      for (const file of privatePaths) {
+        writeFileSync(path.join(producer, file), "private fixture canary\n");
+      }
       git(producer, ["add", "mode.sh", "rename-before.txt", "renamed.txt"]);
+      const sparse = provider === "blacksmith-testbox";
+      if (sparse) {
+        git(producer, ["sparse-checkout", "set", "--no-cone", "/*", "!/sparse-only/"]);
+        expect(existsSync(path.join(producer, hiddenPath))).toBe(false);
+      }
       const headBefore = git(producer, ["rev-parse", "HEAD"]);
       const indexBefore = readFileSync(path.join(producer, ".git", "index"));
       const statusBefore = git(producer, ["status", "--porcelain=v1"]);
@@ -3781,10 +4038,16 @@ describe("scripts/crabbox-wrapper", () => {
       ).toEqual(shallowBefore ?? false);
 
       const imported = receive("candidate", candidate.remoteCommand, candidate.bundle);
-      expect(imported.result.status, imported.result.stderr).toBe(0);
+      expect(imported.result.status, failureDetail(imported.result)).toBe(0);
       expect(imported.result.stdout).toBe("transport fixture reached\n");
       expect(git(imported.receiver, ["rev-parse", "HEAD^"])).toBe(base);
-      expect(git(imported.receiver, ["status", "--porcelain=v1"])).toBe("");
+      expect(git(imported.receiver, ["rev-list", "--count", "HEAD"])).toBe("3");
+      if (alias) {
+        expect(git(imported.receiver, ["rev-parse", alias])).toBe(base);
+      }
+      expect(readFileSync(path.join(imported.receiver, hiddenPath))).toEqual(hiddenBytes);
+      expect(imported.result.stderr).toContain(headBefore);
+      expect(git(imported.receiver, ["rev-parse", "HEAD"])).not.toBe(headBefore);
       expect(readFileSync(path.join(imported.receiver, "unchanged.bin"))).toEqual(unchanged);
       expect(readFileSync(path.join(imported.receiver, "owner.txt"), "utf8")).toBe("unstaged\n");
       expect(readFileSync(path.join(imported.receiver, "untracked.txt"), "utf8")).toBe(
@@ -3792,115 +4055,264 @@ describe("scripts/crabbox-wrapper", () => {
       );
       expect(existsSync(path.join(imported.receiver, "deleted.txt"))).toBe(false);
       expect(existsSync(path.join(imported.receiver, "rename-before.txt"))).toBe(false);
+      for (const file of deletedOwned) {
+        expect(existsSync(path.join(imported.receiver, file)), file).toBe(false);
+      }
+      if (replacedHistory) {
+        expect(existsSync(path.join(imported.receiver, "removed-kind.ignored"))).toBe(false);
+      }
+      for (const file of retainedPrivate) {
+        expect(readFileSync(path.join(imported.receiver, file), "utf8")).toBe(
+          "stale ignored bytes\n",
+        );
+      }
+      expect(
+        readFileSync(path.join(imported.receiver, "deleted-dir.ignored", "runtime.txt"), "utf8"),
+      ).toBe("private runtime\n");
+      expect(readFileSync(path.join(deletionReferent, "canary.txt"), "utf8")).toBe(
+        "private referent\n",
+      );
+      if (localExcludes) {
+        expect(readFileSync(path.join(imported.receiver, "keep.txt"), "utf8")).toBe(
+          "eligible under the local override\n",
+        );
+        expect(existsSync(path.join(imported.receiver, "exclusion-policy"))).toBe(false);
+      }
       expect(readFileSync(path.join(imported.receiver, "renamed.txt"), "utf8")).toBe("base\n");
       expect(readFileSync(path.join(imported.receiver, "restored", "old.txt"), "utf8")).toBe(
         restored,
       );
       expect(git(imported.receiver, ["ls-tree", "HEAD", "alias"])).toMatch(/^120000 blob /u);
       expect(git(imported.receiver, ["ls-tree", "HEAD", "mode.sh"])).toMatch(/^100755 blob /u);
-      expect(git(imported.receiver, ["diff", "--no-renames", "--name-status", base, "HEAD"])).toBe(
-        [
-          "D\tdeleted.txt",
-          "M\tmode.sh",
-          "M\towner.txt",
-          "D\trename-before.txt",
-          "A\trenamed.txt",
-          "A\trestored/old.txt",
-          "A\tuntracked.txt",
-        ].join("\n"),
-      );
-
-      const corrupt = Buffer.from(candidate.bundle);
-      const lastIndex = corrupt.length - 1;
-      corrupt.writeUInt8(corrupt.readUInt8(lastIndex) ^ 1, lastIndex);
-      const wrongBase = git(imported.receiver, [
-        "commit-tree",
-        `${base}^{tree}`,
-        "-m",
-        "other base",
-      ]);
-      const wrongCarrier = git(imported.receiver, [
-        "commit-tree",
-        "HEAD^{tree}",
-        "-p",
-        wrongBase,
-        "-m",
-        "other prerequisite",
-      ]);
-      git(imported.receiver, ["update-ref", "HEAD", wrongCarrier]);
-      const wrongBundle = path.join(root, "wrong-base.bundle");
-      git(imported.receiver, ["bundle", "create", wrongBundle, "HEAD", `^${wrongBase}`]);
-      for (const [name, bundle] of [
-        ["missing-bundle", undefined],
-        ["wrong-base-bundle", readFileSync(wrongBundle)],
-        ["corrupt-bundle", corrupt],
-      ] as const) {
-        const rejected = receive(name, candidate.remoteCommand, bundle);
-        expect(rejected.result.status).toBe(2);
-        expect(rejected.result.stdout).not.toContain("transport fixture reached");
+      const selected = git(producer, [
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+      ])
+        .split("\0")
+        .filter((file) => file && !privatePaths.includes(file) && file !== "source-dir/kept.txt")
+        .filter((file) => {
+          try {
+            return !lstatSync(path.join(producer, file)).isDirectory();
+          } catch {
+            return false;
+          }
+        });
+      const sourceManifest = (directory: string, files: string[]) =>
+        [...new Set(files)].toSorted().map((file): [string, string, string] => {
+          const fullPath = path.join(directory, file);
+          const stat = lstatSync(fullPath);
+          const symlink = stat.isSymbolicLink();
+          return [
+            file,
+            symlink ? "120000" : stat.mode & 0o100 ? "100755" : "100644",
+            createHash("sha256")
+              .update(
+                symlink ? readlinkSync(fullPath, { encoding: "buffer" }) : readFileSync(fullPath),
+              )
+              .digest("hex"),
+          ];
+        });
+      const remotePaths = git(imported.receiver, ["ls-files", "-z"]).split("\0").filter(Boolean);
+      const expectedManifest = sourceManifest(producer, selected);
+      if (sparse) {
+        expectedManifest.push(...sourceManifest(origin, [hiddenPath]));
       }
-      const emptyOrigin = path.join(root, "empty-origin");
-      mkdirSync(emptyOrigin);
-      git(emptyOrigin, ["init", "-q", "--bare"]);
-      const missingBase = receive(
-        "missing-base",
-        candidate.remoteCommand,
-        candidate.bundle,
-        emptyOrigin,
+      expectedManifest.sort((left, right) => left[0].localeCompare(right[0]));
+      expect(
+        sourceManifest(imported.receiver, remotePaths).toSorted((left, right) =>
+          left[0].localeCompare(right[0]),
+        ),
+      ).toEqual(expectedManifest);
+      expect(git(imported.receiver, ["ls-files", "--others", "--exclude-standard"])).toBe("");
+      for (const file of privatePaths) {
+        expect(existsSync(path.join(imported.receiver, file)), file).toBe(false);
+      }
+      expect(
+        readlinkSync(path.join(imported.receiver, "directory-alias"), { encoding: "buffer" }),
+      ).toEqual(Buffer.from(external));
+      expect(readFileSync(path.join(external, "canary.txt"), "utf8")).toBe(
+        "external referent must stay local\n",
       );
-      expect(missingBase.result.status).toBe(2);
-      expect(missingBase.result.stdout).not.toContain("transport fixture reached");
-    },
-  );
-
-  it("transports changed-gate bundles larger than the child-process buffer", () => {
-    const bundleBytes = 2 * 1024 * 1024;
-    const result = runDefaultWrapper(
-      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
-      {
-        env: {
-          OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES: String(bundleBytes),
-          OPENCLAW_FAKE_GIT_BUNDLE_BYTES: String(bundleBytes),
-        },
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
-        },
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("changed-gate bundle size mismatch");
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "does not follow a checkout-controlled changed-gate bundle symlink",
-    () => {
-      const fixtureDir = makeTempDir(tempDirs, "openclaw-changed-gate-symlink-");
-      const victimPath = path.join(fixtureDir, "victim");
-      const victimContents = "preserve-me\n";
-      const bundle = "synthetic-bundle";
-      writeFileSync(victimPath, victimContents, "utf8");
-
-      const result = runDefaultWrapper(
-        ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
-        {
-          env: {
-            OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE: bundle,
-            OPENCLAW_FAKE_GIT_BUNDLE: bundle,
-            OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET: victimPath,
-          },
-          gitResponses: {
-            [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-            [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-            [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
-          },
-        },
+      expect(readFileSync(path.join(external, "kept.txt"), "utf8")).toBe(
+        "shadowed tracked referent must stay local\n",
+      );
+      expect(git(imported.receiver, ["ls-tree", "HEAD", "source-dir"])).toMatch(/^120000 blob /u);
+      expect(
+        git(imported.receiver, ["diff", "--no-renames", "--name-only", base, "HEAD"]).split("\n"),
+      ).toEqual(
+        expect.arrayContaining([
+          "raw-crlf.txt",
+          "tracked.ignored",
+          "reincluded.ignored",
+          "staged.ignored",
+          "deleted.txt",
+          "mode.sh",
+          "alias",
+          "directory-alias",
+        ]),
       );
 
-      expect(result.status).toBe(0);
-      expect(readFileSync(victimPath, "utf8")).toBe(victimContents);
+      // Shared receiver failure paths need one full real-Git fixture; provider/history
+      // variants above retain independent successful source identity checks.
+      if (provider === "blacksmith-testbox" && !shallow) {
+        const corrupt = Buffer.from(candidate.bundle);
+        const lastIndex = corrupt.length - 1;
+        corrupt.writeUInt8(corrupt.readUInt8(lastIndex) ^ 1, lastIndex);
+        const wrongBase = git(imported.receiver, [
+          "commit-tree",
+          `${base}^{tree}`,
+          "-m",
+          "other base",
+        ]);
+        const wrongCarrier = git(imported.receiver, [
+          "commit-tree",
+          "HEAD^{tree}",
+          "-p",
+          wrongBase,
+          "-m",
+          "other prerequisite",
+        ]);
+        git(imported.receiver, ["update-ref", "HEAD", wrongCarrier]);
+        const emptyTree = git(imported.receiver, ["hash-object", "-w", "-t", "tree", "--stdin"]);
+        const emptyCarrier = git(imported.receiver, [
+          "commit-tree",
+          emptyTree,
+          "-p",
+          base,
+          "-m",
+          "empty source fixture",
+        ]);
+        git(imported.receiver, ["update-ref", "refs/openclaw/source-capsule", emptyCarrier]);
+        const emptyTreeBundle = path.join(root, "empty-tree.bundle");
+        git(imported.receiver, [
+          "bundle",
+          "create",
+          emptyTreeBundle,
+          "refs/openclaw/source-capsule",
+          `^${base}`,
+        ]);
+        const wrongBundle = path.join(root, "wrong-base.bundle");
+        git(imported.receiver, ["bundle", "create", wrongBundle, "HEAD", `^${wrongBase}`]);
+        for (const [name, bundle] of [
+          ["missing-bundle", undefined],
+          ["empty-bundle", Buffer.alloc(0)],
+          ["valid-empty-tree-bundle", readFileSync(emptyTreeBundle)],
+          ["stale-valid-bundle", empty.bundle],
+          ["truncated-bundle", candidate.bundle.subarray(0, candidate.bundle.length / 2)],
+          ["wrong-base-bundle", readFileSync(wrongBundle)],
+          ["corrupt-bundle", corrupt],
+        ] as const) {
+          const rejected = receive(name, candidate.remoteCommand, bundle, origin, {}, false);
+          expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
+          expect(rejected.result.stdout).not.toContain("transport fixture reached");
+          expect(existsSync(path.join(rejected.receiver, ".git"))).toBe(false);
+        }
+        for (const mode of ["shell", "script", "stdin"] as const) {
+          const script = runSender(mode);
+          const accepted = receive(`${mode}-candidate`, script.remoteCommand, script.bundle);
+          expect(accepted.result.status, failureDetail(accepted.result)).toBe(0);
+          expect(accepted.result.stdout).toBe("transport fixture reached\n");
+          expect(
+            sourceManifest(accepted.receiver, remotePaths).toSorted((left, right) =>
+              left[0].localeCompare(right[0]),
+            ),
+          ).toEqual(expectedManifest);
+          const rejected = receive(
+            `${mode}-missing-capsule`,
+            script.remoteCommand,
+            undefined,
+            origin,
+            {},
+            false,
+          );
+          expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
+          expect(rejected.result.stdout).not.toContain("transport fixture reached");
+          expect(existsSync(path.join(rejected.receiver, ".git"))).toBe(false);
+        }
+        for (const extraEnv of [
+          { OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA: "1" },
+          { OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH: "1" },
+          {
+            OPENCLAW_FAKE_CRABBOX_PRIVACY_PATHS: JSON.stringify([
+              "private-canary.txt",
+              "tracked.ignored",
+            ]),
+          },
+        ]) {
+          rmSync(capturedBundle, { force: true });
+          const rejected = runCommand(
+            process.execPath,
+            [fixtureWrapper, "run", "--provider", provider, "--", "node", sourceCommand],
+            { cwd: producer, env: { ...env, ...extraEnv }, encoding: "utf8", timeout: 10_000 },
+          );
+          expectRejectedBeforeUpload(rejected);
+        }
+        for (const mutation of ["mode", "bytes", "deletion"]) {
+          const preload = path.join(root, `mutate-${mutation}.cjs`);
+          writeFileSync(
+            preload,
+            `const fs = require("node:fs"); const chmod = fs.chmodSync; fs.chmodSync = (file, mode) => { chmod(file, mode); if (file === "mode.sh") { ${mutation === "mode" ? "chmod(file, mode & ~0o100)" : mutation === "deletion" ? 'fs.writeFileSync("committed-deleted.ignored", "stale restored source")' : 'fs.appendFileSync(file, "corrupted after materialization")'}; } };`,
+          );
+          const rejected = receive(
+            `receiver-${mutation}-mismatch`,
+            candidate.remoteCommand,
+            candidate.bundle,
+            origin,
+            { NODE_OPTIONS: `--require=${preload}` },
+          );
+          expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
+          expect(rejected.result.stderr).toContain(`source ${mutation} mismatch`);
+          expect(rejected.result.stdout).not.toContain("transport fixture reached");
+          expect(git(rejected.receiver, ["rev-parse", "HEAD"])).toBe(base);
+        }
+        const reserved = path.join(producer, ".openclaw-crabbox-changed-gate.bundle");
+        const victim = path.join(external, "canary.txt");
+        symlinkSync(victim, reserved);
+        rmSync(capturedBundle, { force: true });
+        const reservedRejection = runCommand(
+          process.execPath,
+          [fixtureWrapper, "run", "--provider", provider, "--", "node", sourceCommand],
+          { cwd: producer, env, encoding: "utf8", timeout: 10_000 },
+        );
+        expectRejectedBeforeUpload(reservedRejection);
+        expect(readFileSync(victim, "utf8")).toBe("external referent must stay local\n");
+        rmSync(reserved);
+        const emptyOrigin = path.join(root, "empty-origin");
+        mkdirSync(emptyOrigin);
+        git(emptyOrigin, ["init", "-q", "--bare"]);
+        const missingBase = receive(
+          "missing-base",
+          candidate.remoteCommand,
+          candidate.bundle,
+          emptyOrigin,
+        );
+        expect(missingBase.result.status, failureDetail(missingBase.result)).toBe(2);
+        expect(missingBase.result.stdout).not.toContain("transport fixture reached");
+        const blob = git(producer, ["rev-parse", "HEAD:mode.sh"]);
+        const invalidPathEntry = Buffer.concat([
+          Buffer.from(`100644 ${blob}\tinvalid-`),
+          Buffer.from([255]),
+          Buffer.from(".txt\0"),
+        ]);
+        const indexed = runCommand("git", ["update-index", "-z", "--index-info"], {
+          cwd: producer,
+          env,
+          encoding: "utf8",
+          input: invalidPathEntry,
+          timeout: 10_000,
+        });
+        expect(indexed.status, failureDetail(indexed)).toBe(0);
+        rmSync(capturedBundle, { force: true });
+        const invalidPathRejection = runCommand(
+          process.execPath,
+          [fixtureWrapper, "run", "--provider", provider, "--", "node", sourceCommand],
+          { cwd: producer, env, encoding: "utf8", timeout: 10_000 },
+        );
+        expectRejectedBeforeUpload(invalidPathRejection);
+      }
     },
   );
 
@@ -3918,43 +4330,11 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("overlaying the local worktree as changes from abc123");
     expect(output.cwd).toContain("openclaw-crabbox-sync-");
     expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain("node -e");
     expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toMatch(
-      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+      /; env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
-  });
-
-  it("bootstraps the exact dirty worktree tree for remote changed gates", () => {
-    const dirtyTree = "dirty-tree-123";
-    const { output, remoteCommand, result } = runSuccessfulDefaultWrapper(
-      [
-        "run",
-        "--provider",
-        "blacksmith-testbox",
-        "--blacksmith-ref",
-        "main",
-        "--",
-        "corepack",
-        "pnpm",
-        "check:changed",
-      ],
-      {
-        env: {
-          OPENCLAW_FAKE_GIT_EXPECT_COMMIT_TREE: dirtyTree,
-          OPENCLAW_FAKE_GIT_WORKTREE_TREE_SHA: dirtyTree,
-        },
-        gitResponses: {
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: " M scripts/crabbox-wrapper.mts\n" },
-          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
-        },
-      },
-    );
-
-    expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(result.stderr).toContain("overlaying the local worktree as changes from abc123");
-    expect(output.cwd).toContain("openclaw-crabbox-sync-");
-    expectChangedGateGitBootstrap(remoteCommand);
   });
 
   it("bootstraps Git metadata for env-prefixed sparse changed gates", () => {
@@ -3978,7 +4358,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toMatch(
-      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
+      /; env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
   });
 
@@ -3989,6 +4369,12 @@ describe("scripts/crabbox-wrapper", () => {
     );
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain(remoteChangedGateFetch);
+    expect(remoteCommand.indexOf("node --version >&2 || return 1")).toBeLessThan(
+      remoteCommand.indexOf("node -e"),
+    );
+    expect(remoteCommand.indexOf("node -e")).toBeLessThan(
+      remoteCommand.indexOf("corepack enable --install-directory"),
+    );
     expectMacosJsBootstrap(
       remoteCommand,
       `openclaw_crabbox_env ${remoteChangedGateEnvPrefix} pnpm check:changed`,
@@ -4002,14 +4388,14 @@ describe("scripts/crabbox-wrapper", () => {
       sparseChangedGateOptions,
     );
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
-    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain("node -e");
     expectMacosJsBootstrap(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves macOS JS and Git bootstraps for shell-wrapped sparse changed gates", () => {
     const shellScript = "bash -lc 'pnpm check:changed'";
     const { remoteCommand } = runSuccessfulMacosShell(shellScript, sparseChangedGateOptions);
-    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain("node -e");
     expectMacosJsBootstrap(remoteCommand, `${remoteChangedGateExport} ${shellScript}`);
   });
 
@@ -4051,11 +4437,11 @@ describe("scripts/crabbox-wrapper", () => {
   ])("$name", ({ expectFetch, shellScript }) => {
     const { remoteCommand } = runSparseShell(shellScript);
 
-    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain("node -e");
     if (expectFetch) {
       expect(remoteCommand).toContain(remoteChangedGateFetch);
     }
-    expect(remoteCommand).toContain(`&& ${remoteChangedGateExport} ${shellScript}`);
+    expect(remoteCommand).toContain(`; ${remoteChangedGateExport} ${shellScript}`);
   });
 
   it("preserves sparse changed-gate Git bootstrap for direct timeout-wrapped node commands", () => {
@@ -4077,9 +4463,9 @@ describe("scripts/crabbox-wrapper", () => {
       sparseChangedGateOptions,
     );
     expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain("node -e");
     expect(remoteCommand).toMatch(
-      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 timeout 1200s node scripts\/check-changed\.mjs --base origin\/main --head HEAD$/u,
+      /; env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 timeout 1200s node scripts\/check-changed\.mjs --base origin\/main --head HEAD$/u,
     );
   });
 
@@ -4089,9 +4475,9 @@ describe("scripts/crabbox-wrapper", () => {
       sparseChangedGateOptions,
     );
     expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain("node -e");
     expect(remoteCommand).toMatch(
-      /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 timeout 1200s bash -lc 'pnpm check:changed'$/u,
+      /; env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 timeout 1200s bash -lc 'pnpm check:changed'$/u,
     );
   });
 
@@ -4105,9 +4491,9 @@ describe("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain("node -e");
     expect(remoteCommand).toMatch(
-      /&& env -i OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 pnpm check:changed$/u,
+      /; env -i OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 pnpm check:changed$/u,
     );
   });
 
@@ -4121,9 +4507,9 @@ describe("scripts/crabbox-wrapper", () => {
     const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain("node -e");
     expect(remoteCommand).toMatch(
-      /&& \/usr\/bin\/env -i OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 pnpm check:changed$/u,
+      /; \/usr\/bin\/env -i OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 pnpm check:changed$/u,
     );
   });
 
@@ -4161,7 +4547,7 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(renderedCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
-    expect(renderedCommand).not.toContain("git init -q");
+    expect(renderedCommand).not.toContain("node -e");
   });
 
   it.each([
@@ -4180,7 +4566,7 @@ describe("scripts/crabbox-wrapper", () => {
   ])("$name", ({ shellScript }) => {
     const { remoteCommand } = runSparseShell(shellScript);
 
-    expect(remoteCommand).not.toContain("git init -q");
+    expect(remoteCommand).not.toContain("node -e");
   });
 
   it("detects JavaScript commands after hyphenated heredoc delimiters", () => {
@@ -4210,7 +4596,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain(remoteChangedGateFetch);
     expect(remoteCommand).toMatch(
-      /&& export OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1; env CI=1 pnpm check:changed$/u,
+      /; export OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1; env CI=1 pnpm check:changed$/u,
     );
   });
 
@@ -4403,7 +4789,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.cwd).toContain("openclaw-crabbox-sync-");
   });
 
-  it("keeps sparse dirty worktrees on the original checkout", () => {
+  it("freezes ordinary Blacksmith source even when the worktree is dirty", () => {
     const { output, result } = runSuccessfulDefaultWrapper(
       ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--", "echo ok"],
       {
@@ -4414,8 +4800,9 @@ describe("scripts/crabbox-wrapper", () => {
       },
     );
 
-    expect(result.stderr).not.toContain("syncing from temporary full checkout");
-    expect(output.cwd).toBe(repoRoot);
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(output.cwd).not.toBe(repoRoot);
+    expectChangedGateGitBootstrap(output.args.at(-1) ?? "");
   });
 
   it("keeps local artifact paths rooted at the original checkout", () => {
