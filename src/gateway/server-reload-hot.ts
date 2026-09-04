@@ -92,7 +92,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     formatTaskBlockers,
   });
 
-  const applyHotReload = async (
+  // Parked plugin routes belong to one reload generation: a cancelled, failed, or superseded
+  // reload must end them too, or a retired webhook path answers 503 with no restart coming.
+  let endPluginRouteDrain: (() => void) | undefined;
+  const runHotReload = async (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
     publication?: GatewayHotReloadPublication,
@@ -387,7 +390,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         scheduleRecoveryRestart(`plugin channel rollback after ${reason}`, error);
         throw error;
       };
-      const stopChannelsBeforePluginReplace = async (channels: ReadonlySet<ChannelKind>) => {
+      const stopChannelsBeforePluginReplace = async (
+        channels: ReadonlySet<ChannelKind>,
+        endRouteDrain?: () => void,
+      ) => {
+        endPluginRouteDrain = endRouteDrain;
         for (const channel of channels) {
           channelsToRestart.add(channel);
         }
@@ -615,6 +622,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       params.logReload.info(`config change applied (dynamic reads: ${plan.noopPaths.join(", ")})`);
     }
     return recoveryRestartScheduled ? "applied-restart-required" : "applied";
+  };
+
+  const applyHotReload = async (...args: Parameters<typeof runHotReload>) => {
+    try {
+      return await runHotReload(...args);
+    } finally {
+      endPluginRouteDrain?.();
+      endPluginRouteDrain = undefined;
+    }
   };
 
   return {

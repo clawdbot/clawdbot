@@ -14,7 +14,7 @@ type PluginHttpRouteEntry = NonNullable<PluginRegistry["httpRoutes"]>[number];
 
 /** Returns true when a registered route matches any canonical request candidate. */
 function doesPluginRouteMatchPath(
-  route: PluginHttpRouteEntry,
+  route: Pick<PluginHttpRouteEntry, "path" | "match">,
   context: PluginRoutePathContext,
 ): boolean {
   const routeCanonicalPath = canonicalizePathVariant(route.path);
@@ -22,6 +22,14 @@ function doesPluginRouteMatchPath(
     return context.candidates.some((candidate) => prefixMatchPath(candidate, routeCanonicalPath));
   }
   return context.candidates.some((candidate) => candidate === routeCanonicalPath);
+}
+
+/** Returns true when a retiring generation's route snapshot still claims the request path. */
+export function matchesDrainingPluginHttpRoutes(
+  routes: readonly Pick<PluginHttpRouteEntry, "path" | "match">[],
+  context: PluginRoutePathContext,
+): boolean {
+  return routes.some((route) => doesPluginRouteMatchPath(route, context));
 }
 
 /** Finds matching plugin routes with exact matches ordered before prefix matches. */

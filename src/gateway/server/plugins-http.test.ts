@@ -621,4 +621,36 @@ describe("plugin HTTP route auth checks", () => {
     expect(isPluginAuthenticatedRoutePath(registry, "/plugin/secure/report")).toBe(false);
     expect(isPluginAuthenticatedRoutePath(registry, decodeOverflowPublicPath)).toBe(false);
   });
+  it("answers a draining plugin route with 503 Retry-After until the successor registers", async () => {
+    const served = vi.fn((_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      return true;
+    });
+    const registry = createGatewayTestRegistry({
+      drainingHttpRoutes: [{ path: "/hook", match: "exact" }],
+    });
+    const handler = createGatewayPluginRequestHandler({ registry, log: createPluginLog() });
+
+    const parked = makeMockHttpResponse();
+    expect(await handler({ url: "/hook" } as IncomingMessage, parked.res)).toBe(true);
+    expect(parked.res.statusCode).toBe(503);
+    expect(parked.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+    expect(served).not.toHaveBeenCalled();
+
+    // Only the retiring generation's own routes are parked; anything else still dead-ends.
+    const unknown = makeMockHttpResponse();
+    expect(await handler({ url: "/other" } as IncomingMessage, unknown.res)).toBe(false);
+
+    registry.httpRoutes.push(createRoute({ path: "/hook", handler: served }));
+    const reclaimed = makeMockHttpResponse();
+    expect(await handler({ url: "/hook" } as IncomingMessage, reclaimed.res)).toBe(true);
+    expect(reclaimed.res.statusCode).toBe(200);
+    expect(served).toHaveBeenCalledTimes(1);
+
+    // The reload owner ends the drain; a path nothing reclaimed dead-ends again.
+    registry.httpRoutes.length = 0;
+    registry.drainingHttpRoutes = undefined;
+    const released = makeMockHttpResponse();
+    expect(await handler({ url: "/hook" } as IncomingMessage, released.res)).toBe(false);
+  });
 });

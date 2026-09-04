@@ -148,7 +148,12 @@ export type GatewayReloadHandlerParams = {
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
-    beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+    /** `endRouteDrain` releases the parked routes of the retiring generation; a caller that
+     * parks none omits it. The reload owner calls it when its generation finishes. */
+    beforeReplace: (
+      channels: ReadonlySet<ChannelKind>,
+      endRouteDrain?: () => void,
+    ) => Promise<void>;
     commitRuntime: (onCommit?: () => void) => Promise<void>;
     onReplacementTeardownFailure: (error: unknown) => void;
     env: NodeJS.ProcessEnv;

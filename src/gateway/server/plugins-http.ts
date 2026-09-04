@@ -9,6 +9,7 @@ import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.j
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { respondPlainText } from "../control-ui-http-utils.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
@@ -23,7 +24,10 @@ import {
   type PluginRoutePathContext,
 } from "./plugins-http/path-context.js";
 import { matchedPluginRoutesRequireGatewayAuth } from "./plugins-http/route-auth.js";
-import { findMatchingPluginHttpRoutes } from "./plugins-http/route-match.js";
+import {
+  findMatchingPluginHttpRoutes,
+  matchesDrainingPluginHttpRoutes,
+} from "./plugins-http/route-match.js";
 
 export {
   isProtectedPluginRoutePathFromContext,
@@ -185,15 +189,18 @@ export function createGatewayPluginRequestHandler(params: {
   return async (req, res, providedPathContext, dispatchContext) => {
     const registry = params.getRouteRegistry?.() ?? params.registry;
     const gatewayRequestContext = params.getGatewayRequestContext?.();
-    const routes = registry.httpRoutes ?? [];
-    if (routes.length === 0) {
-      return false;
-    }
-
     const pathContext = resolvePluginRoutePathContextForRequest(req, providedPathContext);
     const matchedRoutes = findMatchingPluginHttpRoutes(registry, pathContext);
     if (matchedRoutes.length === 0) {
-      return false;
+      // Senders retry 5xx and treat 404 as final, so a path the draining generation still owns
+      // must answer retriably until its successor registers or the reload owner ends the drain.
+      if (!matchesDrainingPluginHttpRoutes(registry.drainingHttpRoutes ?? [], pathContext)) {
+        return false;
+      }
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Retry-After", "1");
+      respondPlainText(res, 503, "Plugin routes are reloading");
+      return true;
     }
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
     if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied !== true) {

@@ -7137,6 +7137,75 @@ describe("gateway plugin hot reload handlers", () => {
     );
     expect(setState).toHaveBeenCalledTimes(1);
   });
+
+  const createRouteDrainReload = (endRouteDrain: () => void, events: string[], fail?: Error) =>
+    vi.fn(
+      async (params: {
+        beforeReplace: (
+          channels: ReadonlySet<ChannelKind>,
+          endRouteDrain?: () => void,
+        ) => Promise<void>;
+        commitRuntime: () => Promise<void>;
+      }): Promise<GatewayPluginReloadResult> => {
+        await params.beforeReplace(new Set(["discord"]), endRouteDrain);
+        if (fail) {
+          throw fail;
+        }
+        await params.commitRuntime();
+        events.push("registry:replace");
+        return makePluginReloadResult({ activeChannels: new Set(["discord"]) });
+      },
+    );
+
+  const createRouteDrainHandlers = (
+    events: string[],
+    reloadPlugins: ReturnType<typeof createRouteDrainReload>,
+  ) =>
+    createReloadHandlersForTest(
+      undefined,
+      {
+        stop: vi.fn(async (channel) => {
+          events.push(`stop:${channel}`);
+        }),
+        start: vi.fn(async (channel) => {
+          events.push(`start:${channel}`);
+          return new Map();
+        }),
+      },
+      reloadPlugins,
+    );
+
+  it("ends the parked route drain only after the reload restarts its channels", async () => {
+    const events: string[] = [];
+    const endRouteDrain = vi.fn(() => events.push("drain:end"));
+    const handlers = createRouteDrainHandlers(
+      events,
+      createRouteDrainReload(endRouteDrain, events),
+    );
+
+    await expect(
+      handlers.applyHotReload(createPluginReloadPlan(), { plugins: { enabled: true } }),
+    ).resolves.toBe("applied");
+
+    expect(events).toEqual(["stop:discord", "registry:replace", "start:discord", "drain:end"]);
+  });
+
+  it("ends the parked route drain when the reload fails before restarting channels", async () => {
+    const events: string[] = [];
+    const failure = new Error("plugin runtime publication rejected");
+    const endRouteDrain = vi.fn(() => events.push("drain:end"));
+    const handlers = createRouteDrainHandlers(
+      events,
+      createRouteDrainReload(endRouteDrain, events, failure),
+    );
+
+    await expect(
+      handlers.applyHotReload(createPluginReloadPlan(), { plugins: { enabled: true } }),
+    ).rejects.toBe(failure);
+
+    expect(endRouteDrain).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toBe("drain:end");
+  });
 });
 
 describe("deferred channel reload abort generation", () => {

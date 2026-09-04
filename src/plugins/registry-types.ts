@@ -573,6 +573,11 @@ export type PluginRegistry = {
   boardWidgetContentKinds: Map<string, PluginBoardWidgetContentKindRegistration>;
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
+  /**
+   * Routes of a plugin generation whose channels are draining for a reload. They answer
+   * retriably until the successor re-registers; the reload owner clears them when it ends.
+   */
+  drainingHttpRoutes?: readonly Pick<PluginHttpRouteRegistration, "path" | "match">[];
   hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
   widgetPresenters: PluginWidgetPresenterRegistration[];
   mcpServerConnectionResolvers: PluginMcpServerConnectionResolverRegistration[];

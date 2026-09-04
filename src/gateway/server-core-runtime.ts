@@ -433,6 +433,9 @@ export async function startGatewayCoreRuntime(input: {
     const retirePreviousBindings = retireAttachedPluginRuntimeBindings;
     retireAttachedPluginRuntimeBindings = loaded.retireGatewayRuntimeBindings ?? (() => {});
     retirePreviousBindings();
+    // Parked routes outlive the registry they were retired from: the successor only re-registers
+    // them once this reload restarts its channels, well after the swap.
+    loaded.pluginRegistry.drainingHttpRoutes = pluginRuntime.registry.drainingHttpRoutes;
     pluginRuntime.registry = loaded.pluginRegistry;
     pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
     for (const key of attachedPluginGatewayHandlerKeys) {
@@ -525,10 +528,23 @@ export async function startGatewayCoreRuntime(input: {
     const releaseChannelStarts = channelManager.pauseChannelStarts();
     let restoreChannelStarts = true;
     let recoverFromReplacementTeardown: ((error: unknown) => void) | undefined;
+    // Draining unregisters this generation's routes; the successor re-registers them only when the
+    // reload restarts its channels. Park the retiring paths so an inbound webhook in that window is
+    // answered retriably instead of dead-ending as a 404 its sender treats as final and drops.
+    const drainingHttpRoutes = pluginRuntime.registry.httpRoutes.map(({ path, match }) => ({
+      path,
+      match,
+    }));
+    pluginRuntime.registry.drainingHttpRoutes = drainingHttpRoutes;
+    const endRouteDrain = () => {
+      if (pluginRuntime.registry.drainingHttpRoutes === drainingHttpRoutes) {
+        pluginRuntime.registry.drainingHttpRoutes = undefined;
+      }
+    };
     try {
       // Every account retains its plugin runtime, including startup work before its first route.
       // Drain the old generation together; resource-by-resource retention misses late registrations.
-      await params.beforeReplace(beforeChannelIds);
+      await params.beforeReplace(beforeChannelIds, endRouteDrain);
       // A rejected reservation restores startup authority; a committed replacement never does.
       if (params.isAborted?.()) {
         replacement.reject();
