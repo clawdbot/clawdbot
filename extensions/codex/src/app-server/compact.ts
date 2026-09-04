@@ -459,9 +459,9 @@ async function compactCodexNativeThread(
     config: params.config,
   });
   // Already-readable bindings keep compaction's own cancellation-result handling.
-  const currentBinding = options.bindingStore.read(bindingIdentity);
-  const { binding: initialBinding, assertCurrent } = currentBinding
-    ? { binding: currentBinding, assertCurrent: () => {} }
+  const readableBinding = options.bindingStore.read(bindingIdentity);
+  const { binding: initialBinding, assertCurrent } = readableBinding
+    ? { binding: readableBinding, assertCurrent: () => {} }
     : await resolveCodexSessionBinding({
         bindingStore: options.bindingStore,
         identity: bindingIdentity,

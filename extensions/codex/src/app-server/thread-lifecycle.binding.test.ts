@@ -640,7 +640,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const binding = {
       threadId: native.thread.id,
       cwd: workspaceDir,
-      preserveNativeModel: true,
+      preserveNativeModel: true as const,
       model: native.model,
       modelProvider: native.modelProvider,
       webSearchThreadConfigFingerprint: DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,

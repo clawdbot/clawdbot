@@ -375,7 +375,7 @@ export async function finalizeCodexAttempt(
             settledMessages: result.messagesSnapshot,
             turnId: activeTurnId,
             signal: params.abortSignal,
-            assertActive: () => params.hostCapabilities.assertActive(),
+            assertActive: connection.assertCurrent,
           })
         : undefined) ?? Object.freeze({ source: "unavailable" as const }))
     : undefined;

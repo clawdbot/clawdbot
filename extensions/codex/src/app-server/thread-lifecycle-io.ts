@@ -479,6 +479,7 @@ export async function startFreshCodexThread(
   const assertCurrent = () => {
     throwIfAborted();
     params.params.hostCapabilities.assertActive();
+    params.assertCurrent?.();
   };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {

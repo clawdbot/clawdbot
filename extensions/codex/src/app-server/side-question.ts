@@ -220,7 +220,6 @@ export async function runCodexAppServerSideQuestion(
     assertCurrent: hostCapabilities.assertActive,
     signal: params.opts?.abortSignal,
   });
-  params = { ...params, hostCapabilities: { ...hostCapabilities, assertActive: assertCurrent } };
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
@@ -723,6 +722,7 @@ export async function runCodexAppServerSideQuestion(
           loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           signal: runAbortController.signal,
           hostCapabilities: sideRunParams.hostCapabilities,
+          assertCurrent,
           onPreToolUseFailure: (failure) => {
             if (nativePreToolUseFailureFallbackActive) {
               emitNativePreToolUseFailure(failure);
@@ -758,7 +758,7 @@ export async function runCodexAppServerSideQuestion(
       run: async (forkClient, requestOptions) =>
         options.bindingStore.withLease(bindingIdentity, async () => {
           const assertCurrentBinding = () => {
-            params.hostCapabilities.assertActive();
+            assertCurrent();
             runAbortController.signal.throwIfAborted();
             if (!isDeepStrictEqual(options.bindingStore.read(bindingIdentity), binding)) {
               throw new Error("Codex side-question binding changed before fork");
@@ -868,7 +868,7 @@ export async function runCodexAppServerSideQuestion(
               ...scoped,
               signal: runAbortController.signal,
               assertCurrent: () => {
-                params.hostCapabilities.assertActive();
+                assertCurrent();
                 runAbortController.signal.throwIfAborted();
                 scoped.assertCurrent();
               },
@@ -1069,6 +1069,7 @@ function registerCodexSideNativeHookRelay(params: {
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParamsV2["hostCapabilities"];
+  assertCurrent: () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void;
 }): NativeHookRelayRegistrationHandle | undefined {
   if (params.options.enabled === false) {
@@ -1093,7 +1094,7 @@ function registerCodexSideNativeHookRelay(params: {
     }),
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
-    assertActive: params.hostCapabilities.assertActive,
+    assertActive: params.assertCurrent,
     onPreToolUseFailure: params.onPreToolUseFailure,
     command: {
       timeoutMs: params.options.gatewayTimeoutMs,

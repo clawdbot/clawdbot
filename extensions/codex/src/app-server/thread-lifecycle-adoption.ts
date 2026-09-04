@@ -44,12 +44,13 @@ async function assertAdoptedCodexThreadResumeAllowed(
   params: CodexStartOrResumeThreadParams,
   threadId: string,
   context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
+  assertCurrent: () => void,
 ): Promise<CodexThread> {
   const { thread } = await context.lifecycleTiming.measure("thread-read-adoption-status", () =>
     params.client.request(
       "thread/read",
       { threadId, includeTurns: false },
-      { signal: params.signal, assertCurrent: params.params.hostCapabilities.assertActive },
+      { signal: params.signal, assertCurrent },
     ),
   );
   context.throwIfAborted();
@@ -84,7 +85,10 @@ export async function withCodexThreadLifecycleBinding(
     identity,
     config: params.params.config,
     storePath: params.params.sessionTarget?.storePath,
-    assertCurrent: params.params.hostCapabilities.assertActive,
+    assertCurrent: () => {
+      params.params.hostCapabilities.assertActive();
+      params.assertCurrent?.();
+    },
     signal: params.signal,
     assertBinding: params.params.expectedSessionRuntimeOwnership
       ? (binding) =>
@@ -206,6 +210,7 @@ async function preparePendingCodexThreadResume(
   const assertClient = captureCodexAppServerClientLifetime(params.client, "native-process");
   const assertCurrent = () => {
     params.params.hostCapabilities.assertActive();
+    params.assertCurrent?.();
     params.signal?.throwIfAborted();
     assertClient();
     if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
@@ -267,6 +272,7 @@ export async function prepareCodexThreadResume(
   );
   const assertCurrent = () => {
     params.params.hostCapabilities.assertActive();
+    params.assertCurrent?.();
     params.signal?.throwIfAborted();
     assertClient();
     if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
@@ -276,7 +282,12 @@ export async function prepareCodexThreadResume(
   assertCurrent();
   let thread: CodexThread;
   try {
-    thread = await assertAdoptedCodexThreadResumeAllowed(params, binding.threadId, context);
+    thread = await assertAdoptedCodexThreadResumeAllowed(
+      params,
+      binding.threadId,
+      context,
+      assertCurrent,
+    );
   } finally {
     // A failed read cannot authorize recovery after its physical or host owner closes.
     assertCurrent();

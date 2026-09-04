@@ -59,11 +59,12 @@ describe("prepareCodexAttemptConnection", () => {
 
     const connection = await prepareCodexAttemptConnection({ params, options: { bindingStore } });
     expect(bindingStore.read(current)).toEqual(binding);
-    expect(() => connection.params.hostCapabilities.assertActive()).not.toThrow();
+    expect(connection.params.hostCapabilities).toBe(originalHostCapabilities);
+    expect(() => connection.assertCurrent()).not.toThrow();
     await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
 
     expect(() => originalHostCapabilities.assertActive()).not.toThrow();
-    expect(() => connection.params.hostCapabilities.assertActive()).toThrow(
+    expect(() => connection.assertCurrent()).toThrow(
       "Codex session generation is no longer current",
     );
     expect(bindingStore.read(current)).toEqual(binding);

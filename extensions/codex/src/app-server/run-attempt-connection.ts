@@ -207,20 +207,20 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  const hostCapabilities = params.hostCapabilities;
-  let { binding: startupBinding, assertCurrent } = await resolveCodexSessionBinding({
+  const { binding: admittedBinding, assertCurrent } = await resolveCodexSessionBinding({
     reclaimStale: true,
     bindingStore,
     identity: bindingIdentity,
     config: params.config,
     storePath: params.sessionTarget?.storePath,
-    assertCurrent: hostCapabilities.assertActive,
+    assertCurrent: params.hostCapabilities.assertActive,
     signal: params.abortSignal,
     assertBinding: params.expectedSessionRuntimeOwnership
       ? (binding) =>
           assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
       : undefined,
   });
+  let startupBinding = admittedBinding;
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
   if (usesSupervisionConnection) {
@@ -481,8 +481,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         selection,
       ).appServer;
     assertCurrent();
+    // Host capabilities are identity-keyed; carry generation proof separately.
     return {
-      params: { ...params, hostCapabilities: { ...hostCapabilities, assertActive: assertCurrent } },
+      params,
+      assertCurrent,
       options,
       attemptStartedAt,
       profilerEnabled,

@@ -92,6 +92,7 @@ export async function materializePendingSupervisionBranch(
   params: PendingSupervisionMaterializationParams,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   let pending = params.binding.pendingSupervisionBranch;
+  const requestOptions = { signal: params.signal, assertCurrent: params.throwIfAborted };
   const connectionFingerprint = buildCodexAppServerConnectionFingerprint(
     params.appServer,
     params.attempt.agentDir,
@@ -106,7 +107,7 @@ export async function materializePendingSupervisionBranch(
     params.client.request(
       "thread/read",
       { threadId: pending.sourceThreadId, includeTurns: true },
-      { signal: params.signal, assertCurrent: params.throwIfAborted },
+      requestOptions,
     ),
   );
   params.throwIfAborted();
@@ -175,10 +176,7 @@ export async function materializePendingSupervisionBranch(
       "supervision-model-probe-fork",
       async () => {
         try {
-          return await params.client.request("thread/fork", probeParams, {
-            signal: params.signal,
-            assertCurrent: params.throwIfAborted,
-          });
+          return await params.client.request("thread/fork", probeParams, requestOptions);
         } catch (error) {
           if (!(error instanceof CodexAppServerRpcError)) {
             throw new CodexAppServerUnsafeSubscriptionError(
@@ -259,10 +257,7 @@ export async function materializePendingSupervisionBranch(
       "supervision-thread-start",
       async () => {
         try {
-          return await params.client.request("thread/start", startParams, {
-            signal: params.signal,
-            assertCurrent: params.throwIfAborted,
-          });
+          return await params.client.request("thread/start", startParams, requestOptions);
         } catch (error) {
           if (error instanceof CodexAppServerRpcError) {
             throw new CodexThreadStartRequestError(error);
@@ -332,7 +327,7 @@ export async function materializePendingSupervisionBranch(
         params.client.request(
           "thread/inject_items",
           { threadId: finalThreadId, items: history.responseItems },
-          { signal: params.signal, assertCurrent: params.throwIfAborted },
+          requestOptions,
         ),
       );
       params.throwIfAborted();

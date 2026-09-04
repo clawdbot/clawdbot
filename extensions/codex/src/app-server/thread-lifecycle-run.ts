@@ -53,20 +53,14 @@ import { resolveCodexAppServerThreadModelSelection } from "./thread-model-select
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
 export async function startOrResumeThread(
-  params: CodexStartOrResumeThreadParams,
+  input: CodexStartOrResumeThreadParams,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
-  const incognito = isIncognitoSessionKey(params.params.sessionKey);
-  const clientId = resolveCodexAppServerClientInstanceId(params.client);
-  return await withCodexThreadLifecycleBinding(params, async (bindingIdentity, current, assert) => {
-    params = {
-      ...params,
-      params: {
-        ...params.params,
-        hostCapabilities: { ...params.params.hostCapabilities, assertActive: assert },
-      },
-    };
+  const incognito = isIncognitoSessionKey(input.params.sessionKey);
+  const clientId = resolveCodexAppServerClientInstanceId(input.client);
+  return await withCodexThreadLifecycleBinding(input, async (bindingIdentity, saved, assert) => {
+    const params = { ...input, assertCurrent: assert };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
-    let binding = current;
+    let binding = saved;
     if (hasCodexNativeToolCatalog(binding)) {
       // A resumed native catalog is immutable data. Run eligibility only changes
       // the bridge's available executors, never this thread's inherited history.
@@ -77,7 +71,7 @@ export async function startOrResumeThread(
         agentDir: resolveCodexThreadAgentDir(params),
         assertCurrent: () => {
           params.signal?.throwIfAborted();
-          params.params.hostCapabilities.assertActive();
+          assert();
         },
       });
       if (!isDeepStrictEqual(params.dynamicTools, nativeCatalog)) {
