@@ -19,6 +19,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import * as pidAlive from "../shared/pid-alive.js";
 import { VERSION } from "../version.js";
 import {
   assertAgentDeletionPathFence,
@@ -3325,6 +3326,86 @@ describe("openclaw agent database", () => {
           .get(leaseId),
       ).toBeUndefined();
     });
+  });
+
+  it.each([
+    {
+      case: "reclaims a legacy null-identity lease when the live Windows process started after it was opened",
+      platform: "win32" as const,
+      currentStartMs: 2_000_000_000_000,
+      openedAtMs: 1_999_999_000_000,
+      stale: true,
+    },
+    {
+      case: "retains a legacy null-identity lease when the live Windows process started at the same instant",
+      platform: "win32" as const,
+      currentStartMs: 2_000_000_000_000,
+      openedAtMs: 2_000_000_000_000,
+      stale: false,
+    },
+    {
+      case: "retains a legacy null-identity lease when the live Windows process started before it was opened",
+      platform: "win32" as const,
+      currentStartMs: 1_999_999_000_000,
+      openedAtMs: 2_000_000_000_000,
+      stale: false,
+    },
+    {
+      case: "retains a legacy null-identity lease when the Windows process start time is unreadable",
+      platform: "win32" as const,
+      currentStartMs: null,
+      openedAtMs: 1_999_999_000_000,
+      stale: false,
+    },
+    {
+      case: "retains a legacy null-identity lease on non-Windows platforms regardless of start timing",
+      platform: "linux" as const,
+      currentStartMs: 2_000_000_000_000,
+      openedAtMs: 1_999_999_000_000,
+      stale: false,
+    },
+  ])("legacy lease staleness: $case", ({ platform, currentStartMs, openedAtMs, stale }) => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const leaseId = claimOpenClawAgentDatabaseLease({
+      agentId: "worker-1",
+      path: path.join(stateDir, "worker-1.sqlite"),
+      env,
+    });
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            "UPDATE agent_database_leases SET owner_start_time = NULL, opened_at = ? WHERE lease_id = ?",
+          )
+          .run(openedAtMs, leaseId),
+      { env },
+    );
+
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const deadProbe = vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
+    const startProbe = vi
+      .spyOn(pidAlive, "getFileLockProcessStartTime")
+      .mockReturnValue(currentStartMs);
+    try {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      if (stale) {
+        expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
+        expect(
+          openOpenClawStateDatabase({ env })
+            .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
+            .get(leaseId),
+        ).toBeUndefined();
+      } else {
+        expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).toThrow(
+          "database is still open",
+        );
+      }
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+      deadProbe.mockRestore();
+      startProbe.mockRestore();
+    }
   });
 
   it("serializes concurrent ownership claims for one unowned database", async () => {
