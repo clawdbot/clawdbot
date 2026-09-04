@@ -231,7 +231,7 @@ export function resolveMcpTransportConfig(
   if (getStringField(rawServer, ["command"]) && getStringField(rawServer, ["url"])) {
     if (logWarnings) {
       logWarn(
-        `bundle-mcp: skipped server "${serverName}" because "command" and "url" cannot both be non-empty; remove "url" for stdio or remove "command" for an HTTP transport.`,
+        `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because "command" and "url" cannot both be non-empty; remove "url" for stdio or remove "command" for an HTTP transport.`,
       );
     }
     return null;

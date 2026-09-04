@@ -46,6 +46,17 @@ describe("resolveMcpTransportConfig", () => {
     );
   });
 
+  it("sanitizes config-controlled names in mixed-transport warnings", () => {
+    resolveMcpTransportConfig("probe\nWARN forged\u001b[31m", {
+      command: "node",
+      url: "https://mcp.example.com/http",
+    });
+
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: skipped server "probeWARN forged" because "command" and "url" cannot both be non-empty; remove "url" for stdio or remove "command" for an HTTP transport.',
+    );
+  });
+
   it("resolves canonical timeouts and parallel capability", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
