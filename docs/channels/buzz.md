@@ -409,10 +409,9 @@ does not answer, the turn runs without the quote rather than stalling.
 
 Quotes follow `contextVisibility` (see [Groups](/channels/groups)). Under
 `allowlist`, a quoted message is shown only when its author passes the room's
-`groupAllowFrom`; `allowlist_quote` shows quotes regardless. The bot's own
-messages and the sender's own earlier messages are always shown. Set it on
-`channels.buzz.contextVisibility`, per account, or via
-`channels.defaults.contextVisibility`.
+`groupAllowFrom` - the bot's own earlier messages included; `allowlist_quote`
+shows quotes regardless. Set it on `channels.buzz.contextVisibility`, per
+account, or via `channels.defaults.contextVisibility`.
 
 Reply lookups share one small per-relay allowance with every other transient
 Buzz query (profiles, room metadata, membership, history paging). When that

@@ -144,7 +144,24 @@ describe("handleBuzzInbound", () => {
       };
     }
 
-    it("keeps the bot's own message as quote context under allowlist visibility", async () => {
+    it("keeps an allowlisted author's message as quote context under allowlist visibility", async () => {
+      const runtime = createPluginRuntimeMock();
+      setBuzzRuntime(runtime);
+      const params = { ...allowlistRoomParams(), cfg: visibilityConfig("allowlist") };
+      vi.mocked(params.bus.fetchMessageById).mockResolvedValue(
+        createMessage({
+          id: PARENT_EVENT_ID,
+          senderPubkey: SENDER_PUBLIC_KEY,
+          text: "Deploy done.",
+        }),
+      );
+
+      await handleBuzzInbound({ ...params, message: replyMessage() });
+
+      expect(firstDispatch(runtime).ctxPayload.ReplyToBody).toBe("Deploy done.");
+    });
+
+    it("withholds the bot's own message under allowlist visibility when it is not allowlisted", async () => {
       const runtime = createPluginRuntimeMock();
       setBuzzRuntime(runtime);
       const params = { ...allowlistRoomParams(), cfg: visibilityConfig("allowlist") };
@@ -154,7 +171,9 @@ describe("handleBuzzInbound", () => {
 
       await handleBuzzInbound({ ...params, message: replyMessage() });
 
-      expect(firstDispatch(runtime).ctxPayload.ReplyToBody).toBe("Deploy done.");
+      // The shared policy judges the quoted author alone; the bot gets no pass.
+      expect(runtime.channel.inbound.dispatch).toHaveBeenCalled();
+      expect(firstDispatch(runtime).ctxPayload.ReplyToBody).toBeUndefined();
     });
 
     it("withholds another member's message under allowlist visibility", async () => {

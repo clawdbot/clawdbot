@@ -59,6 +59,82 @@ describe("Buzz relay query lease", () => {
     }
   });
 
+  it("hands the freed slot to the waiter before anyone else can take it", async () => {
+    const relay = createRelay();
+    const held = await saturate(relay);
+    const waiting = acquireBuzzQueryLease(relay);
+    await Promise.resolve();
+
+    // Release and, in the same tick, race a no-wait caller for the vacancy. The
+    // waiter has not resumed yet; the slot must already be its.
+    held[0]?.();
+    await expect(acquireBuzzQueryLease(relay, { wait: false })).resolves.toBeNull();
+
+    const release = await waiting;
+    expect(release).not.toBeNull();
+    await expect(acquireBuzzQueryLease(relay, { wait: false })).resolves.toBeNull();
+
+    release?.();
+    for (const entry of held.slice(1)) {
+      entry?.();
+    }
+  });
+
+  it("drops an aborted waiter from the queue and rejects with the reason", async () => {
+    const relay = createRelay();
+    const held = await saturate(relay);
+    const controller = new AbortController();
+    const waiting = acquireBuzzQueryLease(relay, { signal: controller.signal });
+    await Promise.resolve();
+
+    controller.abort(new Error("gateway shutting down"));
+    await expect(waiting).rejects.toThrow("gateway shutting down");
+
+    // The abandoned waiter must not be handed the next freed slot.
+    held[0]?.();
+    const reclaimed = await acquireBuzzQueryLease(relay, { wait: false });
+    expect(reclaimed).not.toBeNull();
+
+    reclaimed?.();
+    for (const entry of held.slice(1)) {
+      entry?.();
+    }
+  });
+
+  it("returns a slot handed to a waiter that was cancelled in the same turn", async () => {
+    const relay = createRelay();
+    const held = await saturate(relay);
+    const controller = new AbortController();
+    const waiting = acquireBuzzQueryLease(relay, { signal: controller.signal });
+    await Promise.resolve();
+
+    // Hand off and abort before the waiter resumes: it must give the slot back.
+    held[0]?.();
+    controller.abort(new Error("gateway shutting down"));
+    await expect(waiting).rejects.toThrow("gateway shutting down");
+    const reclaimed = await acquireBuzzQueryLease(relay, { wait: false });
+    expect(reclaimed).not.toBeNull();
+
+    reclaimed?.();
+    for (const entry of held.slice(1)) {
+      entry?.();
+    }
+  });
+
+  it("refuses an already-aborted caller without touching the allowance", async () => {
+    const relay = createRelay();
+    const controller = new AbortController();
+    controller.abort(new Error("gateway shutting down"));
+
+    await expect(acquireBuzzQueryLease(relay, { signal: controller.signal })).rejects.toThrow(
+      "gateway shutting down",
+    );
+    const held = await saturate(relay);
+    for (const entry of held) {
+      entry?.();
+    }
+  });
+
   it("counts a double release only once", async () => {
     const relay = createRelay();
     const release = await acquireBuzzQueryLease(relay);

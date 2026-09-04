@@ -87,8 +87,6 @@ async function resolveBuzzReplyQuote(params: {
     sender: bus.directory.resolveSenderName(parent.senderPubkey),
     senderAllowed: resolveBuzzQuoteSenderAllowed({
       quotedPubkey: parent.senderPubkey,
-      botPublicKey: bus.publicKey,
-      senderPubkey: message.senderPubkey,
       policy: params.policy,
     }),
   };
@@ -105,18 +103,14 @@ function isSameBuzzRoom(rawChannelId: string, channelId: string): boolean {
 
 /**
  * Whether the quoted author passes the room allowlist, for `contextVisibility`.
- * The bot's own words and the sender's own earlier words are never a leak
- * vector: the bot said it, or the sender was just admitted to say it.
+ * Judged on the quoted author alone, as the shared policy defines it; neither
+ * the bot nor the current sender gets a pass, so `allowlist` means the same
+ * thing here as on every other channel.
  */
 function resolveBuzzQuoteSenderAllowed(params: {
   quotedPubkey: string;
-  botPublicKey: string;
-  senderPubkey: string;
   policy: BuzzRoomPolicy;
 }): boolean {
-  if (params.quotedPubkey === params.botPublicKey || params.quotedPubkey === params.senderPubkey) {
-    return true;
-  }
   return resolveInboundSupplementalSenderAllowed({
     isGroup: true,
     groupPolicy: params.policy.groupPolicy,

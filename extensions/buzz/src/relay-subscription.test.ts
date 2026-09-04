@@ -173,6 +173,32 @@ describe("queryBuzzRelaySnapshot query capacity", () => {
     }
   });
 
+  it("rejects a cancelled query that was still waiting for a slot", async () => {
+    const { relay, prepareSubscription } = createRelay(async () => {});
+    const held = [];
+    for (let index = 0; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES; index += 1) {
+      held.push(await acquireBuzzQueryLease(relay));
+    }
+    const controller = new AbortController();
+
+    const pending = queryBuzzRelaySnapshot(
+      snapshotParams(relay, { signal: controller.signal, abortMessage: "query aborted" }),
+    );
+    await Promise.resolve();
+    controller.abort(new Error("gateway shutting down"));
+
+    // Shutdown while queued surfaces the abort reason, as the snapshot itself
+    // does, and must never reach relay I/O once a slot frees up.
+    await expect(pending).rejects.toThrow("gateway shutting down");
+    held[0]?.();
+    await Promise.resolve();
+    expect(prepareSubscription).not.toHaveBeenCalled();
+
+    for (const release of held.slice(1)) {
+      release?.();
+    }
+  });
+
   it("holds its query slot until a timed-out subscription actually closes", async () => {
     let releaseSend: (() => void) | undefined;
     const { close, relay } = createRelay(

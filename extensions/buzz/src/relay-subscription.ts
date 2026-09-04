@@ -94,7 +94,20 @@ export async function queryBuzzRelaySnapshot<TResult>(
 ): Promise<TResult> {
   // One allowance for every transient query on this relay, so the room budget's
   // reserve holds no matter which query types overlap.
-  const releaseLease = await acquireBuzzQueryLease(params.relay, { wait: params.leaseWait });
+  let releaseLease: (() => void) | null;
+  try {
+    releaseLease = await acquireBuzzQueryLease(params.relay, {
+      wait: params.leaseWait,
+      signal: params.signal,
+    });
+  } catch (error) {
+    // Cancelled while queued for a slot: surface the same abort the snapshot
+    // itself would have raised, and never touch the relay.
+    if (params.signal?.aborted) {
+      throw params.signal.reason ?? new Error(params.abortMessage);
+    }
+    throw error;
+  }
   if (!releaseLease) {
     throw new BuzzQueryLeaseUnavailableError();
   }
