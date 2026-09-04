@@ -133,7 +133,7 @@ describe("handleBashChatCommand", () => {
   it.each([
     { exitCode: null, exitSignal: "SIGTERM", label: "signal SIGTERM" },
     { exitCode: null, exitSignal: null, label: "unknown exit code" },
-  ])("reports a retained process's $label and consumes only its completion", async (outcome) => {
+  ])("reports a retained process's $label without acknowledging delivery", async (outcome) => {
     const eventOptions = { sessionKey: "session-key", contextKey: "exec:finished-status" };
     const previous = enqueueSystemEventEntry("retained diagnostic", eventOptions);
     getFinishedSessionMock.mockReturnValue({
@@ -152,10 +152,11 @@ describe("handleBashChatCommand", () => {
 
     expect(result.text).toContain(`Exit: ${outcome.label}`);
     expect(result.text).toContain("retained diagnostic");
-    expect(peekSystemEventEntries("session-key")).toEqual([previous]);
+    expect(peekSystemEventEntries("session-key")).toHaveLength(2);
+    expect(peekSystemEventEntries("session-key")).toContainEqual(previous);
 
     await handleBashChatCommand(buildParams("!poll finished-status"));
-    expect(peekSystemEventEntries("session-key")).toEqual([previous]);
+    expect(peekSystemEventEntries("session-key")).toHaveLength(2);
   });
 
   it("returns immediately after canonical cancellation is admitted", async () => {

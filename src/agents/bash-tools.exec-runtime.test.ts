@@ -18,7 +18,7 @@ import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import {
   getFinishedSession,
-  markTerminalPollObserved,
+  acknowledgeNotifyOnExit,
   waitForExecScope,
 } from "./bash-process-registry.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -639,7 +639,7 @@ describe("terminal execution-context release", () => {
       });
       markBackgrounded(run.session);
       if (path === "observed") {
-        markTerminalPollObserved(run.session);
+        acknowledgeNotifyOnExit(run.session);
       }
       exit.resolve({
         reason: "exit",

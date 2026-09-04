@@ -70,7 +70,7 @@ export interface ProcessSession {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
-  /** Set when process poll observed the terminal result before notification. */
+  /** Set only after a terminal poll result is delivered or persisted. */
   terminalPollObserved?: boolean;
   notifyOnExitRemoval?: NotifyOnExitRemoval;
   // Deprecated declaration-closure compatibility only; runtime never uses this.
@@ -324,11 +324,6 @@ export function markBackgrounded(session: ProcessSession) {
   }
 }
 
-/** Records that a terminal process poll consumed the process result. */
-export function markTerminalPollObserved(session: ProcessSession): void {
-  session.terminalPollObserved = true;
-}
-
 /** Retains the precise completion-event removal handle on its process owner. */
 export function recordNotifyOnExitRemoval(
   session: ProcessSession,
@@ -344,7 +339,9 @@ export function recordNotifyOnExitRemoval(
 /** Acknowledges one completion event without touching unrelated queue entries. */
 export function acknowledgeNotifyOnExit(record: {
   notifyOnExitRemoval?: NotifyOnExitRemoval;
+  terminalPollObserved?: boolean;
 }): void {
+  record.terminalPollObserved = true;
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;

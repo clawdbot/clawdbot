@@ -19,6 +19,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { clampInt } from "../../utils.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
@@ -251,19 +252,21 @@ export async function handleBashChatCommand(params: {
       };
     }
     if (finished) {
-      acknowledgeNotifyOnExit(finished);
       if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
         activeJob = null;
       }
       const exitLabel = renderExecExitLabel(finished);
       const prefix = finished.terminalStatus === "completed" ? "⚙️" : "⚠️";
-      return {
-        text: [
-          `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
-          `Exit: ${exitLabel}`,
-          formatOutputBlock(finished.aggregated || finished.tail),
-        ].join("\n"),
-      };
+      return setReplyPayloadMetadata(
+        {
+          text: [
+            `${prefix} bash finished (session ${formatSessionSnippet(sessionId)}).`,
+            `Exit: ${exitLabel}`,
+            formatOutputBlock(finished.aggregated || finished.tail),
+          ].join("\n"),
+        },
+        { onFinalDeliverySuccess: () => acknowledgeNotifyOnExit(finished) },
+      );
     }
     if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
       activeJob = null;
