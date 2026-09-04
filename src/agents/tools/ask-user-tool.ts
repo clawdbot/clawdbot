@@ -20,6 +20,10 @@ import {
 } from "../harness/host-private-capabilities.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import {
+  ASK_USER_RPC_GRACE_MS,
+  readAskUserQuestionStatusBeforeExpiry,
+} from "./ask-user-prompt-readiness.js";
+import {
   DEFAULT_ASK_USER_TIMEOUT_SECONDS,
   type NormalizedAskUserParams,
   normalizeAskUserParams,
@@ -32,7 +36,6 @@ import {
 } from "./gateway-question-lifecycle.js";
 import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
 
-const ASK_USER_RPC_GRACE_MS = 10_000;
 const ASK_USER_PROMPT_RECHECK_MS = 50;
 
 const AskUserToolSchema = Type.Object(
@@ -225,6 +228,16 @@ export function reserveAskUserPromptDelivery(params: {
   return { questionId };
 }
 
+function releaseExpiredAskUserQuestion(questionId: string, state: AskUserQuestionState): boolean {
+  if (Date.now() < state.expiresAtMs) {
+    return false;
+  }
+  if (askUserQuestions.get(questionId) === state) {
+    releaseAskUserQuestion(questionId);
+  }
+  return true;
+}
+
 /** Waits until policy-accepted tool execution has registered the gateway question. */
 export async function waitForAskUserPromptReady(
   questionId: string,
@@ -235,10 +248,7 @@ export async function waitForAskUserPromptReady(
     return undefined;
   }
   while (askUserQuestions.get(questionId) === state) {
-    if (Date.now() >= state.expiresAtMs) {
-      if (askUserQuestions.get(questionId) === state) {
-        releaseAskUserQuestion(questionId);
-      }
+    if (releaseExpiredAskUserQuestion(questionId, state)) {
       return undefined;
     }
     if (
@@ -258,10 +268,7 @@ export async function waitForAskUserPromptReady(
       if (read.kind === "expired") {
         // A tool execution may renew this state while the bounded read is in flight.
         // Recheck the current deadline before releasing a still-valid prompt slot.
-        if (Date.now() >= state.expiresAtMs) {
-          if (askUserQuestions.get(questionId) === state) {
-            releaseAskUserQuestion(questionId);
-          }
+        if (releaseExpiredAskUserQuestion(questionId, state)) {
           return undefined;
         }
         continue;
@@ -269,10 +276,7 @@ export async function waitForAskUserPromptReady(
       if (askUserQuestions.get(questionId) !== state) {
         return undefined;
       }
-      if (Date.now() >= state.expiresAtMs) {
-        if (askUserQuestions.get(questionId) === state) {
-          releaseAskUserQuestion(questionId);
-        }
+      if (releaseExpiredAskUserQuestion(questionId, state)) {
         return undefined;
       }
       const status = read.kind === "status" ? read.status : undefined;
@@ -290,9 +294,7 @@ export async function waitForAskUserPromptReady(
     }
     const remainingMs = state.expiresAtMs - Date.now();
     if (remainingMs <= 0) {
-      if (askUserQuestions.get(questionId) === state) {
-        releaseAskUserQuestion(questionId);
-      }
+      releaseExpiredAskUserQuestion(questionId, state);
       return undefined;
     }
     await new Promise<void>((resolve) => {
@@ -301,64 +303,6 @@ export async function waitForAskUserPromptReady(
     });
   }
   return undefined;
-}
-
-async function readAskUserQuestionStatus(
-  questionId: string,
-  gatewayCall: GatewayQuestionCall,
-): Promise<string | undefined> {
-  const result = await gatewayCall("question.list", { timeoutMs: ASK_USER_RPC_GRACE_MS }, {});
-  const questions =
-    result && typeof result === "object" && !Array.isArray(result)
-      ? (result as { questions?: unknown }).questions
-      : undefined;
-  const question = Array.isArray(questions)
-    ? questions.find(
-        (candidate) =>
-          candidate &&
-          typeof candidate === "object" &&
-          !Array.isArray(candidate) &&
-          (candidate as { id?: unknown }).id === questionId,
-      )
-    : undefined;
-  const status =
-    question && typeof question === "object" && !Array.isArray(question)
-      ? (question as { status?: unknown }).status
-      : undefined;
-  return typeof status === "string" ? status : undefined;
-}
-
-type AskUserPromptStatusRead =
-  | { kind: "status"; status: string | undefined }
-  | { kind: "error" }
-  | { kind: "expired" };
-
-async function readAskUserQuestionStatusBeforeExpiry(
-  questionId: string,
-  expiresAtMs: number,
-  gatewayCall: GatewayQuestionCall,
-): Promise<AskUserPromptStatusRead> {
-  const remainingMs = expiresAtMs - Date.now();
-  if (remainingMs <= 0) {
-    return { kind: "expired" };
-  }
-  return await new Promise<AskUserPromptStatusRead>((resolve) => {
-    let settled = false;
-    const finish = (result: AskUserPromptStatusRead) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(expiryTimer);
-      resolve(result);
-    };
-    const expiryTimer = setTimeout(() => finish({ kind: "expired" }), remainingMs);
-    expiryTimer.unref?.();
-    void readAskUserQuestionStatus(questionId, gatewayCall).then(
-      (status) => finish({ kind: "status", status }),
-      () => finish({ kind: "error" }),
-    );
-  });
 }
 
 /** Opens prompt delivery after question.request succeeds. */
