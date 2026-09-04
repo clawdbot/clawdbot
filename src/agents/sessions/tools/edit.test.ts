@@ -451,7 +451,7 @@ describe("edit tool", () => {
     let persisted = Buffer.from("before\n");
     const resolvePath = vi.fn((filePath: string) => `remote:${filePath}`);
     const access = vi.fn(async () => {});
-    const readFile = vi.fn(async () => persisted);
+    const readFile = vi.fn(async (_absolutePath: string) => persisted);
     const writeFile = vi.fn(async (_absolutePath: string, content: string) => {
       persisted = Buffer.from(content);
     });
@@ -490,7 +490,7 @@ describe("edit tool", () => {
     expect(preview?.error).toBeUndefined();
     expect(preview?.diff).toContain("after");
 
-    await tool.execute("call-resolved-execution", args);
+    await tool.execute("call-resolved-execution", args, undefined, undefined, {} as never);
 
     expect(resolvePath).toHaveBeenNthCalledWith(1, args.path, cwd);
     expect(resolvePath).toHaveBeenNthCalledWith(2, args.path, cwd);

@@ -24,9 +24,13 @@ import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js
 import type { SandboxContext } from "./sandbox.js";
 import { buildSandboxFsMounts } from "./sandbox/fs-paths.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
-import { resolveLocalPathToCwd } from "./sessions/tools/path-utils.js";
+import { normalizeWindowsPosixDrivePath } from "./sessions/tools/path-utils.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
+
+function normalizeLocalGuardPathAlias(filePath: string): string {
+  return normalizeWindowsPosixDrivePath(filePath);
+}
 
 function sandboxReadMounts(
   sandbox: SandboxContext,
@@ -57,8 +61,7 @@ function guardHostWorkspaceTool(
 ): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, options.containmentRoot, {
     resolutionCwd: options.codingRoot,
-    normalizeGuardedPathParams: true,
-    resolveGuardedPath: resolveLocalPathToCwd,
+    resolveGuardedPath: normalizeLocalGuardPathAlias,
   });
 }
 
@@ -141,8 +144,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             : {
                 additionalRoots: skillReadRoots,
                 resolutionCwd: options.codingRoot,
-                normalizeGuardedPathParams: true,
-                resolveGuardedPath: resolveLocalPathToCwd,
+                resolveGuardedPath: normalizeLocalGuardPathAlias,
               },
         )
       : read;
