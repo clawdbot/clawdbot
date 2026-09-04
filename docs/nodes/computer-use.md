@@ -205,7 +205,7 @@ The `cua-computer` fulfiller surfaces typed error codes in the tool result and n
 - **Locally enabled**: the node advertises it only while Computer Control is enabled. The gateway can approve that advertised surface once at pairing.
 - **Capability-based**: the tool requires a connected node to advertise both `computer.act` and `screen.snapshot`. The bundled macOS app and the opt-in experimental `cua-computer` plugin fulfill the same command pair.
 
-Provider descriptors declare `contractVersion: 2`. Invalid capability descriptors or `computer.act` result envelopes are rejected with `COMPUTER_CONTRACT_MISMATCH`.
+Provider descriptors declare `contractVersion: 2`. Invalid capability descriptors or `computer.act` result envelopes are rejected with `COMPUTER_CONTRACT_MISMATCH`. The Gateway also accepts optional numeric `cursorX` and `cursorY` fields emitted by older paired macOS nodes, including `v2026.8.1`, so a successful input action is not reported as failed merely because the node upgrades separately. Unknown fields and invalid field types are still rejected; `effect` remains optional.
 
 Direct `node.invoke` calls to the provider-backed `computer.act` command must include an `executionId` UUID in the action parameters. The built-in `computer` tool supplies it automatically.
 

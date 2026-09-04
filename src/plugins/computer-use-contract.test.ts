@@ -212,12 +212,23 @@ describe("Computer Use wire contract", () => {
     }
   });
 
-  it("accepts canonical input success and rejects obsolete cursor fields", () => {
-    expect(parseComputerActResult({ ok: true })).toEqual({ ok: true });
-    expect(() => parseComputerActResult({ ok: true, cursorX: 12, cursorY: 34 })).toThrow(
-      "COMPUTER_CONTRACT_MISMATCH",
-    );
+  it.each([
+    { ok: true },
+    { ok: true, cursorX: 12.5 },
+    { ok: true, cursorY: -4.25 },
+    { ok: true, cursorX: -12.5, cursorY: 4.25 },
+  ])("accepts canonical and older paired-node receipts: %j", (receipt) => {
+    expect(parseComputerActResult(receipt)).toEqual(receipt);
   });
+
+  it.each([{ cursorX: "12" }, { cursorY: null }, { unexpected: true }])(
+    "rejects malformed native receipt fields: %j",
+    (fields) => {
+      expect(() => parseComputerActResult({ ok: true, ...fields })).toThrow(
+        "COMPUTER_CONTRACT_MISMATCH",
+      );
+    },
+  );
 
   it("caps semantic observations and provider detail records", () => {
     const element = {

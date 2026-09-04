@@ -360,6 +360,10 @@ const ComputerObservationSchema = Type.Object(
 export const ComputerActResultSchema = Type.Object(
   {
     ok: Type.Boolean(),
+    // v2026.8.1 paired nodes emit these fields and upgrade independently of the Gateway.
+    // Rejecting them reports failure after input; retain support until a versioned node-upgrade contract.
+    cursorX: Type.Optional(Type.Number()),
+    cursorY: Type.Optional(Type.Number()),
     effect: Type.Optional(
       Type.Enum(["confirmed", "unverifiable", "suspected_noop"] as const, {
         type: "string",

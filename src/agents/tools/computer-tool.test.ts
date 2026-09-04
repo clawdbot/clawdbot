@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { consumeTrustedToolNoStartError } from "../tool-result-error.js";
 import {
   callGatewayToolMock,
   COMPUTER_ACT_COMMAND,
@@ -144,6 +145,54 @@ async function executeComputerAction(params: Record<string, unknown>) {
 
 describe("createComputerTool v1 execution", () => {
   beforeEach(resetComputerToolMocks);
+
+  it.each([
+    { action: "key", encoded: false },
+    { action: "key", encoded: true },
+    { action: "type", encoded: false },
+    { action: "type", encoded: true },
+  ])(
+    "accepts native $action cursor receipts (JSON string: $encoded)",
+    async ({ action, encoded }) => {
+      const receipt = { ok: true, cursorX: 12.5, cursorY: -4 };
+      callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+        if ((body as ComputerActBody).command === COMPUTER_ACT_COMMAND) {
+          return { payload: encoded ? JSON.stringify(receipt) : receipt };
+        }
+        throw new Error("fixture capture unavailable");
+      });
+
+      const result = await createVisionComputerTool().execute("act", { action, text: "a" });
+
+      expect(result.details).toMatchObject({ action, result: receipt });
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: `${JSON.stringify({ action, ...receipt })}\nfollow-up screenshot failed: fixture capture unavailable`,
+      });
+      expect(computerActBodies()).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    { ok: true, cursorX: "12" },
+    { ok: true, cursorY: null },
+    { ok: true, cursorX: 12, unexpected: true },
+  ])(
+    "rejects invalid receipts only after dispatch without claiming no execution: %j",
+    async (receipt) => {
+      callGatewayToolMock.mockResolvedValue({ payload: receipt });
+      const error = await createVisionComputerTool()
+        .execute("act", { action: "key", text: "a" })
+        .catch((cause: unknown) => cause);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
+        message: expect.stringContaining("COMPUTER_CONTRACT_MISMATCH"),
+      });
+      expect(computerActBodies()).toHaveLength(1);
+      expect(consumeTrustedToolNoStartError(error)).toBe(false);
+    },
+  );
 
   it.each([
     [
