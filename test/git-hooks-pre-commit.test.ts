@@ -281,7 +281,12 @@ case "$*" in *--stdin-filepath=*) sed 's/FORMAT_ME/FORMATTED/' ;; esac
 
   it("fails instead of staging empty formatter output for a partially staged file", () => {
     const dir = createContentGuardFixture(tempDirs);
-    writeExecutable(path.join(dir, "node_modules/.bin"), "oxfmt", "#!/bin/sh\nexit 0\n");
+    // Drain stdin so SIGPIPE cannot preempt the hook's empty-output check.
+    writeExecutable(
+      path.join(dir, "node_modules/.bin"),
+      "oxfmt",
+      "#!/bin/sh\ncat >/dev/null\nexit 0\n",
+    );
     stage(dir, "partial.ts", "export const value = 1;\n");
     writeFileSync(
       path.join(dir, "partial.ts"),
