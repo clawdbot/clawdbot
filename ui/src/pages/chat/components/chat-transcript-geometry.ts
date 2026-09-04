@@ -64,3 +64,17 @@ export function measureConnectedTranscriptRows(
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
   return element ? Math.max(0, element.scrollHeight - element.clientHeight) : null;
 }
+
+export function syncPositionRailGutter(
+  viewport: HTMLDivElement | null,
+  inner: HTMLDivElement | null,
+): void {
+  if (!viewport || !inner) {
+    return;
+  }
+  const right = viewport.getBoundingClientRect().left + viewport.clientLeft + viewport.clientWidth;
+  const gutter = right - inner.getBoundingClientRect().right;
+  // The rail's marker/tick footprint reaches 69px from the client edge;
+  // reserve 80px including breathing room (see message-layout.css).
+  viewport.toggleAttribute("data-position-rail-gutter", gutter >= 80);
+}

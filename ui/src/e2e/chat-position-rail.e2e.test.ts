@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../pages/chat/sidebar-layout.ts";
+import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
   captureUiProofEnabled,
@@ -180,6 +182,63 @@ suite.define(() => {
                 Number.parseFloat(getComputedStyle(element).transitionDuration),
               ),
           ).toBeLessThanOrEqual(0.00001); // Global reduced-motion policy uses 0.01ms.
+
+          // Saved widths can consume the gutter even in a wide desktop pane.
+          for (const width of ["100%", "none", "95%", "48rem"]) {
+            await page.goto(`${suite.server.baseUrl}settings/appearance#settings-appearance-chat`);
+            const widthInput = page.locator("[data-settings-chat-message-width]");
+            await widthInput.fill(width);
+            await widthInput.press("Tab");
+            await expect
+              .poll(() =>
+                page.evaluate(
+                  (key) => JSON.parse(localStorage.getItem(key) ?? "{}").chatMessageMaxWidth,
+                  controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+                ),
+              )
+              .toBe(width);
+            await page.goto(`${suite.server.baseUrl}chat`);
+            await transcript.locator(".chat-virtual-row").first().waitFor();
+            await expect
+              .poll(() =>
+                transcript.evaluate((element) =>
+                  getComputedStyle(element).getPropertyValue("--chat-thread-max-width").trim(),
+                ),
+              )
+              .toBe(width);
+            await markers.first().waitFor({ state: width === "48rem" ? "visible" : "hidden" });
+            if (width === "48rem") {
+              const inner = await transcript.locator(".chat-thread-inner").boundingBox();
+              const marker = await markers.first().boundingBox();
+              expect(marker!.x - (inner!.x + inner!.width)).toBeGreaterThanOrEqual(8);
+            }
+            await captureUiProof(
+              suite,
+              page,
+              "chat-position-rail",
+              `saved-width-${width.replace("%", "percent")}.png`,
+            );
+          }
+          // A foreign-host commit can change the inner column while the pane's
+          // own dimensions stay fixed. Exercise that existing event boundary.
+          for (const width of ["95%", "48rem"]) {
+            await transcript.evaluate(
+              (element, { columnWidth, eventName }) => {
+                element.style.setProperty("--chat-thread-max-width", columnWidth);
+                element.dispatchEvent(
+                  new CustomEvent(eventName, {
+                    bubbles: true,
+                    detail: { widthChanged: false },
+                  }),
+                );
+              },
+              { columnWidth: width, eventName: SIDEBAR_GEOMETRY_COMMIT_EVENT },
+            );
+            await markers.first().waitFor({ state: width === "48rem" ? "visible" : "hidden" });
+          }
+          await transcript.evaluate((element) =>
+            element.style.removeProperty("--chat-thread-max-width"),
+          );
           expect(pageErrors).toEqual([]);
         },
       );

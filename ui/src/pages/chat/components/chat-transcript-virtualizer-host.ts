@@ -31,6 +31,7 @@ import {
   maxTranscriptScrollOffset,
   measureConnectedTranscriptRows,
   resolveTranscriptScrollMargin,
+  syncPositionRailGutter,
   syncScrollMargin,
 } from "./chat-transcript-geometry.ts";
 import {
@@ -131,6 +132,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
   private readonly handleGeometryCommit = (event: Event) => {
     this.reconcileInteractionResize(event.target);
+    syncPositionRailGutter(this.scrollElement, this.threadInnerElement);
     if (event instanceof CustomEvent && event.detail?.widthChanged === false) {
       return;
     }
@@ -232,6 +234,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           const heightChanged = previousHeight !== null && previousHeight !== rect.height;
           this.observedWidth = rect.width;
           this.observedHeight = rect.height;
+          syncPositionRailGutter(this.scrollElement, this.threadInnerElement);
           // appliedHeaderHeight, not headerHeight: only the render paths fold a
           // header toggle into the margin, because they own its compensation.
           syncScrollMargin(instance.scrollElement, instance, this.appliedHeaderHeight);
@@ -376,6 +379,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
+    // Saved message widths can change the inner column without resizing the
+    // viewport. Read committed layout, including foreign-host geometry commits.
+    syncPositionRailGutter(this.scrollElement, this.threadInnerElement);
     this.reconcileInteractionResize();
     this.reconcileImplicitEndAnchor();
     this.applyPendingScrollOffset();
@@ -536,11 +542,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     // The reader has reached the final section even though the normal midpoint
     // viewport anchor still points into the preceding row.
     if (maxOffset !== null && Math.abs(maxOffset - scrollElement.scrollTop) <= 1) {
-      for (const messageId of messageIds.toReversed()) {
-        if (this.messageRowKeysById.has(messageId)) {
-          return messageId;
-        }
-      }
+      return messageIds.findLast((messageId) => this.messageRowKeysById.has(messageId)) ?? null;
     }
     // Measurements already include scrollMargin. Query the complete row model,
     // not the rendered range, which can lag a jump or include a focused outlier.

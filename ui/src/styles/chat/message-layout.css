@@ -80,6 +80,12 @@
   border-inline-start: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
 }
 
+/* The transcript owner measures the actual saved-width gutter. Its 80px
+   threshold covers the marker/tick footprint plus space clear of messages. */
+.chat-thread:not([data-position-rail-gutter]) > .chat-position-rail {
+  display: none;
+}
+
 .chat-position-rail__marker {
   position: absolute;
   z-index: 1;
@@ -195,6 +201,9 @@
   width: calc(100% - 2 * var(--chat-thread-gutter) - 2 * var(--chat-thread-side-inset));
   max-width: var(--chat-thread-max-width);
   margin-inline: auto;
+  /* Commit width with the virtual rows, even under the global reduced-motion
+     duration; gutter and row measurements must not sample a transition. */
+  transition-property: none;
 }
 
 /* Message images (sent images displayed in chat) */
