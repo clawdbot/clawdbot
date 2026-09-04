@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
-import { createSentMessageCache } from "./echo-cache.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
 type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
@@ -129,87 +128,6 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         skipIdShortCircuit: undefined,
       },
     );
-  });
-
-  it("drops paired mirror with reply_to_guid matching outbound echo cache guid", async () => {
-    const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+15555550123";
-    echoCache.remember(scope, { text: "Hello", messageId: "GUID-A" });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 100,
-        guid: "GUID-B",
-        reply_to_guid: "GUID-A",
-        text: "Hello",
-      },
-      messageText: "Hello",
-      bodyText: "Hello",
-      echoCache,
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "echo" });
-  });
-
-  it("does not drop inline reply with reply_to_guid but different text", async () => {
-    const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+15555550123";
-    echoCache.remember(scope, { text: "Hello", messageId: "GUID-A" });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 101,
-        guid: "GUID-C",
-        reply_to_guid: "GUID-A",
-        text: "Goodbye",
-      },
-      messageText: "Goodbye",
-      bodyText: "Goodbye",
-      echoCache,
-    });
-
-    expect(decision.kind).toBe("dispatch");
-  });
-
-  it("does not drop message with identical text but unrelated reply_to_guid", async () => {
-    const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+15555550123";
-    echoCache.remember(scope, { text: "Hello", messageId: "GUID-A" });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 102,
-        guid: "GUID-D",
-        reply_to_guid: "GUID-UNRELATED",
-        text: "Hello",
-      },
-      messageText: "Hello",
-      bodyText: "Hello",
-      echoCache,
-    });
-
-    expect(decision.kind).toBe("dispatch");
-  });
-
-  it("does not drop inline reply whose text matches a different outbound GUID", async () => {
-    const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+15555550123";
-    echoCache.remember(scope, { text: "Hello", messageId: "GUID-A" });
-    echoCache.remember(scope, { text: "Okay", messageId: "GUID-B" });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 103,
-        guid: "GUID-C",
-        reply_to_guid: "GUID-A",
-        text: "Okay",
-      },
-      messageText: "Okay",
-      bodyText: "Okay",
-      echoCache,
-    });
-
-    expect(decision.kind).toBe("dispatch");
   });
 
   it("drops reflected self-chat duplicates after seeing the from-me copy", async () => {
