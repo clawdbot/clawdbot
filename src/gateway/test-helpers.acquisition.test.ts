@@ -167,6 +167,8 @@ describe("raw Gateway helper acquisition ownership", () => {
     { helper: "tracked", behavior: "hold upgrade", error: "timeout waiting for ws open" },
     { helper: "tracked", behavior: "reject upgrade", error: "Unexpected server response: 503" },
     { helper: "tracked", behavior: "upgrade then transport error", error: "invalid opcode 3" },
+    { helper: "webchat", behavior: "hold upgrade", error: "timeout waiting for ws open" },
+    { helper: "webchat", behavior: "upgrade then transport error", error: "invalid opcode 3" },
     { helper: "shared auth", behavior: "hold upgrade", error: "timeout waiting for ws open" },
     { helper: "shared auth", behavior: "no challenge", error: "missing connect.challenge nonce" },
     { helper: "shared auth", behavior: "reject auth", error: "synthetic auth rejection" },
@@ -185,15 +187,18 @@ describe("raw Gateway helper acquisition ownership", () => {
         const { openTrackedWs } = await import("./device-authz.test-helpers.js");
         const { openAuthenticatedGatewayWs } = await import("./shared-auth.test-helpers.js");
         const { connectDeviceAuthReq } = await import("./test-helpers.e2e.js");
+        const { connectWebchatClient } = await import("./test-helpers.server.js");
         const acquisition =
           helper === "tracked"
             ? openTrackedWs(peer.port, { "x-acquisition-test": "tracked" })
-            : helper === "shared auth"
-              ? openAuthenticatedGatewayWs(peer.port, "synthetic-token")
-              : connectDeviceAuthReq({
-                  url: `ws://127.0.0.1:${peer.port}`,
-                  token: "synthetic-token",
-                });
+            : helper === "webchat"
+              ? connectWebchatClient({ port: peer.port })
+              : helper === "shared auth"
+                ? openAuthenticatedGatewayWs(peer.port, "synthetic-token")
+                : connectDeviceAuthReq({
+                    url: `ws://127.0.0.1:${peer.port}`,
+                    token: "synthetic-token",
+                  });
         // Observe rejection immediately; none of these rows has an unbounded open wait.
         const failure: unknown = await acquisition.then(
           () => undefined,
