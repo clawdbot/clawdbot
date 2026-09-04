@@ -187,6 +187,8 @@ describe("Codex app-server main thread cleanup", () => {
           result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
         });
       }
+      const config = await waitForHarnessRequest(harness, "config/read", requestStart);
+      harness.send({ id: config.id, result: { config: {}, origins: {}, layers: [] } });
       const requirements = await waitForHarnessRequest(
         harness,
         "configRequirements/read",
@@ -213,14 +215,18 @@ describe("Codex app-server main thread cleanup", () => {
         .map((write) => (JSON.parse(write) as { method: string }).method)
         .filter((method) => method !== "initialize" && method !== "initialized");
     expect(userRequestMethods()).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
+      "config/read",
       "configRequirements/read",
       "turn/start",
+      "config/read",
       "configRequirements/read",
       "turn/start",
     ]);
@@ -255,6 +261,8 @@ describe("Codex app-server main thread cleanup", () => {
     const siblingRun = runCodexAppServerAttempt(siblingParams, {
       bindingStore: testCodexAppServerBindingStore,
     });
+    const siblingConfig = await waitForHarnessRequest(harness, "config/read", siblingRequestStart);
+    harness.send({ id: siblingConfig.id, result: { config: {}, origins: {}, layers: [] } });
     const siblingRequirements = await waitForHarnessRequest(
       harness,
       "configRequirements/read",
@@ -272,8 +280,9 @@ describe("Codex app-server main thread cleanup", () => {
       },
     });
     expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
-    expect(userRequestMethods().slice(-3)).toEqual([
+    expect(userRequestMethods().slice(-4)).toEqual([
       "thread/unsubscribe",
+      "config/read",
       "configRequirements/read",
       "turn/start",
     ]);
@@ -454,6 +463,8 @@ describe("Codex app-server main thread cleanup", () => {
         id: initialize.id,
         result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
       });
+      const config = await waitForHarnessRequest(physical, "config/read");
+      physical.send({ id: config.id, result: { config: {}, origins: {}, layers: [] } });
       const requirements = await waitForHarnessRequest(physical, "configRequirements/read");
       physical.send({ id: requirements.id, result: { requirements: null } });
       const thread = await waitForHarnessRequest(physical, "thread/start");

@@ -317,11 +317,13 @@ describe("startCodexAttemptThread", () => {
     expect(readHarnessRequestMethods(first)).toEqual([
       "initialize",
       "account/login/start",
+      "config/read",
       "configRequirements/read",
     ]);
     expect(readHarnessRequestMethods(second)).toEqual([
       "initialize",
       "account/login/start",
+      "config/read",
       "configRequirements/read",
       "thread/start",
     ]);
@@ -382,6 +384,7 @@ describe("startCodexAttemptThread", () => {
       expect(readHarnessRequestMethods(second)).toEqual([
         "initialize",
         "account/login/start",
+        "config/read",
         "configRequirements/read",
         "thread/start",
       ]);
@@ -421,7 +424,7 @@ describe("startCodexAttemptThread", () => {
     );
     expect(
       readHarnessMessages(harness.writes.slice(writesBeforeRestart)).map(({ method }) => method),
-    ).toEqual(["configRequirements/read"]);
+    ).toEqual(["config/read", "configRequirements/read"]);
 
     result.turnRoute.release();
     result.releaseSharedClientLease();
@@ -476,6 +479,9 @@ describe("startCodexAttemptThread", () => {
     const paths = createAttemptPaths(tempRoots);
     const harness = createCodexLifecycleHarness({
       respond: async (method, params) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "configRequirements/read") {
           return { requirements: null };
         }
@@ -527,6 +533,7 @@ describe("startCodexAttemptThread", () => {
     expect(continued.client).toBe(harness.client);
     expect(continued.thread.threadId).toBe(previous.thread.threadId);
     expect(readHarnessMessages(harness.writes.slice(before)).map(({ method }) => method)).toEqual([
+      "config/read",
       "configRequirements/read",
     ]);
     expect(start).toHaveBeenCalledTimes(1);

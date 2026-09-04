@@ -643,9 +643,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     });
 
     expect(firstHarness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
+      "config/read",
       "configRequirements/read",
       "turn/start",
     ]);
@@ -764,6 +766,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
@@ -849,6 +852,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
@@ -939,6 +943,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
@@ -988,6 +993,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
@@ -1044,6 +1050,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
@@ -1133,6 +1140,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
@@ -1305,6 +1313,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.waitForMethod("turn/start");
 
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
@@ -1443,11 +1452,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           }),
         ]);
         expect(harness.requests.map((request) => request.method)).toEqual([
+          "config/read",
           "configRequirements/read",
           "thread/read",
           "thread/resume",
           "thread/inject_items",
           "turn/start",
+          "config/read",
           "configRequirements/read",
           "thread/start",
           "turn/start",
@@ -1555,11 +1566,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       replaySafe: true,
     });
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
       "turn/start",
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "thread/unsubscribe",
@@ -1637,6 +1650,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     expect(compact).not.toHaveBeenCalled();
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
@@ -1739,6 +1753,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       );
       expect(compact).not.toHaveBeenCalled();
       expect(harness.requests.map((request) => request.method)).toEqual([
+        "config/read",
         "configRequirements/read",
         "thread/read",
         "thread/resume",
@@ -1789,6 +1804,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
@@ -1832,6 +1848,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
@@ -1900,11 +1917,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await vi.waitFor(
       () =>
         expect(harness.requests.map((request) => request.method)).toEqual([
+          "config/read",
           "configRequirements/read",
           "thread/read",
           "thread/resume",
           "thread/inject_items",
           "turn/start",
+          "config/read",
           "configRequirements/read",
           "thread/start",
           "turn/start",

@@ -6,11 +6,13 @@ import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerUserHomeDir,
 } from "./auth-start-options.js";
+import type { CodexAppServerClient } from "./client.js";
 import type {
   CodexAppServerHomeScope,
   CodexModelBackedReviewerContext,
   ProviderAuthAliasConfig,
 } from "./config-contracts.js";
+import { readCodexEffectiveConfig } from "./config-layer-policy.js";
 import {
   firstTomlTableOffset,
   parseInlineOpenAIModelProviderBaseUrl,
@@ -20,38 +22,25 @@ import {
 } from "./config-requirements.js";
 import { readNonEmptyString, readRecord } from "./config-utils.js";
 import { readCodexAppServerConfigOptions } from "./launch-args.js";
-import type { CodexConfigReadParams, CodexConfigReadResponse } from "./protocol-control-plane.js";
+import type { CodexConfigReadResponse } from "./protocol-control-plane.js";
 
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
 
 /** Cloud/system config can redirect reviews after local home/profile checks have passed. */
 export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
-  client: {
-    request: (
-      method: "config/read",
-      params: CodexConfigReadParams,
-      options: { signal?: AbortSignal },
-    ) => Promise<CodexConfigReadResponse>;
-  };
+  client: Pick<CodexAppServerClient, "request">;
   approvalsReviewer: string;
   cwd: string;
   signal?: AbortSignal;
-}): Promise<void> {
+}): Promise<CodexConfigReadResponse | undefined> {
   if (
     params.approvalsReviewer !== "auto_review" &&
     params.approvalsReviewer !== "guardian_subagent"
   ) {
     return;
   }
-  const response = await params.client.request(
-    "config/read",
-    { cwd: path.resolve(params.cwd), includeLayers: false },
-    { signal: params.signal },
-  );
-  const effectiveConfig = readRecord(readRecord(response)?.config);
-  if (!effectiveConfig) {
-    throw new Error("Codex config/read returned an invalid model-backed reviewer config");
-  }
+  const response = await readCodexEffectiveConfig(params.client, params.cwd, params.signal);
+  const effectiveConfig = response.config;
   const modelProvider = effectiveConfig.model_provider;
   const providers = effectiveConfig.model_providers;
   const providerRecords = providers == null ? undefined : readRecord(providers);
@@ -69,6 +58,7 @@ export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
       "Codex model-backed approval reviewer requires the running server to use a trusted OpenAI endpoint",
     );
   }
+  return response;
 }
 
 function isTrustedOptionalReviewerEndpoint(

@@ -90,6 +90,9 @@ describe("persistent upstream fork continuation", () => {
     const clients: ReturnType<typeof createFakeCodexAppServerClient>[] = [];
     const createClient = (home: "secondary" | "ordinary") => {
       const client = createFakeCodexAppServerClient(async (method, requestParams) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "configRequirements/read") {
           return { requirements: null };
         }

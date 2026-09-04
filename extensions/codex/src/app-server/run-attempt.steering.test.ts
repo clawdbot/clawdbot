@@ -911,6 +911,9 @@ describe("runCodexAppServerAttempt steering", () => {
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
       | undefined;
     const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "configRequirements/read") {
         return { requirements: null };
       }

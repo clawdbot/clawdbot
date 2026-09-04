@@ -817,6 +817,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     vi.useFakeTimers();
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
@@ -1608,6 +1611,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let turnStarted = false;
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "configRequirements/read") {
         return { requirements: null };
       }

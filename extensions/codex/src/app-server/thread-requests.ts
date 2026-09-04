@@ -6,7 +6,10 @@ import {
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexAppServerClient } from "./client.js";
-import { CODEX_SESSION_OVERRIDABLE_LAYER_TYPES } from "./config-layer-policy.js";
+import {
+  CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
+  readCodexEffectiveConfig,
+} from "./config-layer-policy.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
   isMessageOnlyCodexSourceReply,
@@ -519,18 +522,9 @@ export async function readCodexInheritedMcpServerNames(
   client: Pick<CodexAppServerClient, "request">,
   cwd: string,
   signal?: AbortSignal,
+  effectiveConfig?: CodexConfigReadResponse,
 ): Promise<string[]> {
-  const response: CodexConfigReadResponse = await client.request(
-    "config/read",
-    {
-      cwd,
-      includeLayers: true,
-    },
-    { signal },
-  );
-  if (!isJsonObject(response) || !isJsonObject(response.config)) {
-    throw new Error("Codex config/read returned an invalid effective config");
-  }
+  const response = effectiveConfig ?? (await readCodexEffectiveConfig(client, cwd, signal));
   if (!Array.isArray(response.layers)) {
     throw new Error("Codex config/read omitted effective config layers");
   }

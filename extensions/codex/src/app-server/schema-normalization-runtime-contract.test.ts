@@ -120,6 +120,9 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       inputSchema: normalizedParameterFreeSchema(),
     };
     const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
@@ -138,6 +141,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     });
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
     ]);
@@ -171,6 +175,9 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
@@ -197,6 +204,9 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     const appServer = createAppServerOptions();
     let nextThreadId = 1;
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
@@ -237,8 +247,10 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     });
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
+      "config/read",
       "configRequirements/read",
       "thread/start",
     ]);

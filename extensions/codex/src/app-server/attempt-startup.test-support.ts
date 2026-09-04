@@ -32,6 +32,9 @@ export function createAttemptClientHarness(): AttemptClientHarness {
   return createClientHarness({
     onWrite: (line, send) => {
       const request = JSON.parse(line) as { id: number; method: string };
+      if (request.method === "config/read") {
+        send({ id: request.id, result: { config: {}, origins: {}, layers: [] } });
+      }
       if (request.method === "configRequirements/read") {
         send({ id: request.id, result: { requirements: null } });
       }

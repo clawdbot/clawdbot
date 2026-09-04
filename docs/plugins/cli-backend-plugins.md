@@ -342,8 +342,11 @@ Project only equivalent capabilities: Claude's `Glob` locates paths and
 `NotebookEdit` edits notebook cells, so neither grants general `read` or `edit`.
 The native list contains tool names, not permission-rule patterns.
 Codex native code mode projects `read` and `exec` after OpenClaw explicitly
-requests the shell and rejects managed requirements that disable it. It never
-infers `write`, `edit`, `apply_patch`, or `process`. The pinned Codex registry has
+requests the shell and rejects managed requirements or legacy managed settings
+that disable it. The effective setting and its source are checked at each
+preflight; a user-local shell disable is overridden for native mode, while a
+managed denial rejects before capture. It never infers `write`, `edit`,
+`apply_patch`, or `process`. The pinned Codex registry has
 no shell-disabled models; a custom model that disables its shell remains an
 unobservable exception because Codex does not expose that model capability.
 

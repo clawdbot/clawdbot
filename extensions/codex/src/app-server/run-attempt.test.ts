@@ -817,6 +817,9 @@ function installFailingThreadStartClient(onThreadStart: () => unknown) {
         if (method === "configRequirements/read") {
           return { requirements: null };
         }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "thread/start") {
           return await onThreadStart();
         }
@@ -850,6 +853,9 @@ async function runSharedClientRestartTest(
     const wire = createCodexLifecycleHarness({
       persistedThreads: ["thread-existing"],
       respond: async (method) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "configRequirements/read") {
           return {
             requirements:
@@ -952,6 +958,9 @@ async function createSandboxReleaseFixture(
     if (method === "configRequirements/read") {
       return { requirements: null };
     }
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
     return handleRequest(method, requestParams);
   });
   const client = { ...mockClientRuntimeMethods(), request };
@@ -1038,6 +1047,9 @@ function installCleanupTrackingClient(turnStartError?: Error) {
         events.push(`request:${method}`);
         if (method === "configRequirements/read") {
           return { requirements: null };
+        }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
         }
         if (method === "thread/start") {
           return threadStartResult();
@@ -1244,6 +1256,9 @@ describe("runCodexAppServerAttempt", () => {
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "configRequirements/read") {
         return { requirements: null };
+      }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "environment/add") {
         return {};
@@ -1492,6 +1507,9 @@ describe("runCodexAppServerAttempt", () => {
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -1553,6 +1571,9 @@ describe("runCodexAppServerAttempt", () => {
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -1602,6 +1623,9 @@ describe("runCodexAppServerAttempt", () => {
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult("new-thread");
       }
@@ -1617,6 +1641,7 @@ describe("runCodexAppServerAttempt", () => {
       mcpServersFingerprintEvaluated: true,
     });
     expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
     ]);
@@ -1640,6 +1665,9 @@ describe("runCodexAppServerAttempt", () => {
           requests.push({ method, params: requestParams });
           if (method === "configRequirements/read") {
             return { requirements: null };
+          }
+          if (method === "config/read") {
+            return { config: {}, origins: {}, layers: [] };
           }
           if (method === "thread/start") {
             return threadStartResult();
@@ -1675,6 +1703,9 @@ describe("runCodexAppServerAttempt", () => {
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult("new-thread");
       }
@@ -1689,6 +1720,7 @@ describe("runCodexAppServerAttempt", () => {
       mcpServersFingerprintEvaluated: true,
     });
     expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
     ]);
@@ -2470,6 +2502,9 @@ describe("runCodexAppServerAttempt", () => {
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         startedThreadId = "thread-stable-heartbeat";
         return threadStartResult(startedThreadId);
@@ -2501,14 +2536,17 @@ describe("runCodexAppServerAttempt", () => {
       await fixture.endTurn("thread-stable-heartbeat");
     }
     expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "thread/unsubscribe",
+      "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
       "thread/inject_items",
       "thread/unsubscribe",
+      "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
@@ -2677,14 +2715,30 @@ describe("runCodexAppServerAttempt", () => {
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/read");
   });
 
-  it("rejects a managed shell denial before a native creator can start", async () => {
+  it.each([
+    { source: "managed requirements", layer: undefined },
+    {
+      source: "legacy managed file",
+      layer: { type: "legacyManagedConfigTomlFromFile", file: "/etc/codex/managed_config.toml" },
+    },
+    { source: "legacy managed MDM", layer: { type: "legacyManagedConfigTomlFromMdm" } },
+  ])("rejects a $source shell denial before a native creator can start", async ({ layer }) => {
     const params = createRunParams();
     params.disableTools = false;
     setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "configRequirements/read") {
-        return { requirements: { featureRequirements: { shell_tool: false } } };
+        return { requirements: layer ? null : { featureRequirements: { shell_tool: false } } };
+      }
+      if (method === "config/read" && layer) {
+        const metadata = { name: layer, version: "sha256:managed-shell-denied" };
+        const config = { features: { shell_tool: false } };
+        return {
+          config,
+          origins: { "features.shell_tool": metadata },
+          layers: [{ ...metadata, config }],
+        };
       }
       if (method === "thread/start") {
         throw new Error("unexpected native creator start");
@@ -2693,9 +2747,41 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
-      "Codex native code mode requires shell_tool, but managed requirements disable it",
+      "Codex native code mode requires shell_tool",
     );
     expect(harness.requests.map((request) => request.method)).not.toContain("thread/start");
+  });
+
+  it("overrides a user-level shell disable when native code mode is enabled", async () => {
+    const params = createRunParams();
+    params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method !== "config/read") {
+        return undefined;
+      }
+      const metadata = {
+        name: { type: "user", file: "/fixture/codex/config.toml", profile: null },
+        version: "sha256:user-shell-disabled",
+      };
+      const config = { features: { shell_tool: false } };
+      return {
+        config,
+        origins: { "features.shell_tool": metadata },
+        layers: [{ ...metadata, config }],
+      };
+    });
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toBeDefined();
+    expect(
+      harness.requests.find((request) => request.method === "thread/start")?.params,
+    ).toMatchObject({
+      config: { "features.shell_tool": true },
+    });
   });
 
   it("replaces the native surface with a filtered catalog and canonical plan persistence", async () => {
@@ -3123,6 +3209,9 @@ describe("runCodexAppServerAttempt", () => {
     const request = vi.fn(async (method: string) => {
       if (method === "configRequirements/read") {
         return { requirements: null };
+      }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "thread/start") {
         return threadStartResult();
@@ -5479,6 +5568,7 @@ describe("runCodexAppServerAttempt", () => {
       "invalid image_url base64 payload",
     );
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/start",
       "turn/start",
@@ -5496,6 +5586,9 @@ describe("runCodexAppServerAttempt", () => {
         if (method === "configRequirements/read") {
           return { requirements: null };
         }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "thread/resume") {
           return threadStartResult("thread-existing");
         }
@@ -5510,6 +5603,7 @@ describe("runCodexAppServerAttempt", () => {
       "unsupported image input",
     );
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
@@ -5529,6 +5623,9 @@ describe("runCodexAppServerAttempt", () => {
       async (method) => {
         if (method === "configRequirements/read") {
           return { requirements: null };
+        }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
         }
         if (method === "thread/resume") {
           return threadStartResult("thread-existing");
@@ -5578,6 +5675,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
@@ -5595,6 +5693,9 @@ describe("runCodexAppServerAttempt", () => {
       async (method) => {
         if (method === "configRequirements/read") {
           return { requirements: null };
+        }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
         }
         if (method === "thread/resume") {
           const response = threadStartResult("thread-existing");
@@ -5649,6 +5750,7 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
@@ -5664,6 +5766,9 @@ describe("runCodexAppServerAttempt", () => {
       async (method) => {
         if (method === "configRequirements/read") {
           return { requirements: null };
+        }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
         }
         if (method === "thread/resume") {
           return threadStartResult("thread-existing");
@@ -5691,6 +5796,7 @@ describe("runCodexAppServerAttempt", () => {
       "cannot steer a review turn",
     );
     expect(harness.requests.map((request) => request.method)).toEqual([
+      "config/read",
       "configRequirements/read",
       "thread/read",
       "thread/resume",
@@ -5803,6 +5909,9 @@ describe("runCodexAppServerAttempt", () => {
         if (method === "configRequirements/read") {
           return { requirements: null };
         }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "thread/start") {
           return threadStartResult();
         }
@@ -5885,6 +5994,9 @@ describe("runCodexAppServerAttempt", () => {
         if (method === "configRequirements/read") {
           return { requirements: null };
         }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "thread/start") {
           return threadStartResult();
         }
@@ -5920,6 +6032,9 @@ describe("runCodexAppServerAttempt", () => {
         if (method === "configRequirements/read") {
           return { requirements: null };
         }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "thread/start") {
           return threadStartResult();
         }
@@ -5952,6 +6067,9 @@ describe("runCodexAppServerAttempt", () => {
       if (method === "configRequirements/read") {
         return { requirements: null };
       }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -5977,6 +6095,9 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createAppServerHarness(async (method) => {
       if (method === "configRequirements/read") {
         return { requirements: null };
+      }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "thread/start") {
         return threadStartResult();
@@ -6246,6 +6367,9 @@ describe("runCodexAppServerAttempt", () => {
     const request = vi.fn(async (method: string) => {
       if (method === "configRequirements/read") {
         return { requirements: null };
+      }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "plugin/installed" || method === "plugin/list") {
         const installed = {
@@ -6623,6 +6747,9 @@ describe("runCodexAppServerAttempt", () => {
         if (method === "configRequirements/read") {
           return { requirements: null };
         }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
         if (method === "thread/start") {
           return threadStartResult("thread-1");
         }
@@ -6666,6 +6793,9 @@ describe("runCodexAppServerAttempt", () => {
     const request = vi.fn(async (method: string) => {
       if (method === "configRequirements/read") {
         return { requirements: null };
+      }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "thread/start") {
         return threadStartResult("thread-1");
@@ -6728,6 +6858,9 @@ describe("runCodexAppServerAttempt", () => {
       async (method, params) => {
         if (method === "configRequirements/read") {
           return { requirements: null };
+        }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
         }
         if (method === "thread/resume") {
           return threadStartResult((params as { threadId?: string }).threadId ?? "thread-existing");
@@ -6816,6 +6949,9 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createAppServerHarness(async (method) => {
       if (method === "configRequirements/read") {
         return { requirements: null };
+      }
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "thread/start") {
         return threadStartResult("thread-1");
@@ -7055,8 +7191,9 @@ describe("runCodexAppServerAttempt", () => {
     const { result, requests, client } = await runSharedClientRestartTest(1);
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests).toEqual([
-      ["configRequirements/read", "thread/read", "thread/resume"],
+      ["config/read", "configRequirements/read", "thread/read", "thread/resume"],
       [
+        "config/read",
         "configRequirements/read",
         "thread/read",
         "thread/resume",
@@ -7071,9 +7208,10 @@ describe("runCodexAppServerAttempt", () => {
     const { result, requests, client } = await runSharedClientRestartTest(2);
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests).toEqual([
-      ["configRequirements/read", "thread/read", "thread/resume"],
-      ["configRequirements/read", "thread/read", "thread/resume"],
+      ["config/read", "configRequirements/read", "thread/read", "thread/resume"],
+      ["config/read", "configRequirements/read", "thread/read", "thread/resume"],
       [
+        "config/read",
         "configRequirements/read",
         "thread/read",
         "thread/resume",
@@ -7089,8 +7227,8 @@ describe("runCodexAppServerAttempt", () => {
       runSharedClientRestartTest(1, { denyReplacementShell: true, requests }),
     ).rejects.toThrow("Codex native code mode requires shell_tool");
     expect(requests).toEqual([
-      ["configRequirements/read", "thread/read", "thread/resume"],
-      ["configRequirements/read"],
+      ["config/read", "configRequirements/read", "thread/read", "thread/resume"],
+      ["config/read", "configRequirements/read"],
     ]);
   });
   it("does not retire the shared Codex client when a spawned helper run fails with a logical thread/start error", async () => {
@@ -8089,6 +8227,9 @@ describe("runCodexAppServerAttempt", () => {
       async (method: string) => {
         if (method === "configRequirements/read") {
           return { requirements: null };
+        }
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
         }
         if (method === "thread/resume") {
           return threadStartResult("thread-existing");
