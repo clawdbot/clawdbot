@@ -62,6 +62,7 @@ type CliOptions = {
   fixture?:
     | "approval"
     | "attachments"
+    | "avatars"
     | "board"
     | "code-fences"
     | "dashboards"
@@ -98,6 +99,21 @@ const MOCK_ACTOR_MIRA: SessionActorFixture = {
 };
 // Rows carry explicit owners the way the gateway projects createdActor fallbacks.
 const MOCK_SESSION_OWNERS: readonly SessionActorFixture[] = [MOCK_ACTOR_PETER, MOCK_ACTOR_MIRA];
+const MOCK_AVATAR_PROFILES = [
+  { id: "profile-avatar-normal", name: "Mira", fill: "#5d7fc5", label: "Normal profile image" },
+  {
+    id: "profile-avatar-dark",
+    name: "Rowan",
+    fill: "#0e1015",
+    label: "Dark surface-matching profile image",
+  },
+  {
+    id: "profile-avatar-light",
+    name: "Sol",
+    fill: "#faf9f7",
+    label: "Light surface-matching profile image",
+  },
+] as const;
 
 const SESSION_PAGE_SIZE = 50;
 const TOTAL_TELEGRAM_SESSIONS = 180;
@@ -365,6 +381,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (
     value !== "approval" &&
     value !== "attachments" &&
+    value !== "avatars" &&
     value !== "board" &&
     value !== "code-fences" &&
     value !== "dashboards" &&
@@ -1376,6 +1393,18 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
   return messages;
 }
 
+function buildAvatarChatHistory(baseTime: number): unknown[] {
+  return MOCK_AVATAR_PROFILES.map(({ id, label, name }, index) => ({
+    ...chatHistoryMessage("user", label, baseTime + index * 60_000),
+    __openclaw: {
+      senderId: id,
+      senderIdentity: { type: "profile", id },
+      senderName: name,
+      senderProfileAvatarUrl: `/api/users/${id}/avatar`,
+    },
+  }));
+}
+
 function buildCodeFenceChatHistory(baseTime: number): unknown[] {
   const proseFence = (language: string, label: string) => {
     const lines = Array.from({ length: 16 }, (_, index) => `${label} line ${index + 1}`);
@@ -1782,6 +1811,7 @@ async function createChatPickerScenario(
       activeRunIds: [PLAN_DEMO_RUN_ID],
       childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
       hasActiveRun: true,
+      ...(fixture === "avatars" ? { kind: "global" as const } : {}),
       status: "running",
       totalTokens: 170_000,
       totalTokensFresh: true,
@@ -2007,7 +2037,9 @@ async function createChatPickerScenario(
     workboardEnabled: fixture === "workboard",
   });
   const historyMessages =
-    fixture === "attachments"
+    fixture === "avatars"
+      ? buildAvatarChatHistory(baseTime)
+      : fixture === "attachments"
       ? buildChatAttachmentHistory(baseTime)
       : fixture === "code-fences"
         ? buildCodeFenceChatHistory(baseTime)
@@ -2156,6 +2188,13 @@ async function createChatPickerScenario(
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
     presenceUsers: [
+      ...(fixture === "avatars"
+        ? MOCK_AVATAR_PROFILES.map(({ id, name }) => ({
+            id,
+            name,
+            avatarUrl: `/api/users/${id}/avatar`,
+          }))
+        : []),
       {
         self: true,
         id: selfProfile.id,
@@ -3191,7 +3230,7 @@ async function createMockGatewayPlugin(
       .map((plugin) => plugin.id),
   );
   const attachmentThemeToggle =
-    fixture === "attachments"
+    fixture === "attachments" || fixture === "avatars"
       ? `    <style data-openclaw-control-ui-mock-theme-toggle>
       .control-ui-mock-theme-toggle { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--card); box-shadow: var(--shadow-md); }
       .control-ui-mock-theme-toggle button { min-height: 28px; padding: 0 10px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
@@ -3229,6 +3268,24 @@ async function createMockGatewayPlugin(
       : "";
   return {
     configureServer(server) {
+      if (fixture === "avatars") {
+        const avatarFills = new Map(
+          MOCK_AVATAR_PROFILES.map(({ fill, id }) => [`/api/users/${id}/avatar`, fill]),
+        );
+        server.middlewares.use((req, res, next) => {
+          const pathname = new URL(req.url ?? "/", "http://openclaw.invalid").pathname;
+          const fill = avatarFills.get(pathname);
+          if (!fill) {
+            next();
+            return;
+          }
+          res.statusCode = 200;
+          res.setHeader("content-type", "image/svg+xml");
+          res.end(
+            `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36"><rect width="36" height="36" fill="${fill}"/></svg>`,
+          );
+        });
+      }
       server.middlewares.use((req, res, next) => {
         const prefix = "/__openclaw__/plugin-icon/";
         const pathname = new URL(req.url ?? "/", "http://openclaw.invalid").pathname;
