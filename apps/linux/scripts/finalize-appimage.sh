@@ -12,6 +12,8 @@ if [[ ! -d "$bundle_dir" ]]; then
   exit 1
 fi
 bundle_dir=$(cd "$bundle_dir" && pwd -P)
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+tools_helper="$script_dir/tauri-appimage-tools.sh"
 
 shopt -s nullglob
 appdirs=("$bundle_dir"/*.AppDir)
@@ -29,29 +31,19 @@ if [[ ! -d "$usr_lib" ]]; then
   exit 1
 fi
 
-if [[ -n ${XDG_CACHE_HOME:-} ]]; then
-  cache_root=$XDG_CACHE_HOME
-else
-  cache_root="${HOME:?HOME is required}/.cache"
-fi
-plugin="$cache_root/tauri/linuxdeploy-plugin-appimage.AppImage"
-if [[ ! -x "$plugin" ]]; then
-  echo "executable Tauri AppImage plugin not found: $plugin" >&2
-  exit 1
-fi
-
 case "$(uname -s)/$(uname -m)" in
-  Linux/x86_64 | Linux/amd64)
-    arch=x86_64
-    ;;
-  Linux/aarch64 | Linux/arm64)
-    arch=aarch64
-    ;;
+  Linux/x86_64 | Linux/amd64) ;;
   *)
     echo "unsupported AppImage host: $(uname -s)/$(uname -m)" >&2
     exit 1
     ;;
 esac
+
+"$tools_helper" verify post-build
+cache_root=${XDG_CACHE_HOME:?XDG_CACHE_HOME is required}
+plugin="$cache_root/tauri/linuxdeploy-plugin-appimage.AppImage"
+runtime="$cache_root/tauri/.appimage-runtime-x86_64"
+arch=x86_64
 
 mapfile -d '' forbidden_libraries < <(
   find "$usr_lib" \( -type f -o -type l \) \
@@ -82,11 +74,13 @@ output=$(mktemp "$bundle_dir/.openclaw-appimage.XXXXXX")
 rm -f -- "$output"
 trap 'rm -f -- "$output"' EXIT
 
+"$tools_helper" verify post-build
 APPIMAGE_EXTRACT_AND_RUN=1 \
 NO_STRIP=true \
 ARCH="$arch" \
+LDAI_RUNTIME_FILE="$runtime" \
 LDAI_OUTPUT="$output" \
-  "$plugin" --appdir "$appdir"
+"$plugin" --appdir "$appdir"
 
 if [[ ! -s "$output" || ! -x "$output" ]]; then
   echo "AppImage plugin did not produce a nonempty executable: $output" >&2

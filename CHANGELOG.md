@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Linux AppImage builds:** pin and verify Tauri's five packaging tools and derived AppImage runtime in a clean job-local cache before build and finalization, preventing mutable upstream assets or stale cache entries from entering packaged artifacts. (#137797)
 - **Update readiness:** select declared health-check owners before loading plugin APIs, preventing unrelated optional Doctor checks from interrupting upgrades while retaining mandatory readiness failures.
 
 - **Apple chat:** make queued messages immediately retryable after session-settings failures, while keeping retries bound to the exact failed attempt.

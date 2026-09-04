@@ -16015,8 +16015,12 @@ it("pins simple release admission owners before selected checkout and preserves 
   const trustedToolingCheckout = linuxBuildSteps.findIndex(
     ({ name }) => name === "Checkout trusted Linux packaging tooling",
   );
+  const selectedTagInstall = linuxBuildSteps.findIndex(
+    ({ name }) => name === "Install selected-tag dependencies",
+  );
   expect(selectedTagCheckout).toBeGreaterThan(0);
-  expect(trustedToolingCheckout).toBe(selectedTagCheckout + 1);
+  expect(selectedTagInstall).toBeGreaterThan(selectedTagCheckout);
+  expect(trustedToolingCheckout).toBe(selectedTagInstall + 1);
   const trustedToolingOptions = linuxBuildSteps[trustedToolingCheckout]?.with;
   expect(trustedToolingOptions).toMatchObject({
     ref: "${{ github.workflow_sha }}",
@@ -16027,6 +16031,8 @@ it("pins simple release admission owners before selected checkout and preserves 
   });
   const trustedToolingFiles = [
     "apps/linux/scripts/stage-appimage-gstreamer.sh",
+    "apps/linux/scripts/tauri-appimage-tools.sh",
+    "apps/linux/scripts/tauri-appimage-tools-x86_64.tsv",
     "apps/linux/scripts/finalize-appimage.sh",
     "apps/linux/tests/packaged_runtime_smoke.py",
     "apps/linux/tests/first_run.py",
@@ -16050,6 +16056,7 @@ it("pins simple release admission owners before selected checkout and preserves 
   );
   expect(buildLinuxBundles["working-directory"]).toBe("apps/linux/src-tauri");
   expect(buildLinuxBundles.run).toContain('\\"createUpdaterArtifacts\\":false');
+  expect(buildLinuxBundles.run).toContain('\\"useLocalToolsDir\\":false');
   const buildLinuxJson = JSON.stringify(linux.jobs.build_linux);
   expect(buildLinuxJson).not.toContain("${{ secrets.");
   for (const name of tauriSigningEnvNames) {
@@ -16364,8 +16371,120 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(publishLinuxBundles.run).toContain(
     '"linux-x86_64": {signature: $linux_signature, url: $linux_url}',
   );
+  const appImageToolsPath = "apps/linux/scripts/tauri-appimage-tools.sh";
+  const appImageToolsManifestPath = "apps/linux/scripts/tauri-appimage-tools-x86_64.tsv";
+  const appImageTools = readFileSync(appImageToolsPath, "utf8");
+  const appImageToolsManifest = readFileSync(appImageToolsManifestPath, "utf8");
+  expect(appImageTools).toContain("prepare)");
+  expect(appImageTools).toContain('verify_directory "$tools_dir" "$2"');
+  expect(appImageTools).toContain("--proto '=https' --tlsv1.2");
+  expect(appImageTools).toContain("--connect-timeout 10 --max-time 120");
+  expect(appImageTools).toContain("--retry 3 --retry-all-errors");
+  expect(appImageTools).toContain('mv -Tn -- "$staging_dir" "$tools_dir"');
+  expect(appImageTools).toContain('fail "refusing existing Tauri tool cache: $tools_dir"');
+  expect(appImageTools).toContain('runtime_name=".appimage-runtime-x86_64"');
+  expect(appImageTools).toContain('offset=$("$plugin" --appimage-offset)');
+  expect(appImageTools).toContain('cmp --silent --bytes="$offset" -- "$plugin" "$runtime"');
+  expect(appImageToolsManifest.trim().split("\n")).toEqual([
+    [
+      "AppRun-x86_64",
+      "https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64",
+      "f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f",
+      "f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f",
+      "0555",
+    ].join("\t"),
+    [
+      "linuxdeploy-x86_64.AppImage",
+      "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-x86_64.AppImage",
+      "e762bea85c8eb0d4b3508d46e5c1f037f717d0f9303ae3b4aafc8b04991fa1ef",
+      "20eebde3c18ae2e44279bd624fc72482503aece216d5d77f10932235342f71c1",
+      "0755",
+    ].join("\t"),
+    [
+      "linuxdeploy-plugin-gtk.sh",
+      "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/b5eb8d05b4c0ed40107fe2158c5d8527f94568ef/linuxdeploy-plugin-gtk.sh",
+      "cb379f9b0733e9ad9f8bd78f8c2fa038aef2478523bb7d4c8e64ff6a1ea3501a",
+      "cb379f9b0733e9ad9f8bd78f8c2fa038aef2478523bb7d4c8e64ff6a1ea3501a",
+      "0555",
+    ].join("\t"),
+    [
+      "linuxdeploy-plugin-gstreamer.sh",
+      "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gstreamer/2a2e67491c32995a3f279ad0ecbe77abd512b42a/linuxdeploy-plugin-gstreamer.sh",
+      "c107b49d84edbffc6ab226ed1007e0626a4f7aa2c3a36b7782bef62351d49e94",
+      "c107b49d84edbffc6ab226ed1007e0626a4f7aa2c3a36b7782bef62351d49e94",
+      "0555",
+    ].join("\t"),
+    [
+      "linuxdeploy-plugin-appimage.AppImage",
+      "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage",
+      "0441769ab38009504d2678c38cd7e526955388dd30a215b4a20afaa5471652f2",
+      "0441769ab38009504d2678c38cd7e526955388dd30a215b4a20afaa5471652f2",
+      "0555",
+    ].join("\t"),
+  ]);
+  expect(appImageTools).toMatch(/continuous[\s\S]*digest-pinned/u);
+
+  const prLinux = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const workflowContracts = [
+    {
+      job: prLinux.jobs.build,
+      helper: appImageToolsPath,
+      label: "pull request",
+    },
+    {
+      job: linux.jobs.build_linux,
+      helper: `.release-tooling/${appImageToolsPath}`,
+      label: "release",
+    },
+  ];
+  for (const contract of workflowContracts) {
+    const steps = contract.job.steps as WorkflowStep[];
+    const prepareIndex = steps.findIndex(({ name }) => name === "Prepare pinned AppImage tools");
+    const buildIndex = steps.findIndex(({ name }) => name === "Build Linux companion bundles");
+    const finalizeIndex = steps.findIndex(({ name }) => name === "Finalize AppImage");
+    expect(prepareIndex, `${contract.label} prepare`).toBeGreaterThan(0);
+    expect(buildIndex, `${contract.label} build`).toBe(prepareIndex + 1);
+    expect(finalizeIndex, `${contract.label} finalize`).toBe(buildIndex + 1);
+    for (const index of [prepareIndex, buildIndex, finalizeIndex]) {
+      expect(steps[index]?.env?.XDG_CACHE_HOME, `${contract.label} cache path`).toBe(
+        "${{ runner.temp }}/openclaw-tauri-cache",
+      );
+    }
+    expect(steps[buildIndex]?.env?.LDAI_RUNTIME_FILE, `${contract.label} runtime path`).toBe(
+      "${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64",
+    );
+    expect(steps[prepareIndex]?.run, contract.label).toContain(`${contract.helper} prepare`);
+    expect(steps[prepareIndex]?.run, contract.label).toContain(
+      `${contract.helper} verify pre-build`,
+    );
+    expect(steps[buildIndex]?.run, contract.label).toContain("@tauri-apps/cli@2.11.4");
+    expect(steps[buildIndex]?.run, contract.label).toMatch(/\\?"useLocalToolsDir\\?":false/u);
+    expect(steps[finalizeIndex]?.run, contract.label).toMatch(
+      /finalize-appimage\.sh "?\\?\$?bundle_dir"?|finalize-appimage\.sh apps\/linux\/src-tauri\/target\/release\/bundle\/appimage/u,
+    );
+    expect(JSON.stringify(contract.job), contract.label).not.toContain("${{ secrets.");
+  }
+  const finalizerSource = readFileSync("apps/linux/scripts/finalize-appimage.sh", "utf8");
+  const postBuildVerifications =
+    finalizerSource.match(/"\$tools_helper" verify post-build/gu) ?? [];
+  expect(postBuildVerifications).toHaveLength(2);
+  expect(finalizerSource.indexOf(postBuildVerifications[0]!)).toBeLessThan(
+    finalizerSource.indexOf("mapfile -d '' forbidden_libraries"),
+  );
+  expect(finalizerSource.lastIndexOf(postBuildVerifications[1]!)).toBeLessThan(
+    finalizerSource.indexOf('"$plugin" --appdir "$appdir"'),
+  );
+  expect(finalizerSource).toContain('LDAI_RUNTIME_FILE="$runtime"');
   if (process.platform === "linux") {
     const selectedTagRoot = tempDirs.make("openclaw-linux-release-v2026.8.2-");
+    const trustedTools = path.join(
+      selectedTagRoot,
+      ".release-tooling/apps/linux/scripts/tauri-appimage-tools.sh",
+    );
+    const trustedToolsManifest = path.join(
+      selectedTagRoot,
+      ".release-tooling/apps/linux/scripts/tauri-appimage-tools-x86_64.tsv",
+    );
     const trustedFinalizer = path.join(
       selectedTagRoot,
       ".release-tooling/apps/linux/scripts/finalize-appimage.sh",
@@ -16385,47 +16504,267 @@ it("pins simple release admission owners before selected checkout and preserves 
     const appDir = path.join(bundleDir, "OpenClaw.AppDir");
     const appImage = path.join(bundleDir, "OpenClaw_2026.8.2_amd64.AppImage");
     const cacheRoot = path.join(selectedTagRoot, ".cache");
-    const plugin = path.join(cacheRoot, "tauri/linuxdeploy-plugin-appimage.AppImage");
+    const toolSourceDir = path.join(selectedTagRoot, "tool-sources");
+    const fakeBin = path.join(selectedTagRoot, "fake-bin");
+    const pluginSentinel = path.join(selectedTagRoot, "plugin-executed");
+    const toolNames = [
+      "AppRun-x86_64",
+      "linuxdeploy-x86_64.AppImage",
+      "linuxdeploy-plugin-gtk.sh",
+      "linuxdeploy-plugin-gstreamer.sh",
+      "linuxdeploy-plugin-appimage.AppImage",
+    ] as const;
     mkdirSync(path.dirname(trustedFinalizer), { recursive: true });
     mkdirSync(path.dirname(trustedSmoke), { recursive: true });
-    mkdirSync(path.join(appDir, "usr/lib"), { recursive: true });
-    mkdirSync(path.dirname(plugin), { recursive: true });
+    mkdirSync(toolSourceDir, { recursive: true });
+    mkdirSync(fakeBin, { recursive: true });
+    copyFileSync("apps/linux/scripts/tauri-appimage-tools.sh", trustedTools);
+    copyFileSync("apps/linux/scripts/tauri-appimage-tools-x86_64.tsv", trustedToolsManifest);
     copyFileSync("apps/linux/scripts/finalize-appimage.sh", trustedFinalizer);
     copyFileSync("apps/linux/tests/packaged_runtime_smoke.py", trustedSmoke);
     copyFileSync("apps/linux/tests/first_run.py", trustedFirstRun);
+    chmodSync(trustedTools, 0o755);
     chmodSync(trustedFinalizer, 0o755);
-    writeFileSync(path.join(appDir, "usr/lib/libwayland-client.so.0"), "host-incompatible");
-    writeFileSync(appImage, "pre-finalized");
-    chmodSync(appImage, 0o755);
-    writeFileSync(`${appImage}.sig`, "stale-signature");
+
+    const toolSources = new Map<string, Buffer>();
+    for (const toolName of toolNames) {
+      const contents =
+        toolName === "linuxdeploy-plugin-appimage.AppImage"
+          ? Buffer.from(
+              [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                'if [[ ${1:-} == "--appimage-offset" ]]; then',
+                "  printf '16\\n'",
+                "  exit 0",
+                "fi",
+                '[[ "$1" == "--appdir" && -d "$2" ]]',
+                '[[ -f "${LDAI_RUNTIME_FILE:?}" ]]',
+                'printf "executed\\n" > "$PLUGIN_SENTINEL"',
+                'cat "$LDAI_RUNTIME_FILE" > "$LDAI_OUTPUT"',
+                `printf '\\n#!/bin/sh\\nexit 0\\n' >> "$LDAI_OUTPUT"`,
+                'chmod +x "$LDAI_OUTPUT"',
+                "",
+              ].join("\n"),
+            )
+          : Buffer.from(`#!/bin/sh\n# synthetic ${toolName}\nexit 0\n`);
+      toolSources.set(toolName, contents);
+      writeFileSync(path.join(toolSourceDir, toolName), contents, { mode: 0o755 });
+    }
+    const preBuildLinuxdeploy = Buffer.from(
+      expectDefined(toolSources.get("linuxdeploy-x86_64.AppImage"), "linuxdeploy source"),
+    );
+    const postBuildLinuxdeploy = Buffer.from(preBuildLinuxdeploy);
+    postBuildLinuxdeploy.fill(0, 8, 11);
+    const digest = (contents: Buffer) => createHash("sha256").update(contents).digest("hex");
+    const writeSyntheticManifest = (wrongDigest = false) => {
+      writeFileSync(
+        trustedToolsManifest,
+        toolNames
+          .map((toolName, index) => {
+            const contents = expectDefined(toolSources.get(toolName), `${toolName} source`);
+            const preBuildDigest = wrongDigest && index === 0 ? "0".repeat(64) : digest(contents);
+            const postBuildDigest =
+              toolName === "linuxdeploy-x86_64.AppImage"
+                ? digest(postBuildLinuxdeploy)
+                : digest(contents);
+            const mode = toolName === "linuxdeploy-x86_64.AppImage" ? "0755" : "0555";
+            return [
+              toolName,
+              `https://example.invalid/${toolName}`,
+              preBuildDigest,
+              postBuildDigest,
+              mode,
+            ].join("\t");
+          })
+          .join("\n") + "\n",
+      );
+    };
     writeFileSync(
-      plugin,
+      path.join(fakeBin, "curl"),
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        '[[ "$1" == "--appdir" && -d "$2" ]]',
-        `printf '#!/bin/sh\\nexit 0\\n' > "$LDAI_OUTPUT"`,
-        'chmod +x "$LDAI_OUTPUT"',
+        "output=",
+        "url=",
+        "while [[ $# -gt 0 ]]; do",
+        '  case "$1" in',
+        "    --output) output=$2; shift 2 ;;",
+        "    https://*) url=$1; shift ;;",
+        "    *) shift ;;",
+        "  esac",
+        "done",
+        '[[ -n "$output" && -n "$url" ]]',
+        'if [[ ${CACHE_RACE_TOOL:-} == "${url##*/}" ]]; then',
+        '  mkdir -p "$XDG_CACHE_HOME/tauri"',
+        '  printf "raced\\n" > "$XDG_CACHE_HOME/tauri/race-marker"',
+        "fi",
+        'cp "$TOOL_SOURCE_DIR/${url##*/}" "$output"',
         "",
       ].join("\n"),
       { mode: 0o755 },
     );
-    expect(existsSync(path.join(selectedTagRoot, "apps/linux/scripts/finalize-appimage.sh"))).toBe(
-      false,
-    );
-    const finalized = spawnSync("bash", ["-c", finalizeAppImage.run ?? ""], {
+    const toolEnv = {
+      ...process.env,
+      PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+      TOOL_SOURCE_DIR: toolSourceDir,
+      XDG_CACHE_HOME: cacheRoot,
+    };
+    writeSyntheticManifest(true);
+    const rejectedPrepare = spawnSync(trustedTools, ["prepare"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: toolEnv,
+    });
+    expect(rejectedPrepare.status).not.toBe(0);
+    expect(existsSync(path.join(cacheRoot, "tauri"))).toBe(false);
+
+    writeSyntheticManifest();
+    const rejectedRacedPrepare = spawnSync(trustedTools, ["prepare"], {
       cwd: selectedTagRoot,
       encoding: "utf8",
       env: {
-        ...process.env,
-        HOME: selectedTagRoot,
-        XDG_CACHE_HOME: cacheRoot,
+        ...toolEnv,
+        CACHE_RACE_TOOL: "linuxdeploy-plugin-appimage.AppImage",
       },
     });
+    expect(
+      rejectedRacedPrepare.status,
+      `${rejectedRacedPrepare.stdout}${rejectedRacedPrepare.stderr}`,
+    ).not.toBe(0);
+    expect(readFileSync(path.join(cacheRoot, "tauri/race-marker"), "utf8")).toBe("raced\n");
+    expect(globSync(path.join(cacheRoot, ".tauri-tools.*"))).toEqual([]);
+    rmSync(path.join(cacheRoot, "tauri"), { recursive: true });
+
+    const prepared = spawnSync(trustedTools, ["prepare"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: toolEnv,
+    });
+    expect(prepared.status, `${prepared.stdout}${prepared.stderr}`).toBe(0);
+    expect(globSync(path.join(cacheRoot, ".tauri-tools.*"))).toEqual([]);
+    const verifiedPreBuild = spawnSync(trustedTools, ["verify", "pre-build"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: toolEnv,
+    });
+    expect(verifiedPreBuild.status, `${verifiedPreBuild.stdout}${verifiedPreBuild.stderr}`).toBe(0);
+    const toolsDir = path.join(cacheRoot, "tauri");
+    const runtime = path.join(toolsDir, ".appimage-runtime-x86_64");
+    const appImagePlugin = expectDefined(
+      toolSources.get("linuxdeploy-plugin-appimage.AppImage"),
+      "AppImage plugin source",
+    );
+    expect(readFileSync(runtime)).toEqual(appImagePlugin.subarray(0, 16));
+    expect(statSync(runtime).mode & 0o777).toBe(0o444);
+    const rejectedStaleCache = spawnSync(trustedTools, ["prepare"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: toolEnv,
+    });
+    expect(rejectedStaleCache.status).not.toBe(0);
+
+    const linuxdeploy = path.join(toolsDir, "linuxdeploy-x86_64.AppImage");
+    writeFileSync(linuxdeploy, postBuildLinuxdeploy);
+    chmodSync(linuxdeploy, 0o755);
+    const verifiedPostBuild = spawnSync(trustedTools, ["verify", "post-build"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: toolEnv,
+    });
+    expect(verifiedPostBuild.status, `${verifiedPostBuild.stdout}${verifiedPostBuild.stderr}`).toBe(
+      0,
+    );
+
+    const resetBundle = () => {
+      rmSync(bundleDir, { force: true, recursive: true });
+      mkdirSync(path.join(appDir, "usr/lib"), { recursive: true });
+      writeFileSync(path.join(appDir, "usr/lib/libwayland-client.so.0"), "host-incompatible");
+      writeFileSync(appImage, "pre-finalized");
+      chmodSync(appImage, 0o755);
+      writeFileSync(`${appImage}.sig`, "stale-signature");
+      rmSync(pluginSentinel, { force: true });
+    };
+    const runFinalizer = () =>
+      spawnSync(trustedFinalizer, [bundleDir], {
+        cwd: selectedTagRoot,
+        encoding: "utf8",
+        env: {
+          ...toolEnv,
+          PLUGIN_SENTINEL: pluginSentinel,
+        },
+      });
+    const restoreTool = (toolName: (typeof toolNames)[number]) => {
+      const contents =
+        toolName === "linuxdeploy-x86_64.AppImage"
+          ? postBuildLinuxdeploy
+          : expectDefined(toolSources.get(toolName), `${toolName} source`);
+      rmSync(path.join(toolsDir, toolName), { force: true });
+      writeFileSync(path.join(toolsDir, toolName), contents, { mode: 0o755 });
+      chmodSync(
+        path.join(toolsDir, toolName),
+        toolName === "linuxdeploy-x86_64.AppImage" ? 0o755 : 0o555,
+      );
+    };
+
+    for (const toolName of toolNames) {
+      resetBundle();
+      const tool = path.join(toolsDir, toolName);
+      chmodSync(tool, 0o755);
+      writeFileSync(tool, Buffer.concat([readFileSync(tool), Buffer.from("tampered")]));
+      const rejected = runFinalizer();
+      expect(rejected.status, `${toolName}: ${rejected.stdout}${rejected.stderr}`).not.toBe(0);
+      expect(existsSync(pluginSentinel), `${toolName} plugin execution`).toBe(false);
+      expect(existsSync(path.join(appDir, "usr/lib/libwayland-client.so.0")), toolName).toBe(true);
+      expect(readFileSync(appImage, "utf8"), toolName).toBe("pre-finalized");
+      expect(readFileSync(`${appImage}.sig`, "utf8"), toolName).toBe("stale-signature");
+      restoreTool(toolName);
+    }
+
+    resetBundle();
+    const appRun = path.join(toolsDir, "AppRun-x86_64");
+    rmSync(appRun);
+    symlinkSync(path.join(toolSourceDir, "AppRun-x86_64"), appRun);
+    const rejectedSymlink = runFinalizer();
+    expect(rejectedSymlink.status).not.toBe(0);
+    expect(existsSync(pluginSentinel)).toBe(false);
+    restoreTool("AppRun-x86_64");
+
+    resetBundle();
+    const gtkPlugin = path.join(toolsDir, "linuxdeploy-plugin-gtk.sh");
+    chmodSync(gtkPlugin, 0o444);
+    const rejectedNonExecutable = runFinalizer();
+    expect(rejectedNonExecutable.status).not.toBe(0);
+    expect(existsSync(pluginSentinel)).toBe(false);
+    restoreTool("linuxdeploy-plugin-gtk.sh");
+
+    resetBundle();
+    chmodSync(runtime, 0o644);
+    writeFileSync(runtime, Buffer.concat([readFileSync(runtime), Buffer.from("tampered")]));
+    const rejectedRuntime = runFinalizer();
+    expect(rejectedRuntime.status).not.toBe(0);
+    expect(existsSync(pluginSentinel)).toBe(false);
+    expect(existsSync(path.join(appDir, "usr/lib/libwayland-client.so.0"))).toBe(true);
+    expect(readFileSync(appImage, "utf8")).toBe("pre-finalized");
+    writeFileSync(runtime, appImagePlugin.subarray(0, 16), { mode: 0o644 });
+    chmodSync(runtime, 0o444);
+
+    resetBundle();
+    const finalized = runFinalizer();
     expect(finalized.status, `${finalized.stdout}${finalized.stderr}`).toBe(0);
+    expect(readFileSync(appImage).subarray(0, 16)).toEqual(appImagePlugin.subarray(0, 16));
     expect(readFileSync(appImage, "utf8")).toContain("#!/bin/sh");
     expect(existsSync(`${appImage}.sig`)).toBe(false);
     expect(existsSync(path.join(appDir, "usr/lib/libwayland-client.so.0"))).toBe(false);
+    expect(readFileSync(pluginSentinel, "utf8")).toBe("executed\n");
+
+    writeFileSync(
+      path.join(appDir, "usr/lib/libwayland-client.so.0"),
+      "post-finalization-smoke-fixture",
+    );
+    expect(existsSync(path.join(selectedTagRoot, "apps/linux/scripts/finalize-appimage.sh"))).toBe(
+      false,
+    );
     const smokeChild = spawnSync(
       "python3",
       [

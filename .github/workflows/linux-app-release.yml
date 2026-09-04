@@ -250,6 +250,13 @@ jobs:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
 
+      - name: Install selected-tag dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --prefer-offline \
+            --config.ignore-scripts=false --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+
       - name: Checkout trusted Linux packaging tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -259,17 +266,12 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             apps/linux/scripts/stage-appimage-gstreamer.sh
+            apps/linux/scripts/tauri-appimage-tools.sh
+            apps/linux/scripts/tauri-appimage-tools-x86_64.tsv
             apps/linux/scripts/finalize-appimage.sh
             apps/linux/tests/packaged_runtime_smoke.py
             apps/linux/tests/first_run.py
           sparse-checkout-cone-mode: false
-
-      - name: Install selected-tag dependencies
-        run: |
-          corepack enable
-          pnpm install --frozen-lockfile --prefer-offline \
-            --config.ignore-scripts=false --config.engine-strict=false \
-            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Stage AppImage GStreamer plugins
         run: | # zizmor: ignore[github-env] static runner-temporary path consumed by the Tauri build in this secretless job
@@ -278,21 +280,33 @@ jobs:
             | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
           echo "GSTREAMER_PLUGINS_DIR=$plugins" >> "$GITHUB_ENV"
 
+      - name: Prepare pinned AppImage tools
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
+        run: |
+          set -euo pipefail
+          .release-tooling/apps/linux/scripts/tauri-appimage-tools.sh prepare
+          .release-tooling/apps/linux/scripts/tauri-appimage-tools.sh verify pre-build
+
       - name: Build Linux companion bundles
         working-directory: apps/linux/src-tauri
         env:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
+          LDAI_RUNTIME_FILE: ${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           # Stamp the release version into the bundles; the committed manifests
           # keep a placeholder 0.1.0 so releases stay tag-driven.
           pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
-            --config "{\"version\":\"${version}\",\"bundle\":{\"createUpdaterArtifacts\":false}}"
+            --config "{\"version\":\"${version}\",\"bundle\":{\"createUpdaterArtifacts\":false,\"useLocalToolsDir\":false}}"
 
       - name: Finalize AppImage
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
         run: |
           set -euo pipefail
           bundle_dir=apps/linux/src-tauri/target/release/bundle/appimage
