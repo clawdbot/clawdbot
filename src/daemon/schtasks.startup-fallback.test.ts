@@ -2012,6 +2012,52 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("does not claim launch evidence after the pre-launch process probe fails", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const installedGatewayCommandLine =
+        '"C:\\Program Files\\nodejs\\node.exe" "C:\\openclaw\\dist\\index.js" gateway --port 18789';
+      let snapshotQueries = 0;
+      spawnSync.mockImplementation((command, args) => {
+        if (
+          command !== getWindowsPowerShellExePath() ||
+          !Array.isArray(args) ||
+          !args.includes(NODE_PROCESS_QUERY)
+        ) {
+          return makeSpawnSyncResult();
+        }
+        if (snapshotQueries++ === 0) {
+          return makeSpawnSyncResult({ status: 1, stderr: "CIM unavailable" });
+        }
+        return makeSpawnSyncResult({
+          stdout: JSON.stringify([{ ProcessId: 4242, CommandLine: installedGatewayCommandLine }]),
+        });
+      });
+      addMissingTaskInstallResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        runningTaskSnapshot(),
+      ]);
+
+      await expect(
+        installScheduledTask({
+          env,
+          stdout: new PassThrough(),
+          programArguments: [
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\openclaw\\dist\\index.js",
+            "gateway",
+            "--port",
+            "18789",
+          ],
+          environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+        }),
+      ).rejects.toThrow("pre-launch process baseline");
+
+      expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
   it("accepts a newly observed Windows gateway process after rejecting a pre-existing match", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");

@@ -67,14 +67,22 @@ function runtimeSignature(runtime: Awaited<ReturnType<typeof readScheduledTaskRu
 async function readPreLaunchTaskPids(
   env: GatewayServiceEnv,
   scriptPath: string,
-): Promise<{ pids: ReadonlySet<number>; hadTaskScriptWrapper: boolean }> {
+): Promise<{
+  pids: ReadonlySet<number>;
+  hadTaskScriptWrapper: boolean;
+  complete: boolean;
+}> {
   const pids = new Set<number>();
   let hadTaskScriptWrapper = false;
   try {
     const snapshot = readWindowsProcessSnapshot();
+    if (!snapshot && process.platform === "win32") {
+      return { pids, hadTaskScriptWrapper, complete: false };
+    }
+    const snapshotEntries = snapshot ?? [];
     const scriptPathNeedle = normalizeLowercaseStringOrEmpty(scriptPath.replaceAll("/", "\\"));
     if (scriptPathNeedle) {
-      for (const entry of snapshot ?? []) {
+      for (const entry of snapshotEntries) {
         const pid = entry.ProcessId;
         if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) {
           continue;
@@ -89,7 +97,10 @@ async function readPreLaunchTaskPids(
         }
       }
     }
-    const command = await readScheduledTaskCommand(env).catch(() => null);
+    const command = await readScheduledTaskCommand(env);
+    if (!command) {
+      return { pids, hadTaskScriptWrapper, complete: false };
+    }
     const port = resolveScheduledTaskCommandPort(env, command);
     if (port) {
       const manageGatewayPort = shouldManageGatewayListenerPort(env);
@@ -119,10 +130,9 @@ async function readPreLaunchTaskPids(
       }
     }
   } catch {
-    // This runs before `schtasks /Run`; a probe failure must never block the launch.
-    // A partial baseline only means evidence is judged as it was before.
+    return { pids, hadTaskScriptWrapper, complete: false };
   }
-  return { pids, hadTaskScriptWrapper };
+  return { pids, hadTaskScriptWrapper, complete: true };
 }
 
 async function shouldFallbackScheduledTaskLaunch(params: {
@@ -263,6 +273,11 @@ export async function runScheduledTaskOrThrow(params: {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
   params.onMutation?.();
+  if (!preLaunch.complete) {
+    throw new Error(
+      `Scheduled Task ${params.taskName} was started, but its pre-launch process baseline could not be inspected; refusing to claim activation or start a direct fallback.`,
+    );
+  }
   if (
     !(await shouldFallbackScheduledTaskLaunch({
       env: params.env,
