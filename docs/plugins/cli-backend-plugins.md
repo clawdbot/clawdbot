@@ -333,6 +333,9 @@ core vocabulary (`read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `web_search`, `web_fetch`), each derived from a native tool the host enforces
 through this contract. Core validates the result before the loopback grant is
 minted and again at the final creator-cap capture; any other name fails the turn.
+Project only equivalent capabilities: Claude's `Glob` locates paths and
+`NotebookEdit` edits notebook cells, so neither grants general `read` or `edit`.
+The native list contains tool names, not permission-rule patterns.
 Codex native code mode projects `read` and `exec` after OpenClaw explicitly
 requests the shell and rejects managed requirements that disable it. It never
 infers `write`, `edit`, `apply_patch`, or `process`. The pinned Codex registry has

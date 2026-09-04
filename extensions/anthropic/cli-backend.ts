@@ -58,17 +58,13 @@ const CLAUDE_CLI_DEFAULT_ARGS = [
   "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
 ] as const;
 
-// Claude Code native tool -> core capability. Each native tool maps only to the
-// capability it is actually equivalent to. Bash is foreground shell only: the
-// launch arguments disallow Bash(run_in_background:true), so no `process`.
+// Only equivalent bare tools confer general capabilities; Glob and notebook-cell
+// edits do not. Bash is foreground-only at launch, so it never grants `process`.
 const CLAUDE_NATIVE_TOOL_CAPABILITIES: Readonly<Record<string, string>> = {
   read: "read",
   grep: "read",
-  glob: "read",
   write: "write",
   edit: "edit",
-  multiedit: "edit",
-  notebookedit: "edit",
   bash: "exec",
   webfetch: "web_fetch",
   websearch: "web_search",
@@ -77,8 +73,7 @@ const CLAUDE_NATIVE_TOOL_CAPABILITIES: Readonly<Record<string, string>> = {
 function projectClaudeNativeToolAuthority(
   nativeTools: readonly string[] | undefined,
 ): readonly string[] {
-  const selected =
-    nativeTools && new Set(nativeTools.map((name) => name.trim().split("(", 1)[0]?.toLowerCase()));
+  const selected = nativeTools && new Set(nativeTools.map((name) => name.trim().toLowerCase()));
   // Mapping order keeps persisted caps deterministic; undefined selects the default surface.
   return [
     ...new Set(

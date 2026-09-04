@@ -13,14 +13,21 @@ describe("Claude CLI cron creator authority", () => {
       "web_fetch",
       "web_search",
     ]);
-    expect(project?.(["Read", "Grep", "Glob"])).toEqual(["read"]);
+    expect(project?.(["Read", "Grep"])).toEqual(["read"]);
     expect(project?.(["Write"])).toEqual(["write"]);
-    // Edit-family tools are file edits only; apply_patch is a distinct capability.
-    expect(project?.(["Edit", "MultiEdit", "NotebookEdit"])).toEqual(["edit"]);
+    // General file edits do not imply the distinct apply_patch capability.
+    expect(project?.(["Edit"])).toEqual(["edit"]);
     // Background Bash is disallowed at launch, so Bash never yields process.
     expect(project?.(["Bash", "Bash(git:*)"])).toEqual(["exec"]);
     expect(project?.(["WebSearch", "WebFetch"])).toEqual(["web_fetch", "web_search"]);
     expect(project?.(["Task", "TodoWrite"])).toEqual([]);
     expect(project?.([])).toEqual([]);
   });
+
+  it.each(["Glob", "NotebookEdit", "Bash(git:*)", "MultiEdit"])(
+    "does not project a general capability from non-equivalent native entry %s",
+    (nativeTool) => {
+      expect(buildAnthropicCliBackend().projectNativeToolAuthority?.([nativeTool])).toEqual([]);
+    },
+  );
 });
