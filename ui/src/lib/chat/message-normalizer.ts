@@ -564,7 +564,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           },
         ];
       }
-      return [
+      const normalizedItems: MessageContentItem[] = [
         {
           type:
             (type as Extract<
@@ -575,8 +575,11 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           name: item.name as string | undefined,
           args: resolveToolBlockArgs(item),
         },
-        ...nestedOmittedMedia,
       ];
+      for (const nestedItem of nestedOmittedMedia) {
+        normalizedItems.push(nestedItem);
+      }
+      return normalizedItems;
     });
   } else if (typeof m.text === "string") {
     if (isAssistantMessage) {
