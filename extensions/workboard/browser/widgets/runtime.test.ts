@@ -269,7 +269,7 @@ it.each([
 ] as const)(
   "preserves an acknowledged $kind move across shared widgets (refresh during move: $refreshDuringMove)",
   async ({ kind, refreshDuringMove }) => {
-    const refreshed = createDeferred();
+    const refreshed = createDeferred<void>();
     const move = createDeferred<unknown>();
     let persistedCards = cards;
     let listCount = 0;

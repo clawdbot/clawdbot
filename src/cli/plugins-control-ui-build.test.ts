@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -81,7 +82,8 @@ describe("native plugin browser builds", () => {
     vi.spyOn(fs, "rename").mockRejectedValue(collision);
 
     expect(await buildPluginControlUi(project)).toEqual(first);
-    const stylesheet = path.join(project.rootDir, first.styles![0]);
+    assert.ok(first.styles?.[0]);
+    const stylesheet = path.join(project.rootDir, first.styles[0]);
     await fs.writeFile(stylesheet, ".tampered {}");
     await expect(buildPluginControlUi(project)).rejects.toThrow(
       "immutable Control UI build was modified",
