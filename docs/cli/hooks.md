@@ -197,6 +197,8 @@ packs resolve runtime packages from `dependencies` and `optionalDependencies`,
 including packs with only optional dependencies. Packages listed only in
 `devDependencies` are omitted. npm pack and dependency installation use
 `--ignore-scripts`; this does not sandbox the installed handler.
+The download always creates an archive in OpenClaw's temporary workspace,
+regardless of npm's `dry-run` or `pack-destination` settings.
 
 ### Install options and trust
 

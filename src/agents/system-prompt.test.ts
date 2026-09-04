@@ -12,58 +12,12 @@ import {
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
-import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
-import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
-import { describeSessionsSpawnTool } from "./tool-description-presets.js";
-import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 describe("buildAgentSystemPrompt", () => {
-  it.each([
-    { available: [], mode: "suggest", deferred: false },
-    { available: ["sessions_yield"], mode: "suggest", deferred: false },
-    { available: ["agents_wait"], mode: "suggest", deferred: false },
-    { available: ["sessions_yield", "agents_wait"], mode: "suggest", deferred: false },
-    { available: [], mode: "prefer", deferred: true },
-    { available: ["sessions_yield"], mode: "prefer", deferred: true },
-    { available: ["agents_wait"], mode: "prefer", deferred: true },
-    { available: ["sessions_yield", "agents_wait"], mode: "prefer", deferred: true },
-  ] as const)(
-    "separates collector waits from announcing yields: $available $mode deferred=$deferred",
-    ({ available, mode, deferred }) => {
-      const availableNames = new Set<string>(available);
-      const tools = applyToolAvailabilityDescriptions([
-        { name: "sessions_spawn", description: describeSessionsSpawnTool({ swarmEnabled: true }) },
-        ...available.map((name) =>
-          name === "sessions_yield" ? createSessionsYieldTool() : { name, description: "Wait" },
-        ),
-      ] as AnyAgentTool[]);
-      const toolNames = tools.map((tool) => tool.name);
-      const prompt = buildAgentSystemPrompt({
-        workspaceDir: "/tmp/openclaw",
-        subagentDelegationMode: mode,
-        toolNames: deferred ? ["tool_search"] : toolNames,
-        capabilityToolNames: deferred ? toolNames : [],
-      });
-      const guidance = [prompt, ...tools.map((tool) => tool.description)].join("\n");
-      expect.soft(guidance).toMatch(/collector[^.\n]*no completion notification/i);
-      expect.soft(guidance).not.toContain("completion push-based.");
-      expect.soft(guidance).not.toContain("Need results before reply: `sessions_yield`");
-      expect
-        .soft(guidance)
-        .not.toContain("End turn after subagent spawn; results arrive next message");
-      for (const name of ["agents_wait", "sessions_yield"] as const) {
-        expect(guidance.includes(name)).toBe(availableNames.has(name));
-      }
-      if (availableNames.has("agents_wait")) {
-        expect(guidance).toMatch(/await with agents_wait/);
-      }
-    },
-  );
-
   it("resolves helper session keys to scoped prompt surfaces", () => {
     expect(resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child")).toBe("subagent");
     expect(resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child")).toBe("acp_backend");

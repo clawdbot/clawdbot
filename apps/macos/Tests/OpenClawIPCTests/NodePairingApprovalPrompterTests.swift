@@ -96,7 +96,9 @@ struct PairingCardPresentationTests {
             requestedAt: Date(timeIntervalSince1970: 1_700_000_000))
     }
 
-    private func deviceCard(scopes: [String], isRepair: Bool = false) -> PairingApprovalCenter.Card {
+    private func deviceCard(
+        scopes: [String], isRepair: Bool = false, previouslyPaired: Bool? = false) -> PairingApprovalCenter.Card
+    {
         PairingApprovalCenter.Card(
             kind: .device,
             requestId: "req-2",
@@ -113,18 +115,18 @@ struct PairingCardPresentationTests {
             caps: [],
             commands: [],
             isRepair: isRepair,
-            previouslyPaired: false,
+            previouslyPaired: previouslyPaired,
             requestedAt: Date(timeIntervalSince1970: 1_700_000_000))
     }
 
     @Test func `card copy summarizes the requesting hardware`() {
         let card = self.nodeCard()
         #expect(PairingCardPresentation.title(for: card) == "Peter's MacBook Pro")
-        #expect(PairingCardPresentation.subtitle(for: card) == "macOS 26.5 · MacBookPro18,3")
+        #expect(PairingCardPresentation.subtitle(for: card) == "macOS 26.5 · 192.168.1.42")
         #expect(PairingCardPresentation.deviceSymbol(for: card) == "macbook")
-        #expect(PairingCardPresentation.identityLine(for: card) == "ID 19cec1c3...9dccdc7 · 192.168.1.42")
-        #expect(PairingCardPresentation.versionTooltip(for: card) == "App 2026.6.11 · Core 2026.6.10")
-        #expect(PairingCardPresentation.headerSummary(for: [card]) == "A node wants to connect to OpenClaw.")
+        #expect(PairingCardPresentation.headerTitle(for: [card]) == "Allow this node’s capabilities?")
+        #expect(PairingCardPresentation.title(for: self.nodeCard(displayName: "Mac\u{202E}safe")) ==
+            "Mac\\u{202E}safe")
     }
 
     @Test func `device symbols map hardware families`() {
@@ -215,36 +217,27 @@ struct PairingCardPresentationTests {
             "Pair and repair devices",
         ])
         #expect(PairingCardPresentation.title(for: card) == "OpenClaw Mac app")
-        #expect(PairingCardPresentation.subtitle(for: card) == "Mac (Intel) · Operator")
+        #expect(PairingCardPresentation.subtitle(for: card) == "Mac (Intel) · Operator · 192.0.2.10")
     }
 
-    @Test func `trust line distinguishes first contact repair and reused ids`() {
-        let fresh = self.nodeCard()
-        #expect(PairingCardPresentation.trustLine(for: fresh).tone == .neutral)
+    @Test func `node capability approval and device token replacement have distinct warnings`() throws {
+        let nodeWarning = try #require(PairingCardPresentation.trustWarning(
+            for: self.nodeCard(previouslyPaired: true)))
+        #expect(nodeWarning.contains("capabilities"))
+        #expect(!nodeWarning.contains("token"))
+        #expect(PairingCardPresentation.trustWarning(for: self.nodeCard()) == nil)
+        #expect(PairingCardPresentation.trustWarning(for: self.nodeCard(previouslyPaired: nil)) == nil)
 
-        // The requester-claimed id is unauthenticated, so an already-paired id
-        // must render as a caution (token replacement), never positive trust.
-        let reusedId = self.nodeCard(previouslyPaired: true)
-        let reusedLine = PairingCardPresentation.trustLine(for: reusedId)
-        #expect(reusedLine.tone == .caution)
-        #expect(reusedLine.text.contains("already paired"))
-
-        let repair = self.deviceCard(scopes: [], isRepair: true)
-        let repairLine = PairingCardPresentation.trustLine(for: repair)
-        #expect(repairLine.tone == .caution)
-        #expect(repairLine.text.contains("Repair"))
-
-        // Unverified history (stale snapshot) must stay neutral.
-        let unknown = self.nodeCard(previouslyPaired: nil)
-        let unknownLine = PairingCardPresentation.trustLine(for: unknown)
-        #expect(unknownLine.tone == .neutral)
-        #expect(!unknownLine.text.contains("already paired"))
-    }
-
-    @Test func `identifier shortening keeps head and tail`() {
-        let long = "4a865684dbfa7b7937bd333813476ca88b672c2d02ad08fc52b80d88af4e82bd"
-        #expect(PairingCardPresentation.shortIdentifier(long) == "4a865684...f4e82bd")
-        #expect(PairingCardPresentation.shortIdentifier("short-id") == "short-id")
+        for device in [
+            self.deviceCard(scopes: [], isRepair: true),
+            self.deviceCard(scopes: [], previouslyPaired: true),
+        ] {
+            let warning = try #require(PairingCardPresentation.trustWarning(for: device))
+            #expect(warning.contains("access token"))
+        }
+        #expect(PairingCardPresentation.trustWarning(for: self.deviceCard(scopes: [])) == nil)
+        #expect(PairingCardPresentation.trustWarning(
+            for: self.deviceCard(scopes: [], previouslyPaired: nil)) == nil)
     }
 
     @Test func `panel auto presents only for unseen requests`() {

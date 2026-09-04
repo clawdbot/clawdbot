@@ -1,26 +1,57 @@
-// Candidate ordering follows the live Control UI credential while retaining
-// saved-secret fallbacks for stale sessions.
 import { describe, expect, it } from "vitest";
-import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import {
+  resolveControlUiAuthCandidates,
+  resolveControlUiAuthHeader,
+  resolveControlUiAuthToken,
+} from "./control-ui-auth.ts";
 
-describe("resolveControlUiAuthCandidates", () => {
-  it("orders the hello device token before saved shared secrets", () => {
-    expect(
-      resolveControlUiAuthCandidates({
-        hello: { auth: { deviceToken: "device-token" } } as never,
+describe("Control UI credentials", () => {
+  it.each([
+    {
+      name: "orders the device token before saved shared secrets",
+      source: {
+        hello: { auth: { deviceToken: "device-token" } },
         settings: { token: "shared-token" },
         password: "shared-password",
-      }),
-    ).toEqual(["device-token", "shared-token", "shared-password"]);
-  });
-
-  it("keeps the device token for pairing-only browsers", () => {
-    expect(
-      resolveControlUiAuthCandidates({
-        hello: { auth: { deviceToken: "device-token" } } as never,
+      },
+      expected: ["device-token", "shared-token", "shared-password"],
+    },
+    {
+      name: "keeps the device token for pairing-only browsers",
+      source: {
+        hello: { auth: { deviceToken: "device-token" } },
         settings: { token: "" },
         password: "",
-      }),
-    ).toEqual(["device-token"]);
+      },
+      expected: ["device-token"],
+    },
+    {
+      name: "trims and deduplicates credentials in priority order",
+      source: {
+        hello: { auth: { deviceToken: " same-token " } },
+        settings: { token: "same-token" },
+        password: " password ",
+      },
+      expected: ["same-token", "password"],
+    },
+    {
+      name: "rejects embedded header newlines before selecting a credential",
+      source: {
+        hello: { auth: { deviceToken: "bad\ndevice" } },
+        settings: { token: "bad\rshared" },
+        password: " password ",
+      },
+      expected: ["password"],
+    },
+    { name: "accepts missing credentials", source: {}, expected: [] },
+    {
+      name: "ignores null and blank credentials",
+      source: { hello: null, settings: { token: " " }, password: null },
+      expected: [],
+    },
+  ])("$name", ({ source, expected }) => {
+    expect(resolveControlUiAuthCandidates(source)).toEqual(expected);
+    expect(resolveControlUiAuthToken(source)).toBe(expected[0] ?? null);
+    expect(resolveControlUiAuthHeader(source)).toBe(expected[0] ? `Bearer ${expected[0]}` : null);
   });
 });

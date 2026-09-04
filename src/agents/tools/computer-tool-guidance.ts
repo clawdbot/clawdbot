@@ -130,7 +130,7 @@ export function buildComputerToolDescription(
   const hasForeground = capabilities.deliveryModes.includes("foreground") && hasDeliveryAction;
   const targetOrder = [
     ...(hasElementTarget ? ["elementRef from the latest observation"] : []),
-    ...(hasWindowPixelTarget ? ["window pixels from the latest window image"] : []),
+    ...(hasWindowPixelTarget ? ["window coordinates from the latest observation"] : []),
     ...(hasDesktopPixelTarget ? ["desktop coordinates from the latest screenshot"] : []),
   ];
 
@@ -145,6 +145,9 @@ export function buildComputerToolDescription(
           ].join(" and ")} data.`
         : "",
     targetOrder.length > 0 ? `Target order: ${targetOrder.join(" > ")}.` : "",
+    hasWindowPixelTarget
+      ? "Window inputs follow `details.coordinateSpace`: `image-pixels` uses the delivered image; accessibility bounds retain provider-native units."
+      : "",
     hasBackground && hasForeground
       ? 'Use `deliveryMode:"background"` first. Escalate to foreground only after that attempt reports ineffective or refused.'
       : hasBackground

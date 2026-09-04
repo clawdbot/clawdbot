@@ -94,13 +94,13 @@ export interface SubagentLifecycleAnnounceCleanupContext
 export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonContext {
   deleteRequesterSettleWakeTimer(runId: string): void;
   getRequesterSettleWakeTimer(runId: string): ScheduledRequesterSettleWake | undefined;
-  hasScheduledRequesterSettleWakeRun(runId: string): boolean;
-  markRequesterSettleWakeRearm(runId: string): void;
-  markRequesterSettleWakeRunScheduled(runId: string): void;
-  runRequesterSettleWake(runId: string, run: () => Promise<unknown>): Promise<unknown>;
+  hasScheduledRequesterSettleWakeRun(entry: SubagentRunRecord): boolean;
+  markRequesterSettleWakeRearm(entry: SubagentRunRecord): void;
+  markRequesterSettleWakeRunScheduled(entry: SubagentRunRecord): void;
+  runRequesterSettleWake(entry: SubagentRunRecord, run: () => Promise<unknown>): Promise<unknown>;
   setRequesterSettleWakeTimer(runId: string, value: ScheduledRequesterSettleWake): void;
-  takeRequesterSettleWakeRearm(runId: string): boolean;
-  unmarkRequesterSettleWakeRunScheduled(runId: string): void;
+  takeRequesterSettleWakeRearm(entry: SubagentRunRecord): boolean;
+  unmarkRequesterSettleWakeRunScheduled(entry: SubagentRunRecord): void;
 }
 
 export type CleanupBookkeepingParams = {
@@ -114,6 +114,7 @@ export type CleanupBookkeepingParams = {
 };
 
 export type ScheduledRequesterSettleWake = {
+  entry: SubagentRunRecord;
   timer: ReturnType<typeof setTimeout>;
   deadline: number;
   rearmGeneration?: number;

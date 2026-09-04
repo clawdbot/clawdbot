@@ -93,6 +93,12 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 
 | Metric                                           | Type      | Labels                                                                                    |
 | ------------------------------------------------ | --------- | ----------------------------------------------------------------------------------------- |
+| `openclaw_gateway_rpc_requests_total`            | counter   | `method`                                                                                  |
+| `openclaw_gateway_rpc_first_response_seconds`    | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_handler_seconds`           | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_admission_seconds`         | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_queue_wait_seconds`        | histogram | `method`                                                                                  |
+| `openclaw_gateway_rpc_outcomes_total`            | counter   | `phase`, `outcome`                                                                        |
 | `openclaw_run_completed_total`                   | counter   | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
 | `openclaw_run_duration_seconds`                  | histogram | `channel`, `model`, `outcome`, `provider`, `trigger`                                      |
 | `openclaw_model_call_total`                      | counter   | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
@@ -153,6 +159,27 @@ provider request. `observation_unit="turn"` measures a synthetic Claude Code
 or Codex CLI agent turn that can contain multiple hidden provider requests.
 Keep those series separate when comparing latency.
 
+Gateway RPC metrics cover valid authenticated WebSocket requests, including
+subsequent rejections. `first_response` measures receipt through the first frame
+accepted by the sender; unavailable or suppressed sends have no duration sample.
+`handler` measures actual handler invocation through return or throw, and
+`admission` measures receipt through that invocation. `queue_wait` measures only
+operator request start-queue wait, separately from command/session lane metrics.
+They measure elapsed time, not CPU time. Early acknowledgments and responses
+after handler return are distinct from completed agent work. See
+[Gateway RPC timing semantics](/gateway/opentelemetry#gateway-rpc).
+
+RPC method labels contain canonical core method names, `other` for plugin
+methods, or `unknown`. Outcome totals aggregate by phase and outcome without a
+method dimension. Each method with all four timings occupies five aggregate
+samples in the shared 2,048-sample cap. A duration histogram occupies one sample
+but expands into 19 scrape series (buckets, sum, and count). Existing samples keep
+updating when the cap fills; unseen RPC or other operational samples are refused
+and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
+coverage of every core method can fill the cap, so a zero value matters when
+interpreting totals or latency percentiles. Async diagnostic queue saturation can
+also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
+
 ## Label policy
 
 <AccordionGroup>
@@ -181,6 +208,21 @@ Keep those series separate when comparing latency.
 ## PromQL recipes
 
 ```promql
+# Gateway RPC requests per second by method
+sum by (method) (rate(openclaw_gateway_rpc_requests_total[5m]))
+
+# 95th percentile first-response latency by method
+histogram_quantile(
+  0.95,
+  sum by (le, method) (rate(openclaw_gateway_rpc_first_response_seconds_bucket[5m]))
+)
+
+# 95th percentile operator request start-queue wait by method
+histogram_quantile(
+  0.95,
+  sum by (le, method) (rate(openclaw_gateway_rpc_queue_wait_seconds_bucket[5m]))
+)
+
 # Tokens per minute, split by provider
 sum by (provider) (rate(openclaw_model_tokens_total[1m]))
 

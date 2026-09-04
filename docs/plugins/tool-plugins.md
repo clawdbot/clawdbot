@@ -171,6 +171,12 @@ That is the opposite argument order from the declarative
 Reading `params` from the first argument of a factory tool returns the tool
 call ID string instead.
 
+Concrete tools can provide `prepareArguments(args)` to normalize input before
+schema validation. The native agent loop also honors
+`executionMode: "sequential"` when tool calls must run one at a time. These
+runtime properties come from the current factory context even when the tool's
+descriptor is cached; argument preparation and execution use the same instance.
+
 Set `hideFromChannelProgress: true` on the concrete factory tool to keep its
 transient activity out of channel progress drafts. Lifecycle events and the
 final tool result still flow normally. OpenClaw preserves this flag when

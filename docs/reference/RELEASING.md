@@ -629,6 +629,12 @@ the stable tag's base version, the parent skips both native qualification and
 APK publication and records the pin, expected train, and remedy in its summary
 and release proof. Before the next tag, prepare the shared mobile release with
 `node --import tsx scripts/mobile-release-version.ts --prepare --version YYYY.M.PATCH --write`.
+When preparing the core and mobile release together, use
+`pnpm release:prepare --version YYYY.M.PATCH --android --write`; its Android
+selection uses the same shared mobile preparation and reads pending notes from
+`apps/ios/CHANGELOG.md`. The generated Android notes must fit
+[Google Play's 500 Unicode character limit](https://support.google.com/googleplay/android-developer/answer/9859348),
+including the final newline. iOS App Store finalization remains a separate step.
 A matching pin still requires successful native qualification; a failed run is
 never recorded as a pin mismatch skip.
 
@@ -762,7 +768,7 @@ at the exact release SHA. Each verifier still independently checks that manifest
 against the artifact's recorded source hash, together with the tarball hashes
 and producer identity.
 
-ClawHub OIDC publication requires the executing release parent to authorize the exact child run, attempt, and package inventories. A direct `Plugin ClawHub Release` dry run can prepare packages without publication authority, but a standalone publish cannot replace the parent. A new recovery child cannot reuse an earlier child's receipt, and a completed parent cannot issue a new one. Failed-parent recovery therefore needs a separately approved ClawHub owner recovery contract; an environment approval alone does not supply the missing receipt. Do not retry publication with copied receipts or treat staging as completed publication.
+ClawHub OIDC publication requires the executing release parent to authorize the exact child run, attempt, and package inventories. A direct `Plugin ClawHub Release` dry run can prepare packages without publication authority, but a standalone publish cannot replace the parent. A direct human `Plugin ClawHub Release` dispatch with `release_publish_run_id` now uploads the `openclaw-clawhub-recovery-approval-<run-id>-<run-attempt>` receipt from the `approve_plugins_clawhub_release` environment job, supplying the child-side evidence ClawHub's explicit-recovery route requires; bot-dispatched children never upload it. ClawHub still also requires a parent authorization receipt bound to that exact recovery child, which a completed parent cannot issue, so failed-parent recovery remains blocked on that parent-side contract. Do not retry publication with copied receipts or treat staging as completed publication.
 
 Before dispatching a ClawHub publisher, the parent refuses dispatch if a run for
 the same tooling ref is waiting, pending, queued, or in progress. Follow the

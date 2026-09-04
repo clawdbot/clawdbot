@@ -8,7 +8,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import { loadCronStore, saveCronJobsStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
@@ -17,7 +17,6 @@ import {
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
 import {
@@ -177,17 +176,18 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
     startedAtMs,
   });
   let receipt: ReturnType<typeof claimCronRunReceiptInDatabase> | undefined;
-  await saveCronJobsStoreWithTransactionHooks(
+  await saveCronJobsStore(
     store.storePath,
     { version: 1, jobs: [foreignRunning, pendingJob] },
-    undefined,
     {
-      beforeWrite: (database) => {
-        receipt = claimCronRunReceiptInDatabase({
-          database,
-          prepared,
-          resolveAgentId: (job) => job.agentId ?? "main",
-        });
+      transactionHooks: {
+        beforeWrite: (database) => {
+          receipt = claimCronRunReceiptInDatabase({
+            database,
+            prepared,
+            resolveAgentId: (job) => job.agentId ?? "main",
+          });
+        },
       },
     },
   );

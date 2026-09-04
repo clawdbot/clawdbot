@@ -344,6 +344,21 @@ async function startMcpLoopbackServer(port = 0): Promise<{
             responses.push(jsonRpcError(readJsonRpcRequestId(message), -32600, "Invalid Request"));
             continue;
           }
+          if (
+            message.method === "tools/call" &&
+            requestContext.nativeCronCreatorToolAllowlist === null
+          ) {
+            if (shouldSendJsonRpcResponse(message)) {
+              responses.push(
+                jsonRpcError(
+                  readJsonRpcRequestId(message),
+                  -32000,
+                  "Native tool authority is not initialized. Retry after native startup, or start a fresh session; no tool action was taken.",
+                ),
+              );
+            }
+            continue;
+          }
           const cliCaptureHandle = cliCaptureHandles[messageIndex];
           let response: object | null;
           try {

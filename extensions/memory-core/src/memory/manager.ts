@@ -21,12 +21,12 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { borrowOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { runInMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
-import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { closeMemoryDatabase, memoryDatabaseTableExists } from "./manager-db.js";
+import { memoryDatabaseTableExists, openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
 import {
   clearMemoryEmbeddingProbeCache,
   resolveEffectiveMemorySearchSettings,
@@ -49,7 +49,11 @@ import {
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
-import { collectMemoryStatusAggregate, resolveStatusProviderInfo } from "./manager-status-state.js";
+import {
+  collectMemoryStatusAggregate,
+  collectMemoryStorageStatus,
+  resolveStatusProviderInfo,
+} from "./manager-status-state.js";
 import type { MemoryReindexRetryState } from "./manager-sync-base.js";
 import {
   enqueueMemoryTargetedSessionSync,
@@ -106,10 +110,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     pollIntervalMs: number;
     timeoutMs: number;
   };
-  protected batchFailureCount = 0;
-  protected batchFailureLastError?: string;
-  protected batchFailureLastProvider?: string;
-  protected batchFailureLock: Promise<void> = Promise.resolve();
   protected publishedDatabase: MemoryIndexDatabase;
   protected readonly cache: { enabled: boolean; maxEntries?: number };
   protected indexIdentityDirty = false;
@@ -171,7 +171,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
               }
               return manager;
             },
-            reuse: (manager) => !manager.closing && !manager.closed,
+            reuse: (manager) => !manager.closing && !manager.closed && manager.db.isOpen,
           };
         },
       },
@@ -203,7 +203,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     for (const source of effectiveSettings.sources) {
       this.sources.add(source);
     }
-    this.publishedDatabase = new MemoryIndexDatabase(this.openDatabase(this.purpose === "status"));
+    const dbPath = resolveUserPath(effectiveSettings.store.databasePath);
+    const vectorEnabled = effectiveSettings.store.vector.enabled;
+    const readOnly = this.purpose === "status";
+    const connection = readOnly
+      ? openMemoryDatabaseReadOnlyAtPath(dbPath, vectorEnabled, this.agentId)
+      : borrowOpenClawAgentDatabase({ agentId: this.agentId, path: dbPath });
+    this.publishedDatabase = new MemoryIndexDatabase(connection.db, connection.release, readOnly);
     try {
       this.providerKey = this.computeProviderKey();
       this.cache = {
@@ -263,7 +269,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         });
       }
     } catch (err) {
-      closeMemoryDatabase(this.db);
+      this.publishedDatabase.release();
       throw err;
     }
   }
@@ -514,6 +520,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.databasePath,
+      storage:
+        this.sourceInspections.size > 0
+          ? collectMemoryStorageStatus(this.db, resolveUserPath(this.settings.store.databasePath))
+          : undefined,
       provider: providerInfo.provider,
       model: providerInfo.model,
       requestedProvider: this.requestedProvider,
@@ -559,14 +569,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       },
       batch: {
         enabled: this.batch.enabled,
-        failures: this.batchFailureCount,
-        limit: MEMORY_BATCH_FAILURE_LIMIT,
+        failures: this.batchFailure.count,
+        limit: this.batchFailureLimit,
         wait: this.batch.wait,
         concurrency: this.batch.concurrency,
         pollIntervalMs: this.batch.pollIntervalMs,
         timeoutMs: this.batch.timeoutMs,
-        lastError: this.batchFailureLastError,
-        lastProvider: this.batchFailureLastProvider,
+        lastError: this.batchFailure.lastError,
+        lastProvider: this.batchFailure.lastProvider,
       },
       custom: {
         llamaCppRuntime: getLocalEmbeddingRuntimeFacts(this.provider),
@@ -651,7 +661,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     try {
       await this.retryFailedClose();
     } finally {
-      closeMemoryDatabase(this.db);
+      this.publishedDatabase.release();
       this.closeTeardownComplete = true;
     }
   }
