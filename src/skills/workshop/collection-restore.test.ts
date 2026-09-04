@@ -200,6 +200,76 @@ describe("skill collection backup and restore", () => {
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Manual improvement.");
   });
 
+  it.each(["unchanged", "edited"])(
+    "preserves a legacy backup and %s deep content when restore cannot verify the tree",
+    async (deepContent) => {
+      await writeWorkshopOwnedSkills([
+        { name: "procedure", description: "Original procedure", body: "# Original\n" },
+      ]);
+      const result = await reconcileSkillCollection({
+        workspaceDir,
+        env: testState.env,
+        ...(await readCollectionReceipt()),
+        plan: [
+          {
+            action: "write",
+            name: "procedure",
+            description: "Clean procedure",
+            content: "# Clean\n",
+          },
+        ],
+      });
+      const skillDir = path.join(workspaceDir, "skills", "procedure");
+      const backupDir = path.join(
+        resolveSkillCollectionBackupRoot(workspaceDir, testState.env),
+        result.backupId,
+      );
+      const backupSkillDir = path.join(backupDir, "workspace", "skills", "procedure");
+      const deepPath = path.join(
+        "references",
+        ...Array.from({ length: 16 }, (_, index) => `d${index}`),
+        "proof.txt",
+      );
+      const currentDeepFile = path.join(skillDir, deepPath);
+      const backupDeepFile = path.join(backupSkillDir, deepPath);
+      // The old sixteen-level digest omitted these files, just as if they were absent.
+      // Keep the real shallow result digest to recreate that legacy backup without a mock.
+      await fs.mkdir(path.dirname(backupDeepFile), { recursive: true });
+      await fs.writeFile(backupDeepFile, "Original support\n");
+      await fs.mkdir(path.dirname(currentDeepFile), { recursive: true });
+      await fs.writeFile(
+        currentDeepFile,
+        deepContent === "edited" ? "Later operator edit\n" : "Original support\n",
+      );
+      const preservedFiles = [
+        path.join(skillDir, "SKILL.md"),
+        currentDeepFile,
+        path.join(backupSkillDir, "SKILL.md"),
+        backupDeepFile,
+        path.join(backupDir, "manifest.json"),
+      ];
+      const snapshot = async () => ({
+        bytes: await Promise.all(preservedFiles.map((file) => fs.readFile(file))),
+        entries: await Promise.all(
+          [workspaceDir, backupDir].map(async (dir) =>
+            (await fs.readdir(dir, { recursive: true })).sort(),
+          ),
+        ),
+      });
+      const before = await snapshot();
+      dispatchCommittedSkillChangeBestEffort.mockClear();
+      snapshotCommittedSkillArtifactBestEffort.mockClear();
+
+      await expect(
+        restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
+      ).rejects.toThrow("Skill evaluation bundle exceeds traversal limits.");
+
+      expect(await snapshot()).toEqual(before);
+      expect(dispatchCommittedSkillChangeBestEffort).not.toHaveBeenCalled();
+      expect(snapshotCommittedSkillArtifactBestEffort).not.toHaveBeenCalled();
+    },
+  );
+
   it("restores an owned skill without rewriting a kept external skill", async () => {
     await writeWorkshopOwnedSkills([
       { name: "owned", description: "Workshop procedure", body: "# Owned original\n" },
