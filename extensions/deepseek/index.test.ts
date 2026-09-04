@@ -383,6 +383,23 @@ describe("deepseek provider plugin", () => {
       expect(readThinking(capturedPayload)?.type).toBe("disabled");
       expect(capturedPayload).not.toHaveProperty("reasoning_effort");
 
+      const wrapThinkingLow = requireThinkingWrapper(
+        createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "low"),
+        "low",
+      );
+      await wrapThinkingLow(
+        {
+          provider: "deepseek",
+          id: modelId,
+          api: "openai-completions",
+        } as never,
+        { messages: [] } as never,
+        {},
+      );
+
+      expect(readThinking(capturedPayload)?.type).toBe("enabled");
+      expect(capturedPayload?.reasoning_effort).toBe("low");
+
       const wrapThinkingXhigh = requireThinkingWrapper(
         createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "xhigh"),
         "xhigh",
@@ -398,7 +415,7 @@ describe("deepseek provider plugin", () => {
       );
 
       expect(readThinking(capturedPayload)?.type).toBe("enabled");
-      expect(capturedPayload?.reasoning_effort).toBe("max");
+      expect(capturedPayload?.reasoning_effort).toBe("high");
     },
   );
 

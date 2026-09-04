@@ -461,7 +461,7 @@ export function setQwenChatTemplateThinking(
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
-export type DeepSeekV4ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type DeepSeekV4ReasoningEffort = "low" | "high" | "max";
 
 function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLevel): boolean {
   const normalized = typeof thinkingLevel === "string" ? thinkingLevel.toLowerCase() : "";
@@ -471,7 +471,14 @@ function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLeve
 function resolveDeepSeekV4ReasoningEffort(
   thinkingLevel: DeepSeekV4ThinkingLevel,
 ): DeepSeekV4ReasoningEffort {
-  return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
+  const normalized = typeof thinkingLevel === "string" ? thinkingLevel.toLowerCase() : "";
+  if (normalized === "minimal" || normalized === "low") {
+    return "low";
+  }
+  if (normalized === "max") {
+    return "max";
+  }
+  return "high";
 }
 
 /** Normalizes assistant reasoning replay shared by OpenAI-compatible provider families. */

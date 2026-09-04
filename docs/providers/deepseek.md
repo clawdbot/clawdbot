@@ -103,8 +103,10 @@ PNG, JPEG, GIF, and WebP images through the same API and API key. See
 V4 models support DeepSeek's `thinking` control. OpenClaw also replays
 DeepSeek `reasoning_content` on follow-up turns so thinking sessions with tool
 calls can continue.
-Use `/think xhigh` or `/think max` with DeepSeek V4 models to request DeepSeek's
-maximum `reasoning_effort`; both map to `"max"`.
+Use `/think max` with DeepSeek V4 models to request DeepSeek's maximum
+`reasoning_effort`. OpenClaw maps `/think minimal` and `/think low` to
+`"low"`, `/think medium`, `/think high`, and `/think xhigh` to `"high"`, and
+`/think max` to `"max"`.
 </Tip>
 
 ## Thinking and tools
