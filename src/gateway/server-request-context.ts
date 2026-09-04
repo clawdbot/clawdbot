@@ -28,6 +28,7 @@ type GatewayRequestContextClient = GatewayClient & {
 };
 
 type GatewayRequestContextParams = {
+  trackExecution: GatewayRequestContext["trackExecution"];
   deps: GatewayRequestContext["deps"];
   configRevisionProjector: GatewayRequestContext["configRevisionProjector"];
   runtimeState: Pick<
@@ -178,6 +179,7 @@ export function createGatewayRequestContext(
 ): GatewayRequestContextWithClientLookup {
   const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
   const context: GatewayRequestContextWithClientLookup = {
+    trackExecution: params.trackExecution,
     deps: params.deps,
     configRevisionProjector: params.configRevisionProjector,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding

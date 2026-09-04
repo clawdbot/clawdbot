@@ -764,8 +764,10 @@ export async function startTestGatewayServer(port: number, opts?: GatewayServerO
       root: tempControlUiRoot,
     };
   }
-  const server = await mod.startGatewayServer(port, resolvedOpts);
-  return gatewayFixtureLifetime.ownServer(server, tempHome);
+  return await gatewayFixtureLifetime.ownServer(
+    () => mod.startGatewayServer(port, resolvedOpts),
+    tempHome,
+  );
 }
 
 export async function startGatewayServerWithRetries(params: {

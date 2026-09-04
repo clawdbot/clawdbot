@@ -1,15 +1,10 @@
-import type { ChildProcess } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
-import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
-import { hasErrnoCode } from "../infra/errno.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
+import { runGatewayFixtureFork } from "./server.fixture-lifetime.test-support.js";
 
 // Run the actual fixture hooks with controlled setup/teardown overlap instead
 // of waiting for the runner's 180s timeout. Consumer test bodies stay uncalled.
@@ -527,137 +522,24 @@ test("observes retained Gateway owners through fixture teardown", async () => {
 `;
 }
 
-test("retains fixture state and fences successors after a required Gateway close failure", (context) => {
-  // A failed required drain deliberately poisons its fixture owner. Exercise it
-  // in a native fork, never by clearing that ownership in this shared worker.
-  const run = Promise.resolve().then(async () => {
-    context.signal.throwIfAborted();
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "gateway-close-fork-")));
-    let joined = false;
-    try {
-      // Failed child claims belong here, never to the outer worker's resource namespace.
-      createVitestResourceOwner(root);
-      const require = createRequire(import.meta.url);
-      const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-      await fs.symlink(
-        path.join(repoRoot, "node_modules"),
-        path.join(root, "node_modules"),
-        "junction",
-      );
-      await fs.mkdir(path.join(root, "home"));
-      await fs.mkdir(path.join(root, "tmp"));
-      await fs.writeFile(
-        path.join(root, "fixture.test.ts"),
-        retainedGatewayFixtureSource(repoRoot, root),
-      );
-      await fs.writeFile(
-        path.join(root, "vitest.config.ts"),
-        `
-import { defineConfig } from "vitest/config";
-import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.shared.config.ts"))};
-export default defineConfig({
-  envDir: false,
-  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
-  plugins: sharedVitestConfig.plugins,
-  resolve: sharedVitestConfig.resolve,
-  test: {
-    pool: "forks", isolate: true, maxWorkers: 1, fileParallelism: false,
-    include: ["fixture.test.ts"],
-    testTimeout: sharedVitestConfig.test.testTimeout,
-    hookTimeout: sharedVitestConfig.test.hookTimeout,
-    deps: sharedVitestConfig.test.deps,
-    server: sharedVitestConfig.test.server,
-  },
-});
-`,
-      );
-      const reportFile = path.join(root, "report.json");
-      let child: ChildProcess | undefined;
-      const output = await runVitestShutdownCommand({
-        args: [
-          path.join(vitestPackageDir, "vitest.mjs"),
-          "run",
-          "--root",
-          root,
-          "--config",
-          path.join(root, "vitest.config.ts"),
-          "--configLoader",
-          "runner",
-          "--reporter=verbose",
-          "--reporter=json",
-          `--outputFile=${reportFile}`,
-        ],
-        cwd: repoRoot,
-        signal: context.signal,
-        timeoutMs: 90_000,
-        maxBytes: 4 * 1024 * 1024,
-        env: {
-          PATH: process.env.PATH,
-          HOME: path.join(root, "home"),
-          USERPROFILE: path.join(root, "home"),
-          OPENCLAW_HOME: path.join(root, "home"),
-          OPENCLAW_STATE_DIR: path.join(root, "home/.openclaw"),
-          OPENCLAW_CONFIG_PATH: path.join(root, "home/.openclaw/openclaw.json"),
-          TMPDIR: path.join(root, "tmp"),
-          TMP: path.join(root, "tmp"),
-          TEMP: path.join(root, "tmp"),
-          CI: "1",
-          NO_COLOR: "1",
-        },
-        onReady(owned) {
-          child = owned;
-        },
-      });
-      const diagnostics = `${output.stdout}\n${output.stderr}`;
-      expect(child?.signalCode, diagnostics).toBeNull();
-      expect(child?.killed, diagnostics).toBe(false);
-      const pid = Number(await fs.readFile(path.join(root, "worker.pid"), "utf8"));
-      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
-      let workerStopped = false;
-      try {
-        process.kill(pid, 0);
-      } catch (error) {
-        if (!hasErrnoCode(error, "ESRCH")) {
-          throw error;
-        }
-        workerStopped = true;
-      }
-      expect(workerStopped, "native fixture worker must exit before root release").toBe(true);
-      joined = true;
-      expect(output.code, diagnostics).toBe(0);
-      expect(JSON.parse(await fs.readFile(reportFile, "utf8")), diagnostics).toMatchObject({
-        numPassedTests: 1,
-        numFailedTests: 0,
-        success: true,
-      });
-      const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
-      const journal = await fs.readFile(path.join(root, "journal.json"), "utf8");
-      expect(JSON.parse(journal), journal).toMatchObject({
-        close: { rejected: true, faultPreserved: true },
-        caseReset: { rejected: true },
-        cleanup: { rejected: true, faultPreserved: true },
-        repeatedCleanup: { rejected: true, faultPreserved: true },
-        suiteSetup: { rejected: true },
-        connectionCleanupFinished: true,
-        stopCalls: 0,
-        harnessRetained: true,
-        successorCaseStarted: false,
-        successorSuiteStarted: false,
-        afterClose: retained,
-        afterCaseReset: retained,
-        afterCleanup: retained,
-        afterModuleReset: retained,
-        producer: { ...retained, phase: "after-cleanup", writeSucceeded: true },
-      });
-    } finally {
-      if (joined) {
-        await fs.rm(root, { recursive: true, force: true });
-      } else {
-        console.warn(`Retained unjoined native Gateway fixture: ${root}`);
-      }
-    }
-  });
-  context.onTestFinished(() => run);
-  return run;
-});
+test("retains fixture state and fences successors after a required Gateway close failure", (context) =>
+  runGatewayFixtureFork(context, retainedGatewayFixtureSource, (journal, text) => {
+    const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
+    expect(journal, text).toMatchObject({
+      close: { rejected: true, faultPreserved: true },
+      caseReset: { rejected: true },
+      cleanup: { rejected: true, faultPreserved: true },
+      repeatedCleanup: { rejected: true, faultPreserved: true },
+      suiteSetup: { rejected: true },
+      connectionCleanupFinished: true,
+      stopCalls: 0,
+      harnessRetained: true,
+      successorCaseStarted: false,
+      successorSuiteStarted: false,
+      afterClose: retained,
+      afterCaseReset: retained,
+      afterCleanup: retained,
+      afterModuleReset: retained,
+      producer: { ...retained, phase: "after-cleanup", writeSucceeded: true },
+    });
+  }));

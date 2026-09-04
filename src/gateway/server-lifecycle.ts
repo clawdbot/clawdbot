@@ -513,38 +513,17 @@ export async function prepareGatewayLifecycle(params: {
       throw failure.reason;
     }
   };
-  const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
-    try {
-      await beginClosePrelude();
-      const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
-      const transport = transportBridge.current();
-      await transport?.portalService.closeAll();
-      await shutdownRuntime.createGatewayCloseHandler({
-        bonjourStop: kernel.swapDiscovery(null)?.stop ?? null,
-        tailscaleCleanup: runtimeState.tailscaleCleanup,
-        clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
-        channelIds,
-        stopChannel,
-        pluginServices: runtimeState.pluginServices,
-        cron: runtimeState.cronState.cron,
-        heartbeatRunner: runtimeState.heartbeatRunner,
-        updateCheckStop: runtimeState.stopGatewayUpdateCheck,
-        stopTaskRegistryMaintenance: shutdownRuntime.stopTaskRegistryMaintenance,
-        nodePresenceTimers,
-        broadcast,
-        maintenance: runtimeState.maintenance,
-        stopMediaCleanup: stopMediaCleanupForClose,
-        agentUnsub: runtimeState.agentUnsub,
-        heartbeatUnsub: runtimeState.heartbeatUnsub,
-        transcriptUnsub: runtimeState.transcriptUnsub,
-        lifecycleUnsub: runtimeState.lifecycleUnsub,
-        taskUnsub: runtimeState.taskUnsub,
+  const prepareClose = async (optsValue?: GatewayCloseOptions) => {
+    await beginClosePrelude(optsValue);
+    const preparation = await shutdownRuntime.prepareGatewayClose(
+      {
         chatRunState,
         chatAbortControllers,
         chatQueuedTurns,
         restartRecoveryCandidates,
         removeChatRun,
         agentRunSeq,
+        broadcast,
         nodeSendToSession,
         resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
         markMainSessionsAbortedForRestart: async (restart) => {
@@ -554,31 +533,63 @@ export async function prepareGatewayLifecycle(params: {
           });
         },
         getPendingReplyCount: getTotalPendingReplies,
-        clients,
-        finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
+        updateCheckStop: runtimeState.stopGatewayUpdateCheck,
         configReloader: { stop: stopConfigReloaderForClose },
-        ...(transport
-          ? {
-              wss: transport.wss,
-              httpServer: transport.httpServer,
-              httpServers: transport.httpServers,
-            }
-          : {}),
-        drainActiveSessionsForShutdown: shutdownRuntime.drainActiveSessionsForShutdown,
-        disposeAllBundleLspRuntimes: shutdownRuntime.disposeAllBundleLspRuntimes,
-        drainRetainedOpenAiEmbeddingProviders:
-          shutdownRuntime.drainRetainedOpenAiEmbeddingProviders,
-        stopGmailWatcher: shutdownRuntime.stopGmailWatcher,
-        disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
-        closeProviderTransportDispatcherPool: shutdownRuntime.closeProviderTransportDispatcherPool,
-      })(optsValue);
-    } finally {
+      },
+      optsValue,
+    );
+    // Startup may still publish cleanup owners while received work settles.
+    // Resolve their handles only when the caller reaches final teardown.
+    return async () => {
+      const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
+      const transport = transportBridge.current();
+      await transport?.portalService.closeAll();
+      await shutdownRuntime.completeGatewayClose(
+        {
+          bonjourStop: kernel.swapDiscovery(null)?.stop ?? null,
+          tailscaleCleanup: runtimeState.tailscaleCleanup,
+          clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
+          channelIds,
+          stopChannel,
+          pluginServices: runtimeState.pluginServices,
+          cron: runtimeState.cronState.cron,
+          heartbeatRunner: runtimeState.heartbeatRunner,
+          stopTaskRegistryMaintenance: shutdownRuntime.stopTaskRegistryMaintenance,
+          nodePresenceTimers,
+          maintenance: runtimeState.maintenance,
+          stopMediaCleanup: stopMediaCleanupForClose,
+          agentUnsub: runtimeState.agentUnsub,
+          heartbeatUnsub: runtimeState.heartbeatUnsub,
+          transcriptUnsub: runtimeState.transcriptUnsub,
+          lifecycleUnsub: runtimeState.lifecycleUnsub,
+          taskUnsub: runtimeState.taskUnsub,
+          chatRunState,
+          clients,
+          finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),
+          ...(transport
+            ? {
+                wss: transport.wss,
+                httpServer: transport.httpServer,
+                httpServers: transport.httpServers,
+              }
+            : {}),
+          drainActiveSessionsForShutdown: shutdownRuntime.drainActiveSessionsForShutdown,
+          disposeAllBundleLspRuntimes: shutdownRuntime.disposeAllBundleLspRuntimes,
+          drainRetainedOpenAiEmbeddingProviders:
+            shutdownRuntime.drainRetainedOpenAiEmbeddingProviders,
+          stopGmailWatcher: shutdownRuntime.stopGmailWatcher,
+          disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,
+          closeProviderTransportDispatcherPool:
+            shutdownRuntime.closeProviderTransportDispatcherPool,
+        },
+        preparation,
+      );
       await requestEntryLifetime.sealAndJoin();
       params.releasePluginMetadata();
-    }
+    };
   };
   const closeOnStartupFailure = async () => {
-    await beginClosePrelude({ reason: "gateway startup failed" });
+    const close = await prepareClose({ reason: "gateway startup failed" });
     await runGatewayShutdownSteps({
       steps: [
         {
@@ -597,7 +608,7 @@ export async function prepareGatewayLifecycle(params: {
         { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
         {
           name: "gateway close",
-          run: () => createCloseHandler()({ reason: "gateway startup failed" }),
+          run: close,
         },
       ],
       onError: (message) => log.error(message),
@@ -677,7 +688,7 @@ export async function prepareGatewayLifecycle(params: {
     registerPostReadySidecars: postReadySidecarStopOwner.publish,
     registerGatewayLifetimeSidecars: gatewayLifetimeSidecarStopOwner.publish,
     sealAndJoinRegisteredSidecarStops,
-    createCloseHandler,
+    prepareClose,
     closeOnStartupFailure,
   };
 }

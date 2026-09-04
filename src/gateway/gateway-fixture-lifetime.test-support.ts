@@ -1,6 +1,7 @@
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import type { GatewayServer } from "./server.js";
 
 type GatewayFixtureState =
@@ -54,13 +55,12 @@ export const gatewayFixtureLifetime = {
     return registry.owners.get(server)?.state.phase === "closed" && !closingOwner();
   },
 
-  ownServer(server: GatewayServer, ownerRoot?: string): GatewayServer {
+  async ownServer(start: () => Promise<GatewayServer>, ownerRoot?: string): Promise<GatewayServer> {
     const owner: GatewayFixtureOwner = { state: { phase: "open" } };
     const lifetime = createFixtureLifetime(ownerRoot);
     const closed = createDeferredCore();
-    const originalClose = server.close.bind(server);
+    // Startup owns state before it can yield or fail without returning a close handle.
     registry.active.add(owner);
-    registry.owners.set(server, owner);
     try {
       void lifetime.track(closed.promise, true);
     } catch (error) {
@@ -68,6 +68,28 @@ export const gatewayFixtureLifetime = {
       throw error;
     }
 
+    let server: GatewayServer;
+    try {
+      server = await start();
+    } catch (error) {
+      owner.state = { phase: "closing" };
+      // Only the native cleanup outcome can certify a failed acquisition as released.
+      if (error instanceof GatewayStartupCleanupError) {
+        closed.reject(error);
+      } else {
+        closed.resolve();
+      }
+      try {
+        await lifetime.cleanup();
+        owner.state = { phase: "closed" };
+        registry.active.delete(owner);
+      } catch (cleanupError) {
+        owner.state = { phase: "retained", error: cleanupError };
+      }
+      throw error;
+    }
+    const originalClose = server.close.bind(server);
+    registry.owners.set(server, owner);
     let closePromise: Promise<void> | undefined;
     server.close = (...args: Parameters<GatewayServer["close"]>) => {
       if (closePromise) {

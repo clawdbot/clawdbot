@@ -270,7 +270,7 @@ describe("createGatewayKernel", () => {
         kernel.postReadyState.maintenanceTimer = maintenanceTimer;
         closing = server
           ? server.close({ reason: "close ordering test" })
-          : kernel.createCloseHandler()({ reason: "close ordering test" });
+          : kernel.prepareClose({ reason: "close ordering test" }).then((close) => close());
 
         expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
         expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });

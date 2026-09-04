@@ -1,6 +1,11 @@
 export async function prepareGatewayShutdownRuntime() {
   const [
-    { createGatewayCloseHandler, drainActiveSessionsForShutdown, runGatewayClosePrelude },
+    {
+      prepareGatewayClose,
+      completeGatewayClose,
+      drainActiveSessionsForShutdown,
+      runGatewayClosePrelude,
+    },
     { runGlobalGatewayStopSafely },
     { flushPendingSessionsChangedEvents },
     { closeMcpLoopbackServer },
@@ -29,7 +34,8 @@ export async function prepareGatewayShutdownRuntime() {
   await prepareActivePluginRegistryShutdown();
 
   return {
-    createGatewayCloseHandler,
+    prepareGatewayClose,
+    completeGatewayClose,
     drainActiveSessionsForShutdown,
     runGatewayClosePrelude,
     runGlobalGatewayStopSafely,

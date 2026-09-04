@@ -9,6 +9,7 @@ import {
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
@@ -21,6 +22,7 @@ import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js"
 
 function createContext(): GatewayRequestContext {
   return {
+    trackExecution: trackAsyncWork,
     deps: {},
     getRuntimeConfig: () => ({}),
     logGateway: {

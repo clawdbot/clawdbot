@@ -7,7 +7,7 @@ import {
 } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
-import { runGatewayShutdownSteps } from "./server-shutdown.js";
+import { rethrowGatewayStartupError, runGatewayShutdownSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
@@ -39,7 +39,7 @@ export async function startGatewayServerCore(
   const {
     beginClosePrelude,
     closeOnStartupFailure,
-    createCloseHandler,
+    prepareClose,
     sealAndJoinRegisteredSidecarStops,
     runClosePrelude,
     stopRegisteredGatewayLifetimeSidecars,
@@ -88,15 +88,13 @@ export async function startGatewayServerCore(
     });
     startupSettled = startup.startupSettled;
   } catch (err) {
-    await closeOnStartupFailure();
-    throw err;
+    return await rethrowGatewayStartupError(err, closeOnStartupFailure);
   }
   // The public server is fully initialized now. Leave a short I/O window before
   // background prewarms and cleanup imports compete for the startup CPU.
   const postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
   postReadyWorkTimer.unref?.();
 
-  const close = createCloseHandler();
   let closePromise: Promise<void> | undefined;
 
   return {
@@ -109,6 +107,7 @@ export async function startGatewayServerCore(
         releasePostReadyWork();
         closePromise = (async () => {
           await prelude;
+          const close = await prepareClose(optsLocal);
           await runGatewayShutdownSteps({
             steps: [
               {
@@ -138,7 +137,7 @@ export async function startGatewayServerCore(
               },
               { name: "gateway close prelude", run: runClosePrelude },
               { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
-              { name: "gateway close", run: () => close(optsLocal) },
+              { name: "gateway close", run: close },
             ],
             onError: (message) => log.error(message),
           });

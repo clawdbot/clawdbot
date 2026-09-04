@@ -1,4 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  BUILD_STAMP_FILE,
+  resolveGitHead,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+} from "../../scripts/lib/local-build-metadata.mts";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -7,6 +14,23 @@ import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
 
 describe("createGatewayKernel", () => {
+  beforeAll(async () => {
+    // The runner prepares compiled plugin dependencies before admitting workers.
+    // This fixture still exercises the source Gateway lifecycle owners.
+    const root = process.cwd();
+    const head = resolveGitHead({ cwd: root });
+    expect(head).toMatch(/^[0-9a-f]{40}$/u);
+    await fs.access(path.join(root, "dist/index.js"));
+    for (const [file, field] of [
+      [BUILD_STAMP_FILE, "head"],
+      [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
+      ["build-info.json", "commit"],
+    ] as const) {
+      const metadata = JSON.parse(await fs.readFile(path.join(root, "dist", file), "utf8"));
+      expect(metadata[field], file).toBe(head);
+    }
+  });
+
   it.for(["kernel", "public"] as const)(
     "retains shutdown dependencies after connection-sidecar failure during %s close",
     async (entry) => {

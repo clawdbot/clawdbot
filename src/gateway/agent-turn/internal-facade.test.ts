@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
@@ -32,6 +33,7 @@ vi.mock("./agent-turn-service.js", () => ({
 
 function createContext() {
   return Object.assign({} as GatewayRequestContext, {
+    trackExecution: trackAsyncWork,
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
     chatAbortControllers: new Map(),

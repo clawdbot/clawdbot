@@ -1,6 +1,25 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayCloseOptions } from "./server-public.js";
+
+/** Create a timeout promise plus cleanup hook for shutdown races. */
+export function createGatewayShutdownTimeout<T>(timeoutMs: number, onTimeout: () => T) {
+  const { promise, resolve } = createDeferredCore<T>();
+  const timer = setTimeout(() => resolve(onTimeout()), timeoutMs);
+  timer.unref?.();
+  return {
+    promise,
+    clear: () => clearTimeout(timer),
+  };
+}
+
+/** Record a shutdown warning once. */
+export function recordGatewayShutdownWarning(warnings: string[], name: string): void {
+  if (!warnings.includes(name)) {
+    warnings.push(name);
+  }
+}
 
 /** Shutdown is published before ingress closes; absent restart metadata stays absent. */
 export function resolveGatewayShutdownNotice(options?: GatewayCloseOptions) {
@@ -40,4 +59,26 @@ export async function runGatewayShutdownSteps(params: {
   if (errors.length > 0) {
     throw new AggregateError(errors, "Gateway shutdown did not complete cleanly");
   }
+}
+
+/** Failed acquisition retains its owner when native cleanup cannot finish. */
+export class GatewayStartupCleanupError extends AggregateError {
+  constructor(startupError: unknown, cleanupError: unknown) {
+    super([startupError, cleanupError], "Gateway startup failed and cleanup did not complete", {
+      cause: startupError,
+    });
+    this.name = "GatewayStartupCleanupError";
+  }
+}
+
+export async function rethrowGatewayStartupError(
+  error: unknown,
+  cleanup: () => Promise<void> | void,
+): Promise<never> {
+  try {
+    await cleanup();
+  } catch (cleanupError) {
+    throw new GatewayStartupCleanupError(error, cleanupError);
+  }
+  throw error;
 }

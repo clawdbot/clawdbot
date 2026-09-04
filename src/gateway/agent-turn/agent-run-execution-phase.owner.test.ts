@@ -120,7 +120,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
       resolveDispatched();
     });
 
-    startAgentRunExecution(execution.params);
+    const completion = startAgentRunExecution(execution.params);
 
     await dispatched;
     expect(dispatchedGeneration).toBe(
@@ -140,14 +140,13 @@ describe("startAgentRunExecution Gateway ownership", () => {
     resolveCleanupObserved();
     await expect(borrowedAfterCleanup).resolves.toBeUndefined();
     expect(execution.runtimeRelease).toHaveBeenCalledOnce();
+    await completion;
   });
 
   it("releases the admitted runtime once when aborted before dispatch", async () => {
     const execution = createExecution({ aborted: true });
 
-    startAgentRunExecution(execution.params);
-
-    await execution.runtimeReleased;
+    await startAgentRunExecution(execution.params);
     expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
     expect(execution.abortCleanup).toHaveBeenCalledOnce();
     expect(execution.gatewayRelease).toHaveBeenCalledOnce();
@@ -161,9 +160,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
       },
     });
 
-    startAgentRunExecution(execution.params);
-
-    await execution.runtimeReleased;
+    await startAgentRunExecution(execution.params);
     expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
     expect(execution.abortCleanup).toHaveBeenCalledOnce();
     expect(execution.gatewayRelease).toHaveBeenCalledOnce();

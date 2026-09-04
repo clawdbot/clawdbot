@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   loaded: [] as string[],
-  close: vi.fn(),
+  prepareClose: vi.fn(),
+  completeClose: vi.fn(),
   flushSessionChanges: vi.fn(),
   stopPlugins: vi.fn(),
   clearPluginRegistry: vi.fn(),
@@ -12,7 +13,8 @@ const state = vi.hoisted(() => ({
 vi.mock("./server-close.runtime.js", () => {
   state.loaded.push("server-close");
   return {
-    createGatewayCloseHandler: state.close,
+    prepareGatewayClose: state.prepareClose,
+    completeGatewayClose: state.completeClose,
     drainActiveSessionsForShutdown: vi.fn(),
     runGatewayClosePrelude: vi.fn(),
   };
@@ -87,7 +89,8 @@ describe("gateway shutdown runtime", () => {
         "plugin-runtime",
       ].toSorted(),
     );
-    expect(runtime.createGatewayCloseHandler).toBe(state.close);
+    expect(runtime.prepareGatewayClose).toBe(state.prepareClose);
+    expect(runtime.completeGatewayClose).toBe(state.completeClose);
     expect(runtime.flushPendingSessionsChangedEvents).toBe(state.flushSessionChanges);
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
     expect(runtime.clearActivePluginRegistry).toBe(state.clearPluginRegistry);

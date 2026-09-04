@@ -23,6 +23,7 @@ import {
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { GatewayConnectionWork } from "./server-connection-work.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import "./server-startup-outcomes.test-support.js";
 
@@ -2432,16 +2433,14 @@ describe("startGatewayPostAttachRuntime", () => {
         const result = await sidecarsPromise;
         await stopping;
 
+        expect(result.pluginServices).not.toBeNull();
+        expect(generation.currentServices()).toBe(owner);
+        expect(onPluginServices).toHaveBeenLastCalledWith(owner);
         if (boundary === "strict replacement") {
-          expect(result.pluginServices).toBeNull();
           expect(serviceStop).toHaveBeenCalledOnce();
           expect(registry.httpRoutes).toEqual([]);
           expect(() => emit?.()).toThrow("no longer active");
-          expect(onPluginServices).toHaveBeenLastCalledWith(null);
         } else {
-          expect(result.pluginServices).not.toBeNull();
-          expect(generation.currentServices()).toBe(owner);
-          expect(onPluginServices).toHaveBeenLastCalledWith(owner);
           expect(serviceStop).not.toHaveBeenCalled();
           expect(registry.httpRoutes.map((route) => route.path)).toEqual([
             "/published-startup-service",
@@ -2457,6 +2456,109 @@ describe("startGatewayPostAttachRuntime", () => {
       }
     },
   );
+
+  it("releases tracked startup after strict timeout while retaining service cleanup", async () => {
+    vi.useFakeTimers();
+    const actualServices =
+      await vi.importActual<typeof import("../plugins/services.js")>("../plugins/services.js");
+    hoisted.startPluginServices.mockImplementationOnce(actualServices.startPluginServices);
+    const startupEntered = createDeferred();
+    const startup = createDeferred();
+    const cleanup = createDeferred();
+    const serviceStop = vi.fn(() => cleanup.promise);
+    const registry = createEmptyPluginRegistry();
+    registry.services.push({
+      pluginId: "retained-startup-cleanup",
+      source: "test",
+      origin: "workspace",
+      service: {
+        id: "retained-startup-cleanup",
+        start: () => {
+          startupEntered.resolve();
+          return startup.promise;
+        },
+        stop: serviceStop,
+      },
+    });
+    const publishedOwner: { current: PluginServicesHandle | null } = { current: null };
+    const generation = createGatewayPluginRuntimeGeneration({
+      getServices: () => publishedOwner.current,
+      setServices: (handle) => {
+        publishedOwner.current = handle;
+      },
+    });
+    const claim = generation.currentClaim();
+    const connectionWork = new GatewayConnectionWork();
+    const base = createPostAttachParams();
+    const operation = Promise.resolve().then(() =>
+      startGatewaySidecars({
+        cfg: base.cfgAtStart,
+        pluginRegistry: registry,
+        defaultWorkspaceDir: base.defaultWorkspaceDir,
+        deps: base.deps,
+        startChannels: vi.fn(async () => {}),
+        shouldCreatePostReadySidecars: () => false,
+        pluginRuntimeClaim: claim,
+        onPluginServices: (handle) => {
+          generation.publishServices(claim, handle);
+        },
+        log: base.log,
+        logHooks: base.logHooks,
+        logChannels: base.logChannels,
+      }),
+    );
+    const starting = connectionWork.track(() => operation);
+    let replacing: Promise<unknown> | undefined;
+    let draining: Promise<void> | undefined;
+    let finalCleanup: Promise<void> | undefined;
+    let reservation: ReturnType<typeof generation.reserve> | undefined;
+
+    try {
+      await startupEntered.promise;
+      const owner = generation.currentServices();
+      if (!owner) {
+        throw new Error("plugin service owner was not published before startup yielded");
+      }
+      reservation = generation.reserve();
+      replacing = owner
+        .stop({
+          strict: true,
+          deadlineAtMs: Date.now() + actualServices.PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+        })
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(actualServices.PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+      expect(await replacing).toBeInstanceOf(AggregateError);
+      expect(serviceStop).toHaveBeenCalledOnce();
+      reservation.reject();
+      startup.resolve();
+
+      let drained = false;
+      draining = connectionWork.drain().then(() => {
+        drained = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drained).toBe(true);
+      expect(generation.currentServices()).toBe(owner);
+
+      let cleanupSettled = false;
+      finalCleanup = owner.stop().then(() => {
+        cleanupSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleanupSettled).toBe(false);
+      expect(serviceStop).toHaveBeenCalledOnce();
+      cleanup.resolve();
+      await finalCleanup;
+      expect(cleanupSettled).toBe(true);
+      expect(serviceStop).toHaveBeenCalledOnce();
+    } finally {
+      reservation?.reject();
+      startup.resolve();
+      cleanup.resolve();
+      await Promise.allSettled([starting, replacing, draining, finalCleanup]);
+      await generation.currentServices()?.stop();
+    }
+  });
 
   it("publishes plugin cleanup ownership before lazy service loading", async () => {
     let shouldStartPluginServices = true;
@@ -2488,7 +2590,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await stopping;
     expect(hoisted.startPluginServices).not.toHaveBeenCalled();
     expect(sidecars.pluginServices).toBeNull();
-    expect(onPluginServices).toHaveBeenLastCalledWith(null);
+    expect(onPluginServices).toHaveBeenCalledOnce();
   });
 
   it.each(["settles", "times out"] as const)(
@@ -4103,6 +4205,133 @@ describe("startGatewayPostAttachRuntime", () => {
         ["backend", "acpx"],
       ],
     });
+  });
+
+  it.each([
+    { label: "before restart-sentinel refresh starts", closeAfterRefreshStarts: false },
+    { label: "during restart-sentinel refresh", closeAfterRefreshStarts: true },
+  ])("retains the startup tail when close begins $label", async ({ closeAfterRefreshStarts }) => {
+    const refreshStarted = createDeferred();
+    const releaseRefresh = createDeferred();
+    const connectionWork = new GatewayConnectionWork();
+    const events: string[] = [];
+    const refreshLatestUpdateRestartSentinel = vi.fn(async () => {
+      events.push("refresh-started");
+      refreshStarted.resolve();
+      await releaseRefresh.promise;
+      events.push("refresh-completed");
+      return null;
+    });
+    const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
+      const operation = Promise.resolve().then(run);
+      return connectionWork.track(() => operation);
+    };
+    const runtime = await trackStartupWork(() =>
+      startGatewayPostAttachRuntime(
+        createPostAttachParams({
+          isClosing: () => connectionWork.isClosing,
+          trackStartupWork,
+        }),
+        createPostAttachRuntimeDeps({ refreshLatestUpdateRestartSentinel }),
+      ),
+    );
+
+    try {
+      if (closeAfterRefreshStarts) {
+        await refreshStarted.promise;
+      }
+      connectionWork.beginClose();
+      const closing = connectionWork.drain().then(() => {
+        events.push("metadata-retired");
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      if (closeAfterRefreshStarts) {
+        expect.soft(events).toEqual(["refresh-started"]);
+      } else {
+        expect.soft(refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
+      }
+      releaseRefresh.resolve();
+      await runtime.startupSettled;
+      await closing;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(events).toEqual(
+        closeAfterRefreshStarts
+          ? ["refresh-started", "refresh-completed", "metadata-retired"]
+          : ["metadata-retired"],
+      );
+    } finally {
+      releaseRefresh.resolve();
+      await connectionWork.drain();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+  });
+
+  it("retains gateway_start loading until close can retire plugin metadata", async () => {
+    const { createHookRunner } = await import("../plugins/hooks.js");
+    const gatewayStart = vi.fn<PluginHookHandlerMap["gateway_start"]>(async () => {});
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.typedHooks.push({
+      pluginId: "startup-lifetime-test",
+      hookName: "gateway_start",
+      handler: gatewayStart,
+      source: "startup-lifetime-test",
+    });
+    const hookRunner = createHookRunner(pluginRegistry);
+    const hookLoadStarted = createDeferred();
+    const releaseHookLoad = createDeferred();
+    const connectionWork = new GatewayConnectionWork();
+    const retirePluginMetadata = vi.fn();
+    const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
+      const operation = Promise.resolve().then(run);
+      return connectionWork.track(() => operation);
+    };
+    const runtime = await trackStartupWork(() =>
+      startGatewayPostAttachRuntime(
+        createPostAttachParams({
+          sidecarStartup: "defer",
+          pluginRegistry,
+          isClosing: () => connectionWork.isClosing,
+          trackStartupWork,
+        }),
+        createPostAttachRuntimeDeps({
+          getGlobalHookRunner: async () => {
+            hookLoadStarted.resolve();
+            await releaseHookLoad.promise;
+            return hookRunner;
+          },
+        }),
+      ),
+    );
+
+    try {
+      await hookLoadStarted.promise;
+      connectionWork.beginClose();
+      const closing = connectionWork.drain().then(retirePluginMetadata);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect.soft(retirePluginMetadata).not.toHaveBeenCalled();
+      releaseHookLoad.resolve();
+      await runtime.startupSettled;
+      await closing;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(gatewayStart).not.toHaveBeenCalled();
+      expect(retirePluginMetadata).toHaveBeenCalledOnce();
+    } finally {
+      releaseHookLoad.resolve();
+      await connectionWork.drain();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
   });
 
   it("passes typed gateway_start context with config, workspace dir, and a live cron getter", async () => {
