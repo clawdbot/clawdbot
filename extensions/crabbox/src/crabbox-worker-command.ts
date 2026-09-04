@@ -89,5 +89,9 @@ export async function stopCrabboxLease(params: {
   if (result.termination === "exit" && result.code === 0) {
     return;
   }
+  // Stop owns cleanup confirmation; provider absence here means the lease is gone.
+  if (result.termination === "exit" && isUnrecognizedLease(result, params.id)) {
+    return;
+  }
   throw crabboxCommandError("stop", result);
 }

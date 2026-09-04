@@ -3380,11 +3380,25 @@ describe("Crabbox worker provider", () => {
     { code: 4, stderr: `sandbox ${LEASE_ID} is not claimed by Crabbox` },
     { code: 4, stderr: `wandb sandbox "${LEASE_ID}" has no matching local ownership claim` },
     { code: 4, stderr: `unikraftcloud lease ${LEASE_ID} no longer exists` },
-    ...["stopped", "released", "destroyed", "terminated"].map((state) => ({
+  ])(
+    "confirms stop when the provider no longer recognizes the lease: $stderr",
+    async ({ code, stderr }) => {
+      const calls: string[][] = [];
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        return commandResult({ code, stderr });
+      });
+      await expect(provider.destroy(lifecycleLease())).resolves.toBeUndefined();
+      expect(calls).toEqual([[SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]]);
+    },
+  );
+
+  it.each(
+    ["stopped", "released", "destroyed", "terminated"].map((state) => ({
       code: 4,
       stderr: `lease ${LEASE_ID} already ${state}`,
     })),
-  ])("rejects unproven stop despite misleading prose: $stderr", async ({ code, stderr }) => {
+  )("rejects unproven stop despite misleading prose: $stderr", async ({ code, stderr }) => {
     const calls: string[][] = [];
     const provider = providerWithRunner(async (argv) => {
       calls.push(argv);
