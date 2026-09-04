@@ -7,7 +7,6 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/ty
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { modelKey } from "../../shared/model-key.js";
 import {
-  CLI_MEMORY_FLUSH_REARM_BYTES,
   hasAlreadyFlushedForCliRearmBucket,
   resolveCliMemoryFlushRearmBucket,
   resolveResponsesServerCompactionThreshold,
@@ -287,25 +286,18 @@ describe("Anthropic server compaction host threshold", () => {
 
 describe("CLI memory-flush re-arm bucket", () => {
   it("buckets transcript growth for CLI backends", () => {
+    const rearmBytes = 256 * 1024;
     expect(resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize: 0 })).toBe(0);
-    expect(
-      resolveCliMemoryFlushRearmBucket({
-        isCli: true,
-        transcriptByteSize: CLI_MEMORY_FLUSH_REARM_BYTES - 1,
-      }),
-    ).toBe(0);
-    expect(
-      resolveCliMemoryFlushRearmBucket({
-        isCli: true,
-        transcriptByteSize: CLI_MEMORY_FLUSH_REARM_BYTES,
-      }),
-    ).toBe(1);
-    expect(
-      resolveCliMemoryFlushRearmBucket({
-        isCli: true,
-        transcriptByteSize: CLI_MEMORY_FLUSH_REARM_BYTES * 3 + 10,
-      }),
-    ).toBe(3);
+    for (const [transcriptByteSize, bucket] of [
+      [rearmBytes - 1, 0],
+      [rearmBytes, 1],
+      [rearmBytes * 3 + 10, 3],
+    ] as const) {
+      expect(resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize })).toBe(bucket);
+      expect(
+        resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize, rearmBytes }),
+      ).toBe(bucket);
+    }
   });
 
   it("keeps the compaction watermark when the byte anchor cannot apply", () => {

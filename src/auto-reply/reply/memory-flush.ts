@@ -187,7 +187,7 @@ export function shouldRunPreflightCompaction(params: {
  * session. Transcript bytes advance on every backend, so they anchor the
  * dedup instead.
  */
-export const CLI_MEMORY_FLUSH_REARM_BYTES = 256 * 1024;
+const CLI_MEMORY_FLUSH_REARM_BYTES = 256 * 1024;
 
 /**
  * Bucket a CLI session's transcript size into re-arm windows, or `undefined`
