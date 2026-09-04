@@ -8,6 +8,7 @@ import uiNodeConfig from "../ui/vitest.node.config.ts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
 import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config.ts";
+import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 
 type ExpectedTestConfig = {
@@ -68,6 +69,32 @@ describe("ui package vitest config", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("gives module-mock fixtures the same isolated ownership in both entry points", async () => {
+    vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", "");
+    vi.resetModules();
+    const config = (await import("../ui/vitest.config.ts")).default;
+    const projects = (requireTestConfig(config).projects ?? []).map(requireTestConfig);
+    const packageIsolated = projects.find((project) => project.name === "unit-mock-registry");
+    const rootIsolated = requireTestConfig(createUiIsolatedVitestConfig({}));
+    expect(packageIsolated?.isolate).toBe(true);
+    expect(rootIsolated.isolate).toBe(true);
+    const packageFiles = globSync(packageIsolated?.include ?? [], {
+      cwd: path.join(process.cwd(), "ui"),
+      exclude: packageIsolated?.exclude,
+    }).map((file) => path.posix.normalize(`ui/${file.replaceAll("\\", "/")}`));
+    expect(packageFiles.length).toBeGreaterThan(0);
+    const rootFiles = globSync(rootIsolated.include ?? [], { exclude: rootIsolated.exclude }).map(
+      (file) => file.replaceAll("\\", "/"),
+    );
+    expect(rootFiles.toSorted()).toEqual(packageFiles.toSorted());
+    const rootShared = requireTestConfig(createUiVitestConfig({}));
+    expect(
+      globSync(rootShared.include ?? [], { exclude: rootShared.exclude }).filter((file) =>
+        packageFiles.includes(file.replaceAll("\\", "/")),
+      ),
+    ).toEqual([]);
   });
 
   it("keeps native Chromium files out of root jsdom without dropping Node-driven Playwright files", async () => {

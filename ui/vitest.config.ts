@@ -118,11 +118,7 @@ const sharedUiTestConfig = {
   hookTimeout: 60_000,
 } as const;
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
-const mockRegistryUnitTests = [
-  ...uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length)),
-  "src/components/mcp-app-view.test.ts",
-  "src/pages/chat/chat-page.test.ts",
-] as const;
+const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
 const systemChromiumExecutableCandidates = [
   "/snap/bin/chromium",
