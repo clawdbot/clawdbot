@@ -8,6 +8,7 @@ import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-
 import type { QueueSettings } from "../../auto-reply/reply/queue.js";
 import { createMockTypingController } from "../../auto-reply/reply/test-helpers.js";
 import type { TemplateContext } from "../../auto-reply/templating.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { bindIngressLifecycleToReplyOptions } from "./ingress-drain-lifecycle.js";
 import {
@@ -183,11 +184,12 @@ function createMonitor(queue: MonitorOptions["queue"], deliver: MonitorOptions["
 }
 
 function createRunnerParams(): Parameters<typeof runReplyAgent>[0] {
+  const staleCfg = { runtimeFresh: false } as OpenClawConfig;
   const followupRun = createTestFollowupRun({
     sessionId: "session-1",
     sessionKey: "agent:main:telegram:default:direct:test",
     messageProvider: "telegram",
-    config: { runtimeFresh: false },
+    config: staleCfg,
     provider: "openai",
     model: "gpt-5.4",
   });
