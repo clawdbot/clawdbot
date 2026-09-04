@@ -8,7 +8,7 @@ import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const STREAM_DELTAS = [
-  "Visible\n<tool_call>exec",
+  "Visible\n<tool_call>exec ",
   "<arg_key>command</arg_key><arg_value>echo redacted</arg_value></tool_call>",
   "\nDone.",
 ] as const;
@@ -41,7 +41,7 @@ function chatMessageText(payload: unknown): string {
 }
 
 it(
-  "strips streamed GLM <tool_call>exec<arg_key> shadow XML from chat.final",
+  "strips streamed GLM <tool_call>exec <arg_key> shadow XML from chat.final",
   { timeout: 90_000 },
   async () => {
     const state = await createOpenClawTestState({
@@ -62,8 +62,8 @@ it(
     const terminal = createDeferred<unknown>();
     const providerServer = createServer((request, response) => {
       void (async () => {
-        for await (const _chunk of request) {
-          // drain
+        for await (const chunk of request) {
+          void chunk;
         }
         const message = {
           type: "message",

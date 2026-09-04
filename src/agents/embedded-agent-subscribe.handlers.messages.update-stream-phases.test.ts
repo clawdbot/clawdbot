@@ -109,6 +109,30 @@ describe("handleMessageUpdate text signatures", () => {
       ],
     },
     {
+      name: "held GLM arg_key after whitespace",
+      chunks: [
+        "Visible\n<tool_call>exec ",
+        "<arg_key>command</arg_key><arg_value>secret</arg_value></tool_call>",
+        "\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "held GLM arg_key after newline",
+      chunks: [
+        "Visible\n<tool_call>exec\n",
+        "<arg_key>command</arg_key><arg_value>secret</arg_value></tool_call>",
+        "\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
       name: "split voice directive",
       chunks: ["[[audio_as_", "voice]]Hello", " world"],
       updates: [
