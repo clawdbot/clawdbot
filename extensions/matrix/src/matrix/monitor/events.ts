@@ -15,7 +15,7 @@ import type { createDirectRoomTracker } from "./direct.js";
 import type { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixInboundRoute } from "./route.js";
-import type { MatrixRawEvent } from "./types.js";
+import type { MatrixRawEvent, MatrixStoreAllowFromResult } from "./types.js";
 import { EventType } from "./types.js";
 import { createMatrixVerificationEventRouter } from "./verification-events.js";
 
@@ -184,7 +184,7 @@ export function registerMatrixMonitorEvents(params: {
   allowFrom: string[];
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  readStoreAllowFrom: () => Promise<string[]>;
+  readStoreAllowFrom: () => Promise<MatrixStoreAllowFromResult>;
   directTracker: ReturnType<typeof createDirectRoomTracker>;
   groupPolicy: "open" | "allowlist" | "disabled";
   roomsConfig?: Record<string, MatrixRoomConfig>;

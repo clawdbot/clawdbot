@@ -13,6 +13,7 @@ import {
   type MatrixResolvedAllowlistEntry,
 } from "./config.js";
 import type { PluginRuntime, RuntimeEnv } from "./runtime-api.js";
+import type { MatrixStoreAllowFromResult } from "./types.js";
 
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
@@ -99,27 +100,35 @@ export function createMatrixHandlerState(config: {
     });
     return { liveCfg, liveDmAllowFrom, liveGroupAllowFrom };
   };
-  const readStoreAllowFrom = async (): Promise<string[]> => {
+  const readStoreAllowFrom = async (): Promise<MatrixStoreAllowFromResult> => {
     const now = Date.now();
     if (
       cachedStoreAllowFrom &&
       isFutureDateTimestampMs(cachedStoreAllowFrom.expiresAtMs, { nowMs: now })
     ) {
-      return cachedStoreAllowFrom.value;
+      return { entries: cachedStoreAllowFrom.value, readFailed: false };
     }
     cachedStoreAllowFrom = null;
+    let readFailed = false;
     const value = await core.channel.pairing
       .readAllowFromStore({
         channel: "matrix",
         env: process.env,
         accountId,
       })
-      .catch(() => []);
-    const expiresAtMs = resolveExpiresAtMsFromDurationMs(ALLOW_FROM_STORE_CACHE_TTL_MS, {
-      nowMs: now,
-    });
-    cachedStoreAllowFrom = expiresAtMs === undefined ? null : { value, expiresAtMs };
-    return value;
+      .catch(() => {
+        readFailed = true;
+        return [];
+      });
+    // A failed read must not poison the cache with an empty result — leave any
+    // existing cache entry alone so the next call retries the real store.
+    if (!readFailed) {
+      const expiresAtMs = resolveExpiresAtMsFromDurationMs(ALLOW_FROM_STORE_CACHE_TTL_MS, {
+        nowMs: now,
+      });
+      cachedStoreAllowFrom = expiresAtMs === undefined ? null : { value, expiresAtMs };
+    }
+    return { entries: value, readFailed };
   };
 
   const shouldSendPairingReply = (senderId: string, created: boolean): boolean => {

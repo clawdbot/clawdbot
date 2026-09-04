@@ -3,7 +3,7 @@ import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runti
 // Matrix plugin module implements verification events behavior.
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
-import type { MatrixRawEvent } from "./types.js";
+import type { MatrixRawEvent, MatrixStoreAllowFromResult } from "./types.js";
 import { EventType } from "./types.js";
 import {
   isMatrixVerificationEventType,
@@ -336,7 +336,7 @@ async function isVerificationNoticeAuthorized(params: {
   allowFrom: string[];
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  readStoreAllowFrom: () => Promise<string[]>;
+  readStoreAllowFrom: () => Promise<MatrixStoreAllowFromResult>;
   logVerboseMessage: (message: string) => void;
 }): Promise<boolean> {
   // Verification notices are DM-only. If DM ingress is disabled, there is no
@@ -347,13 +347,14 @@ async function isVerificationNoticeAuthorized(params: {
     );
     return false;
   }
-  const storeAllowFrom =
+  const storeAllowFromResult =
     params.dmPolicy !== "allowlist" && params.dmPolicy !== "open"
       ? await params.readStoreAllowFrom()
-      : [];
+      : { entries: [], readFailed: false };
   const accessState = await resolveMatrixMonitorAccessState({
     allowFrom: params.allowFrom,
-    storeAllowFrom,
+    storeAllowFrom: storeAllowFromResult.entries,
+    storeReadFailed: storeAllowFromResult.readFailed,
     dmPolicy: params.dmPolicy,
     // Verification flows only exist in strict DMs, so room/group allowlists do
     // not participate in the authorization decision here.
@@ -377,7 +378,7 @@ export function createMatrixVerificationEventRouter(params: {
   allowFrom: string[];
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  readStoreAllowFrom: () => Promise<string[]>;
+  readStoreAllowFrom: () => Promise<MatrixStoreAllowFromResult>;
   logVerboseMessage: (message: string) => void;
   sasNoticeRetryDelayMs?: number;
   runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;

@@ -136,7 +136,10 @@ function createHarness(params?: {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const formatNativeDependencyHint = vi.fn(() => "install hint");
   const logVerboseMessage = vi.fn();
-  const readStoreAllowFrom = vi.fn(async () => params?.storeAllowFrom ?? []);
+  const readStoreAllowFrom = vi.fn(async () => ({
+    entries: params?.storeAllowFrom ?? [],
+    readFailed: false,
+  }));
   const client = {
     on: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
       listeners.set(eventName, listener);

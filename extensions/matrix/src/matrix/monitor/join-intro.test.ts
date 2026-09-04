@@ -105,7 +105,7 @@ function createHarness(
     allowFrom: [],
     dmEnabled: true,
     dmPolicy: "pairing" as const,
-    readStoreAllowFrom: vi.fn(async () => []),
+    readStoreAllowFrom: vi.fn(async () => ({ entries: [], readFailed: false })),
     directTracker,
     groupPolicy: options.groupPolicy ?? "open",
     roomsConfig:

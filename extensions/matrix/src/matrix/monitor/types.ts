@@ -16,6 +16,11 @@ export const RelationType = {
   Thread: "m.thread",
 } as const;
 
+export type MatrixStoreAllowFromResult = {
+  entries: string[];
+  readFailed: boolean;
+};
+
 export type RoomMessageEventContent = MessageEventContent & {
   url?: string;
   file?: EncryptedFile;
