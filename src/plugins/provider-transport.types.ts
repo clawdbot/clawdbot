@@ -1,3 +1,4 @@
+import type { ProviderLocalServiceReconcileContext } from "../agents/provider-local-service-reconcile.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -34,10 +35,7 @@ export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
 };
 
 /** Healthy local service boundary before the provider request is sent. */
-export type ProviderReconcileLocalServiceContext = {
-  baseUrl: string;
-  signal?: AbortSignal;
-};
+export type ProviderReconcileLocalServiceContext = ProviderLocalServiceReconcileContext;
 
 /**
  * Provider-owned WebSocket session policy.

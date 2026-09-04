@@ -1,7 +1,7 @@
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderReconcileLocalServiceContext } from "../plugins/provider-transport.types.js";
+import type { ProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
 
 /** Exact provider endpoint whose optional local process should be leased. */
 export type ProviderLocalServiceTarget = {
@@ -9,7 +9,7 @@ export type ProviderLocalServiceTarget = {
   baseUrl: string;
   headers?: HeadersInit;
   service?: ModelProviderLocalServiceConfig;
-  reconcile?: (ctx: ProviderReconcileLocalServiceContext) => Promise<void>;
+  reconcile?: ProviderLocalServiceReconciler;
 };
 
 /** Configured provider endpoint whose host-owned local service may be leased. */

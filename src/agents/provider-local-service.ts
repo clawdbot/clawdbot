@@ -14,7 +14,6 @@ import { mergeProcessEnv } from "../infra/process-env.js";
 import type { Model } from "../llm/types.js";
 import { isSensitiveFieldKey, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import {
   forceKillChildProcessTree,
   isChildProcessTreeAlive,
@@ -22,6 +21,7 @@ import {
   shouldDetachChildForProcessTree,
 } from "../process/child-process-tree.js";
 import { prepareOomScoreAdjustedSpawnPreservingExecEnv as prepareLocalServiceSpawn } from "../process/linux-oom-score.js";
+import { getModelProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
 import type {
   AcquireConfiguredProviderLocalService,
   ProviderLocalServiceLease,
@@ -118,7 +118,7 @@ export async function ensureModelProviderLocalService(
       baseUrl: model.baseUrl,
       headers: buildHealthProbeHeaders((model as { headers?: HeadersInit }).headers, probeHeaders),
       service,
-      reconcile: getModelProviderRuntimePluginHandle(model)?.plugin?.reconcileLocalService,
+      reconcile: getModelProviderLocalServiceReconciler(model),
     },
     signal,
   );

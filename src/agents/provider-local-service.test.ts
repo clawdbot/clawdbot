@@ -17,6 +17,7 @@ import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getDeterministicFreePortBlock, getFreePort } from "../test-utils/ports.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { getModelProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
 import {
   attachModelProviderLocalService,
   createConfiguredProviderLocalServiceAcquirer,
@@ -182,6 +183,20 @@ describe("provider local service", () => {
       command: process.execPath,
       args: ["--version"],
     });
+  });
+
+  it("clears a stale reconciler when the prepared provider changes", () => {
+    const reconcile = vi.fn(async () => undefined);
+    const withReconciler = attachModelProviderRuntimePluginHandle(
+      { id: "demo", provider: "local", baseUrl: "http://127.0.0.1:1/v1" },
+      { plugin: { reconcileLocalService: reconcile } } as never,
+    );
+    const withoutReconciler = attachModelProviderRuntimePluginHandle(withReconciler, {
+      plugin: {},
+    } as never);
+
+    expect(getModelProviderLocalServiceReconciler(withReconciler)).toBe(reconcile);
+    expect(getModelProviderLocalServiceReconciler(withoutReconciler)).toBeUndefined();
   });
 
   it("treats signaled local service children as exited", () => {
