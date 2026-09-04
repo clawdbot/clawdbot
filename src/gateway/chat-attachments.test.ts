@@ -570,6 +570,50 @@ describe("parseMessageWithAttachments validation errors", () => {
     );
   });
 
+  it("rejects declared text with an image filename on image-only entrypoints", async () => {
+    await expectUnsupportedAttachmentReason(
+      [
+        {
+          type: "file",
+          mimeType: "text/plain",
+          fileName: "note.png",
+          content: Buffer.from("ordinary text attachment").toString("base64"),
+        },
+      ],
+      { acceptNonImage: false },
+      "unsupported-non-image",
+    );
+  });
+
+  it.each([
+    { mimeType: "text/plain; charset=utf-8", fileName: "note.png", expected: "text/plain" },
+    { mimeType: "audio/webm", fileName: "voice.webm", expected: "audio/webm" },
+    { mimeType: "audio/mp4", fileName: "voice.mp4", expected: "audio/mp4" },
+    {
+      mimeType: "application/octet-stream",
+      fileName: "bundle.zip",
+      expected: "application/octet-stream",
+    },
+    { mimeType: "application/octet-stream", fileName: "note.txt", expected: "text/plain" },
+    { mimeType: undefined, fileName: "bundle.zip", expected: "application/zip" },
+  ])(
+    "preserves metadata precedence for inconclusive bytes: $mimeType/$fileName",
+    async ({ mimeType, fileName, expected }) => {
+      const { parsed } = await parseWithWarnings("read this", [
+        {
+          type: "file",
+          mimeType,
+          fileName,
+          content: Buffer.from("ordinary text attachment").toString("base64"),
+        },
+      ]);
+      expect(parsed.images).toEqual([]);
+      expect(parsed.offloadedRefs).toEqual([
+        expect.objectContaining({ mimeType: expected, label: fileName }),
+      ]);
+    },
+  );
+
   it("rejects generic-container payloads mislabeled as images when acceptNonImage is false", async () => {
     const docx = Buffer.from("PK\u0003\u0004fake-docx-content").toString("base64");
     await expectUnsupportedAttachmentReason(

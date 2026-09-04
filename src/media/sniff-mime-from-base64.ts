@@ -7,7 +7,10 @@ const BASE64_SNIFF_PREFIX_CHARS = 256;
 /** Detects MIME from a bounded base64 prefix and optional caller metadata. */
 export async function sniffMimeFromBase64(
   base64: string,
-  hints: Pick<Parameters<typeof detectMime>[0], "headerMime" | "filePath"> = {},
+  hints: Pick<
+    Parameters<typeof detectMime>[0],
+    "headerMime" | "filePath" | "additionalMimeHints"
+  > = {},
 ): Promise<string | undefined> {
   const canonical = canonicalizeBase64(base64);
   if (!canonical) {

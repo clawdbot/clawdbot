@@ -2,7 +2,12 @@
 // Normalizes image attachments, offloads large media, and reports unsupported payloads.
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
-import { extensionForMime, kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import {
+  extensionForMime,
+  kindFromMime,
+  mimeTypeFromFilePath,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -409,11 +414,16 @@ export async function parseMessageWithAttachments(
       }
 
       const providedMime = normalizeMimeType(mime);
-      // The canonical detector needs caller hints to distinguish audio-only
-      // MP4/WebM containers and refine ZIP bytes into their document type.
+      const mimeHints = [providedMime, mimeTypeFromFilePath(label)];
+      // Specific declared MIME precedes the filename when bytes are inconclusive.
+      // The canonical detector still owns byte precedence and container refinement.
       const finalMime =
-        (await sniffMimeFromBase64(b64, { headerMime: providedMime, filePath: label })) ??
-        "application/octet-stream";
+        (await sniffMimeFromBase64(b64, {
+          additionalMimeHints: [
+            ...mimeHints.filter((hint) => !isGenericContainerMime(hint)),
+            ...mimeHints,
+          ],
+        })) ?? "application/octet-stream";
 
       if (providedMime && !isGenericContainerMime(providedMime) && finalMime !== providedMime) {
         log?.warn(`attachment ${label}: mime mismatch (${providedMime} -> ${finalMime})`);
