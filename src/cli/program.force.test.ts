@@ -365,6 +365,7 @@ describe("gateway --force helpers", () => {
     );
     expect(termCall?.[1]).toEqual(["-k", "-TERM", "18789/tcp"]);
     expect(termCall?.[2]).toEqual({
+      env: expect.any(Object),
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       killSignal: "SIGKILL",

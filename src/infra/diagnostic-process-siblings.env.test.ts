@@ -35,6 +35,8 @@ it.each([
   "CLI lsof",
   "CLI netstat",
   "CLI fuser",
+  "CLI fuser TERM",
+  "CLI fuser KILL",
 ])("projects the environment at the %s launch boundary", async (surface) => {
   const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "diagnostic-siblings-")));
@@ -46,9 +48,9 @@ it.each([
     TZ: "UTC",
   });
   vi.spyOn(process, "platform", "get").mockReturnValue(
-    surface === "CLI netstat" ? "win32" : "darwin",
+    surface === "CLI netstat" ? "win32" : surface.startsWith("CLI fuser") ? "linux" : "darwin",
   );
-  vi.spyOn(process, "kill").mockImplementation(() => {
+  const killMock = vi.spyOn(process, "kill").mockImplementation(() => {
     if (surface === "restart poll") {
       throw Object.assign(new Error("gone"), { code: "ESRCH" });
     }
@@ -66,6 +68,7 @@ it.each([
         reports.push({ command, report: JSON.parse(stdout) });
       };
       let lsofCalls = 0;
+      const fuserArgs: string[][] = [];
       mocks.spawn.mockImplementation(
         (command: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
           capture(command, options.env);
@@ -81,15 +84,18 @@ it.each([
       );
       mocks.exec.mockImplementation(
         (command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
-          capture(command, options.env);
-          if (command === "lsof" && surface === "CLI fuser") {
+          capture([command, ...args].join(" "), options.env);
+          if (command === "lsof" && surface.startsWith("CLI fuser")) {
             throw Object.assign(new Error("missing"), { code: "ENOENT" });
           }
           if (command === "ps") {
             return "node openclaw.mjs gateway";
           }
           if (command === "fuser") {
-            expect(args).toEqual(["43123/tcp"]);
+            fuserArgs.push(args);
+            mocks.probe.mockResolvedValue(
+              surface === "CLI fuser KILL" && args.includes("-TERM") ? "busy" : "free",
+            );
             return "424242";
           }
           if (command.endsWith("netstat.exe")) {
@@ -119,18 +125,44 @@ it.each([
         expect(
           await readActiveGatewayLockIdentity({ lockDir: root, env: { OPENCLAW_STATE_DIR: root } }),
         ).toMatchObject({ pid: 424242, port: 43123 });
-      } else if (surface === "CLI fuser") {
-        mocks.probe.mockResolvedValueOnce("busy").mockResolvedValue("free");
-        expect(await forceFreePortAndWait(43123, { beforeSignal: () => {} })).toMatchObject({
+      } else if (surface.startsWith("CLI fuser")) {
+        mocks.probe.mockResolvedValue("busy");
+        const beforeSignal = vi.fn();
+        expect(
+          await forceFreePortAndWait(43123, {
+            sigtermTimeoutMs: 0,
+            ...(surface === "CLI fuser" ? { beforeSignal } : {}),
+          }),
+        ).toEqual({
           killed: [{ pid: 424242 }],
+          waitedMs: 0,
+          escalatedToSigkill: surface === "CLI fuser KILL",
         });
+        if (surface === "CLI fuser") {
+          expect(fuserArgs).toEqual([["43123/tcp"]]);
+          expect(beforeSignal).toHaveBeenCalledExactlyOnceWith({
+            port: 43123,
+            pid: 424242,
+            signal: "SIGTERM",
+          });
+          expect(killMock).toHaveBeenCalledExactlyOnceWith(424242, "SIGTERM");
+        } else {
+          expect(fuserArgs).toEqual(
+            (surface === "CLI fuser KILL" ? ["TERM", "KILL"] : ["TERM"]).map((signal) => [
+              "-k",
+              `-${signal}`,
+              "43123/tcp",
+            ]),
+          );
+          expect(killMock).not.toHaveBeenCalled();
+        }
       } else {
         expect(forceFreePort(43123)).toEqual([expect.objectContaining({ pid: 424242 })]);
       }
       expect(process.env).toEqual(parent);
       expect(reports.length).toBeGreaterThan(0);
       for (const { command, report } of reports) {
-        expect(report, `${command} inherited canary presence`).toEqual({
+        expect.soft(report, `${command} inherited canary presence`).toEqual({
           present: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
           routingPreserved: true,
         });

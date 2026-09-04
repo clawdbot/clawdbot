@@ -118,6 +118,7 @@ function killPortWithFuser(
   const args = ["-k", `-${FUSER_SIGNALS[signal]}`, `${port}/tcp`];
   try {
     const stdout = execFileSync("fuser", args, {
+      env: resolveDiagnosticProcessEnv(),
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: PORT_TOOL_TIMEOUT_MS,
