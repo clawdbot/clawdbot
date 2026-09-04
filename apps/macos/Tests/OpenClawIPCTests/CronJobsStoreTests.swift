@@ -175,9 +175,13 @@ private final class CronGatewayFixture: @unchecked Sendable {
         socket.emitReceiveSuccess(.data(Data(response.utf8)))
     }
 
-    func respondWithJobs(to request: CronGatewayRequest) async throws {
+    func respondWithJobs(to request: CronGatewayRequest, payload: String? = nil) async throws {
         let socket = try await self.readySocket()
-        let payload = await self.requests.jobsResponse()
+        let payload = if let payload {
+            payload
+        } else {
+            await self.requests.jobsResponse()
+        }
         let response = #"{"type":"res","id":"\#(request.id)","ok":true,"payload":\#(payload)}"#
         socket.emitReceiveSuccess(.data(Data(response.utf8)))
     }
@@ -205,8 +209,8 @@ private final class CronGatewayFixture: @unchecked Sendable {
 @Suite(.serialized)
 @MainActor
 struct CronJobsStoreTests {
-    @Test(arguments: [false, true])
-    func `stopping the pane rejects a late job list completion`(succeeds: Bool) async throws {
+    @Test(arguments: [false, true], ["pane", "caller"])
+    func `stopping a refresh rejects a late job list completion`(succeeds: Bool, owner: String) async throws {
         let (arrivals, signal) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let fixture = CronGatewayFixture(holdJobList: true, onRequestRecorded: { signal.yield(()) })
         let store = CronJobsStore(gateway: fixture.gateway)
@@ -218,8 +222,8 @@ struct CronJobsStoreTests {
             store.stop(.settings)
             refresh.cancel()
             signal.finish()
-            await refresh.value
             await fixture.gateway.shutdown()
+            await refresh.value
         }
         do {
             var recorded: CronGatewayRequest?
@@ -230,7 +234,11 @@ struct CronJobsStoreTests {
             let pending = try #require(recorded, "refresh ended before cron.list arrived")
             // A buffered request can outlive its refresh; stop must still precede completion.
             try #require(store.isLoadingJobs)
-            store.stop(.settings)
+            if owner == "pane" {
+                store.stop(.settings)
+            } else {
+                refresh.cancel()
+            }
             store.lastError = "current pane error"
             if succeeds {
                 try await fixture.respondWithJobs(to: pending)
@@ -458,6 +466,62 @@ struct CronJobsStoreTests {
     }
 
     @Test
+    func `removing a job supersedes a pending manual list refresh`() async throws {
+        let (arrivals, signal) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let fixture = CronGatewayFixture(holdJobList: true, onRequestRecorded: { signal.yield(()) })
+        let store = CronJobsStore(gateway: fixture.gateway)
+        var refresh = Task { await store.refreshJobs() }
+        var removal: Task<Void, Never>?
+        let removalFinished = LockIsolated(false)
+        func cleanup() async {
+            store.stop(.settings)
+            refresh.cancel()
+            removal?.cancel()
+            signal.finish()
+            await fixture.gateway.shutdown()
+            await refresh.value
+            await removal?.value
+        }
+        do {
+            let initial = try #require(await fixture.waitForRequest(method: "cron.list"))
+            try await fixture.respondWithJobs(to: initial)
+            await refresh.value
+            let removed = try self.context("job-a", in: store)
+            refresh = Task { await store.refreshJobs() }
+            let stale = try #require(await fixture.waitForRequest(method: "cron.list", occurrence: 1))
+            let stalePayload = await fixture.requests.jobsResponse()
+            removal = Task {
+                await store.removeJob(removed)
+                removalFinished.setValue(true)
+                signal.yield(())
+            }
+            // A completed removal exposes a dropped refresh; a new list proves replacement admission.
+            let replacement = try await AsyncTimeout.withTimeout(
+                seconds: 2,
+                onTimeout: { URLError(.timedOut) },
+                operation: { () async -> CronGatewayRequest? in
+                    for await _ in arrivals {
+                        let request = await fixture.requests.request(method: "cron.list", jobId: nil, occurrence: 2)
+                        if request != nil || removalFinished.value { return request }
+                    }
+                    return nil
+                })
+            try await fixture.respondWithJobs(to: stale, payload: stalePayload)
+            if let replacement { try await fixture.respondWithJobs(to: replacement) }
+            await refresh.value
+            await removal?.value
+
+            #expect(replacement != nil)
+            #expect(store.jobs.map(\.id) == ["job-b"])
+            #expect(store.lastError == nil)
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
+    }
+
+    @Test
     func `job list refresh invalidates pending history when another client removed its selected job`() async throws {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
@@ -638,6 +702,7 @@ struct CronJobsStoreTests {
     func `replacement refresh waits for the cancelled event refresh to drain`(replacement: String) async throws {
         let (lookups, entered) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let (releases, release) = AsyncStream<Void>.makeStream()
+        let cancelled = AsyncTestGate()
         // An unstructured wait keeps endpoint completion pending after its caller is cancelled.
         let heldLookup = Task { for await _ in releases {} }
         let holdNextLookup = LockIsolated(false)
@@ -646,8 +711,12 @@ struct CronJobsStoreTests {
                 defer { value = false }
                 return value
             }) else { return }
-            entered.yield(())
-            await heldLookup.value
+            await withTaskCancellationHandler {
+                entered.yield(())
+                await heldLookup.value
+            } onCancel: {
+                cancelled.open()
+            }
         })
         let store = CronJobsStore(gateway: fixture.gateway)
         func cleanup() async {
@@ -686,6 +755,9 @@ struct CronJobsStoreTests {
                     store.stop(.statusMenu)
                     store.start(.statusMenu)
                 }
+            }
+            try await AsyncTimeout.withTimeout(seconds: 2, onTimeout: { URLError(.timedOut) }) {
+                await cancelled.wait()
             }
             #expect(await fixture.waitForRequest(
                 method: "cron.list", occurrence: nextListOccurrence, timeout: .milliseconds(350)) == nil)
