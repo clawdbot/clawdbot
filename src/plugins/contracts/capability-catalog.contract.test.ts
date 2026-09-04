@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import type {
   PluginCapabilityCatalogEntry,
   PluginCapabilityCatalogContext,
-} from "../capability-catalog.types.js";
+} from "../capability-catalog-context.types.js";
 
 // These are actual import traps: descriptor construction must never evaluate host runtime/auth.
 vi.mock("../loader-runtime-load.js", () => {

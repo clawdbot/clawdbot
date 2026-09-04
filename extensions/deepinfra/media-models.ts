@@ -1,7 +1,28 @@
 // Deepinfra plugin module implements media models behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import type { DeepInfraSurfaceModel } from "./provider-models.js";
+
+export interface DeepInfraSurfaceModel {
+  id: string;
+  name: string;
+  description?: string;
+  tags: string[];
+  contextWindow?: number;
+  maxTokens?: number;
+  // Wire format mirrors deepapi/agent_models_api.AgentOpenAIModelsOut.
+  pricing: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_tokens?: number;
+    per_image_unit?: number;
+    output_seconds?: number;
+    input_characters?: number;
+    input_seconds?: number;
+  };
+  defaultWidth?: number;
+  defaultHeight?: number;
+  defaultIterations?: number;
+}
 
 export const DEEPINFRA_BASE_URL = manifest.modelCatalog.providers.deepinfra.baseUrl;
 

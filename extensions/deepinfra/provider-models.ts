@@ -15,7 +15,11 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { DEEPINFRA_BASE_URL, DEEPINFRA_TTS_FALLBACK_CATALOG } from "./media-models.js";
+import {
+  DEEPINFRA_BASE_URL,
+  DEEPINFRA_TTS_FALLBACK_CATALOG,
+  type DeepInfraSurfaceModel,
+} from "./media-models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseDeepInfraPricingCatalog } from "./pricing-api.js";
 
@@ -26,7 +30,6 @@ const DEEPINFRA_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
   catalog: manifest.modelCatalog.providers.deepinfra,
 });
 
-export { DEEPINFRA_BASE_URL } from "./media-models.js";
 const DEEPINFRA_MODELS_URL = `${DEEPINFRA_BASE_URL}/models?sort_by=openclaw&filter=with_meta`;
 const DEEPINFRA_PRICING_URL = "https://api.deepinfra.com/models/list";
 
@@ -52,21 +55,7 @@ type DeepInfraAuthConfig = {
   models?: { providers?: Record<string, { apiKey?: unknown } | undefined> };
 };
 
-// Wire format — mirrors deepapi/agent_models_api.AgentOpenAIModelsOut.
-interface DeepInfraAgentModelPricing {
-  // chat / vlm / embed
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_read_tokens?: number;
-  // image-gen
-  per_image_unit?: number;
-  // video-gen
-  output_seconds?: number;
-  // tts
-  input_characters?: number;
-  // stt
-  input_seconds?: number;
-}
+type DeepInfraAgentModelPricing = DeepInfraSurfaceModel["pricing"];
 
 interface DeepInfraAgentModelMetadata {
   description?: string;
@@ -85,19 +74,6 @@ interface DeepInfraAgentModelEntry {
 }
 
 type DeepInfraSurface = "chat" | "vlm" | "embed" | "image-gen" | "video-gen" | "tts" | "stt";
-
-export interface DeepInfraSurfaceModel {
-  id: string;
-  name: string;
-  description?: string;
-  tags: string[];
-  contextWindow?: number;
-  maxTokens?: number;
-  pricing: DeepInfraAgentModelPricing;
-  defaultWidth?: number;
-  defaultHeight?: number;
-  defaultIterations?: number;
-}
 
 interface DeepInfraDiscoveredCatalog {
   chat: DeepInfraSurfaceModel[];

@@ -7,10 +7,10 @@ import type {
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 export type {
-  PluginCapabilityCatalog,
   PluginCapabilityCatalogContext,
   PluginCapabilityCatalogEntry,
-} from "../plugins/capability-catalog.types.js";
+} from "../plugins/capability-catalog-context.types.js";
+export type { PluginCapabilityCatalog } from "../plugins/capability-catalog.types.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export type {

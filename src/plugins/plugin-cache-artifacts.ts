@@ -13,7 +13,7 @@ export type PluginSourceCacheRecord = {
   boundaryRoot?: string;
   facadeTracked?: true;
   capabilityCatalog?: {
-    context: import("./capability-catalog.types.js").PluginCapabilityCatalogContext;
+    context: object;
     value: import("./capability-catalog.types.js").PluginCapabilityCatalog;
   };
   publicSurface?: { exports?: object; pending?: Promise<object> };

@@ -1,9 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  PluginCapabilityCatalog,
-  PluginCapabilityCatalogContext,
-} from "./capability-catalog.types.js";
+import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 
 export const capabilityCatalogFamilies = [
