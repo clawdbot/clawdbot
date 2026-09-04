@@ -289,8 +289,21 @@ suite.define(() => {
           expect(await gateway.getRequests("board.data.read")).toEqual([]);
 
           const retainedFrame = await outer.elementHandle();
+          const retainedBoardFrame = await boardOuter.elementHandle();
           const note = inline.getByRole("textbox", { name: "Local note" });
+          const boardNote = board.getByRole("textbox", { name: "Local note" });
           await note.fill("State survives rerenders");
+          await boardNote.fill("Dashboard state survives swaps");
+          for (const region of ["main", "side"]) {
+            await page.locator(".chat-panel-swap").click();
+            await expect
+              .poll(() => page.locator('[data-panel-slot="dashboard"]').getAttribute("data-region"))
+              .toBe(region);
+            expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
+            expect(await retainedBoardFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
+            expect(await note.inputValue()).toBe("State survives rerenders");
+            expect(await boardNote.inputValue()).toBe("Dashboard state survives swaps");
+          }
           const originalHeight = (await outer.boundingBox())?.height ?? 0;
           await inline.getByRole("button", { name: "Toggle details" }).click();
           await expect
@@ -367,7 +380,11 @@ suite.define(() => {
                 canvasReads: (await gateway.getRequests("canvas.document.view")).length,
                 prompt: sent.message,
                 localNote: await note.inputValue(),
+                dashboardLocalNote: await boardNote.inputValue(),
                 retainedFrame: await retainedFrame?.evaluate((frame) => frame.isConnected),
+                retainedDashboardFrame: await retainedBoardFrame?.evaluate(
+                  (frame) => frame.isConnected,
+                ),
               },
               null,
               2,
