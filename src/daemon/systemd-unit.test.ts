@@ -150,4 +150,17 @@ describe("buildSystemdUnit", () => {
       unit.indexOf("Environment=OPENCLAW_GATEWAY_PORT=18789"),
     );
   });
+
+  it("renders scalar paths containing spaces without argument quotes (#137747)", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      workingDirectory: "/run/ocqa/cwd/space dir",
+      environmentFiles: ["/run/ocqa/env/space env.env"],
+    });
+    expect(unit).toContain("WorkingDirectory=/run/ocqa/cwd/space dir");
+    expect(unit).not.toContain('WorkingDirectory="/run/ocqa/cwd/space dir"');
+    expect(unit).toContain("EnvironmentFile=-/run/ocqa/env/space env.env");
+    expect(unit).not.toContain('EnvironmentFile=-"/run/ocqa/env/space env.env"');
+  });
 });
