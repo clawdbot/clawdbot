@@ -271,7 +271,7 @@ function withInputFileTimeout<T>(params: {
   });
 }
 
-/** Validates owned image bytes and normalizes HEIC/HEIF without changing their representation. */
+/** Validates image bytes and converts HEIC/HEIF to JPEG, keeping the original Buffer otherwise. */
 export async function normalizeInputImageBuffer(params: {
   buffer: Buffer;
   mimeType?: string;
