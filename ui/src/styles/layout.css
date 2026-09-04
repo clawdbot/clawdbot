@@ -1708,10 +1708,9 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-tree__loading {
-  min-height: 28px;
-  padding: 6px var(--sidebar-text-offset);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  min-height: 30px;
+  margin-inline: var(--sidebar-text-offset) 2px;
+  clip-path: inset(8px 0 round var(--radius-sm));
 }
 
 .sidebar-session-tree__show-more {

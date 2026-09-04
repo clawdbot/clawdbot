@@ -14,6 +14,107 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it.each([
+    { colorScheme: "dark", width: 1440 },
+    { colorScheme: "light", width: 1440 },
+    { colorScheme: "dark", width: 390 },
+    { colorScheme: "light", width: 390 },
+  ] as const)(
+    "keeps one $colorScheme child-row placeholder stable at $width px",
+    async ({ colorScheme, width }) => {
+      const baseTime = Date.parse("2026-09-04T12:00:00.000Z");
+      const activeKey = "agent:main:loading-active";
+      const parentKey = "agent:main:loading-parent";
+      const childKey = "agent:main:loading-child";
+      const parentRow = sessionRow(parentKey, "Research handoff", baseTime, {
+        childSessions: [childKey],
+      });
+      const childRow = sessionRow(childKey, "Background research", baseTime - 1, {
+        spawnedBy: parentKey,
+      });
+      const context = await suite.browser.newContext({
+        colorScheme,
+        locale: "en-US",
+        reducedMotion: width === 390 ? "reduce" : "no-preference",
+        serviceWorkers: "block",
+        viewport: { height: 900, width },
+      });
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": {
+            cases: [
+              {
+                match: { spawnedBy: parentKey },
+                response: sessionsListResponse([childRow]),
+              },
+              {
+                response: sessionsListResponse([
+                  sessionRow(activeKey, "Active session", baseTime + 1),
+                  parentRow,
+                ]),
+              },
+            ],
+          },
+        },
+        sessionKey: activeKey,
+      });
+
+      try {
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, activeKey));
+        if (width === 390) {
+          const drawerToggle = page
+            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
+            .first();
+          await drawerToggle.waitFor({ state: "visible" });
+          await drawerToggle.click();
+        }
+        const childToggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
+        await childToggle.waitFor({ state: "visible" });
+        await gateway.deferNext("sessions.list", { spawnedBy: parentKey });
+        await childToggle.click();
+        await gateway.waitForRequest("sessions.list", { match: { spawnedBy: parentKey } });
+
+        const children = page.locator(
+          `[data-session-tree="${parentKey}"] > .sidebar-session-tree__children`,
+        );
+        const loading = children.locator(":scope > .sidebar-session-tree__loading");
+        await expect.poll(() => loading.count()).toBe(1);
+        await captureUiProof(suite, page, `sidebar-child-loading-${colorScheme}-${width}.png`);
+        expect(await children.locator(":scope > .skeleton").count()).toBe(1);
+        expect(await loading.getAttribute("aria-busy")).toBe("true");
+        expect(await loading.getAttribute("aria-label")).toBe("Loading…");
+        expect(
+          await loading
+            .locator("a, button, input, select, textarea, [tabindex]:not([tabindex='-1'])")
+            .count(),
+        ).toBe(0);
+        const loadingGeometry = await loading.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const listBounds = element.parentElement!.getBoundingClientRect();
+          return { height: bounds.height, left: bounds.left, listHeight: listBounds.height };
+        });
+        expect(loadingGeometry.listHeight).toBe(loadingGeometry.height);
+
+        await gateway.resolveDeferred("sessions.list");
+        await expect.poll(() => loading.count()).toBe(0);
+        const child = page.locator(`[data-session-key="${childKey}"]`);
+        await child.waitFor({ state: "visible" });
+        const childGeometry = await child.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const titleBounds = element
+            .querySelector(".sidebar-recent-session__name")!
+            .getBoundingClientRect();
+          const listBounds = element.parentElement!.parentElement!.getBoundingClientRect();
+          return { height: bounds.height, left: titleBounds.left, listHeight: listBounds.height };
+        });
+        expect(childGeometry).toEqual(loadingGeometry);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("keeps visible sessions ordered and an active child expanded across run completion", async () => {
     const baseTime = Date.parse("2026-08-14T18:00:00.000Z");
     const parentKey = "agent:main:stability-parent";

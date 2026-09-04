@@ -592,7 +592,12 @@ export function renderSessionTree(params: {
             ${renderChildSessionLoadError(host, session.key)}
             ${
               session.loadingChildren && session.children.length === 0
-                ? html`<span class="sidebar-session-tree__loading">${t("common.loading")}</span>`
+                ? html`<span
+                    class="sidebar-session-tree__loading skeleton skeleton-line skeleton-line--medium"
+                    role="status"
+                    aria-busy="true"
+                    aria-label=${t("common.loading")}
+                  ></span>`
                 : nothing
             }
           </div>`
