@@ -200,7 +200,13 @@ describe("session list resolver cache", () => {
       resetPluginRuntimeStateForTest();
       setActivePluginRegistry(createEmptyPluginRegistry());
       const cfg = {
-        agents: { defaults: { model: { primary: "openai/gpt-5" }, thinkingDefault: "off" } },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5" },
+            models: { "openai/gpt-5": { agentRuntime: { id: "openclaw" } } },
+            thinkingDefault: "off",
+          },
+        },
       } as OpenClawConfig;
       resetConfigRuntimeState();
       setRuntimeConfigSnapshot(cfg);
@@ -316,6 +322,27 @@ describe("session list resolver cache", () => {
         });
         expect(result.sessions).toHaveLength(3);
         expect(acpSelects).toBe(1);
+        for (const search of ["openclaw", "unmatched-runtime"]) {
+          acpSelects = 0;
+          const rows = vi.spyOn(rowProjection, "buildGatewaySessionRow");
+          try {
+            const searched = await listSessionsFromStoreAsync({
+              cfg,
+              storePath: path.join(stateDir, "agents", "default", "sessions", "sessions.json"),
+              store: Object.fromEntries(
+                aboveBatchChunkSize
+                  .slice(0, 55)
+                  .map(({ sessionKey, entry }) => [sessionKey, entry]),
+              ),
+              opts: { search, limit: 1 },
+            });
+            expect(searched.totalCount).toBe(search === "openclaw" ? 55 : 0);
+            expect(rows).toHaveBeenCalledTimes(searched.count);
+            expect(acpSelects).toBe(1);
+          } finally {
+            rows.mockRestore();
+          }
+        }
       } finally {
         prepareSpy.mockRestore();
       }

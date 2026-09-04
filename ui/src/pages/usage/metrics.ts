@@ -36,9 +36,9 @@ function formatUsageCost(n: number, decimals = 2): string {
 }
 
 function formatHourLabel(hour: number): string {
-  const date = new Date();
-  date.setHours(hour, 0, 0, 0);
-  return date.toLocaleTimeString(undefined, { hour: "numeric" });
+  // The bucket hour is already zoned; a fixed UTC date avoids local DST normalization.
+  const date = new Date(Date.UTC(1970, 0, 1, hour));
+  return date.toLocaleTimeString(undefined, { hour: "numeric", timeZone: "UTC" });
 }
 
 function forEachSessionHourSlice(

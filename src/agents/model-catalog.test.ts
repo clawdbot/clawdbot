@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "../plugins/plugin-metadata.test-support.js";
 import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import {
   buildPreparedModelCatalogSnapshot,
@@ -27,10 +31,7 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
   ) => mocks.augmentModelCatalogWithProviderPlugins(...args),
 }));
 
-const metadataSnapshot = {
-  plugins: [],
-  manifestRegistry: { plugins: [] },
-} as unknown as PluginMetadataSnapshot;
+const metadataSnapshot = createPluginMetadataSnapshotFixture();
 
 function providerManifestSnapshot(params: {
   provider: string;
@@ -38,7 +39,7 @@ function providerManifestSnapshot(params: {
   modelIds: string[];
   aliases?: string[];
 }): PluginMetadataSnapshot {
-  const plugin = {
+  const plugin = createPluginManifestRecordFixture({
     id: params.provider,
     origin: "bundled",
     providers: [params.provider],
@@ -54,11 +55,8 @@ function providerManifestSnapshot(params: {
       },
       discovery: { [params.provider]: params.discovery },
     },
-  };
-  return {
-    plugins: [plugin],
-    manifestRegistry: { plugins: [plugin] },
-  } as unknown as PluginMetadataSnapshot;
+  });
+  return createPluginMetadataSnapshotFixture({ plugins: [plugin] });
 }
 
 function registry(entries: ModelCatalogEntry[]): ModelRegistry {
@@ -150,7 +148,7 @@ describe("prepared model catalog builder", () => {
   });
 
   it("carries manifest capability metadata into the prepared catalog", async () => {
-    const plugin = {
+    const plugin = createPluginManifestRecordFixture({
       id: "anthropic",
       origin: "bundled",
       providers: ["anthropic"],
@@ -175,11 +173,8 @@ describe("prepared model catalog builder", () => {
         },
         discovery: { anthropic: "refreshable" },
       },
-    };
-    const snapshot = {
-      plugins: [plugin],
-      manifestRegistry: { plugins: [plugin] },
-    } as unknown as PluginMetadataSnapshot;
+    });
+    const snapshot = createPluginMetadataSnapshotFixture({ plugins: [plugin] });
 
     expect(
       loadManifestModelCatalog({ config: {}, metadataSnapshot: snapshot }).find(
@@ -198,7 +193,7 @@ describe("prepared model catalog builder", () => {
   });
 
   it("drops a base context-window default when an overlay replaces the options list", async () => {
-    const plugin = {
+    const plugin = createPluginManifestRecordFixture({
       id: "anthropic",
       origin: "bundled",
       providers: ["anthropic"],
@@ -220,7 +215,7 @@ describe("prepared model catalog builder", () => {
         },
         discovery: { anthropic: "refreshable" },
       },
-    };
+    });
     // Live provider discovery overlays the manifest row but replaces the
     // options list without restating a default.
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
@@ -233,10 +228,7 @@ describe("prepared model catalog builder", () => {
       },
     ]);
     const snapshot = await build({
-      metadataSnapshot: {
-        plugins: [plugin],
-        manifestRegistry: { plugins: [plugin] },
-      } as unknown as PluginMetadataSnapshot,
+      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [plugin] }),
       entries: [{ id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" }],
       readOnly: false,
     });

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -40,6 +41,7 @@ describe("custodian transcript status", () => {
           sessionId: "engine-session-after-history-timeout",
           reply: "Welcome without history.",
           action: "none",
+          question: QUICK_ACTIONS_QUESTION,
         };
       },
     );

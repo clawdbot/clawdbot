@@ -11,12 +11,29 @@ The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It connec
 The full chat window is a native split view:
 
 - **Sessions sidebar**: searchable session list with pinned, gateway-backed group, and recent sections. Spawned child sessions nest beneath their parent inside each section; collapsed parents summarize running, failed, and unread descendants. Context menus support session info, rename, pin, fork, read/unread, archive/restore, copy session key, and delete. The primary new-session action (or Shift-Cmd-N) creates immediately via `sessions.create`; its adjacent options popover can select an agent and request a managed worktree with an optional base ref.
-- **Window toolbar**: context-usage ring (tokens and session cost, with a compact action), Find in Conversation, and a session actions menu. The menu can rename or fork the current session and update its pin, read, or archive state. **Sessions…** (Shift-Cmd-S) opens the Active/Archived manager for gateway search, group management, session inspection, rename, pin, archive, and restore. Select mode applies pin, unpin, archive, or delete to several active sessions while keeping individual failures visible. Separate menu checkmarks show or hide assistant reasoning and tool activity; both are on by default and remembered across launches.
-- **Transcript and composer**: a centered reading column keeps messages and the composer aligned in wide windows. Assistant messages render as plain text with an avatar, user messages as accent bubbles. The composer grows with multiline drafts and places attachments, model, thinking, and response options beneath the text. Models are grouped by provider with the default provider first, while pinned and recent models remain at the top. Response options include tool-call verbosity and Fast responses when supported. Return sends; Shift-Return inserts a newline. Copy, Reply, Listen, and a message actions menu appear beneath messages; right-click actions remain available. Pending agent questions render as native cards with single- or multi-select options, free-text **Other** answers, expiry countdowns, and shared terminal state. Empty chats offer desktop starter prompts. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy its visible Markdown without hidden reasoning. Truncated assistant messages also offer **Open Full Message**, which loads a selectable Markdown reader. Use **Listen** for gateway TTS with a local speech fallback.
+- **Window toolbar**: conversation title, Find in Conversation, and a session actions menu. The menu can rename or fork the current session and update its pin, read, or archive state. **Sessions…** (Shift-Cmd-S) opens the Active/Archived manager for gateway search, group management, session inspection, rename, pin, archive, and restore. Select mode applies pin, unpin, archive, or delete to several active sessions while keeping individual failures visible. Separate menu checkmarks show or hide assistant reasoning and tool activity; both are on by default and remembered across launches.
+- **Transcript and composer**: a centered reading column keeps messages and the composer aligned in wide windows. Assistant messages render as plain text with an avatar, user messages as accent bubbles. The rounded composer grows with multiline drafts and keeps its controls in a compact footer beneath the text, matching web and iOS. The **+** menu contains attachments, branches, and tool-call verbosity. The context ring shows token usage and session cost and offers **Compact Thread**. The model menu groups models by provider, keeps pinned and recent models at the top, and lets you pin or unpin the selected model. **Effort** contains thinking and Fast response settings. Controls adapt to narrow windows while keeping voice and send actions visible. Return sends; Shift-Return inserts a newline. Copy, Reply, Listen, and a message actions menu appear beneath messages; right-click actions remain available. Pending agent questions render as native cards with single- or multi-select options, free-text **Other** answers, expiry countdowns, and shared terminal state. Empty chats offer desktop starter prompts. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy its visible Markdown without hidden reasoning. Truncated assistant messages also offer **Open Full Message**, which loads a selectable Markdown reader. Use **Listen** for gateway TTS with a local speech fallback.
 - **Find in Conversation**: press Cmd-F to search user and assistant text in the loaded conversation. Return or Cmd-G moves to the next matching message; Shift-Cmd-G moves backward. The selected message is outlined and revealed without incoming replies pulling you away. Escape closes Find. Search does not fetch older history or search hidden reasoning and tool payloads.
 - **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. While Talk Mode is active, the composer shows its listening/thinking/speaking state, live audio activity, and an expandable rolling transcript. Right-click the Talk button to choose **System Default** or a connected microphone; this is the same microphone selection used by Voice Wake and push-to-talk. If a selected microphone disconnects, the active Talk session falls back to the system default and tries the selection again the next time Talk Mode starts. A separate microphone action records a voice note when Talk Mode does not own audio capture.
 
 The anchored compact chat panel from the menu bar keeps the compact single-column layout with the same model, thinking, verbosity, and Fast controls inline, plus starter prompts, Talk Mode, voice notes, and Listen. Assistant reasoning and tool activity remain hidden in this compact surface.
+
+## Diagrams
+
+Completed fenced blocks labeled `mermaid` render as diagrams in native chat,
+including Quick Chat. Rendering runs locally using bundled assets. A fence is
+complete when its closing delimiter arrives or the response finishes; incomplete
+streaming fences remain code.
+
+Use the small options button at the top right to view or copy the source and
+expand the diagram. The copy button also appears on hover or keyboard focus.
+Click the diagram to open its vector preview, where you can zoom and pan. Close
+the preview with its close button or Escape. In Quick Chat, closing the preview
+returns to the reply; clicking outside both the bar and its preview dismisses
+Quick Chat.
+
+Invalid or oversized diagrams keep their source readable. Temporary rendering
+failures offer **Retry diagram** in the options menu.
 
 ## Session colors
 
@@ -32,8 +49,9 @@ optional token or password; credentials are stored in the macOS Keychain.
 Secure profiles maintain their own system-trust-gated first-use certificate pin
 and do not inherit `gateway.remote.tlsFingerprint` from the primary Gateway.
 Dashboard windows enforce that same saved-profile pinning policy.
-Removing a profile also closes its open windows and shuts down its secondary
-connection.
+Removing a profile closes its native chat windows and shuts down its secondary
+connection. Dashboard windows showing that profile return to Primary.
+Updating a saved profile's credentials refreshes its open dashboard windows.
 
 Choose **File → New Gateway Window…** or press Cmd-N, then select one of those
 saved profiles. The picker remembers the most recently used profile. Every
@@ -49,6 +67,7 @@ The menu-bar app's configured Gateway remains the owner of Mac node
 capabilities and Talk Mode. Additional Gateway windows are operator-only, so a
 second Gateway cannot silently retarget global microphone or device controls.
 Listen/TTS and normal chat actions use the window's own Gateway connection.
+Inline widgets also load from that window's Gateway.
 
 ### Gateway picker
 
@@ -56,10 +75,49 @@ The dashboard header shows a Gateway picker when the Mac app has at least two
 configured Gateways. Choose a Gateway to replace the current dashboard in the
 same window, or Option-click it to open a separate dashboard window. **Set as
 primary…** makes the viewed token-authenticated profile the Mac app's primary
-Gateway after confirmation; this resets Talk Mode, the widget panel, and chat
-connections. While connected, the sidebar footer also shows the current Gateway
-and marks it when it is primary. Password-only profiles can be viewed but cannot
-be made primary.
+Gateway after confirmation. The app replaces the primary Gateway's credentials
+and closes its native chat window; independent saved-profile windows stay open.
+Dashboard windows displaying **Primary** follow the new connection, including
+windows opened separately. While connected, the sidebar footer also shows the
+current Gateway and marks it when it is primary. Password-only profiles can be
+viewed but cannot be made primary.
+
+Native dashboard commands such as New Session and the command palette act on
+the frontmost Gateway window.
+
+Native approval cards and dialogs apply only to the Gateway connection that
+requested them. Changing Primary does not transfer a pending approval to the
+new Gateway.
+
+The native Channels and Config settings follow Primary. Changing Primary clears
+the previous Gateway's channel status, login QR, and unsaved config draft, then
+loads the new Gateway's settings. A temporary reconnect to the same Primary
+keeps its WhatsApp login session and config draft. If the connection fails, these
+panes show the Gateway error and keep **Refresh** or **Reload** available.
+Connection attempts show progress, and retries retain the last failure until
+the Gateway connects or Primary changes.
+Opening or revisiting these panes while settings load waits for the current
+Gateway's shared read. Background refreshes preserve unsaved edits; **Reload**
+replaces them with the Gateway's current values.
+
+### Cron jobs when switching Gateways
+
+By default, **Settings → Cron Jobs** links to the Dashboard. Enable
+**Settings → Debug → Show native settings panes** to use the native pane, which
+shows the Primary Gateway's jobs and run history.
+Run, enable, edit, delete, and transcript actions stay with the Gateway that
+supplied the displayed job. After changing Primary, reopen the job from the new
+list before acting on it. A socket reconnect to the same Gateway keeps an open
+editor usable and reloads the selected job before refreshing its history.
+
+While jobs load, the pane shows a loading indicator and disables **Refresh**.
+A failed load shows the Gateway error and enables **Refresh** to try again.
+“No cron jobs yet” appears only after the Gateway returns an empty list.
+
+You can draft a **New Job** while offline. Saving can reconnect or start that
+Gateway, but changing Primary while the editor is open does not move the draft
+to the new Gateway. The app reports the change so you can reopen the editor for
+the intended Gateway.
 
 ## Quick Chat bar
 
@@ -107,7 +165,7 @@ Disable the feature entirely with **Settings → General → Quick Chat**; the s
 - Session groups: `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` own the path-free group catalog. Write-scoped `sessions.groups.defaults` and `sessions.groups.update` own optional New Session folder/worktree defaults. Membership is the session `category` updated through `sessions.patch` or assigned during `sessions.create`.
 - Unread state: after a session activates and its live history loads successfully, the app clears the unread state it observed. A manual unread marker created while that session is already open remains through refreshes and run completion; leave and reopen the session, or mark it read explicitly, to clear it. Failed history loads do not clear unread state, and a transient patch failure retries on the next activation. During staggered upgrades, an older active app can still send a bare read acknowledgement that clears the marker. Cross-client protection therefore requires every active app to support the acknowledgement contract; update all connected clients before relying on the reminder.
 - Onboarding uses a dedicated session to keep first-run setup separate.
-- Offline cache: the app keeps a small read-only cache of recent chat sessions and transcripts per gateway (`~/Library/Application Support/OpenClaw/chat-cache.sqlite`): cold opens paint the last known transcript immediately and refresh once the Gateway responds, and recent chats stay browsable while disconnected (sending stays disabled until the connection is back).
+- Offline storage: recent sessions and transcripts are cached per Gateway in `~/Library/Application Support/OpenClaw/databases/gateway-cache.sqlite`. Client-owned pending commands and routing state live separately in `client-state.sqlite` in the same directory. Cold opens paint cached transcripts before the connection is ready and refresh once the Gateway responds.
 
 ## Security surface
 

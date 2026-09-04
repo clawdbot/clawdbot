@@ -265,7 +265,7 @@ describe("ComposerDictationController", () => {
     }
   });
 
-  it("commits and unlocks immediately while remote close finishes in background", async () => {
+  it("unlocks immediately and rejects a pending result after a new session starts", async () => {
     let resolveClose: () => void = () => {};
     const close = new Promise<void>((resolve) => {
       resolveClose = resolve;
@@ -287,15 +287,15 @@ describe("ComposerDictationController", () => {
     });
     const { controller, onCommit, target } = createHarness();
     await startHold(target);
-    emit({ transcriptionSessionId: "dictation-1", type: "partial", text: "keep this now" });
 
     const committed = controller.finishActive();
 
     expect(controller.active).toBe(false);
     expect(controller.locksComposer).toBe(false);
-    expect(onCommit).toHaveBeenCalledWith("keep this now");
-    await expect(committed).resolves.toBe(true);
-    expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" });
+    expect(onCommit).not.toHaveBeenCalled();
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
+    );
     try {
       expect(controller.startDirect()).toBe(true);
       await waitForFast(() => expect(sessionsCreated).toBe(2));
@@ -310,7 +310,9 @@ describe("ComposerDictationController", () => {
         final: true,
       });
       expect(controller.transcript).toBe("new preview");
-      expect(onCommit).toHaveBeenCalledExactlyOnceWith("keep this now");
+      resolveClose();
+      await expect(committed).resolves.toBe(false);
+      expect(onCommit).not.toHaveBeenCalled();
     } finally {
       resolveClose();
       controller.dispose();
@@ -559,6 +561,10 @@ describe("ComposerDictationController", () => {
     const withoutTranscript = createHarness();
     await startHold(withoutTranscript.target);
     const empty = withoutTranscript.controller.finishActive();
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "dictation-1" }),
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
     await expect(empty).resolves.toBe(false);
     withoutTranscript.controller.dispose();
   });
@@ -625,6 +631,43 @@ describe("ComposerDictationController", () => {
       order.indexOf("talk.session.close"),
     );
     expect(onCommit).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("bounds Stop while transcription session creation remains pending", async () => {
+    let resolveCreate: (result: {
+      sessionId: string;
+      transcriptionSessionId: string;
+      audio: { inputEncoding: string; inputSampleRateHz: number };
+    }) => void = () => undefined;
+    const createResult = new Promise<{
+      sessionId: string;
+      transcriptionSessionId: string;
+      audio: { inputEncoding: string; inputSampleRateHz: number };
+    }>((resolve) => {
+      resolveCreate = resolve;
+    });
+    request = vi.fn(async (method: string) =>
+      method === "talk.session.create" ? createResult : { ok: true },
+    );
+    const { controller, target } = createHarness();
+    await startHold(target);
+
+    const finished = controller.finishActive();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(finished).resolves.toBe(false);
+    expect(controller.locksComposer).toBe(false);
+    expect(request).not.toHaveBeenCalledWith("talk.session.close", expect.anything());
+
+    resolveCreate({
+      sessionId: "late-session",
+      transcriptionSessionId: "late-session",
+      audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+    });
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "late-session" }),
+    );
     controller.dispose();
   });
 

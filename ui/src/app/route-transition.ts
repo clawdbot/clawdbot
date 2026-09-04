@@ -4,7 +4,6 @@ type RouteTransitionOptions = {
   document: Document;
   from: RouteId | undefined;
   navigate: () => Promise<void>;
-  prepare?: () => Promise<void>;
   prefersReducedMotion: boolean;
   to: RouteId;
 };
@@ -59,18 +58,12 @@ async function navigateAndAnimate(
 }
 
 export async function navigateWithRouteTransition(options: RouteTransitionOptions): Promise<void> {
-  const { document, from, navigate, prepare, prefersReducedMotion, to } = options;
+  const { document, from, navigate, prefersReducedMotion, to } = options;
   if (from !== "new-session" || to !== "chat") {
     return navigate();
   }
 
-  try {
-    await prepare?.();
-  } catch {
-    // Preparation is an enhancement. Preserve direct navigation so its normal
-    // route error handling remains authoritative when preloading fails.
-    return navigate();
-  }
-
+  // Navigation commits the URL while the outlet keeps the submitted prompt live.
+  // Only the entrance animation waits for the rendered chat composer.
   return navigateAndAnimate(document, navigate, prefersReducedMotion);
 }

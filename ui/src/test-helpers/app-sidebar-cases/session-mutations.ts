@@ -20,6 +20,7 @@ import {
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
+import { sessionOwnerProfiles } from "../session-owner-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 
 describe("AppSidebar session mutation feedback", () => {
@@ -33,7 +34,10 @@ describe("AppSidebar session mutation feedback", () => {
     restoreDialogPolyfill();
   });
 
-  async function mountMutationHarness(client: GatewayBrowserClient = {} as GatewayBrowserClient) {
+  async function mountMutationHarness(
+    client: GatewayBrowserClient = {} as GatewayBrowserClient,
+    directory = sessionOwnerProfiles(),
+  ) {
     const harness = createSessionsHarness("main", [
       "agent:main:main",
       "agent:main:a",
@@ -46,6 +50,9 @@ describe("AppSidebar session mutation feedback", () => {
       ...args: Parameters<GatewayBrowserClient["request"]>
     ): Promise<T> => {
       const [method, params] = args;
+      if (method === "users.list") {
+        return Promise.resolve(directory as T);
+      }
       if (method === "sessions.patchMany") {
         const request = params as {
           targets: Array<{ key: string; agentId?: string }>;
@@ -175,9 +182,10 @@ describe("AppSidebar session mutation feedback", () => {
         },
       };
     });
-    const { gateway, harness, sidebar } = await mountMutationHarness({
-      request,
-    } as unknown as GatewayBrowserClient);
+    const { gateway, harness, sidebar } = await mountMutationHarness(
+      { request } as unknown as GatewayBrowserClient,
+      sessionOwnerProfiles("Ada", "Bob"),
+    );
     gateway.publish({
       selfUser: { id: "profile-ada", name: "Ada" },
       hello: gatewayHelloForMethods(["sessions.assignOwner"], ["operator.write"]),
@@ -197,8 +205,22 @@ describe("AppSidebar session mutation feedback", () => {
     await sidebar.updateComplete;
 
     const menu = await openSessionMenu(sidebar, row.key);
-    expect(menu.textContent).toContain("Assign to me");
-    expect(menu.textContent).toContain("Assign to…");
+    await waitForFast(() => expect(menu.textContent).toContain("Bob"));
+    expect(
+      Array.from(menu.querySelectorAll<HTMLElement>(":scope > wa-dropdown > wa-dropdown-item"))
+        .map((item) => item.querySelector(".session-menu__text")?.textContent?.trim())
+        .filter((label) => label?.startsWith("Assign to")),
+    ).toEqual(["Assign to…"]);
+    const assignmentMenu = Array.from(
+      menu.querySelectorAll<HTMLElement>(":scope > wa-dropdown > wa-dropdown-item"),
+    ).find(
+      (item) => item.querySelector(".session-menu__text")?.textContent?.trim() === "Assign to…",
+    );
+    expect(
+      Array.from(
+        assignmentMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[slot="submenu"]') ?? [],
+      ).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
+    ).toEqual(["Me", "Bob"]);
     menu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
@@ -222,7 +244,7 @@ describe("AppSidebar session mutation feedback", () => {
 
     const selfMenu = await openSessionMenu(sidebar, row.key);
     const selfItem = selfMenu.querySelector<HTMLElement>(
-      ':scope > wa-dropdown > wa-dropdown-item[value="assign-owner:human:profile-ada"]',
+      ':scope > wa-dropdown > wa-dropdown-item wa-dropdown-item[slot="submenu"][value="assign-owner:human:profile-ada"]',
     );
     selfMenu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {

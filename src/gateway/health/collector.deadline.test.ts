@@ -14,7 +14,11 @@ let testConfig: OpenClawConfig = {};
 let healthPluginsForTest: ChannelPlugin[] = [];
 const tempDirs = createTempDirTracker();
 let sessionStorePath: string;
-const listSessionEntriesReadOnly = vi.fn(() => []);
+const readSessionStoreSummaryReadOnly = vi.fn(() => ({
+  count: 0,
+  recent: [],
+  byAgent: new Map(),
+}));
 let collectGatewayHealthSnapshot: typeof import("./collector.js").collectGatewayHealthSnapshot;
 let createChannelTestPluginBase: typeof import("../../test-utils/channel-plugins.js").createChannelTestPluginBase;
 
@@ -65,7 +69,7 @@ describe("gateway health collection deadline", () => {
       resolveSessionStorePathCore: () => sessionStorePath,
     }));
     vi.doMock("../../config/sessions/session-accessor.js", () => ({
-      listSessionEntriesReadOnly,
+      readSessionStoreSummaryReadOnly,
     }));
     vi.doMock("../../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
@@ -83,7 +87,7 @@ describe("gateway health collection deadline", () => {
       tempDirs.make("openclaw-health-deadline-sessions-"),
       "sessions.json",
     );
-    listSessionEntriesReadOnly.mockReset();
+    readSessionStoreSummaryReadOnly.mockReset();
     testConfig = {};
     healthPluginsForTest = [];
     await collectGatewayHealthSnapshot({ audience: "admin", probe: false, timeoutMs: 50 });
@@ -98,9 +102,9 @@ describe("gateway health collection deadline", () => {
     vi.useFakeTimers();
     const probe = vi.fn(async () => ({ ok: true }));
     healthPluginsForTest = [createDeadlinePlugin({ accountIds: ["default"], probe })];
-    listSessionEntriesReadOnly.mockImplementationOnce(() => {
+    readSessionStoreSummaryReadOnly.mockImplementationOnce(() => {
       vi.advanceTimersByTime(50);
-      return [];
+      return { count: 0, recent: [], byAgent: new Map() };
     });
 
     const snap = await collectDeadlineSnapshot({ timeoutMs: 50 });

@@ -29,7 +29,6 @@ import {
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
-import type { SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
   args?: string[];
@@ -227,7 +226,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       target,
       options: {
         action: "remove files",
-        requireWritable: true,
+        requireWritable: params.recursive ? "subtree" : true,
+        allowedType: "file-or-directory",
       } as const,
     };
     await this.runCheckedCommand({
@@ -255,14 +255,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       target: from,
       options: {
         action: "rename files",
-        requireWritable: true,
+        requireWritable: "subtree",
+        allowedType: "file-or-directory",
       } as const,
     };
     const toCheck = {
       target: to,
       options: {
         action: "rename files",
-        requireWritable: true,
+        requireWritable: "subtree",
+        allowedType: "file-or-directory",
       } as const,
     };
     await this.runCheckedCommand({
@@ -382,7 +384,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }
 
   private ensureWriteAccess(target: SandboxResolvedFsPath, action: string) {
-    if (!allowsWrites(this.sandbox.workspaceAccess) || !target.writable) {
+    if (this.sandbox.workspaceAccess === "ro" || !target.writable) {
       throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
     }
   }
@@ -396,10 +398,6 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       mounts: this.mounts,
     });
   }
-}
-
-function allowsWrites(access: SandboxWorkspaceAccess): boolean {
-  return access === "rw";
 }
 
 function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {

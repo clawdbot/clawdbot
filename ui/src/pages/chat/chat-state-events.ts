@@ -400,7 +400,7 @@ function handleSessionsChangedEvent(
     state.selectedChatSessionArchived = event.archived;
   }
   const result = reconcileSessionEvent(state, payload);
-  if (resetsSelectedSession) {
+  if (resetsSelectedSession || (matchesChat && source?.reason === "compact")) {
     void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
       state.requestUpdate?.(),
     );
@@ -432,23 +432,16 @@ function handleSessionsChangedEvent(
       supersedeInFlight: true,
     }).finally(() => state.requestUpdate?.());
   }
-  if (
-    result.applied &&
-    event &&
-    runIdBeforeApply &&
-    matchesChat &&
+  // The session capability owns roster invalidation, including unapplied events.
+  // A pane refresh here bypasses its debounce and multiplies reads across split panes.
+  if (result.applied && event && runIdBeforeApply && matchesChat) {
     finishSessionMessageRunReconcile(
       state,
       event.key,
       event.clientRunId ?? event.runId ?? runIdBeforeApply,
       result.row,
       presentation,
-    )
-  ) {
-    return;
-  }
-  if (!result.applied && event?.isChatTurn !== true) {
-    void refreshCurrentChatSessionList(state);
+    );
   }
 }
 
@@ -592,8 +585,7 @@ export function handlePageGatewayEvent(
       const shouldRecoverMissingTerminal = Boolean(
         recoveryRunId &&
         recoveryScope &&
-        getChatSessionProjection(state, state.chatMessages, recoveryScope).runs[recoveryRunId]
-          ?.status === "completed",
+        getChatSessionProjection(state, recoveryScope).runs[recoveryRunId]?.status === "completed",
       );
       const recoveryOwnership =
         shouldRecoverMissingTerminal && payload

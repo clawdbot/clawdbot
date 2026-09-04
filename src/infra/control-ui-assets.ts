@@ -3,10 +3,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import * as controlUiFsRuntime from "./control-ui-assets.fs.runtime.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+
+export function formatControlUiSourceCommand(root: string, action: "build" | "dev"): string {
+  const directory = process.platform === "win32" ? quotePowerShellArg(root) : quoteCliArg(root);
+  return `pnpm --dir ${directory} ui:${action}`;
+}
 
 export function resolveControlUiDistIndexPathForRoot(root: string): string {
   return path.join(root, "dist", "control-ui", "index.html");
@@ -398,8 +404,10 @@ export async function ensureControlUiAssetsBuilt(
   if (opts.onBuildStart) {
     opts.onBuildStart();
   } else {
+    const buildCommand = formatControlUiSourceCommand(repoRoot, "build");
+    const devCommand = formatControlUiSourceCommand(repoRoot, "dev");
     runtime.log(
-      "Control UI assets missing; building them now (rerun `pnpm ui:build` after UI changes, or use `pnpm ui:dev` while developing the Control UI)…",
+      `Control UI assets missing; building them now (rerun \`${buildCommand}\` after UI changes, or use \`${devCommand}\` while developing the Control UI)…`,
     );
   }
 

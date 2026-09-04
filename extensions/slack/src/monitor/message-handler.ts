@@ -404,7 +404,11 @@ export function createSlackMessageHandler(params: {
       ctx.runtime.error?.(`slack inbound debounce flush failed: ${formatErrorMessage(err)}`);
     },
   });
-  const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
+  // Keep cache and in-flight lookups with Bolt's client; replaced clients start fresh.
+  const threadTsResolvers = new WeakMap<
+    SlackEventScope["client"],
+    ReturnType<typeof createSlackThreadTsResolver>
+  >();
   const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
 
   async function enqueueSlackMessage(
@@ -427,11 +431,13 @@ export function createSlackMessageHandler(params: {
     // Relay and native events can overlap; a following typeless bot event must see it.
     ctx.rememberSlackChannelType(message.channel, message.channel_type, opts.eventScope);
     trackEvent?.();
-    const resolvedMessage = await (
-      opts.eventScope
-        ? createSlackThreadTsResolver({ client: opts.eventScope.client })
-        : threadTsResolver
-    ).resolve({
+    const client = opts.eventScope?.client ?? ctx.app.client;
+    let threadTsResolver = threadTsResolvers.get(client);
+    if (!threadTsResolver) {
+      threadTsResolver = createSlackThreadTsResolver({ client });
+      threadTsResolvers.set(client, threadTsResolver);
+    }
+    const resolvedMessage = await threadTsResolver.resolve({
       message,
       source: opts.source,
       ...(opts.turnAdoptionLifecycle ? { turnAdoptionLifecycle: opts.turnAdoptionLifecycle } : {}),

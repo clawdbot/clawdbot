@@ -8,7 +8,9 @@ import type {
   RouterHistory,
 } from "@openclaw/uirouter";
 import {
+  activityPersonFromPath,
   agentRouteFromPath,
+  INTERNAL_ACTIVITY_PATH_PARAM,
   INTERNAL_AGENT_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
@@ -42,6 +44,7 @@ import { page as devicesPage } from "./pages/devices/route.ts";
 import { page as labsPage } from "./pages/labs/route.ts";
 import { page as lobsterdexPage } from "./pages/lobsterdex/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
+import { page as meetingsPage } from "./pages/meetings/route.ts";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as modelSetupPage } from "./pages/model-setup/route.ts";
@@ -60,7 +63,7 @@ import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
 type AppRouteModule = {
-  render: (data: unknown) => unknown;
+  render: (data: unknown, loaderPending: boolean) => unknown;
   renderOwnerKey?: (
     match: Pick<RouteMatch, "data" | "location">,
     settled: Pick<RouteMatch, "data" | "location"> | undefined,
@@ -80,6 +83,7 @@ const APP_ROUTE_TREE = [
   custodianPage,
   newSessionPage,
   activityPage,
+  meetingsPage,
   dashboardsPage,
   appsPage,
   portalsPage,
@@ -114,12 +118,26 @@ const APP_ROUTE_TREE = [
 
 const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
 
+/** Starts route chunk downloads without running the route's loader. */
+export function warmApplicationRouteModule(
+  router: ApplicationRouter,
+  location: RouteLocation,
+  basePath: string,
+): void {
+  const routeId = routeIdFromPath(location.pathname, basePath);
+  const route = routeId ? router.getRoute(routeId) : null;
+  if (route) {
+    // Navigation owns chunk errors; its import reuses the browser's module cache.
+    void Promise.resolve(route.component()).catch(() => undefined);
+  }
+}
+
 export function createApplicationRouter(): ApplicationRouter {
   const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
     routes: appRoutes,
   });
-  // The shared router intentionally matches exact paths only. Workboard ids,
-  // hub tabs, and session refs are runtime data, so the app owns those paths.
+  // The shared router intentionally matches exact paths only. People, Workboard
+  // ids, hub tabs, and session refs are runtime data, so the app owns those paths.
   return {
     ...router,
     routeIdFromPath,
@@ -129,6 +147,9 @@ export function createApplicationRouter(): ApplicationRouter {
 type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
 
 function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
+  if (activityPersonFromPath(pathname, basePath)) {
+    return ["activity", INTERNAL_ACTIVITY_PATH_PARAM, pathname];
+  }
   const agentRoute = agentRouteFromPath(pathname, basePath);
   if (agentRoute) {
     return ["agents", INTERNAL_AGENT_PATH_PARAM, pathname];

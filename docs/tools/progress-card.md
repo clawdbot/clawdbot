@@ -50,9 +50,9 @@ The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done
 Choose the representation that makes the current state easiest to scan: use a table for comparisons or metrics, a progress bar for one long operation, and a checklist only when the work is genuinely sequential. Omit the checklist when a table, bar, or sentence says it better, and do not repeat the same facts across the plan and Markdown. Markdown accepts ordinary formatting, links, and optional progress bars:
 
 ```md
-Tests are running.
+<progress aria-label="Tests · 3/7" value="3" max="7"></progress>
 
-<progress value="3" max="7"></progress>
+Tests are running.
 
 | check      | state   |
 | ---------- | ------- |
@@ -60,7 +60,7 @@ Tests are running.
 | live flow  | running |
 ```
 
-The Control UI renders `progress` elements with `value` and `max` attributes. Other raw HTML is stripped by the Markdown sanitizer.
+Put one progress bar first and give it a short `aria-label` with its purpose and current/total values. In the session hovercard, the Agent Notepad pins the bar above the note and shows that label. Other raw HTML is stripped by the Markdown sanitizer.
 
 ## Limits
 
@@ -88,7 +88,7 @@ The current chat keeps exactly one live card in the main conversation:
 - The card appears in the collapsible surface inside the composer at every width.
 
 Opening a side panel does not move the card out of the conversation. The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
-Each placement shows the local time of the last progress update, including seconds.
+The composer and dashboard placements show the local time of the last progress update. The hovercard instead shows the current-or-next plan step and its completed/total count, followed by Markdown in a separate Agent Notepad when a note is present.
 
 ## Pin the card to the dashboard
 

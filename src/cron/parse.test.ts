@@ -216,13 +216,25 @@ describe("parseAbsoluteTimeMs", () => {
       expect(parseAbsoluteTimeMs(year2050.toString())).toBe(year2050);
     });
 
-    it("handles maximum valid timestamp", () => {
-      // JavaScript Date range ends at +100,000,000 days
-      const maxValid = new Date(8640000000000000).getTime();
-      expect(parseAbsoluteTimeMs(maxValid.toString())).toBe(maxValid);
-      expect(parseAbsoluteTimeMs(new Date(maxValid).toISOString())).toBe(maxValid);
-      expect(parseAbsoluteTimeMs("+275760-09-13T00:00:00.001Z")).toBeNull();
-    });
+    it.each([
+      ["8640000000000000", 8_640_000_000_000_000],
+      ["+275760-09-13T00:00:00.000Z", 8_640_000_000_000_000],
+      ["-271821-04-20T00:00:00.000Z", -8_640_000_000_000_000],
+      ["+275760-09-13T01:00:00+01:00", 8_640_000_000_000_000],
+      ["-271821-04-19T23:00:00-01:00", -8_640_000_000_000_000],
+      ["+275760-09-13T00:00:00.001+00:01", 8_639_999_999_940_001],
+      ["-271821-04-19T23:59:59.999-00:01", -8_639_999_999_940_001],
+      ["-271821-04-19T24:00:00Z", -8_640_000_000_000_000],
+      ["+275760-09-13T00:00:00.001Z", null],
+      ["+275760-09-13T01:00:00.001+01:00", null],
+      ["-271821-04-19T22:59:59.999-01:00", null],
+      ["-000000-01-01", null],
+    ] as const)(
+      "applies Date bounds after offset and end-of-day conversion for %s",
+      (input, expected) => {
+        expect(parseAbsoluteTimeMs(input)).toBe(expected);
+      },
+    );
   });
 
   describe("real-world cron examples", () => {

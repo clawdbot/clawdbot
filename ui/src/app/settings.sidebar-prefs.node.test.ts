@@ -60,7 +60,11 @@ describe("sidebar preference persistence", () => {
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarEntries).toEqual(["route:cron", "route:plugins"]);
+    expect(loadSettings().sidebarEntries).toEqual([
+      "route:dashboards",
+      "route:cron",
+      "route:plugins",
+    ]);
     expect(loadSettings().navWidth).toBe(258);
   });
 

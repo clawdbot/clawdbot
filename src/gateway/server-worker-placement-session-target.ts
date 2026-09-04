@@ -26,6 +26,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   agentId: string;
   executionMode: WorkerPlacementExecutionMode;
   action: "activation" | "recovery";
+  signal?: AbortSignal;
   run: (worktree: WorkerPlacementWorktree) => T | Promise<T>;
 }): Promise<T> {
   const target = params.sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
@@ -37,6 +38,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   return await runExclusiveSessionLifecycleMutation({
     scope: target.storePath,
     identities: [params.sessionKey, target.canonicalKey, ...target.storeKeys, params.sessionId],
+    signal: params.signal,
     run: async () => {
       const {
         config,

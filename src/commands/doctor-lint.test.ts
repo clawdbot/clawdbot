@@ -570,7 +570,7 @@ describe("runDoctorLintCli", () => {
     }
   });
 
-  it("keeps mixed selected checks on a fully isolated state view", async () => {
+  it("keeps mixed selected checks on an isolated plugin metadata view", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-private-"));
     const stateDir = path.join(rootDir, "operator-state");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -714,22 +714,14 @@ describe("runDoctorLintCli", () => {
     }
   });
 
-  it("keeps relevant deferred plugin inspection off the source state database", async () => {
+  it("runs post-plugin readiness against an isolated state snapshot", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-relevant-"));
     const stateDir = path.join(rootDir, "operator-state");
     const configPath = path.join(stateDir, "openclaw.json");
     const config = {
       gateway: { mode: "local" },
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
       memory: { search: { provider: "local", fallback: "none" } },
-      models: {
-        providers: {
-          "fixture-external": {
-            baseUrl: "http://127.0.0.1:19432/v1",
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      },
     } satisfies OpenClawConfig;
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(configPath, `${JSON.stringify(config)}\n`);
@@ -760,10 +752,12 @@ describe("runDoctorLintCli", () => {
       HOME: process.env.HOME,
       OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
       OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+      OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE,
     };
     process.env.HOME = stateDir;
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     process.env.OPENCLAW_STATE_DIR = stateDir;
+    process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE = "1";
     mocks.readConfigFileSnapshot.mockImplementation((...args: unknown[]) =>
       mocks.actualReadConfigFileSnapshot(...args),
     );
@@ -774,7 +768,6 @@ describe("runDoctorLintCli", () => {
         runDoctorLintCli(runtime, {
           json: true,
           severityMin: "error",
-          onlyIds: ["memory-core/managed-local-embedding-setup"],
         }),
       ).resolves.toBe(1);
       expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
@@ -1033,6 +1026,7 @@ function restoreDoctorLintTestEnv(values: {
   HOME: string | undefined;
   OPENCLAW_CONFIG_PATH: string | undefined;
   OPENCLAW_STATE_DIR: string | undefined;
+  OPENCLAW_UPDATE_POST_CORE_CONVERGENCE?: string | undefined;
 }): void {
   if (values.HOME === undefined) {
     delete process.env.HOME;
@@ -1048,5 +1042,11 @@ function restoreDoctorLintTestEnv(values: {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
     process.env.OPENCLAW_STATE_DIR = values.OPENCLAW_STATE_DIR;
+  }
+  if (values.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === undefined) {
+    delete process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE;
+  } else {
+    process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE =
+      values.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE;
   }
 }

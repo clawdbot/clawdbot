@@ -5,6 +5,21 @@ import Testing
 
 @MainActor
 struct ChannelsStoreUIConfigTests {
+    @Test func `WhatsApp QR login requests select the WhatsApp provider`() {
+        let start = whatsappLoginStartParams(force: true)
+        let wait = whatsappLoginWaitParams(
+            timeoutMs: 120_000,
+            currentQrDataUrl: "data:image/png;base64,current",
+            sessionKey: "opaque-session")
+
+        #expect(start["channel"]?.value as? String == "whatsapp")
+        #expect(wait["channel"]?.value as? String == "whatsapp")
+        #expect(wait["sessionKey"]?.value as? String == "opaque-session")
+
+        let legacyWait = whatsappLoginWaitParams(timeoutMs: 120_000, currentQrDataUrl: nil)
+        #expect(legacyWait["sessionKey"] == nil)
+    }
+
     @Test func `user accent overrides the operator seam color`() {
         #expect(ChannelsStore.uiAccent(userAccent: " #112233 ", seamColor: "#445566") == "#112233")
     }

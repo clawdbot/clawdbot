@@ -147,10 +147,11 @@ export function resolvePluginInstallSourcePlan(params: {
     return sourcePlan(
       {
         source: "official",
-        spec: official.npmSpec,
+        spec: official.spec,
+        installSources: official.installSources,
+        expectedPluginId: official.pluginId,
         pluginId: official.pluginId,
         mode: params.mode,
-        ...(official.expectedIntegrity ? { expectedIntegrity: official.expectedIntegrity } : {}),
         ...(params.pin ? { pin: true } : {}),
       },
       params.raw,

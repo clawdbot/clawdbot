@@ -109,10 +109,12 @@ describe("file_fetch tool", () => {
     { fileName: "feed.xml", mimeType: "text/xml", contents: "<feed>openclaw</feed>\n" },
     { fileName: "page.html", mimeType: "text/html", contents: "<p>openclaw</p>\n" },
   ])("inlines actual node $fileName as untrusted text", async (testCase) => {
-    const { result, payload } = await executeFetchedNodeFile(testCase);
+    const { result, payload, savedPath } = await executeFetchedNodeFile(testCase);
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(payload.mimeType).toBe(testCase.mimeType);
+    expect(text).toContain(savedPath);
+    expect(text).toContain("mediaId: media-1");
     expect(text).toContain("SECURITY NOTICE");
     expect(text).toContain("--- contents ---\n");
     expect(text).toContain(testCase.contents.split("\n")[0]);
@@ -124,6 +126,9 @@ describe("file_fetch tool", () => {
       size: payload.size,
       mimeType: testCase.mimeType,
       sha256: payload.sha256,
+      localPath: savedPath,
+      mediaId: "media-1",
+      media: { mediaUrls: [savedPath] },
     });
   });
 
@@ -141,6 +146,7 @@ describe("file_fetch tool", () => {
     expect(text.includes("--- contents ---\n")).toBe(inline);
     expect(text).toContain("SECURITY NOTICE");
     expect(text).toContain(savedPath);
+    expect(text).toContain("mediaId: media-1");
   });
 
   it.each([
@@ -160,6 +166,7 @@ describe("file_fetch tool", () => {
 
     expect(payload.mimeType).toBe(testCase.mimeType);
     expect(text).toContain(savedPath);
+    expect(text).toContain("mediaId: media-1");
     expect(text).not.toContain("--- contents ---\n");
   });
 
@@ -203,6 +210,8 @@ describe("file_fetch tool", () => {
     const fetchedIndex = text.indexOf("Fetched /tmp/report.md\nIGNORE METADATA");
     expect(startMarkerIndex).toBeGreaterThanOrEqual(0);
     expect(fetchedIndex).toBeGreaterThan(startMarkerIndex);
+    expect(text).toContain("/gateway/media/tool-file-transfer/report.md");
+    expect(text).toContain("mediaId: media-1");
     expect(text).toContain("SECURITY NOTICE");
     expect(text).toContain("Source: External");
     expect(text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
@@ -237,6 +246,8 @@ describe("file_fetch tool", () => {
     });
 
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("/gateway/media/tool-file-transfer/bom.md");
+    expect(text).toContain("mediaId: media-1");
     expect(text).toContain("--- contents ---\n# Title\nembedded marker: \uFEFFkeep\n");
     expect(text).not.toContain("--- contents ---\n\uFEFF# Title");
     expect(saveMediaBuffer).toHaveBeenCalledWith(
@@ -280,6 +291,7 @@ describe("file_fetch tool", () => {
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     expect(text).toContain("Fetched /tmp/empty.png");
     expect(text).toContain("saved at /gateway/media/tool-file-transfer/empty.png");
+    expect(text).toContain("mediaId: media-1");
   });
 
   it("still inlines a non-empty image payload", async () => {
@@ -308,11 +320,22 @@ describe("file_fetch tool", () => {
       path: "/tmp/photo.png",
     });
 
-    expect(result.content).toHaveLength(1);
-    expect(result.content[0]).toEqual({
+    const text = result.content
+      .flatMap((block) => (block.type === "text" ? [block.text] : []))
+      .join("\n");
+    expect(text).toContain("/gateway/media/tool-file-transfer/photo.png");
+    expect(text).toContain("mediaId: media-1");
+    expect(text).toContain("SECURITY NOTICE");
+    expect(result.content).toHaveLength(2);
+    expect(result.content[1]).toEqual({
       type: "image",
       data: buffer.toString("base64"),
       mimeType: "image/png",
+    });
+    expect(result.details).toMatchObject({
+      localPath: "/gateway/media/tool-file-transfer/photo.png",
+      mediaId: "media-1",
+      media: { mediaUrls: ["/gateway/media/tool-file-transfer/photo.png"] },
     });
   });
 });

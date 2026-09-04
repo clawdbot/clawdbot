@@ -132,6 +132,9 @@ export type TranscribeAudioFileParams = {
 };
 
 export type MediaUnderstandingRuntime = {
+  resolveAudioInputBudget: (params: {
+    cfg: OpenClawConfig;
+  }) => Promise<{ enabled: false } | { enabled: true; maxBytes: number }>;
   runMediaUnderstandingFile: (
     params: RunMediaUnderstandingFileParams,
   ) => Promise<RunMediaUnderstandingFileResult>;

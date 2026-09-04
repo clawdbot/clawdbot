@@ -22,6 +22,7 @@ type Job = {
 };
 
 type Workflow = {
+  concurrency?: { group: string; "cancel-in-progress": boolean };
   jobs?: Record<string, Job>;
   on?: {
     workflow_dispatch?: {
@@ -56,6 +57,14 @@ function step(jobValue: Job, name: string): Step {
 }
 
 describe("Plugin ClawHub New workflow", () => {
+  it("isolates validation runs while serializing publication of the same target", () => {
+    expect(workflow.concurrency).toEqual({
+      group:
+        "plugin-clawhub-new-${{ inputs.dry_run && format('dry-run-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}",
+      "cancel-in-progress": false,
+    });
+  });
+
   it("binds trusted-main workflow code to an exact release target SHA", () => {
     expect(workflow.on?.workflow_dispatch?.inputs?.ref?.required).toBe(true);
     for (const input of [
@@ -188,6 +197,7 @@ describe("Plugin ClawHub New workflow", () => {
     expect(packRun).not.toContain('mode}" == "configure-only"');
     expect(packRun).toContain("bash .release-harness/scripts/plugin-clawhub-publish.sh --pack");
     expect(packRun).not.toContain("bash scripts/plugin-clawhub-publish.sh --pack");
+    expect(packRun).not.toContain("check-plugin-npm-runtime-builds.mts");
     expect(packRun).toContain("--validate-packed");
     expect(packRun).toContain("--clawhub-toolchain-integrity");
     expect(packRun).toContain("--clawhub-toolchain-sha256");
@@ -340,7 +350,7 @@ describe("Plugin ClawHub New workflow", () => {
     expect(materializerSource).toContain("--ignore-scripts");
     expect(materializerSource).toContain("--omit=dev");
     expect(materializerSource).toContain(
-      "9606849698f041afdd2c2600633320f6b7c1e5136d06b98ce16c169c055c0f83",
+      "adc9d3613a752dfe00597a8826f45fab82e7651478d16ba1bf5354369157fee9",
     );
     expect(materializerSource).toContain("lock_sha256=");
     expect(materializerSource).toContain("integrity=${clawhub_integrity}");

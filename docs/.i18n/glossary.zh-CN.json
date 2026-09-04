@@ -64,6 +64,10 @@
     "target": "ClawHub"
   },
   {
+    "source": "ClawHub CLI",
+    "target": "ClawHub CLI"
+  },
+  {
     "source": "Claws",
     "target": "Claws"
   },
@@ -1666,6 +1670,10 @@
   {
     "source": "v2026.8.1 (AKA OpenClaw 2.0)",
     "target": "v2026.8.1 (AKA OpenClaw 2.0)"
+  },
+  {
+    "source": "v2026.8.2",
+    "target": "v2026.8.2"
   },
   {
     "source": "v2026.8.1",

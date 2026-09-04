@@ -36,8 +36,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     },
   );
   vi.doMock("./code-mode-swarm.runtime.js", load);
-  vi.doMock("./subagents/registry/subagent-registry.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("./subagents/registry/subagent-registry.js")>()),
+  vi.doMock("./subagents/registry/subagent-registry.js", () => ({
     getSwarmRunByLaunchReplayKey: lookup,
     initSubagentRegistry: initialize,
     getSubagentRunsByRunIds: readCollectors,
@@ -153,8 +152,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         config,
         owner,
         dispatch: (pendingRequests = requests) =>
-          createPendingBridgeStates({
-            pendingRequests,
+          createPendingBridgeStates(pendingRequests, {
             config: limits,
             runtime,
             ctx,

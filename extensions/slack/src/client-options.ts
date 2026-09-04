@@ -43,6 +43,16 @@ const SLACK_LOOKUP_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
 
+function normalizeSlackFetchInit(init?: RequestInit): RequestInit | undefined {
+  if (init?.body !== "") {
+    return init;
+  }
+  // Parameterless Slack Web API calls use an explicit empty body. Older Undici HTTP/2
+  // clients can leave that request stream open instead of setting END_STREAM on HEADERS.
+  const { body: _body, ...rest } = init;
+  return rest;
+}
+
 /** Build the dispatcher shared by Slack Web API fetches and Socket Mode. */
 export function resolveSlackProxyDispatcher(): SlackProxyDispatcher | undefined {
   const options = resolveEnvHttpProxyAgentOptions();
@@ -64,14 +74,21 @@ function buildSlackFetch(
   if (!dispatcher || isDebugProxyGlobalFetchPatchInstalled()) {
     // Debug capture patches global fetch after installing its proxy-aware dispatcher.
     // A package-owned fetch would bypass capture whenever ambient proxy env is present.
-    return resolveFetch() as NonNullable<WebClientOptions["fetch"]> | undefined;
+    const slackFetch = resolveFetch();
+    if (!slackFetch) {
+      return undefined;
+    }
+    return ((input: RequestInfo | URL, init?: RequestInit) =>
+      slackFetch(input, normalizeSlackFetchInit(init))) as NonNullable<WebClientOptions["fetch"]>;
   }
   const { fetch: slackFetch } = loadSlackUndiciRuntime();
   return ((input: RequestInfo | URL, init?: RequestInit) => {
     // Slack Web API invokes this hook with URL/string inputs. The cast only bridges
     // duplicate Undici Request types while the package-owned fetch and dispatcher stay paired.
     const slackInput = input as Parameters<typeof slackFetch>[0];
-    const slackInit = { ...init, dispatcher } as Parameters<typeof slackFetch>[1];
+    const slackInit = { ...normalizeSlackFetchInit(init), dispatcher } as Parameters<
+      typeof slackFetch
+    >[1];
     return slackFetch(slackInput, slackInit);
   }) as NonNullable<WebClientOptions["fetch"]>;
 }

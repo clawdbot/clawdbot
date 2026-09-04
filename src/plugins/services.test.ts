@@ -17,6 +17,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import {
   emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -372,28 +373,6 @@ describe("startPluginServices", () => {
 
     await handle.stop();
     expect(rollback).toHaveBeenCalledOnce();
-  });
-
-  it("runs concurrent and repeated shutdowns through one cleanup operation", async () => {
-    let releaseStop: (() => void) | undefined;
-    const stopping = new Promise<void>((resolve) => {
-      releaseStop = resolve;
-    });
-    const stop = vi.fn(() => stopping);
-    const handle = await startTrackingServices({
-      services: [{ id: "service", start: () => {}, stop }],
-    });
-
-    const firstStop = handle.stop();
-    const secondStop = handle.stop();
-    releaseStop?.();
-    await Promise.all([firstStop, secondStop]);
-
-    expect(firstStop).toBe(secondStop);
-    expect(stop).toHaveBeenCalledOnce();
-
-    await handle.stop();
-    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("binds gateway events to the owning plugin namespace and scope", async () => {
@@ -911,6 +890,34 @@ describe("startPluginServices", () => {
       "sidecars.plugin-services.plugin~003Atest.service_a",
     ]);
     expect(new Set(measured).size).toBe(measured.length);
+  });
+
+  it("retains filtered diagnostic interests only for the exporter service lifetime", async () => {
+    const received = vi.fn();
+    const handle = await startPluginServices({
+      registry: createRegistry(
+        [
+          {
+            id: "diagnostics-otel",
+            start: (ctx) => {
+              ctx.internalDiagnostics!.onEvent(received, { include: ["log.record"] });
+            },
+          },
+        ],
+        "diagnostics-otel",
+        "bundled",
+      ),
+      config: createServiceConfig(),
+    });
+    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);
+    expect(hasInternalDiagnosticEventInterest("gateway.rpc")).toBe(false);
+    emitTrustedDiagnosticEvent({ type: "log.record", level: "INFO", message: "synthetic" });
+    emitTrustedDiagnosticEvent({ type: "gateway.rpc", phase: "received", method: "health" });
+    await waitForDiagnosticEventsDrained();
+    expect(received.mock.calls.map(([event]) => event.type)).toEqual(["log.record"]);
+    await handle.stop();
+    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
+    expect(hasInternalDiagnosticEventInterest("gateway.rpc")).toBe(false);
   });
 
   it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {

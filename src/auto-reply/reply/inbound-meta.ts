@@ -5,7 +5,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -550,8 +549,7 @@ function resolveInboundFormattingHints(
     return undefined;
   }
   const normalizedChannel = normalizeAnyChannelId(channelValue) ?? channelValue;
-  const agentPrompt = (getLoadedChannelPluginById(normalizedChannel) as ChannelPlugin | undefined)
-    ?.agentPrompt;
+  const agentPrompt = getLoadedChannelPluginById(normalizedChannel)?.agentPrompt;
   return agentPrompt?.inboundFormattingHints?.({
     cfg,
     accountId: normalizePromptMetadataString(ctx.AccountId) ?? undefined,

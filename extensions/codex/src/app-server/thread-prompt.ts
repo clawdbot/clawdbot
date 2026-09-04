@@ -18,12 +18,30 @@ import {
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 
+export type CodexThreadPromptContext = Pick<
+  EmbeddedRunAttemptParams,
+  | "config"
+  | "agentId"
+  | "sessionKey"
+  | "modelId"
+  | "disableTools"
+  | "disableMessageTool"
+  | "delegationCapability"
+  | "toolsAllow"
+  | "sourceReplyDeliveryMode"
+  | "promptMode"
+  | "extraSystemPrompt"
+>;
+
 export function buildDeveloperInstructions(
-  params: EmbeddedRunAttemptParams,
+  params: CodexThreadPromptContext,
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
 ): string {
   const deferredToolNames = new Set<string>();
   let secretsToolName: string | undefined;
+  let showWidgetToolName: string | undefined;
+  let dashboardToolName: string | undefined;
+  let portalToolName: string | undefined;
   let hasSkillWorkshop = false;
   let hasSessionsSpawn = false;
   let hasSessionsYield = false;
@@ -41,11 +59,21 @@ export function buildDeveloperInstructions(
     }
     for (const tool of spec.type === "namespace" ? spec.tools : [spec]) {
       const name = tool.name.trim();
+      const qualifiedName = spec.type === "namespace" ? `${spec.name}.${name}` : name;
       if (tool.deferLoading === true && name) {
         deferredToolNames.add(name);
       }
       if (name === "secrets" && params.disableTools !== true) {
-        secretsToolName ??= spec.type === "namespace" ? `${spec.name}.${name}` : name;
+        secretsToolName ??= qualifiedName;
+      }
+      if (name === "show_widget") {
+        showWidgetToolName ??= qualifiedName;
+      }
+      if (name === "dashboard") {
+        dashboardToolName ??= qualifiedName;
+      }
+      if (name === "portal") {
+        portalToolName ??= qualifiedName;
       }
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
       hasSessionsSpawn ||= name === "sessions_spawn";
@@ -112,6 +140,12 @@ export function buildDeveloperInstructions(
     buildHarnessVisibleReplyGuidance({
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       messageToolAvailable,
+      uiPresentation:
+        params.disableTools !== true &&
+        params.promptMode !== "minimal" &&
+        params.promptMode !== "none"
+          ? { showWidgetToolName, dashboardToolName, portalToolName }
+          : undefined,
     }),
     buildCredentialSafetyPrompt(secretsToolName),
     nativeCommandGuidance,

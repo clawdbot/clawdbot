@@ -105,32 +105,21 @@ export function resolvesToExistingFileSync(rawOperand: string, cwd: string | und
   }
 }
 
+// ELF, Mach-O, and fat executable headers, including both Mach-O byte orders.
+const BINARY_EXECUTABLE_MAGICS = new Set([
+  0x7f454c46, 0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf,
+  0xbfbafeca,
+]);
+
 function isKnownBinaryExecutableHeader(buffer: Buffer): boolean {
-  if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
+  if (buffer.length >= 4 && BINARY_EXECUTABLE_MAGICS.has(buffer.readUInt32BE(0))) {
     return true;
   }
-  if (
-    buffer.length >= 4 &&
-    (buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xce])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xce, 0xfa, 0xed, 0xfe])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xcf])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xca, 0xfe, 0xba, 0xbe])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xbe, 0xba, 0xfe, 0xca])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xca, 0xfe, 0xba, 0xbf])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xbf, 0xba, 0xfe, 0xca])))
-  ) {
-    return true;
-  }
-  if (buffer.length < 0x40 || !buffer.subarray(0, 2).equals(Buffer.from([0x4d, 0x5a]))) {
+  if (buffer.length < 0x40 || buffer.readUInt16BE(0) !== 0x4d5a) {
     return false;
   }
   const peOffset = buffer.readUInt32LE(0x3c);
-  return (
-    peOffset >= 0 &&
-    peOffset <= buffer.length - 4 &&
-    buffer.subarray(peOffset, peOffset + 4).equals(Buffer.from([0x50, 0x45, 0x00, 0x00]))
-  );
+  return peOffset <= buffer.length - 4 && buffer.readUInt32BE(peOffset) === 0x50450000;
 }
 
 export function isLikelyScriptLikePathSync(targetPath: string): boolean {
@@ -156,7 +145,7 @@ export function isLikelyScriptLikePathSync(targetPath: string): boolean {
   } catch {
     return true;
   }
-  if (header.length === 0 || header.subarray(0, 2).equals(Buffer.from("#!"))) {
+  if (header.length === 0 || (header[0] === 0x23 && header[1] === 0x21)) {
     return true;
   }
   return !isKnownBinaryExecutableHeader(header);

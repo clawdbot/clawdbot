@@ -24,7 +24,7 @@ export async function prepareCodexAttemptRoute(
     releaseSharedClientLeaseOnce,
   } = resources;
   const { connection } = prompt.context.runtime;
-  const { params, runAbortController, abortFromUpstream } = connection;
+  const { runAbortController } = connection;
   const { state, turnIdRef, completeTurn } = turnRuntime;
   const { noteNotificationReceived, enqueueNotification } = notifications;
   const attachRouteAbort = (route: CodexThreadRouteReservation) => {
@@ -101,7 +101,6 @@ export async function prepareCodexAttemptRoute(
     resourceState.nativeHookRelay?.unregister();
     await releaseSandboxExecEnvironment();
     releaseSharedClientLeaseOnce();
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
   return { ensureCurrentThreadRoute };
