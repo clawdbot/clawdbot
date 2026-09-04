@@ -534,13 +534,16 @@ describe("Tool Search", () => {
       }),
     );
     expect(JSON.stringify(manyGroups, null, 2).length).toBeLessThanOrEqual(4_000);
+    let sawRetainedCandidate = false;
     for (const group of manyGroups.results as Array<{
       candidates: Array<{ id: string }>;
       truncated?: true;
     }>) {
       if (group.candidates.length === 0) {
+        expect(sawRetainedCandidate).toBe(false);
         expect(group.truncated).toBe(true);
       } else {
+        sawRetainedCandidate = true;
         expect(group.candidates[0]?.id).toBe(rankedIds[0]);
       }
     }
@@ -980,19 +983,22 @@ describe("Tool Search", () => {
       scenario: "delegation was never provided",
       agentId: "openclaw",
       denyOpenClaw: false,
-      expected: "Read gateway config + schema. Writes/restart unavailable; ask human.",
+      expected:
+        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
     },
     {
       scenario: "policy removed delegation",
       agentId: "main",
       denyOpenClaw: true,
-      expected: "Read gateway config + schema. Writes/restart unavailable; ask human.",
+      expected:
+        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
     },
     {
       scenario: "delegation remains authorized",
       agentId: "main",
       denyOpenClaw: false,
-      expected: "Read gateway config + schema. Writes/restart: use openclaw tool.",
+      expected:
+        "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell. Other system changes: use openclaw tool.",
     },
   ])(
     "keeps gateway guidance consistent across final and deferred surfaces when $scenario",
@@ -2803,6 +2809,46 @@ describe("Tool Search", () => {
           ? "Use tool_search_code with openclaw.tools.search(query)"
           : "Use tool_search to find them",
       );
+    },
+  );
+
+  it.each([
+    { mode: "code" as const, longerDescriptions: 69 },
+    { mode: "tools" as const, longerDescriptions: 98 },
+    { mode: "directory" as const, longerDescriptions: 98 },
+  ])(
+    "keeps the exact capability directory boundary in $mode mode",
+    ({ mode, longerDescriptions }) => {
+      const render = (overflow: boolean) => {
+        const catalogRef = createToolSearchCatalogRef();
+        // These fixed names and descriptions fill the 18,000-character prompt exactly.
+        const tools = Array.from({ length: 100 }, (_, index) =>
+          pluginTool(
+            `boundary_${String(index).padStart(3, "0")}`,
+            "x".repeat(145 + Number(index < longerDescriptions) + Number(overflow && index === 99)),
+          ),
+        );
+        registerHeadlessToolSearchCatalog({ catalogRef, tools });
+        try {
+          return buildToolSchemaDirectoryPrompt({
+            catalogRef,
+            config: { tools: { toolSearch: { enabled: true, mode } } },
+          });
+        } finally {
+          clearToolSearchCatalog({ catalogRef });
+        }
+      };
+
+      const full = render(false);
+      expect(full).toHaveLength(18_000);
+      expect(full).toContain("- boundary_099 (fake-catalog):");
+      expect(full).not.toContain("additional tools omitted");
+
+      const overflow = render(true);
+      expect(overflow.length).toBeLessThanOrEqual(18_000);
+      expect(overflow).toContain("- boundary_098 (fake-catalog):");
+      expect(overflow).not.toContain("- boundary_099");
+      expect(overflow).toContain("1 additional tools omitted.");
     },
   );
 

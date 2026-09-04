@@ -85,6 +85,48 @@ describe("convertMessages assistant text replay", () => {
     expect(replayed?.content).toBe("Let me check the file.\nThe file contains X.");
   });
 
+  it.each([false, true])(
+    "preserves sanitized block positions with thinking-as-text %s",
+    (requiresThinkingAsText) => {
+      const assistant: AssistantMessage = {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        content: [
+          { type: "thinking", thinking: "reason\ud800" },
+          { type: "text", text: " \t" },
+          { type: "text", text: "first\ud800" },
+          { type: "text", text: "\udc00" },
+          { type: "thinking", thinking: "next😀" },
+          { type: "text", text: "last😀" },
+        ],
+        usage: emptyUsage,
+        stopReason: "stop",
+        timestamp: 2,
+      };
+      const converted = convertMessages(
+        model,
+        { messages: [assistant] },
+        { ...resolveOpenAICompletionsCompat(model), requiresThinkingAsText },
+      );
+
+      expect(converted).toEqual([
+        {
+          role: "assistant",
+          content: requiresThinkingAsText
+            ? [
+                { type: "text", text: "reason\n\nnext😀" },
+                { type: "text", text: "first" },
+                { type: "text", text: "" },
+                { type: "text", text: "last😀" },
+              ]
+            : "first\n\nlast😀",
+        },
+      ]);
+    },
+  );
+
   it("keeps paired OpenAI tool call ids UTF-16 safe when truncating", () => {
     const prefix = "a".repeat(39);
     const oversizedId = `${prefix}🐱`;

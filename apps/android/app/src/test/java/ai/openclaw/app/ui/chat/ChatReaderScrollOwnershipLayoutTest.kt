@@ -67,6 +67,36 @@ class ChatReaderScrollOwnershipLayoutTest {
     verifyManualTakeover(replaceRunningTransition = true)
   }
 
+  @Test
+  fun finishingHistoryLoadDoesNotCancelAMovingNewUserTurn() {
+    showReader(initialHistoryLoading = true)
+    composeRule.waitForIdle()
+    val initial = viewport()
+    assertTrue("History must begin away from the latest row", initial.index > 0)
+    val originalAutoAdvance = composeRule.mainClock.autoAdvance
+    composeRule.mainClock.autoAdvance = false
+    try {
+      click("Append user turn")
+      composeRule.mainClock.advanceTimeByFrame()
+      drainCurrentWork()
+      val newTurnStart = viewport()
+      assertTrue("The new turn must start an automatic scroll", newTurnStart.scrolling)
+      advanceUntilMoving(newTurnStart, "new user turn before history settles")
+      click("Loading: true")
+      composeRule.mainClock.advanceTimeByFrame()
+      drainCurrentWork()
+      composeRule.onNodeWithText("Loading: false").assertIsDisplayed()
+      composeRule.mainClock.autoAdvance = true
+      composeRule.waitForIdle()
+      assertEquals("Finishing history must preserve the in-progress new-turn scroll", ViewportPosition(0, 0), viewport().position)
+      composeRule.onNodeWithText("new user").assertIsDisplayed()
+      assertFalse(viewport().scrolling)
+    } finally {
+      composeRule.mainClock.autoAdvance = originalAutoAdvance
+      composeRule.waitForIdle()
+    }
+  }
+
   private fun verifyManualTakeover(replaceRunningTransition: Boolean) {
     showReader()
     composeRule.waitForIdle()
@@ -154,13 +184,14 @@ class ChatReaderScrollOwnershipLayoutTest {
       .performClick()
   }
 
-  private fun showReader() {
+  private fun showReader(initialHistoryLoading: Boolean = false) {
     val initialMessages = listOf(message("old user", "user", 1)) + (0 until 60).map { message("assistant $it", "assistant", it + 2) }
     composeRule.setContent {
       ClawDesignTheme {
         var messages by remember { mutableStateOf(initialMessages) }
+        var historyLoading by remember { mutableStateOf(initialHistoryLoading) }
         val timeline = remember(messages) { buildChatTimeline(messages, 0, emptyList(), null) }
-        val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = false)
+        val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = historyLoading)
         SideEffect { reader = current }
         LaunchedEffect(Unit) { observedScale = currentCoroutineContext()[MotionDurationScale]?.scaleFactor }
         CompositionLocalProvider(LocalChatReaderNavigation provides current.onManualNavigation) {
@@ -171,6 +202,7 @@ class ChatReaderScrollOwnershipLayoutTest {
               TextButton(onClick = manualNavigation) { Text("Read here") }
             }
             TextButton(onClick = { messages = initialMessages + message("new user", "user", 1000) }) { Text("Append user turn") }
+            TextButton(onClick = { historyLoading = !historyLoading }) { Text("Loading: $historyLoading") }
             Text("User turns: ${messages.count { it.role == "user" }}")
             LazyColumn(
               state = current.listState,

@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 
-// Audits docs links, routes, redirects, and Mintlify anchors.
-import { spawnSync } from "node:child_process";
+// Audits docs links against the shared publishing parser and route contract.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createProcessor } from "@mdx-js/mdx";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import MarkdownIt from "markdown-it";
 import type { Nodes } from "mdast";
 import { resolveClawHubRepoPath, syncClawHubDocsTree } from "./docs-sync-publish.mjs";
-import { resolveNpmRunner } from "./npm-runner.mts";
+import { parseDocsDocument, resolveDocsFragment } from "./lib/docs-markdown.mjs";
+import { resolveRedirects } from "./lib/docs-redirects.mjs";
 
 const ROOT = process.cwd();
 const DOCS_DIR = path.join(ROOT, "docs");
@@ -22,59 +23,6 @@ const MARKDOWN_PARSER = new MarkdownIt({ html: false });
 const HTML_MARKDOWN_PARSER = new MarkdownIt({ html: true });
 type MarkdownToken = ReturnType<typeof MARKDOWN_PARSER.parse>[number];
 const VERBATIM_MDX_ELEMENTS = new Set(["code", "pre", "script", "style", "textarea"]);
-const MINTLIFY_CLI_VERSION = "4.2.808";
-const MINTLIFY_BROKEN_LINKS_ARGS = [
-  "exec",
-  "--yes",
-  `--package=mint@${MINTLIFY_CLI_VERSION}`,
-  "--",
-  "mint",
-  "broken-links",
-  "--check-anchors",
-];
-const NODE_25_UNSUPPORTED_BY_MINTLIFY = 25;
-
-type ScriptSpawnOptions = {
-  cwd: string;
-  env?: NodeJS.ProcessEnv;
-  shell?: boolean;
-  stdio: "ignore" | "inherit";
-  windowsVerbatimArguments?: boolean;
-};
-
-type ScriptSpawn = (
-  command: string,
-  args: string[],
-  options: ScriptSpawnOptions,
-) => { status: number | null };
-
-type RunDocsLinkAuditOptions = {
-  args?: string[];
-  comSpec?: string;
-  env?: NodeJS.ProcessEnv;
-  nodeExecPath?: string;
-  nodeVersion?: string;
-  platform?: NodeJS.Platform;
-  spawnSyncImpl?: ScriptSpawn;
-  prepareAnchorAuditDocsDirImpl?: typeof prepareAnchorAuditDocsDir;
-  prepareMirroredDocsDirImpl?: typeof prepareMirroredDocsDir;
-  cleanupAnchorAuditDocsDirImpl?: (dir: string) => void;
-};
-
-type MintlifyInvocationParams = Pick<
-  RunDocsLinkAuditOptions,
-  "comSpec" | "env" | "nodeExecPath" | "nodeVersion" | "platform"
-> & {
-  cwd: string;
-  spawnSyncImpl: ScriptSpawn;
-};
-
-type MintlifySpawnSpec = {
-  command: string;
-  args: string[];
-  options?: ScriptSpawnOptions;
-};
-
 if (!fs.existsSync(DOCS_DIR) || !fs.statSync(DOCS_DIR).isDirectory()) {
   console.error("docs:check-links: missing docs directory; run from repo root.");
   process.exit(1);
@@ -120,27 +68,6 @@ function collectMarkdownCodeLines(tokens: MarkdownToken[]): Set<number> {
     }
   }
   return lines;
-}
-
-function collectCodeLines(raw: string): Set<number> {
-  try {
-    const lines = new Set<number>();
-    const visit = (node: Nodes): void => {
-      if (node.type === "code" && node.position) {
-        for (let line = node.position.start.line; line <= node.position.end.line; line++) {
-          lines.add(line - 1);
-        }
-      }
-      if ("children" in node) {
-        node.children.forEach(visit);
-      }
-    };
-    visit(MDX_PROCESSOR.parse(raw));
-    return lines;
-  } catch {
-    // Legacy malformed MDX still needs the same tolerant code ranges as external-link auditing.
-    return collectMarkdownCodeLines(MARKDOWN_PARSER.parse(raw, {}));
-  }
 }
 
 /**
@@ -352,10 +279,6 @@ export function normalizeRoute(p: string) {
   return stripped ? `/${stripped}` : "/";
 }
 
-function stripInlineCode(text: string) {
-  return text.replace(/`[^`]+`/g, "");
-}
-
 function isLocalizedDocPath(p: string) {
   return /^\/?[a-z]{2}(?:-[A-Za-z]{2,8})+\//.test(p);
 }
@@ -510,74 +433,6 @@ function collectNavPageEntries(node: unknown): string[] {
   return entries;
 }
 
-const markdownLinkRegex = /!?\[[^\]]*\]\(([^)]+)\)/g;
-
-export function sanitizeDocsConfigForEnglishOnly(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => sanitizeDocsConfigForEnglishOnly(item))
-      .filter((item) => item !== undefined);
-  }
-
-  if (!isRecord(value)) {
-    if (typeof value === "string" && isLocalizedDocPath(value)) {
-      return undefined;
-    }
-    return value;
-  }
-
-  const record = value;
-  if (typeof record.language === "string" && record.language !== "en") {
-    return undefined;
-  }
-
-  const sanitized: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(record)) {
-    const next = sanitizeDocsConfigForEnglishOnly(child);
-    if (next === undefined) {
-      continue;
-    }
-    if (Array.isArray(next) && next.length === 0) {
-      continue;
-    }
-    if (
-      next &&
-      typeof next === "object" &&
-      !Array.isArray(next) &&
-      Object.keys(next).length === 0
-    ) {
-      continue;
-    }
-    sanitized[key] = next;
-  }
-
-  if (record.pages && !Array.isArray(sanitized.pages)) {
-    return undefined;
-  }
-  if (record.groups && !Array.isArray(sanitized.groups)) {
-    return undefined;
-  }
-  if (record.tabs && !Array.isArray(sanitized.tabs)) {
-    return undefined;
-  }
-  if (
-    "source" in record &&
-    typeof record.source === "string" &&
-    typeof sanitized.source !== "string"
-  ) {
-    return undefined;
-  }
-  if (
-    "destination" in record &&
-    typeof record.destination === "string" &&
-    typeof sanitized.destination !== "string"
-  ) {
-    return undefined;
-  }
-
-  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
-}
-
 /** Prepares a docs directory, mirroring ClawHub docs when available. */
 export function prepareMirroredDocsDir(
   sourceDir = DOCS_DIR,
@@ -604,135 +459,45 @@ export function prepareMirroredDocsDir(
     return { dir: sourceRoot, mirroredClawHub: false, cleanup: () => {} };
   }
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-link-audit-"));
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-link-audit-"));
+  const tempDir = path.join(tempRoot, "docs");
   try {
     fs.cpSync(sourceRoot, tempDir, { recursive: true });
     syncClawHubDocsTreeImpl(tempDir, { repoPath: clawhubRepo, required: false });
     return {
       dir: tempDir,
       mirroredClawHub: true,
-      cleanup: () => fs.rmSync(tempDir, { recursive: true, force: true }),
+      cleanup: () => fs.rmSync(tempRoot, { recursive: true, force: true }),
     };
   } catch (error) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempRoot, { recursive: true, force: true });
     throw error;
   }
 }
 
-/**
- * Creates an English-only temporary docs tree for Mintlify anchor checks.
- */
-export function prepareAnchorAuditDocsDir(sourceDir = DOCS_DIR) {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-anchor-audit-"));
+function parseAuditUrl(
+  href: string,
+  base = "https://docs.openclaw.ai",
+): Result<{ hostname: string; pathname: string; hash: string }, string> {
   try {
-    fs.cpSync(sourceDir, tempDir, { recursive: true });
-
-    for (const entry of fs.readdirSync(tempDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      if (!isGeneratedTranslatedDoc(`${entry.name}/`)) {
-        continue;
-      }
-      fs.rmSync(path.join(tempDir, entry.name), { recursive: true, force: true });
-    }
-
-    for (const filePath of walk(tempDir).filter((entry) => /\.mdx?$/iu.test(entry))) {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const normalized = raw.replace(/<!--[\s\S]*?-->/gu, (comment) =>
-        comment.replace(/[^\r\n]/gu, ""),
-      );
-      if (normalized !== raw) {
-        fs.writeFileSync(filePath, normalized, "utf8");
-      }
-    }
-
-    const docsJsonPath = path.join(tempDir, "docs.json");
-    const docsConfig = JSON.parse(fs.readFileSync(docsJsonPath, "utf8"));
-    const sanitized = sanitizeDocsConfigForEnglishOnly(docsConfig);
-    fs.writeFileSync(docsJsonPath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf8");
-
-    return tempDir;
-  } catch (error) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    throw error;
-  }
-}
-
-function parseNodeMajor(version: string) {
-  const major = Number.parseInt(version.split(".")[0] ?? "", 10);
-  return Number.isFinite(major) ? major : 0;
-}
-
-function createMintlifyNpmRunnerSpawnSpec(
-  params: MintlifyInvocationParams,
-  options: { nodeExecPath?: string } = {},
-): MintlifySpawnSpec {
-  const env = params.env ?? process.env;
-  const runner = resolveNpmRunner({
-    comSpec: params.comSpec,
-    env,
-    execPath: options.nodeExecPath ?? params.nodeExecPath,
-    npmArgs: MINTLIFY_BROKEN_LINKS_ARGS,
-    platform: params.platform,
-  });
-  return {
-    command: runner.command,
-    args: runner.args,
-    options: {
-      cwd: params.cwd,
-      env: "env" in runner ? (runner.env ?? env) : env,
-      shell: runner.shell,
-      stdio: "inherit",
-      windowsVerbatimArguments:
-        "windowsVerbatimArguments" in runner ? runner.windowsVerbatimArguments : undefined,
-    },
-  };
-}
-
-/**
- * Mintlify currently rejects Node 25+. If the repo script itself is running
- * under a too-new experimental Node, probe common local version managers and
- * use their Node 22 wrapper for only the Mintlify child process.
- */
-function resolveMintlifyAnchorAuditInvocation(params: MintlifyInvocationParams): MintlifySpawnSpec {
-  const nodeVersion = params.nodeVersion ?? process.versions.node;
-  if (parseNodeMajor(nodeVersion) < NODE_25_UNSUPPORTED_BY_MINTLIFY) {
-    return createMintlifyNpmRunnerSpawnSpec(params);
-  }
-
-  const node22Probe = "process.exit(Number(process.versions.node.split('.')[0]) === 22 ? 0 : 1)";
-  const node22Runner = createMintlifyNpmRunnerSpawnSpec(params, { nodeExecPath: "node" });
-  const candidates = [
-    {
-      command: "fnm",
-      probeArgs: ["exec", "--using=22", "node", "-e", node22Probe],
-      args: ["exec", "--using=22", node22Runner.command, ...node22Runner.args],
-    },
-    {
-      command: "mise",
-      probeArgs: ["exec", "node@22", "--", "node", "-e", node22Probe],
-      args: ["exec", "node@22", "--", node22Runner.command, ...node22Runner.args],
-    },
-  ];
-
-  for (const candidate of candidates) {
-    const probe = params.spawnSyncImpl(candidate.command, candidate.probeArgs, {
-      cwd: params.cwd,
-      stdio: "ignore",
+    const url = new URL(href, base);
+    return ok({
+      hostname: url.hostname,
+      pathname:
+        url.hostname === "docs.openclaw.ai" ? decodeURIComponent(url.pathname) : url.pathname,
+      hash: url.hash,
     });
-    if (probe.status === 0) {
-      return { command: candidate.command, args: candidate.args };
-    }
+  } catch (error) {
+    return err(error instanceof URIError ? "malformed URL path" : "malformed URL");
   }
-
-  return createMintlifyNpmRunnerSpawnSpec(params);
 }
 
 /**
  * Audits local docs links against route, file, and redirect indexes.
  */
-function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?: boolean } = {}) {
+function auditDocsLinks(
+  options: { docsDir?: string; allowExternalClawHubRoutes?: boolean; anchors?: boolean } = {},
+) {
   const docsDir = options.docsDir ?? DOCS_DIR;
   const index = buildAuditIndex(docsDir, {
     allowExternalClawHubRoutes: options.allowExternalClawHubRoutes === true,
@@ -740,97 +505,136 @@ function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?
   const broken: Array<{ file: string; line: number; link: string; reason: string }> = [];
   let checked = 0;
 
+  // The publisher writes physical/index routes; frontmatter permalinks do not
+  // create pages. Only emitted pages and configured redirects can prove fragments.
+  const pages = new Map<string, ReturnType<typeof parseDocsDocument>>();
+  const pageRoute = (rel: string) =>
+    normalizeRoute(rel.replace(/\.mdx?$/i, "").replace(/(?:^|\/)index$/, ""));
   for (const abs of index.markdownFiles) {
     const rel = normalizeSlashes(path.relative(index.docsDir, abs));
-    const baseDir = normalizeSlashes(path.dirname(rel));
-    const rawText = fs.readFileSync(abs, "utf8");
-    const lines = rawText.split("\n");
-
-    const codeLines = collectCodeLines(rawText);
-
-    for (let lineNum = 0; lineNum < lines.length; lineNum++) {
-      let line = lines[lineNum];
-      if (line === undefined) {
+    pages.set(
+      pageRoute(rel),
+      parseDocsDocument(fs.readFileSync(abs, "utf8"), undefined, {
+        sourceFile: abs,
+        root: path.dirname(index.docsDir),
+        pageRoute: pageRoute(rel),
+        mapLink: (href: string, line: number | undefined) => ({ href, line: line ?? 0 }),
+      }),
+    );
+  }
+  const collisions = [...pages].flatMap(([route, document]) =>
+    document.collisions.map((collision) => ({ route, ...collision })),
+  );
+  if (options.anchors) {
+    for (const collision of collisions) {
+      if (collision.reason === "duplicate authored/canonical ID") {
+        broken.push({
+          file: collision.route,
+          line: 0,
+          link: `#${collision.id}`,
+          reason: collision.reason,
+        });
+      }
+    }
+  }
+  const redirectTargets = new Map<string, ReturnType<typeof parseAuditUrl>>();
+  if (options.anchors) {
+    const records = resolveRedirects({
+      redirects: index.docsConfig.redirects ?? [],
+      pages: [...pages.keys()].map((route) => ({ route, markdownRoute: `${route}.md` })),
+      localeCodes: ["en"],
+      prefixes: [],
+      publicPath: (route: string) => route,
+      onError: (source: string, error: Error) =>
+        broken.push({ file: "docs.json", line: 0, link: source, reason: error.message }),
+    });
+    for (const record of records) {
+      const destinationResult = parseAuditUrl(record.destination);
+      redirectTargets.set(record.source, destinationResult);
+      if (!destinationResult.ok) {
+        broken.push({
+          file: "docs.json",
+          line: 0,
+          link: record.source,
+          reason: destinationResult.error,
+        });
         continue;
       }
-
-      if (codeLines.has(lineNum)) {
+      const destination = destinationResult.value;
+      if (destination.hostname !== "docs.openclaw.ai") {
         continue;
       }
-
-      line = stripInlineCode(line);
-
-      for (const match of line.matchAll(markdownLinkRegex)) {
-        const raw = match[1]?.trim();
-        if (!raw) {
-          continue;
-        }
-        if (/^(https?:|mailto:|tel:|data:|#)/i.test(raw)) {
-          continue;
-        }
-
-        const pathPart = raw.split("#")[0] ?? "";
-        const clean = pathPart.split("?")[0];
-        if (!clean) {
-          continue;
-        }
-        checked++;
-
-        if (clean.startsWith("/")) {
-          const route = normalizeRoute(clean);
-          const resolvedRoute = resolveRoute(route, {
-            redirects: index.redirects,
-            routes: index.routes,
-          });
-          if (!resolvedRoute.ok) {
-            const staticRel = route.replace(/^\//, "");
-            if (!index.relAllFiles.has(staticRel)) {
-              broken.push({
-                file: rel,
-                line: lineNum + 1,
-                link: raw,
-                reason: `route/file not found (terminal: ${resolvedRoute.terminal})`,
-              });
-              continue;
-            }
-          }
-          continue;
-        }
-
-        if (!clean.startsWith(".") && !clean.includes("/")) {
-          continue;
-        }
-
-        const normalizedRel = normalizeSlashes(path.normalize(path.join(baseDir, clean)));
-
-        if (/\.[a-zA-Z0-9]+$/.test(normalizedRel)) {
-          if (!index.relAllFiles.has(normalizedRel)) {
-            broken.push({
-              file: rel,
-              line: lineNum + 1,
-              link: raw,
-              reason: "relative file not found",
-            });
-          }
-          continue;
-        }
-
-        const candidates = [
-          normalizedRel,
-          `${normalizedRel}.md`,
-          `${normalizedRel}.mdx`,
-          `${normalizedRel}/index.md`,
-          `${normalizedRel}/index.mdx`,
-        ];
-
-        if (!candidates.some((candidate) => index.relAllFiles.has(candidate))) {
-          broken.push({
-            file: rel,
-            line: lineNum + 1,
-            link: raw,
-            reason: "relative doc target not found",
-          });
-        }
+      const page = pages.get(destination.pathname);
+      if (page && destination.hash && !resolveDocsFragment(destination.hash, new Set(page.ids))) {
+        broken.push({
+          file: "docs.json",
+          line: 0,
+          link: record.source,
+          reason: `redirect fragment not found: ${record.destination}`,
+        });
+      }
+    }
+  }
+  for (const abs of index.markdownFiles) {
+    const rel = normalizeSlashes(path.relative(index.docsDir, abs));
+    const document = pages.get(pageRoute(rel))!;
+    for (const { href: raw, line } of document.links) {
+      const local = !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(raw);
+      if (!options.anchors && (!local || raw.startsWith("#"))) {
+        continue;
+      }
+      const urlResult = parseAuditUrl(raw, `https://docs.openclaw.ai${pageRoute(rel)}`);
+      if (urlResult.ok && urlResult.value.hostname !== "docs.openclaw.ai") {
+        continue;
+      }
+      checked++;
+      if (!urlResult.ok) {
+        broken.push({ file: rel, line, link: raw, reason: urlResult.error });
+        continue;
+      }
+      const url = urlResult.value;
+      const route = pageRoute(url.pathname).replace(/^\/en(?:\/|$)/, "/");
+      const destinationResult =
+        options.anchors && !pages.has(route) && redirectTargets.has(route)
+          ? redirectTargets.get(route)!
+          : urlResult;
+      if (!destinationResult.ok) {
+        broken.push({ file: rel, line, link: raw, reason: destinationResult.error });
+        continue;
+      }
+      const destination = destinationResult.value;
+      if (destination.hostname !== "docs.openclaw.ai") {
+        continue;
+      }
+      const terminal = pageRoute(destination.pathname).replace(/^\/en(?:\/|$)/, "/");
+      const page = pages.get(terminal);
+      const resolved = resolveRoute(route, { redirects: index.redirects, routes: index.routes });
+      if (
+        !page &&
+        (options.anchors || !resolved.ok) &&
+        !index.relAllFiles.has(url.pathname.slice(1))
+      ) {
+        broken.push({
+          file: rel,
+          line,
+          link: raw,
+          reason: `route/file not found (terminal: ${resolved.terminal})`,
+        });
+      } else if (
+        options.anchors &&
+        destination.hash &&
+        page &&
+        (/\.mdx?$/.test(destination.pathname) ||
+          !resolveDocsFragment(destination.hash, new Set(page.ids)))
+      ) {
+        broken.push({
+          file: rel,
+          line,
+          link: raw,
+          reason: /\.mdx?$/.test(destination.pathname)
+            ? "fragment requires an HTML page, not raw Markdown"
+            : `fragment not found (terminal: ${terminal}${destination.hash})`,
+        });
       }
     }
   }
@@ -857,12 +661,12 @@ function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?
     });
   }
 
-  return { checked, broken };
+  return { checked, broken, collisions };
 }
 
 /** Runs the docs link audit CLI. */
-export function runDocsLinkAuditCli(options: RunDocsLinkAuditOptions = {}) {
-  const args = options.args ?? process.argv.slice(2);
+function runDocsLinkAuditCli() {
+  const args = process.argv.slice(2);
   if (args[0] === "--prepare-external-links") {
     if (args.length !== 2 || !args[1]) {
       console.error("usage: docs-link-audit.mjs --prepare-external-links <output-dir>");
@@ -874,63 +678,23 @@ export function runDocsLinkAuditCli(options: RunDocsLinkAuditOptions = {}) {
     return 0;
   }
 
-  if (args.includes("--anchors")) {
-    const spawnSyncImpl: ScriptSpawn =
-      options.spawnSyncImpl ??
-      ((command, spawnArgs, spawnOptions) => {
-        return spawnSync(command, spawnArgs, {
-          ...spawnOptions,
-          stdio: spawnOptions.stdio,
-        });
-      });
-    const prepareAnchorAuditDocsDirImpl =
-      options.prepareAnchorAuditDocsDirImpl ?? prepareAnchorAuditDocsDir;
-    const cleanupAnchorAuditDocsDirImpl =
-      options.cleanupAnchorAuditDocsDirImpl ??
-      ((dir) => fs.rmSync(dir, { recursive: true, force: true }));
-    const prepareMirroredDocsDirImpl = options.prepareMirroredDocsDirImpl ?? prepareMirroredDocsDir;
-    const mirroredDocsDir = prepareMirroredDocsDirImpl(DOCS_DIR);
-    let anchorDocsDir: string | undefined;
-
-    try {
-      anchorDocsDir = prepareAnchorAuditDocsDirImpl(mirroredDocsDir.dir);
-      // Mintlify's package graph expects npm's hoisted layout; pnpm dlx can fail
-      // to resolve declared transitive packages from its strict store layout.
-      const invocation = resolveMintlifyAnchorAuditInvocation({
-        comSpec: options.comSpec,
-        cwd: anchorDocsDir,
-        env: options.env,
-        nodeExecPath: options.nodeExecPath,
-        nodeVersion: options.nodeVersion,
-        platform: options.platform,
-        spawnSyncImpl,
-      });
-      const result = spawnSyncImpl(invocation.command, invocation.args, {
-        ...invocation.options,
-        cwd: anchorDocsDir,
-        stdio: "inherit",
-      });
-
-      return result.status ?? 1;
-    } finally {
-      if (anchorDocsDir) {
-        cleanupAnchorAuditDocsDirImpl(anchorDocsDir);
-      }
-      mirroredDocsDir.cleanup();
-    }
-  }
-
   const mirroredDocsDir = prepareMirroredDocsDir(DOCS_DIR);
   try {
-    const { checked, broken } = auditDocsLinks({
+    const { checked, broken, collisions } = auditDocsLinks({
       docsDir: mirroredDocsDir.dir,
       allowExternalClawHubRoutes: !mirroredDocsDir.mirroredClawHub,
+      anchors: args.includes("--anchors"),
     });
     console.log(`checked_internal_links=${checked}`);
     console.log(`broken_links=${broken.length}`);
+    if (args.includes("--anchors")) {
+      console.log(
+        `omitted_compatibility_aliases=${collisions.filter((item) => item.reason === "compatibility alias collision").length}`,
+      );
+    }
 
     for (const item of broken) {
-      console.log(`${item.file}:${item.line} :: ${item.link} :: ${item.reason}`);
+      console.log(`${item.file}:${item.line || "unknown"} :: ${item.link} :: ${item.reason}`);
     }
 
     return broken.length > 0 ? 1 : 0;

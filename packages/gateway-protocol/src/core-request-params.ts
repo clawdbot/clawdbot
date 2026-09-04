@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 import type * as AgentSchema from "./schema/agent.js";
 import type * as BoardSchema from "./schema/board.js";
 import type { CommandsListParams } from "./schema/commands.js";
+import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
 import type { PortalCloseParams, PortalListParams, PortalOpenParams } from "./schema/portals.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
@@ -25,6 +26,8 @@ export type GatewayCoreRequestParams = {
   "conversations.turn": AgentSchema.ConversationTurnParams;
   "conversations.turn.cancel": AgentSchema.ConversationTurnCancelParams;
   "logs.tail": LogsTailParams;
+  "mentions.list": HumanMentionsSchema.MentionsListParams;
+  "mentions.dismiss": HumanMentionsSchema.MentionsDismissParams;
   "portal.close": PortalCloseParams;
   "portal.list": PortalListParams;
   "portal.open": PortalOpenParams;
@@ -32,6 +35,16 @@ export type GatewayCoreRequestParams = {
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;
   "sessions.github.confirm": GitHubSchema.SessionGitHubConfirmParams;
+  "users.authConnect.catalog": UsersSchema.UsersAuthConnectCatalogParams;
+  "users.authConnect.start": UsersSchema.UsersAuthConnectStartParams;
+  "users.authConnect.answer": UsersSchema.UsersAuthConnectAnswerParams;
+  "users.authConnect.status": UsersSchema.UsersAuthConnectStatusParams;
+  "users.authConnect.cancel": UsersSchema.UsersAuthConnectCancelParams;
+  "users.listAuthLinks": UsersSchema.UsersListAuthLinksParams;
+  "users.listModelAccounts": UsersSchema.UsersListModelAccountsParams;
+  "users.selectModelAccount": UsersSchema.UsersSelectModelAccountParams;
+  "users.linkAuthProfile": UsersSchema.UsersLinkAuthProfileParams;
+  "users.unlinkAuthProfile": UsersSchema.UsersUnlinkAuthProfileParams;
   "users.github.status": Static<typeof UsersSchema.UsersGitHubStatusParamsSchema>;
   "users.github.authorize.start": Static<typeof UsersSchema.UsersGitHubAuthorizeStartParamsSchema>;
   "users.github.authorize.poll": Static<typeof UsersSchema.UsersGitHubAuthorizePollParamsSchema>;
@@ -39,5 +52,6 @@ export type GatewayCoreRequestParams = {
     typeof UsersSchema.UsersGitHubAuthorizeCancelParamsSchema
   >;
   "users.github.disconnect": Static<typeof UsersSchema.UsersGitHubDisconnectParamsSchema>;
+  "users.mentionable": HumanMentionsSchema.UsersMentionableParams;
   "ui.command": UiCommandParams;
 };

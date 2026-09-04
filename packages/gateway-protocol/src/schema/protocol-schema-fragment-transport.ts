@@ -28,6 +28,7 @@ export const TransportProtocolSchemas = {
   GatewayErrorDetails: errorCodes.GatewayErrorDetailsSchema,
   ProjectCloneErrorDetails: errorCodes.ProjectCloneErrorDetailsSchema,
   GatewaySuspendTaskBlocker: gatewaySuspend.GatewaySuspendTaskBlockerSchema,
+  GatewaySuspension: gatewaySuspend.GatewaySuspensionSchema,
   GatewaySuspendBlocker: gatewaySuspend.GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareParams: gatewaySuspend.GatewaySuspendPrepareParamsSchema,
   GatewaySuspendPrepareBusyResult: gatewaySuspend.GatewaySuspendPrepareBusyResultSchema,

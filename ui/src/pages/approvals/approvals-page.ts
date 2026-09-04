@@ -388,41 +388,47 @@ class ApprovalsPage extends OpenClawLightDomElement {
             </tr>
           </thead>
           <tbody>
-            ${this.grants.length === 0
-              ? html`
-                  <tr>
-                    <td colspan="5" class="data-table-empty-cell">
-                      <div class="data-table-empty-state" role="status" aria-live="polite">
-                        ${t("standingGrants.empty")}
-                      </div>
-                    </td>
-                  </tr>
-                `
-              : this.grants.map(
-                  (grant) => html`
+            ${
+              this.grants.length === 0
+                ? html`
                     <tr>
-                      <td>${grant.cronJobName ?? grant.cronJobId}</td>
-                      <td class="mono">${grant.command}</td>
-                      <td>${grant.useCount}</td>
-                      <td>${grantStateLabel(grant, nowMs)}</td>
-                      <td>
-                        ${grantIsActive(grant, nowMs)
-                          ? html`
-                              <button
-                                class="btn btn--sm"
-                                ?disabled=${this.revokingGrantId !== null}
-                                @click=${() => void this.revokeGrant(grant.grantId)}
-                              >
-                                ${this.revokingGrantId === grant.grantId
-                                  ? t("standingGrants.revoking")
-                                  : t("standingGrants.revoke")}
-                              </button>
-                            `
-                          : nothing}
+                      <td colspan="5" class="data-table-empty-cell">
+                        <div class="data-table-empty-state" role="status" aria-live="polite">
+                          ${t("standingGrants.empty")}
+                        </div>
                       </td>
                     </tr>
-                  `,
-                )}
+                  `
+                : this.grants.map(
+                    (grant) => html`
+                      <tr>
+                        <td>${grant.cronJobName ?? grant.cronJobId}</td>
+                        <td class="mono">${grant.command}</td>
+                        <td>${grant.useCount}</td>
+                        <td>${grantStateLabel(grant, nowMs)}</td>
+                        <td>
+                          ${
+                            grantIsActive(grant, nowMs)
+                              ? html`
+                                  <button
+                                    class="btn btn--sm"
+                                    ?disabled=${this.revokingGrantId !== null}
+                                    @click=${() => void this.revokeGrant(grant.grantId)}
+                                  >
+                                    ${
+                                      this.revokingGrantId === grant.grantId
+                                        ? t("standingGrants.revoking")
+                                        : t("standingGrants.revoke")
+                                    }
+                                  </button>
+                                `
+                              : nothing
+                          }
+                        </td>
+                      </tr>
+                    `,
+                  )
+            }
           </tbody>
         </table>
       </div>
@@ -450,49 +456,57 @@ class ApprovalsPage extends OpenClawLightDomElement {
             </tr>
           </thead>
           <tbody>
-            ${this.items.length === 0
-              ? html`
-                  <tr>
-                    <td colspan="7" class="data-table-empty-cell">
-                      <div class="data-table-empty-state" role="status" aria-live="polite">
-                        ${this.error || !this.hasLoaded
-                          ? t("approvalHistory.unknown")
-                          : t("approvalHistory.empty")}
-                      </div>
-                    </td>
-                  </tr>
-                `
-              : this.items.map(
-                  (item) => html`
+            ${
+              this.items.length === 0
+                ? html`
                     <tr>
-                      <td>${formatResolvedAt(item.resolvedAtMs)}</td>
-                      <td>${kindLabel(item.presentation.kind)}</td>
-                      <td class="mono">${requestLabel(item)}</td>
-                      <td>
-                        ${statusLabel(item.status)} ·
-                        ${decisionLabel("decision" in item ? item.decision : undefined)}
+                      <td colspan="7" class="data-table-empty-cell">
+                        <div class="data-table-empty-state" role="status" aria-live="polite">
+                          ${
+                            this.error || !this.hasLoaded
+                              ? t("approvalHistory.unknown")
+                              : t("approvalHistory.empty")
+                          }
+                        </div>
                       </td>
-                      <td>${reasonLabel(item.reason)}</td>
-                      <td class="mono">${sourceLabel(item)}</td>
-                      <td class="mono">${resolverLabel(item)}</td>
                     </tr>
-                  `,
-                )}
+                  `
+                : this.items.map(
+                    (item) => html`
+                      <tr>
+                        <td>${formatResolvedAt(item.resolvedAtMs)}</td>
+                        <td>${kindLabel(item.presentation.kind)}</td>
+                        <td class="mono">${requestLabel(item)}</td>
+                        <td>
+                          ${statusLabel(item.status)} ·
+                          ${decisionLabel("decision" in item ? item.decision : undefined)}
+                        </td>
+                        <td>${reasonLabel(item.reason)}</td>
+                        <td class="mono">${sourceLabel(item)}</td>
+                        <td class="mono">${resolverLabel(item)}</td>
+                      </tr>
+                    `,
+                  )
+            }
           </tbody>
         </table>
       </div>
       <div class="data-table-pagination">
         <div class="data-table-pagination__info">${t("approvalHistory.retention")}</div>
         <div class="data-table-pagination__controls">
-          ${this.nextCursor
-            ? html`
-                <button ?disabled=${this.loadingMore} @click=${() => void this.loadPage(false)}>
-                  ${this.loadingMore
-                    ? t("approvalHistory.loadingMore")
-                    : t("approvalHistory.loadMore")}
-                </button>
-              `
-            : nothing}
+          ${
+            this.nextCursor
+              ? html`
+                  <button ?disabled=${this.loadingMore} @click=${() => void this.loadPage(false)}>
+                    ${
+                      this.loadingMore
+                        ? t("approvalHistory.loadingMore")
+                        : t("approvalHistory.loadMore")
+                    }
+                  </button>
+                `
+              : nothing
+          }
         </div>
       </div>
     `;
@@ -501,30 +515,38 @@ class ApprovalsPage extends OpenClawLightDomElement {
   override render() {
     const body = renderSettingsPage(
       html`
-        ${!this.connected
-          ? html`<div class="callout warn">${t("approvalHistory.offline")}</div>`
-          : nothing}
-        ${this.connected && !this.approvalsAccess
-          ? html`
-              <div class="callout warn" role="status">
-                ${t("common.disabled")} · <code>${APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
-              </div>
-            `
-          : nothing}
-        ${this.approvalsAccess && this.error
-          ? html`
-              <div class="callout danger">
-                ${this.error}
-                <button class="btn btn--sm" @click=${() => void this.loadPage(true)}>
-                  ${t("common.retry")}
-                </button>
-              </div>
-            `
-          : nothing}
+        ${
+          !this.connected
+            ? html`<div class="callout warn">${t("approvalHistory.offline")}</div>`
+            : nothing
+        }
+        ${
+          this.connected && !this.approvalsAccess
+            ? html`
+                <div class="callout warn" role="status">
+                  ${t("common.disabled")} · <code>${APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
+                </div>
+              `
+            : nothing
+        }
+        ${
+          this.approvalsAccess && this.error
+            ? html`
+                <div class="callout danger">
+                  ${this.error}
+                  <button class="btn btn--sm" @click=${() => void this.loadPage(true)}>
+                    ${t("common.retry")}
+                  </button>
+                </div>
+              `
+            : nothing
+        }
         ${this.approvalsAccess ? this.renderGrants() : nothing}
-        ${this.approvalsAccess
-          ? html`<h2 class="settings-section-title">${t("standingGrants.historyTitle")}</h2>`
-          : nothing}
+        ${
+          this.approvalsAccess
+            ? html`<h2 class="settings-section-title">${t("standingGrants.historyTitle")}</h2>`
+            : nothing
+        }
         ${this.approvalsAccess ? this.renderTable() : nothing}
       `,
       { wide: true },

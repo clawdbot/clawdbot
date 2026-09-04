@@ -30,12 +30,8 @@ function createEmptyStore(): LedgerStore {
   };
 }
 
-function serializeLedgerStore(store: LedgerStore): string {
-  return JSON.stringify(store);
-}
-
 function getSerializedLedgerByteLength(store: LedgerStore): number {
-  return Buffer.byteLength(serializeLedgerStore(store), "utf8");
+  return Buffer.byteLength(JSON.stringify(store), "utf8");
 }
 
 function getOrCreateSession(
@@ -74,7 +70,8 @@ function getOrCreateSession(
 }
 
 function trimLedger(state: MemoryLedgerState): void {
-  for (const session of Object.values(state.store.sessions)) {
+  const sessions = Object.values(state.store.sessions);
+  for (const session of sessions) {
     if (session.events.length <= state.maxEventsPerSession) {
       continue;
     }
@@ -82,7 +79,6 @@ function trimLedger(state: MemoryLedgerState): void {
     session.complete = false;
   }
 
-  const sessions = Object.values(state.store.sessions);
   if (sessions.length > state.maxSessions) {
     for (const session of sessions
       .toSorted((a, b) => b.updatedAt - a.updatedAt)
@@ -92,23 +88,23 @@ function trimLedger(state: MemoryLedgerState): void {
   }
 
   let serializedBytes = getSerializedLedgerByteLength(state.store);
-  while (serializedBytes > state.maxSerializedBytes) {
-    const session = Object.values(state.store.sessions)
-      .filter((candidate) => candidate.events.length > 0)
-      .toSorted((a, b) => a.updatedAt - b.updatedAt)[0];
-    if (!session) {
-      break;
-    }
-    session.events.shift();
-    session.complete = false;
-    serializedBytes = getSerializedLedgerByteLength(state.store);
+  if (serializedBytes <= state.maxSerializedBytes) {
+    return;
   }
-
-  while (serializedBytes > state.maxSerializedBytes) {
-    const session = Object.values(state.store.sessions).toSorted(
-      (a, b) => a.updatedAt - b.updatedAt,
-    )[0];
-    if (!session) {
+  // Trimming changes neither timestamps nor session order; reuse one stable
+  // eviction order while preserving the events-before-session-rows policy.
+  const oldestFirst = Object.values(state.store.sessions).toSorted(
+    (a, b) => a.updatedAt - b.updatedAt,
+  );
+  for (const session of oldestFirst) {
+    while (serializedBytes > state.maxSerializedBytes && session.events.length > 0) {
+      session.events.shift();
+      session.complete = false;
+      serializedBytes = getSerializedLedgerByteLength(state.store);
+    }
+  }
+  for (const session of oldestFirst) {
+    if (serializedBytes <= state.maxSerializedBytes) {
       break;
     }
     delete state.store.sessions[session.sessionId];

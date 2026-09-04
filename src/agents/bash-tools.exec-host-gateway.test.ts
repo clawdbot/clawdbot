@@ -146,16 +146,14 @@ const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   ),
 );
 const evaluateShellAllowlistWithAuthorizationMock = vi.hoisted(() =>
-  vi.fn(
-    (): MockAllowlistResult => ({
-      allowlistMatches: [],
-      analysisOk: true,
-      allowlistSatisfied: true,
-      segments: [{ resolution: null, argv: ["echo", "ok"] }],
-      segmentAllowlistEntries: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
-      segmentSatisfiedBy: [],
-    }),
-  ),
+  vi.fn((): MockAllowlistResult => ({
+    allowlistMatches: [],
+    analysisOk: true,
+    allowlistSatisfied: true,
+    segments: [{ resolution: null, argv: ["echo", "ok"] }],
+    segmentAllowlistEntries: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+    segmentSatisfiedBy: [],
+  })),
 );
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => true));
 const hasExactCommandDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
@@ -207,14 +205,12 @@ const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
 );
 const runAbortedApprovalError = vi.hoisted(() => new Error("run aborted"));
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
-  vi.fn(
-    (): MockExecHostApprovalContext => ({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "off",
-      askFallback: "deny",
-    }),
-  ),
+  vi.fn((): MockExecHostApprovalContext => ({
+    approvals: { allowlist: [], file: { version: 1, agents: {} } },
+    hostSecurity: "allowlist",
+    hostAsk: "off",
+    askFallback: "deny",
+  })),
 );
 const runExecProcessMock = vi.hoisted(() => vi.fn());
 const startupCancellationMocks = vi.hoisted(() => ({

@@ -716,25 +716,15 @@ describe("ensureConfigReady", () => {
   });
 
   it("retries the cached config snapshot after a read rejection", async () => {
-    const originalVitest = process.env.VITEST;
-    process.env.VITEST = "false";
     const transientError = new Error("temporary config read failure");
     const recoveredSnapshot = makeSnapshot();
     readConfigFileSnapshotMock
       .mockRejectedValueOnce(transientError)
       .mockResolvedValueOnce(recoveredSnapshot);
 
-    try {
-      await expect(runEnsureConfigReady(["health"])).rejects.toThrow(transientError);
-      await expect(runEnsureConfigReady(["health"])).resolves.toBeDefined();
-      await expect(runEnsureConfigReady(["health"])).resolves.toBeDefined();
-    } finally {
-      if (originalVitest === undefined) {
-        delete process.env.VITEST;
-      } else {
-        process.env.VITEST = originalVitest;
-      }
-    }
+    await expect(runEnsureConfigReady(["health"])).rejects.toThrow(transientError);
+    await expect(runEnsureConfigReady(["health"])).resolves.toBeDefined();
+    await expect(runEnsureConfigReady(["health"])).resolves.toBeDefined();
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, {});

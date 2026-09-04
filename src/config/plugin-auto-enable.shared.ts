@@ -1,7 +1,6 @@
 // Shares plugin auto-enable detection across config and runtime code.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -673,22 +672,24 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
-  for (const { value: modelRef } of collectConfiguredModelRefs(params.config, {
-    includeChannelModelOverrides: false,
-  })) {
+  const configuredModelPluginIds = new Set<string>();
+  for (const modelRef of new Set(
+    collectConfiguredModelRefs(params.config, { includeChannelModelOverrides: false }).map(
+      ({ value }) => value,
+    ),
+  )) {
     const owningPluginIds = resolveOwningPluginIdsForModelRef({
       model: modelRef,
       config: params.config,
       env: params.env,
       manifestRegistry: params.registry,
     });
-    if (owningPluginIds?.length === 1) {
-      changes.push({
-        pluginId: expectDefined(owningPluginIds[0], "owning plugin ids entry at 0"),
-        kind: "provider-model-configured",
-        modelRef,
-      });
+    const pluginId = owningPluginIds?.length === 1 ? owningPluginIds[0] : undefined;
+    if (!pluginId || configuredModelPluginIds.has(pluginId)) {
+      continue;
     }
+    configuredModelPluginIds.add(pluginId);
+    changes.push({ pluginId, kind: "provider-model-configured", modelRef });
   }
 
   for (const providerId of collectConfiguredSpeechProviderIds(params.config)) {

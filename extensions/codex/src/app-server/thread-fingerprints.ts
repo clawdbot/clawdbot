@@ -58,22 +58,25 @@ function redactUserMcpServersFingerprintSecrets(value: JsonValue): JsonValue {
   if (!value || typeof value !== "object") {
     return value;
   }
-  const next: JsonObject = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === "http_headers" && entry && typeof entry === "object" && !Array.isArray(entry)) {
-      next[key] = Object.fromEntries(
-        Object.entries(entry).map(([header, headerValue]) => [
-          header,
-          header.toLowerCase() === "authorization"
-            ? fingerprintUserMcpServersAuthorizationHeader(headerValue)
-            : headerValue,
-        ]),
-      ) as JsonObject;
-      continue;
-    }
-    next[key] = redactUserMcpServersFingerprintSecrets(entry);
-  }
-  return next;
+  // Native server names are literal keys, including __proto__.
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => {
+      if (key === "http_headers" && entry && typeof entry === "object" && !Array.isArray(entry)) {
+        return [
+          key,
+          Object.fromEntries(
+            Object.entries(entry).map(([header, headerValue]) => [
+              header,
+              header.toLowerCase() === "authorization"
+                ? fingerprintUserMcpServersAuthorizationHeader(headerValue)
+                : headerValue,
+            ]),
+          ),
+        ];
+      }
+      return [key, redactUserMcpServersFingerprintSecrets(entry)];
+    }),
+  );
 }
 
 function fingerprintUserMcpServersAuthorizationHeader(value: unknown): string {
@@ -140,13 +143,12 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
   if (!isJsonObject(value)) {
     return value;
   }
-  const stable: JsonObject = {};
-  for (const [key, child] of Object.entries(value).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    stable[key] = stabilizeJsonValue(child);
-  }
-  return stable;
+  // Indexed assignment would lose __proto__ schema and policy changes from the fingerprint.
+  return Object.fromEntries(
+    Object.entries(value)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, stabilizeJsonValue(child)]),
+  );
 }
 
 function readActiveCodexTurnIds(thread: unknown): string[] {

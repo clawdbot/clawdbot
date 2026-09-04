@@ -21,7 +21,6 @@ export type ReplySessionBinding = {
 };
 
 export type PendingContinuationSettlement = {
-  statusPayload: ReplyPayload;
   settle: (statusDelivered: boolean) => Promise<void>;
 };
 

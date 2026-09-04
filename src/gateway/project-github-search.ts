@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type {
   RemoteProject,
   ProjectsSearchRemoteResult,
@@ -8,11 +10,8 @@ import {
   fetchGitHubApi,
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
-  isRecord,
-  readOptionalGitHubString,
   readGitHubJsonResponse,
   resolveGitHubApiCredentialScope,
-  requiredString,
 } from "./control-ui-github-api.js";
 
 const SEARCH_CACHE_MS = 60_000;
@@ -39,20 +38,17 @@ function parseRepository(value: unknown): RemoteProject | null {
   if (!isRecord(value)) {
     return null;
   }
-  let fullName: string;
-  let name: string;
-  try {
-    fullName = requiredString(value, "full_name");
-    name = requiredString(value, "name");
-  } catch {
+  const fullName = readNonBlankString(value.full_name);
+  const name = readNonBlankString(value.name);
+  if (!fullName || !name) {
     return null;
   }
-  const clone = parseProjectGitUrl(readOptionalGitHubString(value, "clone_url") ?? "");
-  const webUrl = boundedString(readOptionalGitHubString(value, "html_url"), 2048);
+  const clone = parseProjectGitUrl(readNonBlankString(value.clone_url) ?? "");
+  const webUrl = boundedString(readNonBlankString(value.html_url), 2048);
   if (!clone || !webUrl) {
     return null;
   }
-  const description = boundedString(readOptionalGitHubString(value, "description"), 500);
+  const description = boundedString(readNonBlankString(value.description), 500);
   return {
     name: name.slice(0, 100),
     fullName: fullName.slice(0, 200),

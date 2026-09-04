@@ -326,33 +326,45 @@ describe("memory host SDK package internals", () => {
     });
   });
 
-  it("filters extra directories by glob while preserving symlink skips", async () => {
-    const tmpDir = getTmpDir();
-    const extraDir = path.join(tmpDir, "extra");
-    const outsideDir = path.join(tmpDir, "outside");
-    fsSync.mkdirSync(path.join(extraDir, "notes", "nested"), { recursive: true });
-    fsSync.mkdirSync(path.join(extraDir, "drafts"), { recursive: true });
-    fsSync.mkdirSync(outsideDir, { recursive: true });
-    fsSync.writeFileSync(path.join(extraDir, "root.md"), "root");
-    fsSync.writeFileSync(path.join(extraDir, "notes", "keep.md"), "keep");
-    fsSync.writeFileSync(path.join(extraDir, "notes", "nested", "keep.md"), "nested");
-    fsSync.writeFileSync(path.join(extraDir, "drafts", "skip.md"), "skip");
-    fsSync.writeFileSync(path.join(extraDir, "notes", "ignore.txt"), "ignore");
-    fsSync.writeFileSync(path.join(outsideDir, "linked.md"), "linked");
-    tryCreateSymlink(path.join(outsideDir, "linked.md"), path.join(extraDir, "notes", "linked.md"));
-    tryCreateSymlink(outsideDir, path.join(extraDir, "notes", "linked-dir"), "dir");
+  it.each([
+    { directory: "notes", rootFile: "root.md" },
+    { directory: "..notes", rootFile: "..root.md" },
+    { directory: "...notes", rootFile: "...root.md" },
+  ])(
+    "filters $directory by glob while preserving symlink skips",
+    async ({ directory, rootFile }) => {
+      const tmpDir = getTmpDir();
+      const extraDir = path.join(tmpDir, "extra");
+      const outsideDir = path.join(tmpDir, "outside");
+      fsSync.mkdirSync(path.join(extraDir, directory, "nested"), { recursive: true });
+      fsSync.mkdirSync(path.join(extraDir, "drafts"), { recursive: true });
+      fsSync.mkdirSync(outsideDir, { recursive: true });
+      fsSync.writeFileSync(path.join(extraDir, rootFile), "root");
+      fsSync.writeFileSync(path.join(extraDir, directory, "keep.md"), "keep");
+      fsSync.writeFileSync(path.join(extraDir, directory, "nested", "keep.md"), "nested");
+      fsSync.writeFileSync(path.join(extraDir, "drafts", "skip.md"), "skip");
+      fsSync.writeFileSync(path.join(extraDir, directory, "ignore.txt"), "ignore");
+      fsSync.writeFileSync(path.join(outsideDir, "linked.md"), "linked");
+      tryCreateSymlink(
+        path.join(outsideDir, "linked.md"),
+        path.join(extraDir, directory, "linked.md"),
+      );
+      tryCreateSymlink(outsideDir, path.join(extraDir, directory, "linked-dir"), "dir");
 
-    const files = await listMemoryFiles(tmpDir, [
-      { path: extraDir, pattern: "root.md" },
-      { path: extraDir, pattern: "notes/**/*.md" },
-    ]);
+      const files = await listMemoryFiles(tmpDir, [
+        { path: extraDir, pattern: rootFile },
+        { path: extraDir, pattern: `${directory}/**/*.md` },
+      ]);
 
-    expect(files.map((file) => path.relative(extraDir, file)).toSorted()).toEqual([
-      path.join("notes", "keep.md"),
-      path.join("notes", "nested", "keep.md"),
-      "root.md",
-    ]);
-  });
+      expect(files.map((file) => path.relative(extraDir, file)).toSorted()).toEqual(
+        [
+          path.join(directory, "keep.md"),
+          path.join(directory, "nested", "keep.md"),
+          rootFile,
+        ].toSorted(),
+      );
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "skips a symlinked workspace root file instead of aborting enumeration",

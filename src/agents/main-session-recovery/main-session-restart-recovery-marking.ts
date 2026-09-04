@@ -7,12 +7,13 @@ import type {
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartRecoveryCandidate } from "../../gateway/chat-abort.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
-  collectActiveSessionWorkAdmissions,
-  isSessionWorkAdmissionTargetActive,
-} from "../../sessions/session-lifecycle-admission.js";
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../infra/agent-events.js";
+import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
+import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -41,6 +42,7 @@ async function markRecoveryStore(params: {
   ) =>
     | {
         action: "mark";
+        isCurrent?: () => boolean;
         forceRestartSafeTools?: boolean;
         replaceRuns?: boolean;
         resetRuntime?: boolean;
@@ -49,10 +51,16 @@ async function markRecoveryStore(params: {
     | { action: "retire_terminal" }
     | undefined;
 }) {
+  const commitGuards: Array<() => boolean> = [];
   return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
     storePath: params.storePath,
     statuses: params.statuses,
     requireWriteSuccess: true,
+    assertCommitAllowed: () => {
+      if (commitGuards.some((isCurrent) => !isCurrent())) {
+        throw new Error("Restart recovery owner changed before commit");
+      }
+    },
     update: (entries) => {
       const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
       const counts = { marked: 0, skipped: 0 };
@@ -76,6 +84,10 @@ async function markRecoveryStore(params: {
           counts.skipped++;
           continue;
         }
+        const { isCurrent, ...mark } = plan;
+        if (isCurrent) {
+          commitGuards.push(isCurrent);
+        }
         if (plan.replaceRuns) {
           entry.restartRecoveryRuns = plan.runs;
         }
@@ -86,7 +98,7 @@ async function markRecoveryStore(params: {
           kind: "mark_interrupted",
           cycleId: randomUUID(),
           now: Date.now(),
-          ...plan,
+          ...mark,
         });
         replacements.push({ sessionKey, entry });
         counts.marked++;
@@ -97,6 +109,7 @@ async function markRecoveryStore(params: {
 }
 
 export async function markRestartAbortedMainSessions(params: {
+  resolveGatewayContext: GatewayContextResolver;
   cfg?: OpenClawConfig;
   additionalCfgs?: Iterable<OpenClawConfig | undefined>;
   stateDir?: string;
@@ -109,8 +122,8 @@ export async function markRestartAbortedMainSessions(params: {
   const result = { marked: 0, skipped: 0 };
   // Channel work can outlive its chat-run registration. The admission owner
   // retains the authoritative store and session identities until the turn releases.
-  const activeAdmissions = collectActiveSessionWorkAdmissions();
-  if (activeRuns.length === 0 && activeAdmissions.size === 0) {
+  const activeAdmissions = captureGatewaySessionWorkAdmissions(params.resolveGatewayContext);
+  if (activeRuns.length === 0 && activeAdmissions.targets.size === 0) {
     return result;
   }
 
@@ -132,7 +145,7 @@ export async function markRestartAbortedMainSessions(params: {
     }
   }
 
-  for (const storePath of activeAdmissions.keys()) {
+  for (const storePath of activeAdmissions.targets.keys()) {
     storePaths.add(storePath);
   }
   for (const storePath of storePaths) {
@@ -152,7 +165,7 @@ export async function markRestartAbortedMainSessions(params: {
                 run.lifecycleGeneration !== currentLifecycleGeneration)) &&
             params.isActiveRun?.(run) !== false,
         );
-        const matchedActiveAdmission = isSessionWorkAdmissionTargetActive({
+        const matchedActiveAdmission = activeAdmissions.isActive({
           scope: storePath,
           sessionKey,
           sessionId: entry.sessionId,
@@ -173,6 +186,17 @@ export async function markRestartAbortedMainSessions(params: {
         ]);
         return {
           action: "mark",
+          // Planning yields before SQLite commits. Revalidate the captured owners
+          // in its synchronous guard, not just while selecting this row.
+          isCurrent: () =>
+            isAgentEventLifecycleGenerationCurrent(currentLifecycleGeneration) &&
+            ((matchedActiveAdmission &&
+              activeAdmissions.isActive({
+                scope: storePath,
+                sessionKey,
+                sessionId: entry.sessionId,
+              })) ||
+              matchingActiveRuns.some((run) => params.isActiveRun?.(run) !== false)),
           forceRestartSafeTools: matchedActiveAdmission,
           replaceRuns: true,
           resetRuntime: !wasRunning,

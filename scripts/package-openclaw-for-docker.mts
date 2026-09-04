@@ -47,6 +47,7 @@ type RunOptions = {
   env?: NodeJS.ProcessEnv;
   killAfterMs?: unknown;
   maxCapturedStdoutBytes?: number;
+  stdinFilePath?: string;
   stdoutFilePath?: string;
   timeoutMs?: unknown;
 };
@@ -288,18 +289,24 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
         : process.platform === "win32" && command === "npm"
           ? resolveNpmRunner({ env, npmArgs: args })
           : { args, command, shell: false };
-    const stdoutFd = options.stdoutFilePath ? openSync(options.stdoutFilePath, "wx") : undefined;
+    let stdinFd: number | undefined;
+    let stdoutFd: number | undefined;
     let child: ReturnType<typeof spawn>;
     try {
+      stdinFd = options.stdinFilePath ? openSync(options.stdinFilePath, "r") : undefined;
+      stdoutFd = options.stdoutFilePath ? openSync(options.stdoutFilePath, "wx") : undefined;
       child = spawn(invocation.command, invocation.args, {
         cwd,
-        stdio: ["ignore", stdoutFd ?? "pipe", "pipe"],
+        stdio: [stdinFd ?? "ignore", stdoutFd ?? "pipe", "pipe"],
         env: invocation.env ?? env,
         detached: useProcessGroup,
         shell: invocation.shell,
         windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       });
     } finally {
+      if (stdinFd !== undefined) {
+        closeSync(stdinFd);
+      }
       if (stdoutFd !== undefined) {
         closeSync(stdoutFd);
       }
@@ -564,21 +571,28 @@ function isPackedAiRuntimeTarball(filename: string) {
 }
 
 function runPackageTar(
-  flags: string[],
+  operation: "extract" | "create",
   tarballPath: string,
   directory: string,
   args: string[] = [],
-  env?: NodeJS.ProcessEnv,
 ) {
-  // Frozen-source harnesses use system tar without their own dependency install.
-  // Basenames avoid GNU tar's drive-as-host parsing; forward slashes prevent
-  // Windows directory separators from becoming -C backslash escapes.
+  // Frozen-source harnesses use system tar. Stream archives to avoid drive-as-host
+  // parsing without changing cwd/PATH for tar or gzip; -C uses forward slashes
+  // because Windows directory separators can become backslash escapes.
+  const creating = operation === "create";
+  const flags = creating ? ["--no-xattrs", "-czf"] : ["-xzf"];
   return run(
     "tar",
-    [...flags, path.basename(tarballPath), "-C", directory.replaceAll(path.sep, "/"), ...args],
-    path.dirname(tarballPath),
+    [...flags, "-", "-C", directory.replaceAll(path.sep, "/"), ...args],
+    process.cwd(),
     {
-      env,
+      ...(creating
+        ? {
+            stdoutFilePath: tarballPath,
+            // BSD tar has separate PAX xattr and AppleDouble (._*) metadata paths.
+            env: { ...process.env, COPYFILE_DISABLE: "1" },
+          }
+        : { stdinFilePath: tarballPath }),
       timeoutMs: resolveTimeoutMs(
         "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
         DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
@@ -606,7 +620,7 @@ export async function prepareBundledAiRuntimePackage(
   const extractAiRuntime =
     packageOptions.extractAiRuntime ??
     ((tarballPath: string, destination: string) =>
-      runPackageTar(["-xzf"], tarballPath, destination, ["--strip-components=1"]));
+      runPackageTar("extract", tarballPath, destination, ["--strip-components=1"]));
   const prepareManifest = packageOptions.prepareManifest ?? (async () => false);
   const restoreManifest = packageOptions.restoreManifest ?? (async () => false);
   const originalPackageJson = await fs.readFile(packageJsonPath, "utf8");
@@ -787,7 +801,7 @@ async function normalizeOpenClawTarballModes(tarballPath: string) {
   // the bundled AI runtime extraction above.
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
   try {
-    await runPackageTar(["-xzf"], tarballPath, stageDir);
+    await runPackageTar("extract", tarballPath, stageDir);
     let stagedFileCount = 0;
     const normalizeStagedModes = async (dir: string): Promise<void> => {
       for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
@@ -811,14 +825,7 @@ async function normalizeOpenClawTarballModes(tarballPath: string) {
     const stageRootEntries = await fs.readdir(stageDir);
     const normalizedPath = `${tarballPath}.modes-tmp`;
     await fs.rm(normalizedPath, { force: true });
-    await runPackageTar(
-      ["--no-xattrs", "-czf"],
-      normalizedPath,
-      stageDir,
-      stageRootEntries,
-      // BSD tar has separate PAX xattr and AppleDouble (._*) metadata paths.
-      { ...process.env, COPYFILE_DISABLE: "1" },
-    );
+    await runPackageTar("create", normalizedPath, stageDir, stageRootEntries);
     await fs.rename(normalizedPath, tarballPath);
   } finally {
     await fs.rm(stageDir, { force: true, recursive: true });

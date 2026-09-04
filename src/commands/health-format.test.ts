@@ -50,6 +50,7 @@ const createHealthSummary = (
 
 function createMultiAccountHealthSummary(
   secondary: Partial<ChannelAccountHealthSummary>,
+  primaryOverrides: Partial<ChannelAccountHealthSummary> = {},
 ): HealthSummary {
   const primary = {
     accountId: "main",
@@ -58,20 +59,22 @@ function createMultiAccountHealthSummary(
     linked: true,
     healthState: "healthy",
     probe: { ok: true, elapsedMs: 12 },
+    ...primaryOverrides,
+  };
+  const secondaryAccount = {
+    accountId: "alerts",
+    enabled: true,
+    configured: true,
+    linked: true,
+    ...secondary,
   };
   return createHealthSummary({
     channels: {
       matrix: {
         ...primary,
         accounts: {
-          main: primary,
-          alerts: {
-            accountId: "alerts",
-            enabled: true,
-            configured: true,
-            linked: true,
-            ...secondary,
-          },
+          [primary.accountId]: primary,
+          [secondaryAccount.accountId]: secondaryAccount,
         },
       },
     },
@@ -233,6 +236,75 @@ describe("formatHealthChannelLines", () => {
     expect(
       formatHealthChannelLines(summary, { accountMode: "all", accountIdsByChannel }),
     ).toStrictEqual(["Matrix: blocked"]);
+  });
+
+  it.each([
+    {
+      name: "successful",
+      probe: { ok: true, elapsedMs: 12 },
+      expected: "ok (12ms)",
+      expectedAll: "ok (alerts:alerts:12ms)",
+    },
+    {
+      name: "failed",
+      probe: { ok: false, error: "sync rejected" },
+      expected: "failed (unknown) - sync rejected",
+      expectedAll: "failed (unknown) - sync rejected",
+    },
+  ])(
+    "reports the $name active probe when the preferred account is unconfigured",
+    ({ probe, expected, expectedAll }) => {
+      const summary = createMultiAccountHealthSummary(
+        { healthState: "healthy", probe },
+        { configured: false, linked: undefined, healthState: undefined, probe: undefined },
+      );
+      const accountIdsByChannel = { matrix: ["main"] };
+
+      expect(formatHealthChannelLines(summary)).toStrictEqual([`Matrix: ${expected}`]);
+      expect(
+        formatHealthChannelLines(summary, { accountMode: "all", accountIdsByChannel }),
+      ).toStrictEqual([`Matrix: ${expectedAll}`]);
+      expect(
+        formatHealthChannelLines(summary, { accountMode: "default", accountIdsByChannel }),
+      ).toStrictEqual(["Matrix: not configured"]);
+      expect(
+        formatHealthChannelLines(summary, {
+          accountIdsByChannel: { matrix: ["alerts"] },
+        }),
+      ).toStrictEqual([`Matrix: ${expected}`]);
+    },
+  );
+
+  it("keeps the healthy preferred account ahead of numeric account-key order", () => {
+    const summary = createMultiAccountHealthSummary(
+      { accountId: "1", probe: { ok: true, elapsedMs: 1 } },
+      { accountId: "9", probe: { ok: true, elapsedMs: 9 } },
+    );
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual(["Matrix: ok (9ms)"]);
+    expect(
+      formatHealthChannelLines(summary, { accountIdsByChannel: { matrix: ["1", "9"] } }),
+    ).toStrictEqual(["Matrix: ok (1ms)"]);
+  });
+
+  it.each([undefined, {}])("preserves the channel snapshot when accounts are %j", (accounts) => {
+    const summary = createHealthSummary({
+      channels: {
+        matrix: {
+          accountId: "main",
+          configured: true,
+          probe: { ok: true, elapsedMs: 12 },
+          accounts,
+        },
+      },
+      channelOrder: ["matrix"],
+      channelLabels: { matrix: "Matrix" },
+    });
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual(["Matrix: ok (12ms)"]);
+    expect(formatHealthChannelLines(summary, { accountMode: "all" })).toStrictEqual([
+      "Matrix: ok (12ms)",
+    ]);
   });
 
   it.each([

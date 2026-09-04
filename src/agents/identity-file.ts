@@ -145,7 +145,7 @@ function parseIdentityMarkdown(content: string): AgentIdentityFile {
 }
 
 /** Return true when the parsed identity has any meaningful user-supplied value. */
-export function identityHasValues(identity: AgentIdentityFile): boolean {
+function identityHasValues(identity: AgentIdentityFile): boolean {
   return Boolean(
     identity.name ||
     identity.emoji ||

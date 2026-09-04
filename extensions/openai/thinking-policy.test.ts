@@ -14,6 +14,26 @@ function levelIds(params: {
 }
 
 describe("OpenAI thinking route provenance", () => {
+  it.each(["openclaw", "codex", "auto"])(
+    "offers Astra's supported efforts on the %s runtime",
+    (runtime) => {
+      expect(
+        resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", runtime).levels.map((level) => level.id),
+      ).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    },
+  );
+
+  it.each([{ efforts: [] }, { efforts: ["low", "high"] }])(
+    "retains Astra account efforts $efforts",
+    ({ efforts }) => {
+      expect(
+        resolveUnifiedOpenAIThinkingProfile("gpt-6-astra", "codex", {
+          supportedReasoningEfforts: efforts,
+        }).levels.map((level) => level.id),
+      ).toEqual(["off", ...efforts]);
+    },
+  );
+
   it.each([
     { efforts: ["low", "high", "ultra"], expected: ["off", "low", "high", "ultra"] },
     { efforts: ["low", "high", "max"], expected: ["off", "low", "high", "max"] },

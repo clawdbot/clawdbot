@@ -81,8 +81,12 @@ function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
   }
   event.preventDefault();
   event.stopPropagation();
-  const lastPicker = pickers.at(-1);
-  pickers.forEach(closeComposerPicker);
+  // A nested menu restores focus inside its still-open parent picker.
+  const deepestPickers = pickers.filter(
+    (picker) => !pickers.some((other) => other !== picker && picker.contains(other)),
+  );
+  const lastPicker = deepestPickers.at(-1);
+  deepestPickers.forEach(closeComposerPicker);
   invocationComposer?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
   invocationComposer
     ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
@@ -125,7 +129,7 @@ function closeOtherChatComposerPickers(source: HTMLElement): void {
     return;
   }
   for (const picker of openChatComposerPickers(composer)) {
-    if (picker !== source) {
+    if (picker !== source && !picker.contains(source)) {
       closeComposerPicker(picker);
     }
   }

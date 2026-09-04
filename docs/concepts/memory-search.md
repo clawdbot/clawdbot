@@ -183,13 +183,21 @@ Optionally index session transcripts so `memory_search` can recall earlier
 conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).
 
-Session hits obey `tools.sessions.visibility`: the default `"agent"` exposes
-same-agent sessions to unsandboxed callers, including non-main sessions. This
-can include other users sharing that agent. A per-peer `session.dmScope`
+Use `corpus: "memory"` to search only memory notes. Results containing no session
+transcripts do not load session history or perform session-visibility lookups.
+
+Session hits obey `tools.sessions.visibility`, which defaults to `"all"`.
+`memory_search` still searches the selected agent's indexed corpus; use
+[`sessions_search`](/concepts/session-search) for transcript search across agents
+on the Gateway. Visible transcripts can include other users' conversations.
+Cross-agent session access is on by default and governed by
+`tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access
+(requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`) or use `allow`
+to restrict agent pairs. A per-peer `session.dmScope`
 separates DM context but does not restrict transcript access through session
-tools. Choose explicit `"tree"` for current plus spawned scope (with an
-agent-wide exception for main), `"self"` for strict current-session recall, or
-separate agents for separate trust boundaries. Sandbox spawned-only clamps and
+tools. Choose explicit `"agent"` for same-agent recall, `"tree"` for current plus
+spawned scope (with an agent-wide exception for main), or `"self"` for strict
+current-session recall. Sandbox spawned-only clamps and
 incognito exclusions still apply.
 
 ## Troubleshooting

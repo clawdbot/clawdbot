@@ -89,6 +89,8 @@ export class DiscordVoiceManager {
   private readonly following: DiscordVoiceFollowing;
   private readonly receive: DiscordVoiceReceive;
   private readonly voiceSessions: DiscordVoiceSessions;
+  // Room watchers outlive individual bot sessions; only unsubscribe/destroy retires them.
+  private readonly occupancyWatchers = new Set<{ guildId: string; refresh: () => void }>();
   private destroyed = false;
 
   constructor(params: {
@@ -188,10 +190,55 @@ export class DiscordVoiceManager {
     this.voiceSessions.refreshGuildRoster(guildId);
   }
 
+  watchChannelOccupancy(
+    params: { guildId: string; channelId: string },
+    listener: (state: { occupied: boolean }) => void,
+  ): () => void {
+    if (this.destroyed) {
+      return () => undefined;
+    }
+    const guildId = params.guildId.trim();
+    const channelId = params.channelId.trim();
+    let wasOccupied = false;
+    const watcher = {
+      guildId,
+      refresh: () => {
+        const states = listDiscordVoiceParticipantStates({
+          client: this.client,
+          guildId,
+          channelId,
+        });
+        if (states === null) {
+          return;
+        }
+        const occupied =
+          countDiscordVoiceHumanParticipants({ states, botUserId: this.botUserId }) > 0;
+        if (occupied !== wasOccupied) {
+          wasOccupied = occupied;
+          listener({ occupied });
+        }
+      },
+    };
+    this.occupancyWatchers.add(watcher);
+    watcher.refresh();
+    return () => {
+      this.occupancyWatchers.delete(watcher);
+    };
+  }
+
+  private reconcileChannelOccupancy(guildId?: string): void {
+    for (const watcher of this.occupancyWatchers) {
+      if (!guildId || watcher.guildId === guildId) {
+        watcher.refresh();
+      }
+    }
+  }
+
   async autoJoin(): Promise<void> {
     if (!this.voiceEnabled || this.destroyed) {
       return;
     }
+    this.reconcileChannelOccupancy();
     const entriesByGuild = new Map<string, VoiceChannelResidency>();
     const duplicateGuilds = new Set<string>();
     for (const entry of this.autoJoinChannels) {
@@ -220,6 +267,7 @@ export class DiscordVoiceManager {
   }
 
   async reconcileAutoJoinGuild(guildId: string): Promise<void> {
+    this.reconcileChannelOccupancy(guildId);
     const entry = this.resolveAutoJoinTarget(guildId);
     if (!entry?.whenOccupied || !this.voiceEnabled || this.destroyed) {
       return;
@@ -346,6 +394,7 @@ export class DiscordVoiceManager {
         }
         this.guildLifecycles.set(guildId, { status: "active", generation, instance: entry });
         this.fatalAutoJoinFailures.delete(formatAutoJoinFailureKey({ guildId, channelId }));
+        return { ...result, ...(entry.channelName ? { channelName: entry.channelName } : {}) };
       } else if (!result.ok && isCurrent()) {
         this.guildLifecycles.set(guildId, { status: "inactive", generation });
       }
@@ -427,6 +476,7 @@ export class DiscordVoiceManager {
       return;
     }
     this.membership.track(this.sessions.get(guildId), data, previousVoiceState);
+    this.reconcileChannelOccupancy(guildId);
     if (this.following.isFollowedUser(userId)) {
       await this.following.handleFollowedUserVoiceStateUpdate({ guildId, channelId, userId });
     }
@@ -438,6 +488,7 @@ export class DiscordVoiceManager {
 
   async destroy(): Promise<void> {
     this.destroyed = true;
+    this.occupancyWatchers.clear();
     this.following.destroy();
     for (const entry of this.sessions.values()) {
       entry.stop();

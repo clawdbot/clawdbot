@@ -4,11 +4,10 @@ import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { BroadcastChannel, Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeWorkerActivity } from "../../test/helpers/worker-activity.js";
 import * as workerUrls from "../infra/runtime-worker-url.js";
 import {
   applyCodeModeCatalog,
@@ -29,14 +28,11 @@ async function observeTypeScriptPreparation(source: string) {
   const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
   const dir = tempDirs.make("code-mode-typescript-load-");
   const channelName = `typescript-load-${crypto.randomUUID()}`;
-  const channel = new BroadcastChannel(channelName);
-  onTestFinished(() => channel.close());
-  const loading = createDeferred();
-  channel.addEventListener("message", () => loading.resolve(), { once: true });
+  const loading = observeWorkerActivity(channelName);
   await writeFile(
     path.join(dir, "observed-typescript.mjs"),
-    `import { BroadcastChannel } from "node:worker_threads";
-     new BroadcastChannel(${JSON.stringify(channelName)}).postMessage("loading");
+    `import { BroadcastChannel, threadId } from "node:worker_threads";
+     new BroadcastChannel(${JSON.stringify(channelName)}).postMessage(threadId);
      ${source}`,
   );
   const workerPath = path.join(dir, "observed-worker.ts");
@@ -56,9 +52,7 @@ async function observeTypeScriptPreparation(source: string) {
     .spyOn(workerUrls, "resolveRuntimeWorkerUrl")
     .mockReturnValue(pathToFileURL(workerPath));
   onTestFinished(() => resolveWorker.mockRestore());
-  const terminate = vi.spyOn(Worker.prototype, "terminate");
-  onTestFinished(() => terminate.mockRestore());
-  return { loading: loading.promise, terminate };
+  return { loading };
 }
 
 describe("Code Mode TypeScript execution", () => {
@@ -157,9 +151,7 @@ describe("Code Mode TypeScript execution", () => {
   )(
     "stops $mode source preparation on $outcome before any tool dispatch",
     async ({ mode, outcome }) => {
-      const { loading, terminate } = await observeTypeScriptPreparation(
-        "await new Promise(() => {});",
-      );
+      const { loading } = await observeTypeScriptPreparation("await new Promise(() => {});");
       const h = createCodeModeHarness();
       const tool = pluginTool("fake_noop", "Noop");
       onTestFinished(() => clearToolSearchCatalog(h.ctx));
@@ -193,7 +185,7 @@ describe("Code Mode TypeScript execution", () => {
         controller.abort();
         await execution;
       });
-      await Promise.race([
+      const worker = await Promise.race([
         loading,
         execution.then((result) => {
           throw new Error(`Code Mode settled before source preparation: ${JSON.stringify(result)}`);
@@ -206,10 +198,7 @@ describe("Code Mode TypeScript execution", () => {
       }
       expect(await execution).toMatchObject({ status: "failed", code: outcome, output: [] });
       expect(tool.execute).not.toHaveBeenCalled();
-      expect(terminate).toHaveBeenCalled();
-      const worker = terminate.mock.contexts.at(-1);
-      expect(worker).toBeInstanceOf(Worker);
-      expect((worker as Worker).threadId).toBe(-1);
+      expect(worker.threadId).toBe(-1);
       expect(testing.activeRuns.size).toBe(0);
     },
   );

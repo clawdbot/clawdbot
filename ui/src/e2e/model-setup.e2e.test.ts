@@ -45,6 +45,68 @@ const localPrepareOptions = [
 ];
 
 suite.define(() => {
+  it("refreshes detected authentication without retaining an account email for API-key access", async () => {
+    await suite.withPage(
+      {
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+          : {}),
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const candidate = {
+          kind: "codex-cli",
+          brandId: "openai",
+          label: "Codex",
+          modelRef: "openai/gpt-5.6-luna",
+          recommended: false,
+          credentials: true,
+        };
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "openclaw.setup.detect"],
+          methodResponses: {
+            "openclaw.setup.detect": {
+              sequence: [
+                "logged in · ChatGPT account · alex@example.com",
+                "logged in · API key (usage-billed)",
+              ].map((detail) => ({
+                candidates: [{ ...candidate, detail }],
+                manualProviders: [],
+                workspace: "/tmp/openclaw-e2e",
+                setupComplete: false,
+              })),
+            },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        const row = page.locator('[data-candidate-kind="codex-cli"]');
+        await expect.poll(() => row.textContent()).toContain("ChatGPT account · alex@example.com");
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "auth-account-desktop.png"),
+            fullPage: true,
+          });
+        }
+        const detectionCount = (await gateway.getRequests("openclaw.setup.detect")).length;
+        await page.getByRole("button", { name: "Check again" }).click();
+        await expect
+          .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
+          .toBe(detectionCount + 1);
+        await expect.poll(() => row.textContent()).toContain("API key (usage-billed)");
+        expect(await row.textContent()).not.toContain("alex@example.com");
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "auth-api-key-desktop.png"),
+            fullPage: true,
+          });
+        }
+      },
+    );
+  });
+
   it("hands first-run model setup to the custodian in onboarding chrome", async () => {
     await suite.withPage(
       {

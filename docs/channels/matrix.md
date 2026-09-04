@@ -14,7 +14,7 @@ Matrix is a downloadable channel plugin (`@openclaw/matrix`) built on the offici
 openclaw plugins install @openclaw/matrix
 ```
 
-Bare plugin specs try ClawHub first, then npm fallback. Force a source with `openclaw plugins install clawhub:@openclaw/matrix` or `npm:@openclaw/matrix`. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
+`@openclaw/matrix` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
 
 `plugins install` registers and enables the plugin; no separate `enable` step is needed. The channel still does nothing until configured below. See [Plugins](/tools/plugin) for general install rules.
 
@@ -350,7 +350,11 @@ openclaw matrix account add \
   --enable-e2ee
 ```
 
-`--encryption` is an alias for `--enable-e2ee`. Manual config equivalent:
+`--encryption` is an alias for `--enable-e2ee`. Both setup commands finish their Matrix client operations before saving the enabled config, so a running Gateway can reload after that work settles. If bootstrap fails, the encryption setting is still saved; use the reported diagnostics and next steps to finish verification.
+
+Setup preserves unrelated configuration changes made while it runs. If the selected account changes, setup leaves that newer configuration intact and asks you to review it and rerun the command.
+
+Manual config equivalent:
 
 ```json5
 {

@@ -271,6 +271,8 @@ describe("successful update finalization ordering", () => {
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect.soft(failure).toBeUndefined();
     expect.soft(output).toContain("Shell completion refresh failed");
+    expect.soft(output).toContain("Resolve the reported error before retrying");
+    expect.soft(output).not.toContain("session only");
     expect.soft(mocks.restartService).toHaveBeenCalledOnce();
     expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.checkCompletionStatus.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -317,6 +319,8 @@ describe("successful update finalization ordering", () => {
 
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect(output).toContain("completion cache generation failed");
+    expect(output).toContain("Resolve the reported error before retrying");
+    expect(output).not.toContain("source /tmp/openclaw-completion.zsh");
     expect(output).toContain("openclaw completion --write-state --install");
     expect(mocks.restartService).toHaveBeenCalledOnce();
     expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(

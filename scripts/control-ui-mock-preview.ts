@@ -14,7 +14,8 @@ function installControlUiPreview(): void {
   // application startup can send synthetic resources to the operator Gateway.
   const gatewayUrl = new URL(window.location.origin);
   gatewayUrl.protocol = gatewayUrl.protocol === "https:" ? "wss:" : "ws:";
-  previewWindow["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl: gatewayUrl.origin };
+  gatewayUrl.pathname = "/__openclaw_mock_gateway__";
+  previewWindow["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl: gatewayUrl.toString() };
 
   const gateway = previewWindow.openclawControlUiE2eGateway;
   if (!gateway) {

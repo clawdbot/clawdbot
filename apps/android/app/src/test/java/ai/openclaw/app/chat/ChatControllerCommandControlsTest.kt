@@ -20,8 +20,11 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerCommandControlsTest {
   private val json = chatControllerTestJson
 
@@ -263,7 +266,7 @@ class ChatControllerCommandControlsTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -471,6 +474,7 @@ class ChatControllerCommandControlsTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             check(method != "sessions.patch") { "archive must use its captured request lease" }
@@ -508,6 +512,8 @@ class ChatControllerCommandControlsTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = { method, _ ->
             requests += method
@@ -916,7 +922,8 @@ class ChatControllerCommandControlsTest {
           respond("chat.send", """{"runId":"run-new"}""")
           respond("health", "{}")
         }
-      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      runCurrent()
 
       assertTrue(controller.sendMessageAwaitAcceptance("/new", "off", emptyList()))
 
@@ -933,7 +940,8 @@ class ChatControllerCommandControlsTest {
           respond("chat.send", """{"runId":"run-1"}""")
           respond("health", "{}")
         }
-      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      runCurrent()
 
       assertTrue(controller.sendMessageAwaitAcceptance("hello", "off", emptyList()))
       assertEquals(1, controller.pendingRunCount.value)
@@ -975,6 +983,61 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun newChatOwnsProgressWhilePreviousSessionListFinishes() =
+    runTest {
+      val key = "agent:main:dashboard:fresh"
+      val sessionsEntered = CompletableDeferred<Unit>()
+      val releaseSessions = CompletableDeferred<Unit>()
+      val createEntered = CompletableDeferred<Unit>()
+      val releaseCreate = CompletableDeferred<Unit>()
+      val gateway = ScriptedGateway(json)
+      var sessionsRequests = 0
+      gateway.respond("sessions.list") {
+        if (sessionsRequests++ == 0) {
+          sessionsEntered.complete(Unit)
+          releaseSessions.await()
+        }
+        """{"sessions":[]}"""
+      }
+      gateway.respond("sessions.create") {
+        createEntered.complete(Unit)
+        releaseCreate.await()
+        """{"ok":true,"key":"$key"}"""
+      }
+      gateway.respond("chat.history") { params ->
+        historyResponse(if (gateway.sessionKeyOf(params) == key) "fresh-session" else "parent-session", emptyList())
+      }
+      gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+      val controller = createChatController(cacheScope = { ChatCacheScope("gateway-a", 1) }, requestGateway = gateway::request)
+      controller.load("main")
+      sessionsEntered.await()
+
+      val create = async { controller.startNewChatAwait() }
+      try {
+        createEntered.await()
+        assertEquals("parent-session", controller.sessionId.value)
+        assertTrue(controller.healthOk.value)
+        assertFalse("Session creation must not claim transcript loading", controller.historyLoading.value)
+        assertTrue(controller.isCreatingSession.value)
+        releaseSessions.complete(Unit)
+        runCurrent()
+
+        assertTrue("A completed history tail must not clear New's progress", controller.isCreatingSession.value)
+        assertFalse(controller.historyLoading.value)
+        releaseCreate.complete(Unit)
+        assertTrue(create.await())
+        assertEquals(key, controller.sessionKey.value)
+        assertEquals("fresh-session", controller.sessionId.value)
+        assertFalse(controller.isCreatingSession.value)
+        assertFalse(controller.historyLoading.value)
+      } finally {
+        releaseSessions.complete(Unit)
+        releaseCreate.complete(Unit)
+        create.cancelAndJoin()
+      }
+    }
+
+  @Test
   fun startNewChatSelectsCreatedSessionAfterConcurrentSameSessionHistoryLoad() =
     runTest {
       for (refreshLoadedParent in listOf(false, true)) {
@@ -1012,6 +1075,7 @@ class ChatControllerCommandControlsTest {
           assertEquals("main", controller.sessionKey.value)
           assertEquals("parent-session", controller.sessionId.value)
           assertFalse(controller.historyLoading.value)
+          assertTrue("New stays pending through same-session history; refreshLoadedParent=$refreshLoadedParent", controller.isCreatingSession.value)
         } finally {
           releaseCreate.complete(Unit)
         }
@@ -1019,6 +1083,7 @@ class ChatControllerCommandControlsTest {
         assertTrue("New must survive same-session history; refreshLoadedParent=$refreshLoadedParent", create.await())
         assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
         assertEquals("fresh-session", controller.sessionId.value)
+        assertFalse(controller.isCreatingSession.value)
         assertEquals(1, requests.count { it.first == "sessions.create" })
       }
     }
@@ -1114,6 +1179,7 @@ class ChatControllerCommandControlsTest {
 
           assertFalse("A stale create must not select its result after $change", create.await())
           runCurrent()
+          assertFalse(controller.isCreatingSession.value)
           assertEquals(selectedKey, controller.sessionKey.value)
           assertEquals(selectedOwner, controller.sessionOwnerAgentId.value)
           assertEquals(selectedSessionId, controller.sessionId.value)
@@ -1154,6 +1220,7 @@ class ChatControllerCommandControlsTest {
         createResponse.completeExceptionally(IllegalStateException("old create failed"))
         assertFalse(create.await())
         assertEquals("other", controller.sessionKey.value)
+        assertFalse(controller.isCreatingSession.value)
         assertTrue(controller.historyLoading.value)
         assertNull(controller.errorText.value)
 
@@ -1191,7 +1258,7 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun startNewChatCancellationClearsSpinnerWhenRefreshFinishesBeforeAdmission() =
+  fun startNewChatCancellationClearsCreationAfterRefreshFinishesBeforeAdmission() =
     runTest {
       val gatewayScope = ChatCacheScope("gateway-a", 1)
       val gateway = ScriptedGateway(json)
@@ -1236,11 +1303,12 @@ class ChatControllerCommandControlsTest {
       assertEquals(2, gateway.callCount("chat.history"))
       assertEquals(1, gateway.callCount("sessions.create"))
       assertNull(controller.errorText.value)
+      assertFalse(controller.isCreatingSession.value)
       assertFalse(controller.historyLoading.value)
     }
 
   @Test
-  fun startNewChatCancellationClearsOnlyItsOwnFreshHistoryLoad() =
+  fun startNewChatCancellationKeepsSelectedHydrationAlive() =
     runTest {
       for (refreshBeforeCancellation in listOf(false, true)) {
         val firstHistoryEntered = CompletableDeferred<Unit>()
@@ -1261,6 +1329,7 @@ class ChatControllerCommandControlsTest {
         try {
           firstHistoryEntered.await()
           assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+          assertTrue(controller.isCreatingSession.value)
           assertTrue(controller.historyLoading.value)
           if (refreshBeforeCancellation) {
             controller.refresh()
@@ -1271,14 +1340,15 @@ class ChatControllerCommandControlsTest {
 
           assertTrue(create.isCancelled)
           assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
-          assertEquals("Only a newer history request may retain loading", refreshBeforeCancellation, controller.historyLoading.value)
+          assertFalse(controller.isCreatingSession.value)
+          assertTrue("Selected history stays loading until its controller-owned request finishes", controller.historyLoading.value)
           assertNull(controller.errorText.value)
 
           releaseHistory.complete(Unit)
-          if (!refreshBeforeCancellation) controller.refresh()
           advanceUntilIdle()
           assertEquals("fresh-session", controller.sessionId.value)
           assertFalse(controller.historyLoading.value)
+          assertTrue(controller.healthOk.value)
         } finally {
           releaseHistory.complete(Unit)
           create.cancelAndJoin()

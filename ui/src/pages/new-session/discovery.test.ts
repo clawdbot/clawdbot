@@ -157,7 +157,7 @@ describe("readDraftEnvironments", () => {
     ).toEqual([issue]);
   });
 
-  it("normalizes bounded invocable commands separately from declared capabilities", () => {
+  it("normalizes command inventory and keeps only closed required-command state", () => {
     expect(
       readDraftEnvironments([
         {
@@ -166,15 +166,27 @@ describe("readDraftEnvironments", () => {
           status: "available",
           capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
           invocableCommands: [" z.command ", "camera.snap", "camera.snap", "x".repeat(129), ""],
+          requiredNodeCommand: { command: " codex.exec-server.stdio.v1 ", state: "unauthorized" },
+        },
+        {
+          id: "node:invalid-state",
+          type: "node",
+          status: "available",
+          requiredNodeCommand: { command: "runtime.exec", state: "unknown" },
         },
       ]),
     ).toEqual([
+      { id: "node:invalid-state", type: "node", status: "available" },
       {
         id: "node:runner",
         type: "node",
         status: "available",
         capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
         invocableCommands: ["camera.snap", "z.command"],
+        requiredNodeCommand: {
+          command: "codex.exec-server.stdio.v1",
+          state: "unauthorized",
+        },
       },
     ]);
   });

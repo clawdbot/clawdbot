@@ -293,7 +293,7 @@ struct GatewayConnectionTests {
         var iterator = stream.makeAsyncIterator()
         let first = await iterator.next()
 
-        guard case let .snapshot(snap) = first else {
+        guard first?.isCurrent == true, case let .snapshot(snap) = first?.push else {
             Issue.record("expected snapshot, got \(String(describing: first))")
             return
         }
@@ -317,7 +317,7 @@ struct GatewayConnectionTests {
         session.latestTask()?.emitReceiveSuccess(.data(evt1))
 
         let firstEvent = await iterator.next()
-        guard case let .event(firstFrame) = firstEvent else {
+        guard firstEvent?.isCurrent == true, case let .event(firstFrame) = firstEvent?.push else {
             Issue.record("expected event, got \(String(describing: firstEvent))")
             return
         }
@@ -330,7 +330,7 @@ struct GatewayConnectionTests {
         session.latestTask()?.emitReceiveSuccess(.data(evt3))
 
         let gap = await iterator.next()
-        guard case let .seqGap(expected, received) = gap else {
+        guard gap?.isCurrent == true, case let .seqGap(expected, received) = gap?.push else {
             Issue.record("expected seqGap, got \(String(describing: gap))")
             return
         }
@@ -338,7 +338,7 @@ struct GatewayConnectionTests {
         #expect(received == 3)
 
         let secondEvent = await iterator.next()
-        guard case let .event(secondFrame) = secondEvent else {
+        guard secondEvent?.isCurrent == true, case let .event(secondFrame) = secondEvent?.push else {
             Issue.record("expected event, got \(String(describing: secondEvent))")
             return
         }

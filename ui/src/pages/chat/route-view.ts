@@ -16,9 +16,11 @@ function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
     <section class="card">
       <h2>${t("chat.sessionRoute.chooseTitle")}</h2>
       <p>
-        ${data.candidates.length > 1
-          ? t("chat.sessionRoute.multipleMatches", { shortId: data.shortId })
-          : t("chat.sessionRoute.additionalMatches")}
+        ${
+          data.candidates.length > 1
+            ? t("chat.sessionRoute.multipleMatches", { shortId: data.shortId })
+            : t("chat.sessionRoute.additionalMatches")
+        }
       </p>
       ${data.candidates.map(
         (candidate) => html`
@@ -28,9 +30,11 @@ function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
           </p>
         `,
       )}
-      ${data.truncated && data.candidates.length > 1
-        ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
-        : null}
+      ${
+        data.truncated && data.candidates.length > 1
+          ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
+          : null
+      }
     </section>
   `;
 }

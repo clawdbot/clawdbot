@@ -53,9 +53,16 @@ function hasAnyRetiredVersionPrefix(normalized: string, prefixes: readonly strin
   return prefixes.some((prefix) => hasRetiredVersionPrefix(normalized, prefix));
 }
 
-function parseProviderModelRef(
+export function normalizeAnthropicProviderId(provider: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
+  return normalized;
+}
+
+export function parseAnthropicModelRef(
   raw: string,
-  defaultProvider: string,
 ): { provider: string; model: string; explicitProvider: boolean } | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -63,7 +70,7 @@ function parseProviderModelRef(
   }
   const slashIndex = trimmed.indexOf("/");
   if (slashIndex <= 0) {
-    return { provider: defaultProvider, model: trimmed, explicitProvider: false };
+    return { provider: "anthropic", model: trimmed, explicitProvider: false };
   }
   const provider = trimmed.slice(0, slashIndex).trim();
   const model = trimmed.slice(slashIndex + 1).trim();
@@ -71,7 +78,7 @@ function parseProviderModelRef(
     return null;
   }
   return {
-    provider: normalizeLowercaseStringOrEmpty(provider),
+    provider: normalizeAnthropicProviderId(provider),
     model,
     explicitProvider: true,
   };
@@ -176,7 +183,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
 export function resolveClaudeCliAnthropicModelRefs(
   raw: string,
 ): ClaudeCliAnthropicModelRefs | null {
-  const parsed = parseProviderModelRef(raw, "anthropic");
+  const parsed = parseAnthropicModelRef(raw);
   if (!parsed) {
     return null;
   }

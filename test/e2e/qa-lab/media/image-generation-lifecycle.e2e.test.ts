@@ -194,7 +194,7 @@ describe("image generation task lifecycle through QA-channel", () => {
     }
   });
 
-  it("deduplicates running and recently completed requests around one completion", async () => {
+  it("deduplicates requests and labels internal completion provenance", async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
     const bus = await startQaBusServer({ state });
@@ -297,6 +297,22 @@ describe("image generation task lifecycle through QA-channel", () => {
       },
       { interval: 50, timeout: 30_000 },
     );
+
+    const completionReentry = await vi.waitFor(
+      async () => {
+        const request = (await readMockRequests(mock.baseUrl)).find(
+          (request) =>
+            request.allInputText.includes("[Inter-session message]") &&
+            request.allInputText.includes("sourceTool=image_generate"),
+        );
+        if (!request) {
+          throw new Error("image completion did not re-enter the agent session");
+        }
+        return request;
+      },
+      { interval: 50, timeout: 30_000 },
+    );
+    expect(completionReentry.allInputText).toContain("sourceChannel=internal");
 
     await sendExactRequest();
     const completedDuplicate = await waitForToolOutput(mock.baseUrl, "recently succeeded");

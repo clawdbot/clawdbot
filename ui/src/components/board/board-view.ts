@@ -28,6 +28,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/board.css";
 import "../web-awesome-tabs.ts";
 import "../web-awesome.ts";
+import { renderBoardTabs } from "./board-tabs.ts";
 import type { BoardWidgetCellCallbacks } from "./board-widget-cell.ts";
 import "./board-widget-cell.ts";
 
@@ -551,82 +552,6 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     }
   };
 
-  private renderTab(tab: BoardTab, activeTabId: string): TemplateResult {
-    const active = tab.tabId === activeTabId;
-    const dropTarget = tab.tabId === this.hoverTabId;
-    return html`
-      <wa-tab
-        class=${`board-tabs__tab ${active ? "board-tabs__tab--active" : ""} ${dropTarget ? "board-tabs__tab--drop" : ""}`}
-        panel=${tab.tabId}
-        ?active=${active}
-        data-board-tab-id=${tab.tabId}
-      >
-        ${tab.title}
-      </wa-tab>
-    `;
-  }
-
-  private renderOverflowTab(tab: BoardTab): TemplateResult {
-    return html`
-      <wa-dropdown-item
-        class="board-tabs__overflow-item"
-        value=${tab.tabId}
-        data-board-tab-id=${tab.tabId}
-      >
-        ${tab.title}
-      </wa-dropdown-item>
-    `;
-  }
-
-  private renderTabs(
-    tabs: readonly BoardTab[],
-    activeTabId: string,
-  ): TemplateResult | typeof nothing {
-    if (tabs.length <= 1) {
-      return nothing;
-    }
-    const visible = tabs.slice(0, 6);
-    const active = tabs.find((tab) => tab.tabId === activeTabId);
-    if (active && !visible.some((tab) => tab.tabId === active.tabId)) {
-      visible[visible.length - 1] = active;
-    }
-    const visibleIds = new Set(visible.map((tab) => tab.tabId));
-    const overflow = tabs.filter((tab) => !visibleIds.has(tab.tabId));
-    return html`
-      <nav class="board-tabs" aria-label=${t("board.tabsLabel")}>
-        <wa-tab-group
-          class="board-tabs__track"
-          .active=${activeTabId}
-          activation="manual"
-          without-scroll-controls
-          @wa-tab-show=${this.handleTabShow}
-        >
-          ${visible.map((tab) => this.renderTab(tab, activeTabId))}
-        </wa-tab-group>
-        ${overflow.length > 0
-          ? html`
-              <wa-dropdown
-                class="board-tabs__overflow"
-                placement="bottom-end"
-                @wa-select=${this.handleOverflowSelect}
-              >
-                <button
-                  class="board-tabs__overflow-trigger"
-                  slot="trigger"
-                  type="button"
-                  aria-label=${t("board.moreTabs")}
-                  title=${t("board.moreTabs")}
-                >
-                  •••
-                </button>
-                ${overflow.map((tab) => this.renderOverflowTab(tab))}
-              </wa-dropdown>
-            `
-          : nothing}
-      </nav>
-    `;
-  }
-
   private renderGrid(
     widgets: readonly BoardWidget[],
     tabs: readonly BoardTab[],
@@ -692,9 +617,11 @@ class OpenClawBoardView extends OpenClawLightDomElement {
             `;
           },
         )}
-        ${this.gesture?.mode === "move"
-          ? html`<div class="board-grid__append-zone" aria-hidden="true"></div>`
-          : nothing}
+        ${
+          this.gesture?.mode === "move"
+            ? html`<div class="board-grid__append-zone" aria-hidden="true"></div>`
+            : nothing
+        }
       </div>
     `;
   }
@@ -710,19 +637,30 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     const widgets = activeTab ? orderedWidgets(snapshot, activeTab.tabId) : [];
     return html`
       <section class="board-view" aria-label=${t("board.label")}>
-        ${this.renderTabs(tabs, activeTabId)} ${this.renderGrid(widgets, tabs, snapshot.sessionKey)}
-        ${this.actionError
-          ? html`<div class="board-view__error" role="alert">${this.actionError}</div>`
-          : nothing}
+        ${renderBoardTabs({
+          tabs,
+          activeTabId,
+          hoverTabId: this.hoverTabId,
+          onTabShow: this.handleTabShow,
+          onOverflowSelect: this.handleOverflowSelect,
+        })}
+        ${this.renderGrid(widgets, tabs, snapshot.sessionKey)}
+        ${
+          this.actionError
+            ? html`<div class="board-view__error" role="alert">${this.actionError}</div>`
+            : nothing
+        }
         <div class="board-announcer" aria-live="polite" aria-atomic="true">
-          ${this.announcement
-            ? keyed(
-                this.announcementRevision,
-                html`<span data-announcement-revision=${this.announcementRevision}
-                  >${this.announcement}</span
-                >`,
-              )
-            : nothing}
+          ${
+            this.announcement
+              ? keyed(
+                  this.announcementRevision,
+                  html`<span data-announcement-revision=${this.announcementRevision}
+                    >${this.announcement}</span
+                  >`,
+                )
+              : nothing
+          }
         </div>
       </section>
     `;

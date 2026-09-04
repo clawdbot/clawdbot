@@ -23,6 +23,7 @@ type LoginFailureKind =
   | "trusted-proxy"
   | "auth-rate-limited"
   | "profile-unavailable"
+  | "verified-user-required"
   | "pairing-required"
   | "insecure-context"
   | "origin-not-allowed"
@@ -117,6 +118,20 @@ function resolveLoginFailureFeedback(
         "login.failure.profileUnavailable.stepAdmin",
       ],
       docsHref: "https://docs.openclaw.ai/concepts/user-model#gateway-profile-and-github-credit",
+    });
+  }
+
+  if (lastErrorCode === ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED) {
+    return buildFeedback({
+      kind: "verified-user-required",
+      rawError,
+      titleKey: "login.failure.verifiedUserRequired.title",
+      summaryKey: "login.failure.verifiedUserRequired.summary",
+      stepKeys: [
+        "login.failure.verifiedUserRequired.stepIdentity",
+        "login.failure.verifiedUserRequired.stepSharedSecret",
+      ],
+      docsHref: "https://docs.openclaw.ai/gateway/operator-scopes",
     });
   }
 
@@ -354,17 +369,19 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
     >
       <div class="login-gate__failure-title">${feedback.title}</div>
       <div class="login-gate__failure-summary">${feedback.summary}</div>
-      ${feedback.refreshAction
-        ? html`
-            <button
-              type="button"
-              class="btn primary login-gate__failure-refresh"
-              @click=${refreshLoginGatePage}
-            >
-              ${feedback.refreshAction.label}
-            </button>
-          `
-        : nothing}
+      ${
+        feedback.refreshAction
+          ? html`
+              <button
+                type="button"
+                class="btn primary login-gate__failure-refresh"
+                @click=${refreshLoginGatePage}
+              >
+                ${feedback.refreshAction.label}
+              </button>
+            `
+          : nothing
+      }
       <ol class="login-gate__failure-steps">
         ${feedback.steps.map((step) => html`<li>${renderLoginFailureStep(step)}</li>`)}
       </ol>
@@ -472,9 +489,9 @@ function renderLoginGate(props: LoginGateProps) {
                 }}
               />
               <openclaw-tooltip
-                .content=${props.showGatewayPassword
-                  ? t("login.hidePassword")
-                  : t("login.showPassword")}
+                .content=${
+                  props.showGatewayPassword ? t("login.hidePassword") : t("login.showPassword")
+                }
               >
                 <button
                   type="button"

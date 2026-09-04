@@ -4,8 +4,8 @@ import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   isUpdateAttentionForced,
   resolveUpdateAttentionDismissal,
+  type SidebarAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
-import type { SidebarAttentionDismissal } from "./sidebar-attention-entries.ts";
 
 type SidebarUpdateContext = Pick<ApplicationContext, "gateway" | "overlays">;
 

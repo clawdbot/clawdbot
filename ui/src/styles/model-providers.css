@@ -239,6 +239,11 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.settings-section__actions .model-providers__refresh-button.btn--icon.btn--xs svg {
+  width: var(--control-ui-text-xs);
+  height: var(--control-ui-text-xs);
+}
+
 .model-providers__defaults .model-picker {
   width: min(420px, 100%);
 }

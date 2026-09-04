@@ -15,7 +15,8 @@ function extractFileNameFromMediaUrl(value: string): string | null {
   const cleaned = stripQuery(trimmed);
   try {
     const parsed = new URL(cleaned);
-    const base = path.basename(parsed.pathname);
+    // Data URLs carry inline bytes, not a filename suitable for transcript text.
+    const base = parsed.protocol === "data:" ? "" : path.basename(parsed.pathname);
     if (!base) {
       return null;
     }

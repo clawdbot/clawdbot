@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   isRestartRecoveryTombstone,
@@ -17,6 +18,7 @@ import {
   type SessionWorkerPlacementContext,
 } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import { logVerbose } from "../../globals.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   runExclusiveSessionLifecycleMutation,
   type SessionWorkAdmissionLease,
@@ -148,7 +150,7 @@ async function restoreArchivedDispatchSession(params: {
               commitGuard: assertCommitAllowed,
             });
           }
-          return { archivedAt: undefined, archivedBy: undefined };
+          return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
         },
         { assertCommitAllowed: () => assertCommitAllowed?.() },
       )) ?? undefined,
@@ -458,6 +460,9 @@ export function createDispatchReplyOperationCoordinator(params: {
       try {
         return await admitReplyTurn({
           sessionKey: dispatchOperationSessionKey,
+          resolveGatewayContext:
+            readChannelContextGatewayContextResolver(params.ctx) ??
+            getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
           sessionId: operationSessionId,
           expectedSessionId: params.resolveOperationExpectedSessionId(),
           expectedActiveOperation: params.initialDispatchReplyOperation,

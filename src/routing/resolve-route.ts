@@ -256,6 +256,10 @@ function buildEvaluatedBindingsByChannel(
       continue;
     }
     const match = normalizeBindingMatch(binding.match);
+    // Unmatchable peers cannot establish routing or account-ownership evidence.
+    if (match.peer.state === "invalid") {
+      continue;
+    }
     const evaluated: EvaluatedBinding = {
       binding,
       match,
@@ -341,39 +345,16 @@ function pushToIndexMap(
   map.set(key, [binding]);
 }
 
-function peerLookupKeys(kind: ChatType, id: string): string[] {
-  if (kind === "group") {
-    return [`group:${id}`, `channel:${id}`];
-  }
-  if (kind === "channel") {
-    return [`channel:${id}`, `group:${id}`];
-  }
-  return [`${kind}:${id}`];
+function peerLookupKey(kind: ChatType, id: string): string {
+  // Group/channel matching is interchangeable; share one source-ordered bucket.
+  return `${kind === "channel" ? "group" : kind}:${id}`;
 }
 
-function collectPeerIndexedBindings(
+function getPeerIndexedBindings(
   index: EvaluatedBindingsIndex,
   peer: RoutePeer | null,
 ): EvaluatedBinding[] {
-  if (!peer) {
-    return [];
-  }
-  const out: EvaluatedBinding[] = [];
-  const seen = new Set<EvaluatedBinding>();
-  for (const key of peerLookupKeys(peer.kind, peer.id)) {
-    const matches = index.byPeer.get(key);
-    if (!matches) {
-      continue;
-    }
-    for (const match of matches) {
-      if (seen.has(match)) {
-        continue;
-      }
-      seen.add(match);
-      out.push(match);
-    }
-  }
-  return out;
+  return peer ? (index.byPeer.get(peerLookupKey(peer.kind, peer.id)) ?? []) : [];
 }
 
 function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBindingsIndex {
@@ -387,9 +368,11 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
 
   for (const binding of bindings) {
     if (binding.match.peer.state === "valid") {
-      for (const key of peerLookupKeys(binding.match.peer.kind, binding.match.peer.id)) {
-        pushToIndexMap(byPeer, key, binding);
-      }
+      pushToIndexMap(
+        byPeer,
+        peerLookupKey(binding.match.peer.kind, binding.match.peer.id),
+        binding,
+      );
       continue;
     }
     if (binding.match.peer.state === "wildcard-kind") {
@@ -484,6 +467,17 @@ function getEvaluatedBindingIndexForChannelAccount(
   const built = buildEvaluatedBindingsIndex(bindings);
   existing?.byChannelAccountIndex.set(cacheKey, built);
   return built;
+}
+
+/** @internal Lists matchable candidates from the canonical channel/account binding index. */
+export function listChannelAccountRouteBindings(
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
+) {
+  return getEvaluatedBindingsForChannelAccount(
+    input.cfg,
+    normalizeLowercaseStringOrEmpty(input.channel),
+    normalizeAccountId(input.accountId),
+  ).map(({ binding }) => binding);
 }
 
 /** @internal Lists exact DM peers from the canonical channel/account binding index. */
@@ -593,9 +587,6 @@ function buildResolvedRouteCacheKey(params: {
 }
 
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
-  if (match.peer.state === "invalid") {
-    return false;
-  }
   if (match.peer.state === "valid") {
     if (
       !scope.peer ||
@@ -705,6 +696,8 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         routeCache.clear();
         routeCache.set(routeCacheKey, route);
       }
+      // Cold and warm returns are caller-owned; edits must not poison the cache.
+      return { ...route };
     }
     return route;
   };
@@ -751,13 +744,13 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       matchedBy: "binding.peer",
       enabled: Boolean(peer),
       scopePeer: peer,
-      candidates: collectPeerIndexedBindings(bindingsIndex, peer),
+      candidates: getPeerIndexedBindings(bindingsIndex, peer),
     },
     {
       matchedBy: "binding.peer.parent",
       enabled: Boolean(parentPeer && parentPeer.id),
       scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
-      candidates: collectPeerIndexedBindings(bindingsIndex, parentPeer),
+      candidates: getPeerIndexedBindings(bindingsIndex, parentPeer),
     },
     {
       matchedBy: "binding.peer.wildcard",
@@ -887,12 +880,5 @@ export function listEffectiveGroupRouteBindings(cfg: OpenClawConfig) {
         }).agentId === markerForIndex(index),
     );
   });
-}
-
-/** @internal Resolves fallback precedence for an unknown direct peer. */
-export function resolveUnknownDirectMessageRoute(
-  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId" | "dmScope" | "groupScope">,
-): ResolvedAgentRoute {
-  return resolveAgentRoute({ ...input, peer: { kind: "direct", id: "" } });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

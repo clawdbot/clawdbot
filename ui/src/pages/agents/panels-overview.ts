@@ -13,6 +13,7 @@ import { renderSettingsRow, renderSettingsSection } from "../../components/setti
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  type AgentContext,
   buildAgentContext,
   buildModelOptions,
   normalizeModelValue,
@@ -149,11 +150,13 @@ export function renderAgentOverview(params: {
         <div class="settings-row settings-row--stacked">
           <div class="agent-identity-editor">
             <span class="agent-identity-editor__avatar" aria-hidden="true">
-              ${identityAvatarUrl
-                ? html`<img src=${identityAvatarUrl} alt="" decoding="async" />`
-                : html`<span class="agent-identity-editor__avatar-text"
-                    >${identityAvatarText}</span
-                  >`}
+              ${
+                identityAvatarUrl
+                  ? html`<img src=${identityAvatarUrl} alt="" decoding="async" />`
+                  : html`<span class="agent-identity-editor__avatar-text"
+                      >${identityAvatarText}</span
+                    >`
+              }
             </span>
             <div class="agent-identity-editor__fields">
               <label class="field">
@@ -182,16 +185,20 @@ export function renderAgentOverview(params: {
               </label>
             </div>
           </div>
-          ${params.identityError
-            ? html`<div class="settings-row__desc" role="alert" style="color: var(--danger);">
-                ${params.identityError}
-              </div>`
-            : nothing}
+          ${
+            params.identityError
+              ? html`<div class="settings-row__desc" role="alert" style="color: var(--danger);">
+                  ${params.identityError}
+                </div>`
+              : nothing
+          }
           <div class="agent-identity-editor__actions">
             <label class="btn btn--sm">
-              ${identityAvatarUrl
-                ? t("agents.identity.replaceImage")
-                : t("agents.identity.chooseImage")}
+              ${
+                identityAvatarUrl
+                  ? t("agents.identity.replaceImage")
+                  : t("agents.identity.chooseImage")
+              }
               <input
                 type="file"
                 accept="image/*"
@@ -243,9 +250,11 @@ export function renderAgentOverview(params: {
         </dl>
       `,
     )}
-    ${configDirty
-      ? html`<div class="callout warn">${t("agents.overview.unsavedConfig")}</div>`
-      : nothing}
+    ${
+      configDirty
+        ? html`<div class="callout warn">${t("agents.overview.unsavedConfig")}</div>`
+        : nothing
+    }
     ${renderSettingsSection(
       {
         title: t("agents.overview.modelSelection"),
@@ -355,4 +364,36 @@ export function renderAgentOverview(params: {
       `,
     )}
   `;
+}
+
+export function renderAgentContextSection(
+  context: AgentContext,
+  subtitle: string,
+  onSelectPanel: (panel: AgentsPanel) => void,
+) {
+  return renderSettingsSection(
+    { title: t("agents.context.title"), description: subtitle },
+    html`
+      <dl class="settings-kv">
+        <dt>${t("agents.context.workspace")}</dt>
+        <dd>
+          <button type="button" class="workspace-link mono" @click=${() => onSelectPanel("files")}>
+            ${context.workspace}
+          </button>
+        </dd>
+        <dt>${t("agents.context.primaryModel")}</dt>
+        <dd><code>${context.model}</code></dd>
+        <dt>${t("agents.context.runtime")}</dt>
+        <dd><code>${context.runtime}</code></dd>
+        <dt>${t("agents.context.identityName")}</dt>
+        <dd>${context.identityName}</dd>
+        <dt>${t("agents.context.identityAvatar")}</dt>
+        <dd>${context.identityAvatar}</dd>
+        <dt>${t("agents.context.skillsFilter")}</dt>
+        <dd>${context.skillsLabel}</dd>
+        <dt>${t("agents.context.default")}</dt>
+        <dd>${context.isDefault ? t("common.yes") : t("common.no")}</dd>
+      </dl>
+    `,
+  );
 }

@@ -36,7 +36,6 @@ import type { JsonObject, JsonValue } from "./protocol-json.js";
 import type * as CodexMcpProtocol from "./protocol-mcp.js";
 
 export type {
-  CodexConfigEdit,
   CodexConfigReadResponse,
   CodexConfigRequirementsReadResponse,
   CodexPluginDetail,
@@ -413,6 +412,15 @@ export type CodexTurnStartResponse = {
   turn: CodexTurn;
 };
 
+type CodexTurnSteerParams = JsonObject &
+  Pick<CodexTurnStartParams, "threadId" | "input" | "additionalContext"> & {
+    expectedTurnId: string;
+  };
+
+type CodexTurnSteerResponse = {
+  turnId: string;
+};
+
 export type CodexTurn = {
   id: string;
   threadId?: string;
@@ -438,6 +446,8 @@ export type CodexThread = {
   updatedAt?: number | null;
   status?: CodexThreadStatus | null;
   canAcceptDirectInput?: boolean | null;
+  /** Codex 0.153+: current loaded selection, otherwise latest persisted model. */
+  model?: string | null;
   modelProvider?: string | null;
   cwd?: string | null;
   source?: CodexSessionSource | null;
@@ -676,6 +686,7 @@ type CodexAppServerRequestParamsOverride = {
   "thread/turns/list": CodexThreadTurnsListParams;
   "thread/name/set": CodexThreadSetNameParams;
   "thread/read": CodexThreadReadParams;
+  "thread/resume": CodexThreadResumeParams;
   "thread/start": CodexThreadStartParams;
   "thread/unarchive": CodexThreadArchiveParams;
   "thread/unsubscribe": CodexThreadUnsubscribeParams;
@@ -683,6 +694,8 @@ type CodexAppServerRequestParamsOverride = {
   "thread/goal/get": CodexThreadGoalGetParams;
   "thread/goal/clear": CodexThreadGoalClearParams;
   "turn/interrupt": CodexTurnInterruptParams;
+  "turn/start": CodexTurnStartParams;
+  "turn/steer": CodexTurnSteerParams;
   "mcpServer/resource/read": CodexMcpProtocol.ResourceReadParams;
   "mcpServer/tool/call": CodexMcpProtocol.ToolCallParams;
 };
@@ -736,7 +749,7 @@ type CodexAppServerRequestResultMap = {
   "thread/goal/clear": CodexThreadGoalClearResponse;
   "turn/interrupt": JsonValue;
   "turn/start": CodexTurnStartResponse;
-  "turn/steer": JsonValue;
+  "turn/steer": CodexTurnSteerResponse;
 };
 
 export function isJsonObject(value: unknown): value is JsonObject {
