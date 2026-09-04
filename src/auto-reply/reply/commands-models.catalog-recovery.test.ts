@@ -279,14 +279,17 @@ describe("/models browse catalog recovery", () => {
       .mockResolvedValueOnce({ agentDir: "/tmp/intermediate-agent", config: intermediateCfg })
       .mockResolvedValueOnce({ agentDir: "/tmp/current-agent", config: currentCfg });
 
-    const data = await buildPreparedModelsProviderData(staleCfg, "worker", {
+    const reply = await resolveModelsCommandReply({
+      cfg: staleCfg,
+      commandBodyNormalized: "/models",
+      agentId: "worker",
       agentDir: "/tmp/selected-agent",
       workspaceDir: "/tmp/selected-workspace",
     });
 
-    expect(data.resolvedDefault).toEqual({ provider: "openai", model: "gpt-5.6-luna" });
-    expect(data.providers).toEqual(["openai"]);
-    expect(data.modelNames.get("openai/gpt-5.6-luna")).toBe("Current Luna");
+    expect(reply?.text).toContain("openai");
+    expect(reply?.text).not.toContain("anthropic");
+    expect(reply?.text).not.toContain("google");
     expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledTimes(2);
     for (const [params] of catalogMocks.loadPublishedOwner.mock.calls) {
       expect(params).toMatchObject({

@@ -76,10 +76,11 @@ type PreparedModelsProviderData = ModelsProviderData & {
 };
 
 type ModelsBrowseOptions = {
-  agentDir?: string;
   view?: "default" | "all";
   workspaceDir?: string;
 };
+
+type ModelsBrowseContext = ModelsBrowseOptions & { agentDir?: string };
 
 export type ModelsRuntimeChoice = {
   id: string;
@@ -170,14 +171,23 @@ function addRuntimeChoice(
   return choices;
 }
 
-export async function buildPreparedModelsProviderData(
+export function buildPreparedModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
   options: ModelsBrowseOptions = {},
 ): Promise<PreparedModelsProviderData> {
+  return buildPreparedModelsProviderDataWithContext(cfg, agentId, options);
+}
+
+async function buildPreparedModelsProviderDataWithContext(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+  options: ModelsBrowseOptions,
+  agentDir?: string,
+): Promise<PreparedModelsProviderData> {
   const deadlineMs =
     options.view === "all" ? undefined : Date.now() + MODEL_CATALOG_BROWSE_TIMEOUT_MS;
-  let currentAgentDir = options.agentDir;
+  let currentAgentDir = agentDir;
   let currentConfig = cfg;
   const buildCurrentData = (control: { catalogFallback?: boolean; deadlineMs?: number }) =>
     buildPreparedDataForConfig(
@@ -248,7 +258,7 @@ async function loadPublishedModelsOwner(params: {
 async function buildPreparedDataForConfig(
   cfg: OpenClawConfig,
   agentId: string | undefined,
-  options: ModelsBrowseOptions,
+  options: ModelsBrowseContext,
   control: { catalogFallback?: boolean; deadlineMs?: number },
 ): Promise<PreparedModelsProviderData> {
   const project = (owner?: PreparedModelRuntimeSnapshot) =>
@@ -707,14 +717,14 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const parsed = parseModelsArgs(argText);
 
-  const { byProvider, providers, modelNames } = await buildPreparedModelsProviderData(
+  const { byProvider, providers, modelNames } = await buildPreparedModelsProviderDataWithContext(
     params.cfg,
     params.agentId,
     {
-      agentDir: params.agentDir,
       ...(parsed.action === "list" && parsed.all ? { view: "all" as const } : {}),
       workspaceDir: params.workspaceDir,
     },
+    params.agentDir,
   );
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = buildProviderInfos({ providers, byProvider });
