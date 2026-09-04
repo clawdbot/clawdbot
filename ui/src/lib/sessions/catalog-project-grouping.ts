@@ -94,12 +94,14 @@ export function migrateCollapsedCatalogProjectSection(
   projectIdentity: string,
 ): ReadonlySet<string> | null {
   const migrated = new Set(
-    [...sections].filter(
-      (candidate) =>
-        candidate === id ||
-        !candidate.startsWith(prefix) ||
-        catalogProjectPathIdentity(candidate.slice(prefix.length)) !== projectIdentity,
-    ),
+    [...sections].filter((candidate) => {
+      if (candidate === id || !candidate.startsWith(prefix)) {
+        return true;
+      }
+      const suffix = candidate.slice(prefix.length);
+      const legacyPath = suffix.startsWith("project:") ? suffix.slice("project:".length) : suffix;
+      return catalogProjectPathIdentity(legacyPath) !== projectIdentity;
+    }),
   );
   if (migrated.size === sections.size) {
     return null;

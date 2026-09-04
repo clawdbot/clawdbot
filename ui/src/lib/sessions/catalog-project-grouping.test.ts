@@ -258,12 +258,13 @@ describe("groupCatalogSessionsByProject", () => {
 });
 
 describe("catalog project collapse migration", () => {
-  it("replaces an equivalent Windows worktree key and preserves unrelated sections", () => {
+  it("replaces raw and project-prefixed Windows worktree keys", () => {
     const prefix = "catalog-project:codex:gateway:local:";
     const canonical = `${prefix}project:windows:drive:c:/work/openclaw`;
+    const rawWorktree = String.raw`C:\Work\OpenClaw\.CLAUDE\WORKTREES\fix-1`;
     const unrelated = "catalog:claude";
     const migrated = migrateCollapsedCatalogProjectSection(
-      new Set([`${prefix}${String.raw`C:\Work\OpenClaw\.CLAUDE\WORKTREES\fix-1`}`, unrelated]),
+      new Set([`${prefix}${rawWorktree}`, `${prefix}project:${rawWorktree}`, unrelated]),
       prefix,
       canonical,
       "windows:drive:c:/work/openclaw",

@@ -30,7 +30,7 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
-        const legacySectionId = String.raw`catalog-project:codex:gateway:local:C:\WORK\OPENCLAW\.CLAUDE\WORKTREES\fix-older`;
+        const legacySectionId = String.raw`catalog-project:codex:gateway:local:project:C:\WORK\OPENCLAW\.CLAUDE\WORKTREES\fix-older`;
         const canonicalSectionId =
           "catalog-project:codex:gateway:local:project:windows:drive:c:/work/openclaw";
         await page.addInitScript(
