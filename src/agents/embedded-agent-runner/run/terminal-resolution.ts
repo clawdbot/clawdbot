@@ -206,6 +206,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   activePromptPersisted: boolean;
   activateInternalPrompt: (prompt: string) => void;
   activateCompactionContinuation: (instruction: string) => void;
+  clearCompactionContinuation: () => void;
   setSuppressNextUserMessagePersistence: (value: boolean) => void;
   armPostCompactionGuard: () => void;
   readTerminalToolPresentation: () => string | undefined;
@@ -405,6 +406,8 @@ export async function resolveEmbeddedRunTerminal(input: {
     input.armPostCompactionGuard();
     return { action: "retry" };
   }
+  // Invisible retries return above; visible and terminal paths release this retained constraint.
+  input.clearCompactionContinuation();
 
   if (reasoningOnlyRetriesExhausted && !input.finalAssistantVisibleText) {
     const incompletePayloadText = "⚠️ Agent couldn't generate a response. Please try again.";

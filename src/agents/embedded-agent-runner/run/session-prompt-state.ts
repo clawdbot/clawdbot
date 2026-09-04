@@ -61,7 +61,15 @@ export function createEmbeddedRunSessionPromptState(input: {
   // Fresh attempts retain the projection owner's bounded, retryable failure contract.
   let settleOwnedTranscriptProjection = false;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
-  let activePrompt: ActivePrompt = {
+  let basePromptOverride: string | undefined;
+  let compactionContinuationInstruction: string | undefined;
+  const activePrompt: ActivePrompt = {
+    get override() {
+      const instruction = compactionContinuationInstruction;
+      return instruction && basePromptOverride?.trim()
+        ? `${basePromptOverride}\n\n${instruction}`
+        : (instruction ?? basePromptOverride);
+    },
     persisted: suppressNextUserMessagePersistence,
     internal: false,
   };
@@ -100,13 +108,15 @@ export function createEmbeddedRunSessionPromptState(input: {
   };
   // Internal control prompts are model-only context, never operator-authored transcript turns.
   const activateInternalPrompt = (prompt: string) => {
-    activePrompt = { override: prompt, persisted: true, internal: true };
+    basePromptOverride = prompt;
+    Object.assign(activePrompt, { persisted: true, internal: true });
     suppressNextUserMessagePersistence = true;
   };
   const activateCompactionContinuation = (instruction: string) => {
-    const priorPrompt = activePrompt.internal ? activePrompt.override : undefined;
-    activateInternalPrompt(priorPrompt?.trim() ? `${priorPrompt}\n\n${instruction}` : instruction);
+    compactionContinuationInstruction = instruction;
+    activateInternalPrompt(basePromptOverride ?? "");
   };
+  const clearCompactionContinuation = () => (compactionContinuationInstruction = undefined);
   const onUserMessagePersisted: NonNullable<
     PreparedEmbeddedRunInput["runParams"]["onUserMessagePersisted"]
   > = (message) => {
@@ -201,6 +211,7 @@ export function createEmbeddedRunSessionPromptState(input: {
     notifyCompactionSessionAdopted,
     activateInternalPrompt,
     activateCompactionContinuation,
+    clearCompactionContinuation,
     markOwnedTranscriptRetry: () => {
       settleOwnedTranscriptProjection = true;
     },

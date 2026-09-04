@@ -72,6 +72,7 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     activePromptPersisted: true,
     activateInternalPrompt: vi.fn(),
     activateCompactionContinuation: vi.fn(),
+    clearCompactionContinuation: vi.fn(),
     setSuppressNextUserMessagePersistence: vi.fn(),
     armPostCompactionGuard: vi.fn(),
     readTerminalToolPresentation: () => undefined,
