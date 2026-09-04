@@ -33,3 +33,21 @@ export function resolveExecApprovalCommandDisplay(request: ExecApprovalRequestPa
     commandPreview: normalizePreview(commandText, previewSource),
   };
 }
+
+/**
+ * Resolves cwd display values for exec approval prompts. The canonical cwd is
+ * taken as-is (sanitized at record creation); the requested cwd is sanitized
+ * here because it travels inside the approval plan, and is only surfaced when
+ * it differs from the canonical path so approvers see both.
+ */
+export function resolveExecApprovalCwdDisplay(request: ExecApprovalRequestPayload): {
+  cwd: string | null;
+  requestedCwd: string | null;
+} {
+  const cwd = request.cwd ?? null;
+  const planRequestedCwd = request.systemRunPlan?.requestedCwd;
+  if (!planRequestedCwd || planRequestedCwd === cwd) {
+    return { cwd, requestedCwd: null };
+  }
+  return { cwd, requestedCwd: sanitizeExecApprovalDisplayText(planRequestedCwd) };
+}

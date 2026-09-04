@@ -32,6 +32,7 @@ describe("normalizeSystemRunApprovalPlan", () => {
         commandText: 'bash -lc "echo hi"',
         commandPreview: "echo hi",
         cwd: " /tmp ",
+        requestedCwd: " /tmp/link ",
         agentId: " main ",
         sessionKey: " agent:main:main ",
         mutableFileOperand: {
@@ -45,6 +46,7 @@ describe("normalizeSystemRunApprovalPlan", () => {
         commandText: 'bash -lc "echo hi"',
         commandPreview: "echo hi",
         cwd: "/tmp",
+        requestedCwd: "/tmp/link",
         agentId: "main",
         sessionKey: "agent:main:main",
         mutableFileOperand: {
@@ -52,6 +54,25 @@ describe("normalizeSystemRunApprovalPlan", () => {
           path: "/tmp/payload.txt",
           sha256: "abc123",
         },
+      },
+    },
+    {
+      name: "drops an invalid requestedCwd instead of failing the plan",
+      input: {
+        argv: ["echo", "hi"],
+        commandText: "echo hi",
+        cwd: "/tmp/real",
+        requestedCwd: 42,
+      },
+      expected: {
+        argv: ["echo", "hi"],
+        commandText: "echo hi",
+        commandPreview: null,
+        cwd: "/tmp/real",
+        requestedCwd: null,
+        agentId: null,
+        sessionKey: null,
+        mutableFileOperand: undefined,
       },
     },
     {
@@ -76,6 +97,7 @@ describe("normalizeSystemRunApprovalPlan", () => {
         commandText: "echo hi",
         commandPreview: null,
         cwd: null,
+        requestedCwd: null,
         agentId: null,
         sessionKey: null,
         policySnapshot: {
@@ -117,6 +139,7 @@ describe("normalizeSystemRunApprovalPlan", () => {
         commandText: "echo hi",
         commandPreview: null,
         cwd: null,
+        requestedCwd: null,
         agentId: null,
         sessionKey: null,
         policySnapshot: {
@@ -148,6 +171,7 @@ describe("normalizeSystemRunApprovalPlan", () => {
         commandText: 'bash -lc "echo hi"',
         commandPreview: null,
         cwd: null,
+        requestedCwd: null,
         agentId: null,
         sessionKey: null,
         mutableFileOperand: undefined,

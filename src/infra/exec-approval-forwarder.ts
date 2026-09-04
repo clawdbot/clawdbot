@@ -26,7 +26,7 @@ import { createPendingApprovalRegistry } from "../shared/pending-approval-regist
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
-import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
+import { resolveExecApprovalCommandDisplay, resolveExecApprovalCwdDisplay } from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import { sanitizeExecApprovalWarningText } from "./exec-approval-text-sanitize.js";
 import {
@@ -252,8 +252,12 @@ function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: nu
     lines.push("Command:");
     lines.push(command.text);
   }
-  if (request.request.cwd) {
-    lines.push(`CWD: ${request.request.cwd}`);
+  const cwdDisplay = resolveExecApprovalCwdDisplay(request.request);
+  if (cwdDisplay.cwd) {
+    lines.push(`CWD: ${cwdDisplay.cwd}`);
+  }
+  if (cwdDisplay.requestedCwd) {
+    lines.push(`Requested CWD: ${cwdDisplay.requestedCwd}`);
   }
   if (request.request.nodeId) {
     lines.push(`Node: ${request.request.nodeId}`);

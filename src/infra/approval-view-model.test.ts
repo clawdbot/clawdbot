@@ -79,6 +79,59 @@ describe("buildPendingApprovalView", () => {
 
   const approvalRequestBase = { id: "approval-id", createdAtMs: 1, expiresAtMs: 2 };
 
+  it("surfaces the requested cwd next to the canonical cwd when they differ", () => {
+    const request: ExecApprovalRequest = {
+      ...approvalRequestBase,
+      request: {
+        command: "echo hi",
+        host: "node",
+        cwd: "/srv/real-work",
+        systemRunPlan: {
+          argv: ["echo", "hi"],
+          commandText: "echo hi",
+          cwd: "/srv/real-work",
+          requestedCwd: "/srv/link-work",
+          agentId: null,
+          sessionKey: null,
+        },
+      },
+    };
+
+    const view = buildPendingApprovalView(request);
+    if (view.approvalKind !== "exec") {
+      throw new Error("expected exec approval view");
+    }
+    expect(view.metadata).toContainEqual({ label: "CWD", value: "/srv/real-work" });
+    expect(view.metadata).toContainEqual({ label: "Requested CWD", value: "/srv/link-work" });
+  });
+
+  it("omits the requested cwd row when it matches the canonical cwd", () => {
+    const request: ExecApprovalRequest = {
+      ...approvalRequestBase,
+      request: {
+        command: "echo hi",
+        host: "node",
+        cwd: "/srv/real-work",
+        systemRunPlan: {
+          argv: ["echo", "hi"],
+          commandText: "echo hi",
+          cwd: "/srv/real-work",
+          requestedCwd: "/srv/real-work",
+          agentId: null,
+          sessionKey: null,
+        },
+      },
+    };
+
+    const view = buildPendingApprovalView(request);
+    if (view.approvalKind !== "exec") {
+      throw new Error("expected exec approval view");
+    }
+    expect(view.metadata.filter((row) => row.label.includes("CWD"))).toEqual([
+      { label: "CWD", value: "/srv/real-work" },
+    ]);
+  });
+
   it.each([
     { request: { ...approvalRequestBase, request: { command: "echo safe" } }, metadata: [] },
     {

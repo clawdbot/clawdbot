@@ -260,6 +260,26 @@ executable.
 Set globally under `tools.exec.commandHighlighting` or per agent under
 `agents.entries.*.tools.exec.commandHighlighting`.
 
+### `tools.exec.allowSymlinkPath`
+
+<ParamField path="allowSymlinkPath" type="boolean" default="false">
+  When `true`, the exec tool allows `system.run` commands to execute in
+  directories whose path contains symlink components, or when the cwd
+  itself is a symlink. By default, OpenClaw rejects symlinked cwd paths
+  in approval-bound host execution to prevent path-rebind attacks.
+
+When enabled, the approval plan exposes both the requested cwd (with
+symlinks) as `requestedCwd` and the resolved canonical target as `cwd`,
+so the approver can see the full path resolution before approving.
+
+The canonical realpath and file identity are still verified at
+execution time (TOCTOU protection). Opt in only on trusted filesystems
+where symlinks are part of the normal layout.
+
+Can be set globally under `tools.exec.allowSymlinkPath` or per agent
+under `agents.entries.*.tools.exec.allowSymlinkPath`.
+</ParamField>
+
 ## YOLO mode (no-approval)
 
 To run host exec without approval prompts, open **both** policy layers:

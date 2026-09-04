@@ -907,7 +907,9 @@ async function dispatchInvoke(
         params.strictInlineEval === true ||
         execPolicy.agentExec?.strictInlineEval === true ||
         execPolicy.globalExec?.strictInlineEval === true;
-      const prepared = buildSystemRunApprovalPlan(params, bindApproval);
+      const allowSymlinkPath =
+        execPolicy.agentExec?.allowSymlinkPath ?? execPolicy.globalExec?.allowSymlinkPath === true;
+      const prepared = buildSystemRunApprovalPlan({ ...params, allowSymlinkPath }, bindApproval);
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
         return;

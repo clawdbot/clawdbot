@@ -330,6 +330,7 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "talk.speechLocale",
   "tools.alsoAllow.*",
   "tools.deny.*",
+  "tools.exec.allowSymlinkPath",
   "tools.exec.applyPatch.allowModels.*",
   "tools.exec.applyPatch.enabled",
   "tools.exec.applyPatch.workspaceOnly",

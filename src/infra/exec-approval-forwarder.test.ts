@@ -696,6 +696,32 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
   });
 
+  it("shows requested and canonical cwd in forwarded text when they differ", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          cwd: "/srv/real-work",
+          systemRunPlan: {
+            argv: ["echo", "hello"],
+            commandText: "echo hello",
+            cwd: "/srv/real-work",
+            requestedCwd: "/srv/link-work",
+            agentId: null,
+            sessionKey: null,
+          },
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("CWD: /srv/real-work");
+    expect(text).toContain("Requested CWD: /srv/link-work");
+  });
+
   it("omits allow-always from forwarded fallback text when ask=always", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });

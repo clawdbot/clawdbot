@@ -163,6 +163,8 @@ export type SystemRunApprovalFileOperand = {
 export type SystemRunApprovalPlan = {
   argv: string[];
   cwd: string | null;
+  /** The original cwd as requested by the caller, before canonical resolution. */
+  requestedCwd?: string | null;
   commandText: string;
   commandPreview?: string | null;
   agentId: string | null;

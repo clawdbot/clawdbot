@@ -339,6 +339,20 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
+  /**
+   * Allow exec commands to run when cwd or path components contain symlinks.
+   *
+   * Default: false (symlinks in cwd path are blocked for security).
+   *
+   * When enabled, the exec tool resolves the canonical realpath and verifies
+   * file identity stability, but does not reject symlinked path components.
+   * The approval plan exposes both the requested cwd (with symlinks) and the
+   * canonical target so the approver can see the full path resolution.
+   *
+   * Scope: applies to approval-bound `system.run` host execution paths.
+   * Risk: relaxes TOCTOU symlink hardening — enable only on trusted filesystems.
+   */
+  allowSymlinkPath?: boolean;
   /** apply_patch subtool configuration. */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: true; set false to disable). */

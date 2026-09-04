@@ -11,7 +11,7 @@ import type {
   ResolvedApprovalView,
   SystemAgentApprovalViewBase,
 } from "./approval-view-model.types.js";
-import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
+import { resolveExecApprovalCommandDisplay, resolveExecApprovalCwdDisplay } from "./exec-approval-command-display.js";
 import { buildTypedApprovalActionDescriptors } from "./exec-approval-reply.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
@@ -31,8 +31,12 @@ function buildExecMetadata(request: ExecApprovalRequest): ApprovalMetadataView[]
   if (request.request.agentId) {
     metadata.push({ label: "Agent", value: request.request.agentId });
   }
-  if (request.request.cwd) {
-    metadata.push({ label: "CWD", value: request.request.cwd });
+  const cwdDisplay = resolveExecApprovalCwdDisplay(request.request);
+  if (cwdDisplay.cwd) {
+    metadata.push({ label: "CWD", value: cwdDisplay.cwd });
+  }
+  if (cwdDisplay.requestedCwd) {
+    metadata.push({ label: "Requested CWD", value: cwdDisplay.requestedCwd });
   }
   if (request.request.host) {
     metadata.push({ label: "Host", value: request.request.host });

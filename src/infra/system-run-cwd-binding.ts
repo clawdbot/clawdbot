@@ -10,10 +10,12 @@ export const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
 export type ApprovedCwdSnapshot = {
   cwd: string;
   stat: fs.Stats;
+  allowSymlinkPath?: boolean;
 };
 
 export function captureApprovedCwdSnapshotSync(
   cwd: string,
+  allowSymlinkPath?: boolean,
 ): { ok: true; snapshot: ApprovedCwdSnapshot } | { ok: false; message: string } {
   const requestedCwd = path.resolve(cwd);
   let cwdLstat: fs.Stats;
@@ -37,24 +39,31 @@ export function captureApprovedCwdSnapshotSync(
       message: "SYSTEM_RUN_DENIED: approval requires cwd to be a directory",
     };
   }
-  if (hasMutableSymlinkPathComponentSync(requestedCwd) || cwdLstat.isSymbolicLink()) {
+  // Opt-in allowSymlinkPath skips the symlink rejection but keeps realpath
+  // resolution plus file-identity checks, so the approved target cannot be
+  // silently rebound between approval and launch.
+  if (
+    !allowSymlinkPath &&
+    (hasMutableSymlinkPathComponentSync(requestedCwd) || cwdLstat.isSymbolicLink())
+  ) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink path components)",
     };
   }
-  if (
-    !sameFileIdentity(cwdStat, cwdLstat) ||
-    !sameFileIdentity(cwdStat, cwdRealStat) ||
-    !sameFileIdentity(cwdLstat, cwdRealStat)
-  ) {
+  const identityMismatch = allowSymlinkPath
+    ? !sameFileIdentity(cwdStat, cwdRealStat)
+    : !sameFileIdentity(cwdStat, cwdLstat) ||
+      !sameFileIdentity(cwdStat, cwdRealStat) ||
+      !sameFileIdentity(cwdLstat, cwdRealStat);
+  if (identityMismatch) {
     return { ok: false, message: "SYSTEM_RUN_DENIED: approval cwd identity mismatch" };
   }
-  return { ok: true, snapshot: { cwd: cwdReal, stat: cwdStat } };
+  return { ok: true, snapshot: { cwd: cwdReal, stat: cwdStat, allowSymlinkPath } };
 }
 
 /** Rechecks the exact directory object immediately before process launch. */
 export function revalidateApprovedCwdSnapshot(snapshot: ApprovedCwdSnapshot): boolean {
-  const current = captureApprovedCwdSnapshotSync(snapshot.cwd);
+  const current = captureApprovedCwdSnapshotSync(snapshot.cwd, snapshot.allowSymlinkPath);
   return current.ok && sameFileIdentity(snapshot.stat, current.snapshot.stat);
 }
