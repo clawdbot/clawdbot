@@ -61,17 +61,23 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
 
   // Decision tokens are chat-supplied, so inherited keys such as "constructor"
   // or "__proto__" must not read through to Object.prototype.
-  if (Object.hasOwn(DECISION_ALIASES, first)) {
+  const firstDecision = Object.hasOwn(DECISION_ALIASES, first)
+    ? DECISION_ALIASES[first]
+    : undefined;
+  if (firstDecision) {
     return {
       ok: true,
-      decision: DECISION_ALIASES[first],
+      decision: firstDecision,
       id: tokens.slice(1).join(" ").trim(),
     };
   }
-  if (Object.hasOwn(DECISION_ALIASES, second)) {
+  const secondDecision = Object.hasOwn(DECISION_ALIASES, second)
+    ? DECISION_ALIASES[second]
+    : undefined;
+  if (secondDecision) {
     return {
       ok: true,
-      decision: DECISION_ALIASES[second],
+      decision: secondDecision,
       id: expectDefined(tokens[0], "tokens entry at 0"),
     };
   }
