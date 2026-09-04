@@ -8,6 +8,18 @@ type RunFailureContext = {
 
 const failureContexts = new WeakMap<RunEventEmitter, RunFailureContext>();
 
+/** Record deferred callback failures before abort/cleanup can relay them through a provider. */
+export function recordRunFailure(
+  emit: RunEventEmitter,
+  origin: "runtime" | "provider",
+  error: unknown,
+): void {
+  const context = failureContexts.get(emit);
+  if (context) {
+    context.failure ??= { origin, value: error };
+  }
+}
+
 function rethrowRunFailure(
   context: RunFailureContext,
   origin: "runtime" | "provider",

@@ -1,5 +1,7 @@
-import type { StreamOptions, UserMessage } from "@openclaw/llm-core";
+import type { Message, StreamOptions, UserMessage } from "@openclaw/llm-core";
+import type { AgentEventSink } from "./agent-stream-response.js";
 import { getInternalSteeringQueueObserver } from "./internal-hooks.js";
+import { recordRunFailure } from "./turn-interruption.js";
 import type { AgentLoopConfig } from "./types.js";
 
 /** Forward queued input while its normal transcript owner retains commit ordering. */
@@ -7,7 +9,16 @@ export function createStreamSteering(
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
   convertSteering: AgentLoopConfig["convertToLlm"],
+  emit: AgentEventSink,
 ) {
+  const callWithFailureOrigin = <T>(origin: "runtime" | "provider", callback: () => T): T => {
+    try {
+      return callback();
+    } catch (error) {
+      recordRunFailure(emit, origin, error);
+      throw error;
+    }
+  };
   const observer = getInternalSteeringQueueObserver(config.getSteeringMessages);
   let open = true;
   let cleanup: (() => void) | undefined;
@@ -26,8 +37,29 @@ export function createStreamSteering(
     if (!open || signal?.aborted) {
       return undefined;
     }
-    needsContinuation = control.needsContinuation;
-    const outerCleanup = config.onActiveResponse?.(control);
+    // The caller can invoke provider controls from inside its callback. Observe
+    // those calls first, so a provider exception keeps its origin while unwinding.
+    const continuation = control.needsContinuation;
+    const observedControl: typeof control = {
+      steer(messages) {
+        return callWithFailureOrigin("provider", () => control.steer(messages)).catch(
+          (error: unknown) => {
+            recordRunFailure(emit, "provider", error);
+            throw error;
+          },
+        );
+      },
+      ...(continuation
+        ? {
+            needsContinuation: () =>
+              callWithFailureOrigin("provider", () => continuation.call(control)),
+          }
+        : {}),
+    };
+    needsContinuation = observedControl.needsContinuation;
+    const outerCleanup = callWithFailureOrigin("runtime", () =>
+      config.onActiveResponse?.(observedControl),
+    );
     const forward = () => {
       if (!open || signal?.aborted || failure || !observer || submitted) {
         return;
@@ -49,7 +81,13 @@ export function createStreamSteering(
             release();
             return;
           }
-          const converted = await convertSteering([...messages]);
+          let converted: Message[];
+          try {
+            converted = await convertSteering([...messages]);
+          } catch (error) {
+            recordRunFailure(emit, "runtime", error);
+            throw error;
+          }
           const userMessages = converted.filter(
             (message): message is UserMessage => message.role === "user",
           );
@@ -64,7 +102,7 @@ export function createStreamSteering(
             return;
           }
           dispatched = true;
-          if (!(await control.steer(userMessages))) {
+          if (!(await observedControl.steer(userMessages))) {
             release();
             stop();
           }
@@ -79,7 +117,7 @@ export function createStreamSteering(
     const unsubscribe = observer?.subscribe(forward);
     cleanup = () => {
       unsubscribe?.();
-      outerCleanup?.();
+      callWithFailureOrigin("runtime", () => outerCleanup?.());
     };
     forward();
     return stop;

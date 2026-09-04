@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import type {
   AssistantMessage,
+  AssistantMessageEvent,
   Message,
   Model,
   StreamOptions,
@@ -9,9 +10,11 @@ import type {
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { agentLoop, runAgentLoop } from "./agent-loop.js";
 import { Agent } from "./agent.js";
+import { attachInternalToolBatchLifecycle } from "./internal-hooks.js";
 import { createAssistantMessageEventStream } from "./llm.js";
-import type { AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from "./types.js";
+import type { AgentEvent, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from "./types.js";
 
 const model: Model = {
   id: "steerable-model",
@@ -97,6 +100,38 @@ function createSteerableAgent(
       firstResponse.end();
     },
   };
+}
+
+function throwFailure(value: unknown): never {
+  throw value;
+}
+
+function expectFailureOrigin(messages: readonly AgentMessage[], runtime: boolean, error: unknown) {
+  const message = messages.findLast((entry) => entry.role === "assistant");
+  expect(message).toMatchObject({
+    provider: model.provider,
+    model: model.id,
+    stopReason: "error",
+    errorMessage: error instanceof Error ? error.message : String(error),
+  });
+  expect(message?.diagnostics ?? []).toEqual(
+    runtime ? [{ type: "synthesized_run_failure", timestamp: message?.timestamp }] : [],
+  );
+}
+
+async function collectLoop(config: AgentLoopConfig, streamFn: StreamFn, tools: AgentTool[] = []) {
+  const stream = agentLoop(
+    [{ role: "user", content: "original question", timestamp: 1 }],
+    { systemPrompt: "", messages: [], tools },
+    config,
+    undefined,
+    streamFn,
+  );
+  for await (const event of stream) {
+    // Consume the public event stream before its terminal result.
+    void event;
+  }
+  return stream.result();
 }
 
 describe("active response steering", () => {
@@ -376,4 +411,264 @@ describe("active response steering", () => {
     expect(steer).not.toHaveBeenCalled();
     expect(harness.agent.cancelSteeringMessage((message) => message === update)).toBe(update);
   });
+});
+
+describe("steering failure ownership", () => {
+  it.each(["steer-sync", "steer-async", "continuation", "transform", "convert"] as const)(
+    "keeps the origin of a live %s failure",
+    async (boundary) => {
+      const failure = Object.freeze(new Error("opaque steering failure"));
+      const reached = createDeferred();
+      const update: UserMessage = { role: "user", content: "change direction", timestamp: 3 };
+      const fail = () => {
+        reached.resolve();
+        return throwFailure(failure);
+      };
+      const steer = vi.fn<(messages: readonly UserMessage[]) => Promise<boolean>>(() =>
+        boundary === "steer-async" ? Promise.reject(failure) : fail(),
+      );
+      const project = (messages: AgentMessage[]) =>
+        messages.includes(update) ? fail() : (messages as Message[]);
+      const harness = createSteerableAgent(steer, {
+        ...(boundary === "continuation" ? { needsContinuation: fail } : {}),
+        ...(boundary === "transform"
+          ? { transformContext: async (messages) => project(messages) }
+          : {}),
+        ...(boundary === "convert" ? { convertToLlm: project } : {}),
+      });
+      const run = harness.agent.prompt("original question");
+      try {
+        await harness.started;
+        if (boundary !== "continuation") {
+          harness.agent.steer(update);
+          if (boundary === "steer-async") {
+            await vi.waitFor(() => expect(steer).toHaveBeenCalledOnce());
+          } else {
+            await reached.promise;
+          }
+        }
+      } finally {
+        harness.finish();
+        await run;
+      }
+      const runtime = boundary === "transform" || boundary === "convert";
+      expectFailureOrigin(harness.agent.state.messages, runtime, failure);
+      expect(steer).toHaveBeenCalledTimes(boundary.startsWith("steer-") ? 1 : 0);
+      expect(harness.requests).toHaveLength(1);
+      expect(harness.agent.state.isStreaming).toBe(false);
+      if (boundary !== "continuation") {
+        expect(harness.agent.cancelSteeringMessage((message) => message === update)).toBe(update);
+      }
+    },
+  );
+
+  it.each(["callback", "cleanup", "callback-steer", "callback-continuation"] as const)(
+    "preserves %s origin and raw rejection through public loop APIs",
+    async (boundary) => {
+      const failure = Object.freeze(new Error("opaque callback failure"));
+      for (const raw of [false, true]) {
+        const cleanup = vi.fn(() => boundary === "cleanup" && throwFailure(failure));
+        const callback = vi.fn<NonNullable<StreamOptions["onActiveResponse"]>>((control) => {
+          if (boundary === "callback") {
+            throwFailure(failure);
+          }
+          if (boundary === "callback-steer") {
+            void control.steer([{ role: "user", content: "change direction", timestamp: 3 }]);
+          }
+          if (boundary === "callback-continuation") {
+            control.needsContinuation?.();
+          }
+          return cleanup;
+        });
+        const config: AgentLoopConfig = {
+          model,
+          convertToLlm: (messages) => messages as Message[],
+          onActiveResponse: callback,
+        };
+        const streamFn: StreamFn = (_model, _context, options) => {
+          const disconnect = options?.onActiveResponse?.({
+            steer: () => throwFailure(failure),
+            needsContinuation: () => throwFailure(failure),
+          });
+          return {
+            async *[Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {
+              try {
+                yield { type: "done", reason: "stop", message: assistant("done") };
+              } finally {
+                disconnect?.();
+              }
+            },
+            result: async () => assistant("done"),
+          };
+        };
+        if (raw) {
+          await expect(
+            runAgentLoop(
+              [],
+              { systemPrompt: "", messages: [] },
+              config,
+              () => {},
+              undefined,
+              streamFn,
+            ),
+          ).rejects.toBe(failure);
+        } else {
+          const messages = await collectLoop(config, streamFn);
+          expectFailureOrigin(messages, !boundary.startsWith("callback-"), failure);
+        }
+        expect(callback).toHaveBeenCalledOnce();
+        expect(cleanup).toHaveBeenCalledTimes(boundary === "cleanup" ? 1 : 0);
+      }
+    },
+  );
+
+  it.each(["callback", "cleanup"] as const)(
+    "preserves a provider terminal that consumes an outer %s failure",
+    async (boundary) => {
+      const failure = Object.freeze(new Error("consumed callback failure"));
+      const terminal = {
+        ...assistant(""),
+        stopReason: "error" as const,
+        errorMessage: "provider terminal",
+      };
+      const cleanup = vi.fn(() => throwFailure(failure));
+      const config: AgentLoopConfig = {
+        model,
+        convertToLlm: (messages) => messages as Message[],
+        onActiveResponse: () => (boundary === "callback" ? throwFailure(failure) : cleanup),
+      };
+      let consumed: unknown;
+      const streamFn: StreamFn = (_model, _context, options) => {
+        try {
+          const disconnect = options?.onActiveResponse?.({ steer: async () => false });
+          disconnect?.();
+        } catch (error) {
+          consumed = error;
+        }
+        const response = createAssistantMessageEventStream();
+        response.push({ type: "error", reason: "error", error: terminal });
+        response.end();
+        return response;
+      };
+      const messages = await collectLoop(config, streamFn);
+      expect(consumed).toBe(failure);
+      expectFailureOrigin(messages, false, terminal.errorMessage);
+      expect(messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+      expect(cleanup).toHaveBeenCalledTimes(boundary === "cleanup" ? 1 : 0);
+    },
+  );
+
+  it.each(["batch", "listener", "commit"] as const)(
+    "retains runtime origin when async %s failure aborts provider iteration with the same value",
+    async (boundary) => {
+      for (const failure of [
+        "opaque async failure",
+        Object.freeze(new Error("opaque async failure")),
+      ]) {
+        for (const raw of [false, true]) {
+          const closed = vi.fn();
+          const result = vi.fn(async () => assistant("unused"));
+          const execute = vi.fn(async () => ({ content: [], details: {} }));
+          const commitReadyCalls = vi.fn(() => throwFailure(failure));
+          const releaseSkippedCalls = vi.fn();
+          const tools: AgentTool[] = [
+            {
+              name: "lookup",
+              label: "Lookup",
+              description: "Lookup",
+              parameters: Type.Object({}),
+              execute,
+            },
+          ];
+          const toolCall = {
+            type: "toolCall" as const,
+            id: "lookup",
+            name: "lookup",
+            arguments: {},
+            async: true as const,
+          };
+          const listener = async (event: AgentEvent) => {
+            if (boundary === "listener" && event.type === "tool_execution_start") {
+              await setImmediate();
+              throwFailure(failure);
+            }
+          };
+          const config: AgentLoopConfig = {
+            model,
+            convertToLlm: (messages) => messages as Message[],
+            ...(boundary !== "listener"
+              ? {
+                  beforeToolBatch: async () => {
+                    await setImmediate();
+                    return boundary === "batch"
+                      ? throwFailure(failure)
+                      : attachInternalToolBatchLifecycle(
+                          {},
+                          { commitReadyCalls, releaseSkippedCalls },
+                        );
+                  },
+                }
+              : {}),
+          };
+          const streamFn: StreamFn = (_model, _context, options) => {
+            const signal = options?.signal;
+            if (!signal) {
+              throw new Error("expected the provider execution signal");
+            }
+            const aborted = createDeferred();
+            const onAbort = () => aborted.resolve();
+            signal.addEventListener("abort", onAbort, { once: true });
+            return {
+              async *[Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {
+                try {
+                  yield { type: "start", partial: assistant("") };
+                  yield {
+                    type: "toolcall_end",
+                    contentIndex: 0,
+                    toolCall,
+                    partial: { ...assistant(""), content: [toolCall] },
+                  };
+                  await aborted.promise;
+                  throwFailure(signal.reason);
+                } finally {
+                  signal.removeEventListener("abort", onAbort);
+                  closed();
+                }
+              },
+              result,
+            };
+          };
+          if (raw) {
+            await expect(
+              runAgentLoop(
+                [],
+                { systemPrompt: "", messages: [], tools },
+                config,
+                listener,
+                undefined,
+                streamFn,
+              ),
+            ).rejects.toBe(failure);
+          } else if (boundary === "listener") {
+            const agent = new Agent({ initialState: { model, tools }, streamFn });
+            agent.subscribe(listener);
+            await agent.prompt("look up");
+            expectFailureOrigin(agent.state.messages, true, failure);
+            expect(agent.state.pendingToolCalls.size).toBe(0);
+          } else {
+            expectFailureOrigin(await collectLoop(config, streamFn, tools), true, failure);
+          }
+          expect(execute).not.toHaveBeenCalled();
+          expect(result).not.toHaveBeenCalled();
+          expect(closed).toHaveBeenCalledOnce();
+          if (boundary === "commit") {
+            expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith([
+              { toolCallId: "lookup", args: {} },
+            ]);
+            expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["lookup"]);
+          }
+        }
+      }
+    },
+  );
 });

@@ -8,7 +8,11 @@ import type {
 import { uuidv7 } from "./harness/session/uuid.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import { createStreamSteering } from "./stream-steering.js";
-import { normalizeCoreContextMessages, startRunProviderStream } from "./turn-interruption.js";
+import {
+  normalizeCoreContextMessages,
+  recordRunFailure,
+  startRunProviderStream,
+} from "./turn-interruption.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -153,7 +157,7 @@ export async function streamAgentResponse(
       executionAbort.abort(new Error(message.errorMessage ?? "Model response interrupted"));
     }
   };
-  const steering = createStreamSteering(config, executionSignal, async (pending) => {
+  const convertSteering: AgentLoopConfig["convertToLlm"] = async (pending) => {
     requestPrefix ??= JSON.stringify(llmMessages);
     const projected = await convertMessages([...sourceMessages, ...pending], executionSignal);
     // Live input can only append to the active request. Pruning or rewriting
@@ -162,7 +166,8 @@ export async function streamAgentResponse(
       return [];
     }
     return projected.slice(llmMessages.length);
-  });
+  };
+  const steering = createStreamSteering(config, executionSignal, convertSteering, emit);
   const executedIds = new Set<string>();
   const batches: ExecutedToolCallBatch[] = [];
   let executions = Promise.resolve();
@@ -206,10 +211,13 @@ export async function streamAgentResponse(
         });
         batches.push(batch);
         if (batch.fatal || batch.terminateRun) {
-          executionAbort.abort(batch.fatal?.error ?? new Error("Tool batch terminated"));
+          const reason = batch.fatal?.error ?? new Error("Tool batch terminated");
+          recordRunFailure(emit, "runtime", reason);
+          executionAbort.abort(reason);
         }
       })
       .catch((error: unknown) => {
+        recordRunFailure(emit, "runtime", error);
         executionFailure ??= { error };
         executionAbort.abort(error);
       })
