@@ -346,6 +346,20 @@ describe("loadGatewayRuntimeConfigSchema", () => {
         expected: "first",
       },
       {
+        name: "explicit dual selection after allowlist materialization",
+        entries: { plus: { enabled: true }, core: { enabled: true } },
+        allow: ["core"],
+        deny: [],
+        expected: "first",
+      },
+      {
+        name: "untrusted material config",
+        entries: { plus: { config: {} }, core: { enabled: true } },
+        allow: ["core"],
+        deny: [],
+        expected: "core",
+      },
+      {
         name: "closer-origin owner",
         entries: { plus: { enabled: true }, core: { enabled: true } },
         deny: [],
@@ -363,12 +377,12 @@ describe("loadGatewayRuntimeConfigSchema", () => {
   )(
     "publishes the $scenario.name schema and sensitive hints with $first first",
     ({
-      scenario: { entries, deny, expected, coreOrigin = "config", plusOrigin = "config" },
+      scenario: { entries, allow, deny, expected, coreOrigin = "config", plusOrigin = "config" },
       first,
     }) => {
       mockLoadConfig.mockReturnValue({
         ...explicitMainRoster(),
-        plugins: { entries, deny },
+        plugins: { entries, allow, deny },
         channels: { proofchat: { address: "local" } },
       });
       const order = first === "plus" ? ["plus", "core"] : ["core", "plus"];

@@ -1,5 +1,6 @@
 import { resolvePluginActivationSourceConfig } from "../plugins/activation-source-config.js";
-import { resolveDiscoverableScopedChannelPluginIds } from "../plugins/channel-presence-policy.js";
+import { canStartConfiguredChannelPlugin } from "../plugins/channel-startup-policy.js";
+import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveConfiguredChannelAutoEnableCandidates } from "./plugin-auto-enable.channels.js";
 import { materializePluginAutoEnableCandidatesInternal } from "./plugin-auto-enable.materialize.js";
@@ -29,13 +30,22 @@ export function resolveChannelSchemaSelection(
           env,
           manifestRegistry: registry,
         }).config;
+  const pluginsConfig = normalizePluginsConfig(effectiveConfig.plugins);
+  const activationSource = createPluginActivationSource({ config: activationSourceConfig });
   return new Set(
-    resolveDiscoverableScopedChannelPluginIds({
-      config: effectiveConfig,
-      activationSourceConfig,
-      channelIds: registry.plugins.flatMap((plugin) => plugin.channels),
-      manifestRecords: registry.plugins,
-      env,
-    }),
+    registry.plugins
+      .filter(
+        (plugin) =>
+          plugin.channels.length > 0 &&
+          canStartConfiguredChannelPlugin({
+            id: plugin.id,
+            origin: plugin.origin,
+            channelIds: plugin.channels,
+            config: effectiveConfig,
+            pluginsConfig,
+            activationSource,
+          }),
+      )
+      .map((plugin) => plugin.id),
   );
 }
