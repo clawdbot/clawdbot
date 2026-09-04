@@ -1349,6 +1349,45 @@ describe("doctor.memory.dreamDiary", () => {
     }
   });
 
+  it("resolves the ambient system-agent owner when agentId is omitted", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-owner-"));
+    getRuntimeConfig.mockReturnValue({
+      agents: {
+        defaults: { systemAgent: { agentId: "bernhardine" } },
+        entries: { ops: {}, research: {}, bernhardine: {} },
+      },
+    });
+    // Simulate an ambiguous multi-agent install where only the configured
+    // ambient owner can select the target; without the fallback this throws.
+    resolveDefaultAgentId.mockImplementationOnce(() => {
+      throw new AgentSelectionRequiredError(["ops", "research", "bernhardine"], {
+        surface: "doctor memory",
+        hint: "Pass agentId to select a configured agent.",
+      });
+    });
+    resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
+      agentId === "bernhardine" ? workspaceDir : "/tmp/openclaw",
+    );
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemory("doctor.memory.dreamDiary", respond);
+      expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.anything(), "bernhardine");
+      expect(resolveDefaultAgentId).not.toHaveBeenCalled();
+      const payload = respondPayload(respond);
+      expectRecordFields(payload, {
+        agentId: "bernhardine",
+        found: false,
+      });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+    // Restore the shared default config (this describe does not reset it).
+    getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockReset();
+    resolveDefaultAgentId.mockReset().mockReturnValue("main");
+  });
+
   it("backfills the dream diary from workspace memory files", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-backfill-"));
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });

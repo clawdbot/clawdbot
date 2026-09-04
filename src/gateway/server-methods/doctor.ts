@@ -690,7 +690,8 @@ function resolveDoctorMemoryTarget(
   agentId: string;
   workspaceDir: string;
 } | null {
-  const resolved = resolveDoctorMemoryAgent(context, params, respond);
+  const omittedAgentId = tryResolveAmbientOwnerAgentId(context.getRuntimeConfig());
+  const resolved = resolveDoctorMemoryAgent(context, params, respond, omittedAgentId);
   if (!resolved) {
     return null;
   }
