@@ -198,20 +198,22 @@ export function renderChatModelAccountControl(params: {
               })}
             >
               <span
-                >${option.label}${option.description
-                  ? html`<br /><small>${option.description}</small>`
-                  : nothing}</span
+                >${option.label}${
+                  option.description ? html`<br /><small>${option.description}</small>` : nothing
+                }</span
               >
             </wa-dropdown-item>
           `,
         )}
       </wa-dropdown>
       ${params.hint ? html`<span class="chat-model-account__hint">${params.hint}</span>` : nothing}
-      ${currentInventory.error
-        ? html`<span class="chat-model-account__error" role="alert"
-            >${currentInventory.error}</span
-          >`
-        : nothing}
+      ${
+        currentInventory.error
+          ? html`<span class="chat-model-account__error" role="alert"
+              >${currentInventory.error}</span
+            >`
+          : nothing
+      }
     </div>
   `;
 }
