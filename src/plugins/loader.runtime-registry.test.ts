@@ -277,8 +277,7 @@ it.each(["cjs", "ts"])(
           }
           expect(descriptors.nodes.get?.()).toBe(runtime.nodes);
           const ttsDescriptor = Object.getOwnPropertyDescriptor(runtime, "tts")!;
-          expect(ttsDescriptor.get).toEqual(expect.any(Function));
-          expect(ttsDescriptor.set).toBeUndefined();
+          expect(ttsDescriptor).toMatchObject({ get: expect.any(Function), set: undefined });
           expect(Reflect.set(runtime, "tts", {})).toBe(false);
           for (const [key, prepared] of [
             ["config", configApi],
