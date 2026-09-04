@@ -178,4 +178,115 @@ describe("openai-compatible embedding stall deadlines", () => {
       clearTimeout(callerAbort);
     }
   });
+
+  it("fires the built-in query deadline before a slower 15s caller signal (#136405)", async () => {
+    const server = await startNeverRespondingEmbeddingServer();
+    const provider = await createProvider(createOptions({ remote: { baseUrl: server.baseUrl } }));
+    // Memory Core's recall lane aborts at 15s; the built-in 10s query deadline
+    // must win so default-config users see the precise embedding timeout.
+    const controller = new AbortController();
+    const callerAbort = setTimeout(() => controller.abort(), 15_000);
+    const startedAt = Date.now();
+
+    try {
+      const outcome = await withTestTimeout(
+        provider.embed("hello", { inputType: "query", signal: controller.signal }).then(
+          () => ({ type: "resolved" as const }),
+          (error: unknown) => ({ type: "rejected" as const, error }),
+        ),
+        14_000,
+        "timed out waiting for the built-in query deadline",
+      );
+      if (outcome.type !== "rejected") {
+        throw new Error(`expected embedding request to reject, got ${outcome.type}`);
+      }
+      expect(Date.now() - startedAt).toBeLessThan(15_000);
+      expect((outcome.error as Error).message).toBe(
+        "openai-compatible embeddings request timed out after 10s (set models.providers.<id>.timeoutSeconds to adjust)",
+      );
+      expect(controller.signal.aborted).toBe(false);
+    } finally {
+      clearTimeout(callerAbort);
+    }
+  }, 20_000);
+
+  it("does not inherit provider timeoutSeconds across a distinct remote destination", async () => {
+    const server = await startNeverRespondingEmbeddingServer();
+    const provider = await createProvider(
+      createOptions({
+        config: {
+          models: {
+            providers: {
+              "gpu-spark": {
+                baseUrl: "http://spark.local:11434/v1",
+                timeoutSeconds: 1,
+                models: [],
+              },
+            },
+          },
+        } as EmbeddingProviderCreateOptions["config"],
+        provider: "gpu-spark",
+        model: "text-embedding-bge-m3",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    // The 1s provider deadline belongs to another destination; the remote
+    // override must not inherit it (the built-in 10s query deadline applies).
+    const batchOutcome = await Promise.race([
+      provider.embed("hello", { inputType: "query" }).then(
+        () => "resolved" as const,
+        () => "rejected" as const,
+      ),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("pending"), 2_000);
+      }),
+    ]);
+    expect(batchOutcome).toBe("pending");
+  });
+
+  it("applies the composed deadline to local service acquisition", async () => {
+    const server = await startNeverRespondingEmbeddingServer();
+    const acquireLocalService = (target: unknown, signal?: AbortSignal) =>
+      new Promise<{ release: () => void }>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("lease aborted")), {
+          once: true,
+        });
+      });
+    const options = createOptions({
+      config: {
+        models: {
+          providers: {
+            "gpu-spark": {
+              baseUrl: server.baseUrl,
+              timeoutSeconds: 1,
+              localService: { command: process.execPath },
+              models: [],
+            },
+          },
+        },
+      } as EmbeddingProviderCreateOptions["config"],
+      provider: "gpu-spark",
+      model: "gpu-spark/text-embedding-bge-m3",
+    }) as EmbeddingProviderCreateOptions & {
+      acquireLocalService: typeof acquireLocalService;
+    };
+    options.acquireLocalService = acquireLocalService;
+    const provider = await createProvider(options);
+
+    const startedAt = Date.now();
+    const outcome = await withTestTimeout(
+      provider.embed("hello", { inputType: "query" }).then(
+        () => ({ type: "resolved" as const }),
+        (error: unknown) => ({ type: "rejected" as const, error }),
+      ),
+      5_000,
+      "timed out waiting for the acquisition deadline",
+    );
+    if (outcome.type !== "rejected") {
+      throw new Error(`expected acquisition to reject, got ${outcome.type}`);
+    }
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect((outcome.error as Error).message).toBe("lease aborted");
+  });
 });
