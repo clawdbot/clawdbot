@@ -330,7 +330,10 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
   }
 }
 
-export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
+export function completeFollowupRunLifecycle(
+  run: FollowupLifecycleRun,
+  disposition?: "consumed",
+): void {
   run.steerPending?.settle(false);
   const lifecycle = run.turnAdoptionLifecycle;
 
@@ -342,7 +345,7 @@ export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
     // Async onAbandoned work must contain its own rejections; core guarantees a
     // non-rejecting promise. onSettled must still run after a synchronous throw.
     try {
-      if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+      if (disposition !== "consumed" && !admittedTurnAdoptionLifecycles.has(lifecycle)) {
         // The queue is relinquishing an un-admitted message: free its dedupe
         // identity so the abandonment-triggered ingress retry can re-enqueue
         // instead of being rejected as a recent duplicate and falsely completed.

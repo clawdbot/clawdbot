@@ -7,6 +7,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import {
@@ -295,63 +296,28 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           return;
         }
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
-        const scopedTools = await toolCache.resolve({
-          cfg,
-          signal: requestAbort.signal,
-          sessionKey: requestContext.sessionKey,
-          runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
-          runtimePolicyAgentId: requestContext.runtimePolicyAgentId,
-          agentId: requestContext.agentId,
-          sessionId: requestContext.sessionId,
-          runId: requestContext.runId,
-          workspaceDir: requestContext.workspaceDir,
-          cwd: requestContext.cwd,
-          modelProvider: requestContext.modelProvider,
-          modelId: requestContext.modelId,
-          ...(boundClientGrant?.toolAuth
-            ? {
-                authProfileStore: boundClientGrant.toolAuth.store,
-                ...(boundClientGrant.toolAuth.agentDir
-                  ? { authProfileStoreAgentDir: boundClientGrant.toolAuth.agentDir }
-                  : {}),
-              }
-            : {}),
-          ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
-          yieldContextCacheKey: yieldContext?.cacheKey,
-          onYield: yieldContext?.onYield,
-          messageProvider: requestContext.messageProvider,
-          clientCaps: requestContext.clientCaps,
-          currentChannelId: requestContext.currentChannelId,
-          currentThreadTs: requestContext.currentThreadTs,
-          currentMessageId: requestContext.currentMessageId,
-          replyToMode: requestContext.replyToMode,
-          currentInboundAudio: requestContext.currentInboundAudio,
-          accountId: requestContext.accountId,
-          inboundEventKind: requestContext.inboundEventKind,
-          sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
-          sourceReplyOnly: requestContext.sourceReplyOnly,
-          taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
-          requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
-          toolsAllow: requestContext.toolsAllow,
-          delegationCapability: requestContext.delegationCapability,
-          ...(skillWorkshop ? { skillWorkshop } : {}),
-          scheduledToolPolicy: requestContext.scheduledToolPolicy,
-          senderIsOwner: requestContext.senderIsOwner,
-          nodeExecAllowed: requestContext.nodeExecAllowed,
-          execSession: requestContext.execSession,
-          execOverrides: requestContext.execOverrides,
-          bashElevated: requestContext.bashElevated,
-          trigger: requestContext.trigger,
-          approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
-          channelContext: requestContext.channelContext,
-          senderName: requestContext.senderName,
-          senderUsername: requestContext.senderUsername,
-          senderE164: requestContext.senderE164,
-          groupId: requestContext.groupId,
-          groupChannel: requestContext.groupChannel,
-          groupSpace: requestContext.groupSpace,
-          spawnedBy: requestContext.spawnedBy,
-        });
+        // Tools capture their creator at construction, not the later HTTP execution scope.
+        const scopedTools = await withAgentQuestionAnswerAuthority(
+          boundClientGrant?.questionAnswerAuthority,
+          () =>
+            toolCache.resolve({
+              ...requestContext,
+              cfg,
+              signal: requestAbort.signal,
+              ...(boundClientGrant?.toolAuth
+                ? {
+                    authProfileStore: boundClientGrant.toolAuth.store,
+                    ...(boundClientGrant.toolAuth.agentDir
+                      ? { authProfileStoreAgentDir: boundClientGrant.toolAuth.agentDir }
+                      : {}),
+                  }
+                : {}),
+              ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
+              yieldContextCacheKey: yieldContext?.cacheKey,
+              onYield: yieldContext?.onYield,
+              ...(skillWorkshop ? { skillWorkshop } : {}),
+            }),
+        );
 
         // Discovery may outlive the requesting connection or grant.
         requestAbort.signal.throwIfAborted();

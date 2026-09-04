@@ -2,6 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 // Tests active reply run registry add, lookup, and cleanup behavior.
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { QuestionAnswerUnconfirmedError } from "../../agents/harness/gateway-question-dispatch.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import {
@@ -14,6 +15,8 @@ import { markDiagnosticModelStartedForTest } from "../../logging/diagnostic-run-
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
@@ -49,7 +52,7 @@ import {
 } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import {
-  createFollowupRunToolAuthorityProjector,
+  prepareReplyToolAuthority,
   resolveFollowupRunToolAuthorityFingerprint,
 } from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -185,38 +188,77 @@ describe("reply run registry", () => {
     );
   });
 
-  it("projects only while the active operation owns a concrete route", () => {
-    const run = createQueueTestRun({ prompt: "operation projection" });
-    const operation = createTestReplyOperation({ sessionId: "session-projector" });
-    const projector = createFollowupRunToolAuthorityProjector(run);
-    const overlay = toolAuthorityOverlay(run);
+  it.each(["complete", "fail", "abortByUser", "abortForRestart"] as const)(
+    "requires a snapshot for route preparation and rejects it after %s",
+    (close) => {
+      const run = createQueueTestRun({ prompt: "operation projection" });
+      const operation = createTestReplyOperation({ sessionId: "session-projector" });
+      const snapshot = prepareReplyToolAuthority(run);
+      const overlay = toolAuthorityOverlay(run);
+      const route = { provider: "openai", model: "gpt-primary" };
 
-    operation.bindToolAuthorityProjector(projector);
-    expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
+      expect(() => operation.bindToolAuthorityRoute(route)).toThrow(
+        "Reply operation has no active tool authority snapshot",
+      );
+      expect(operation.toolAuthorityRoute).toBeUndefined();
+      expect(operation.toolAuthorityFingerprint).toBeUndefined();
+      operation.bindToolAuthoritySnapshot(snapshot);
+      expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
 
-    operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-primary" });
-    expect(operation.projectToolAuthorityFingerprint(overlay)).toBe(
-      resolveFollowupRunToolAuthorityFingerprint(run, {
-        provider: "openai",
-        model: "gpt-primary",
-      }),
-    );
+      const fingerprint = resolveFollowupRunToolAuthorityFingerprint(run, route);
+      expect(operation.bindToolAuthorityRoute(route)).toBe(fingerprint);
+      expect(operation.projectToolAuthorityFingerprint(overlay)).toBe(fingerprint);
 
-    operation.complete();
-    expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
-  });
+      if (close === "fail") {
+        operation.fail("run_failed");
+      } else {
+        operation[close]();
+      }
+      expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
+      expect(() => operation.bindToolAuthorityRoute({ ...route, model: "gpt-late" })).toThrow(
+        "Reply operation has no active tool authority snapshot",
+      );
+      expect(operation.toolAuthorityRoute).toEqual(route);
+      expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
+    },
+  );
 
-  it("tracks the concrete authority route across fallback candidates", () => {
+  it("keeps the initial policy snapshot while tracking concrete fallback authority", () => {
+    const run = createQueueTestRun({ prompt: "route authority" });
     const operation = createTestReplyOperation({ sessionId: "session-route" });
+    const snapshot = prepareReplyToolAuthority(run);
+    const primary = { provider: "openai", model: "gpt-primary" };
+    const fallback = { provider: "anthropic", model: "claude-fallback" };
+    const primaryFingerprint = resolveFollowupRunToolAuthorityFingerprint(run, primary);
+    const fallbackFingerprint = resolveFollowupRunToolAuthorityFingerprint(run, fallback);
+    const overlay = toolAuthorityOverlay(run);
+    operation.bindToolAuthoritySnapshot(snapshot);
 
-    operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-primary" });
-    expect(operation.toolAuthorityRoute).toEqual({ provider: "openai", model: "gpt-primary" });
+    expect(operation.bindToolAuthorityRoute(primary)).toBe(primaryFingerprint);
+    expect(operation.toolAuthorityRoute).toEqual(primary);
+    expect(operation.toolAuthorityFingerprint).toBe(primaryFingerprint);
 
-    operation.bindToolAuthorityRoute({ provider: "anthropic", model: "claude-fallback" });
-    expect(operation.toolAuthorityRoute).toEqual({
-      provider: "anthropic",
-      model: "claude-fallback",
+    run.run.execOverrides = { security: "deny" };
+    expect(() => operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run))).toThrow(
+      "Reply operation cannot change tool authority after admission",
+    );
+    expect(operation.toolAuthorityFingerprint).toBe(primaryFingerprint);
+    expect(operation.bindToolAuthorityRoute(fallback)).toBe(fallbackFingerprint);
+    expect(operation.toolAuthorityRoute).toEqual(fallback);
+    expect(operation.toolAuthorityFingerprint).toBe(fallbackFingerprint);
+    expect(operation.projectToolAuthorityFingerprint(overlay)).toBe(fallbackFingerprint);
+
+    operation.bindToolAuthoritySnapshot(snapshot);
+    expect(operation.toolAuthorityRoute).toEqual(fallback);
+    expect(operation.toolAuthorityFingerprint).toBe(fallbackFingerprint);
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      toolAuthorityFingerprint: "backend-exact-authority",
     });
+    operation.bindToolAuthoritySnapshot(snapshot);
+    expect(operation.toolAuthorityRoute).toEqual(fallback);
+    expect(operation.toolAuthorityFingerprint).toBe("backend-exact-authority");
     operation.complete();
   });
 
@@ -1948,7 +1990,10 @@ describe("reply run registry", () => {
   it("rejects inbound steering when tool authority changes before backend admission", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({ sessionId: "session-authority" });
-    operation.bindToolAuthorityFingerprint("authority-a");
+    operation.bindToolAuthoritySnapshot({
+      fingerprint: () => "authority-a",
+      project: () => "authority-a",
+    });
     operation.attachBackend({
       kind: "embedded",
       cancel: vi.fn(),
@@ -1981,9 +2026,8 @@ describe("reply run registry", () => {
       async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
     );
     const operation = createTestReplyOperation({ sessionId: "session-projected-authority" });
-    operation.bindToolAuthorityProjector(createFollowupRunToolAuthorityProjector(run));
+    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
     operation.bindToolAuthorityRoute(route);
-    operation.bindToolAuthorityFingerprint(resolveFollowupRunToolAuthorityFingerprint(run, route));
     operation.attachBackend({
       kind: "embedded",
       cancel: vi.fn(),
@@ -2125,48 +2169,73 @@ describe("reply run registry", () => {
     expect(replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)).toBeUndefined();
   });
 
-  it("returns synchronous and asynchronous queue failures as typed rejections", async () => {
-    const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
-    operation.setPhase("running");
-    const synchronous = vi.fn(() => {
-      throw new Error("sync rejection");
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      runId: "run-a",
-      cancel: vi.fn(),
-      messageInjection: { isAvailable: () => true, queueMessage: synchronous },
-    });
-    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-
-    const synchronousAttempt = beginReplyMessageInjectionTarget(target, "first");
-    expect(synchronous).toHaveBeenCalledOnce();
-    await expect(synchronousAttempt.acceptance).resolves.toBe(false);
-    await expect(synchronousAttempt.outcome).resolves.toMatchObject({
-      status: "rejected",
-      reason: "runtime_rejected",
-      errorMessage: "Error: sync rejection",
-    });
-
-    operation.attachBackend({
-      kind: "embedded",
-      runId: "run-a",
-      cancel: vi.fn(),
-      messageInjection: {
-        isAvailable: () => true,
-        queueMessage: vi.fn(async () => {
-          throw new Error("async rejection");
+  it.each(
+    (["sync", "async", "mismatched-question"] as const).flatMap((source) =>
+      [false, true].map((unconfirmed) => ({ source, unconfirmed })),
+    ),
+  )(
+    "distinguishes rejection from non-replayable input: $source (unconfirmed=$unconfirmed)",
+    async ({ source, unconfirmed }) => {
+      const cause = new Error(`${source} rejection`);
+      const error = unconfirmed ? new QuestionAnswerUnconfirmedError(cause) : cause;
+      const queueMessage = vi.fn((): Promise<void> => {
+        if (source === "sync") {
+          throw error;
+        }
+        return Promise.reject(error);
+      });
+      const claimPendingUserInputAnswer = vi.fn(async () => {
+        throw error;
+      });
+      const operation = createTestReplyOperation({ originatingLeafEntryId: "leaf-a" });
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "run-a",
+        toolAuthorityFingerprint: "active-authority",
+        cancel: vi.fn(),
+        claimPendingUserInputAnswer,
+        messageInjection: { isAvailable: () => true, queueMessage },
+      });
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+      const confirmSteerTargetRunIdForPersistence = vi.fn(async () => {});
+      const recorder = {
+        ...createUserTurnTranscriptRecorder({
+          input: { text: "answer" },
+          target: createTestUserTurnTranscriptTarget(),
         }),
-      },
-    });
-    const asynchronousAttempt = beginReplyMessageInjectionTarget(target, "second");
-    await expect(asynchronousAttempt.acceptance).resolves.toBe(false);
-    await expect(asynchronousAttempt.outcome).resolves.toMatchObject({
-      status: "rejected",
-      reason: "runtime_rejected",
-      errorMessage: "Error: async rejection",
-    });
-  });
+        confirmSteerTargetRunIdForPersistence,
+      };
+      const onQueueAccepted = vi.fn();
+      const mismatch = source === "mismatched-question";
+      const attempt = beginReplyMessageInjectionTarget(target, "answer", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: mismatch ? "incoming-authority" : "active-authority",
+        pendingInputAuthorityFingerprint: "active-authority",
+        waitForTranscriptCommit: true,
+        userTurnTranscriptRecorder: recorder,
+        onQueueAccepted,
+      });
+
+      await expect(attempt.acceptance).resolves.toBe(unconfirmed);
+      if (unconfirmed) {
+        await expect(attempt.outcome).resolves.toEqual({
+          status: "indeterminate",
+          errorMessage: error.message,
+        });
+        expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      } else {
+        await expect(attempt.outcome).resolves.toMatchObject({
+          status: "rejected",
+          reason: "runtime_rejected",
+          errorMessage: String(error),
+        });
+      }
+      expect(confirmSteerTargetRunIdForPersistence).not.toHaveBeenCalled();
+      expect(queueMessage).toHaveBeenCalledTimes(mismatch ? 0 : 1);
+      expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(mismatch ? 1 : 0);
+    },
+  );
 
   it("reports callback acceptance before outcome and composes the caller callback", async () => {
     const delivery = createDeferred();

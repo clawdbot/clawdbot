@@ -472,9 +472,16 @@ export async function finishGatewayStartup(params: {
       for (const nodeSession of nodeRegistry.refreshRuntimePolicy(nextConfig)) {
         refreshConnectedNodeSurfaceCaches({ context: gatewayRequestContext, nodeSession });
       }
-      await nodeDesktopService.reconcileRuntimePolicy();
+      await Promise.all([
+        nodeDesktopService.reconcileRuntimePolicy(),
+        runtimeState.discovery?.update({ mdnsMode: nextConfig.discovery?.mdns?.mode }),
+      ]);
     },
-    commitTerminalConfig: (nextConfig) => {
+    commitRuntimePolicy: (nextConfig) => {
+      const rateLimit = nextConfig.gateway?.auth?.rateLimit;
+      authRateLimiter.updateConfig(rateLimit);
+      browserAuthRateLimiter.updateConfig({ ...rateLimit, exemptLoopback: false });
+      nodeReapprovalCoordinator.updateConfig(rateLimit);
       terminalLaunchPolicy.commitConfig();
       workerLiveEvents?.rebindAll(nextConfig);
     },

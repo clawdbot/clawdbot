@@ -1,5 +1,5 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
-import { describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
@@ -35,9 +35,10 @@ const REQUESTER = "agent:main:dashboard:session-tools-requester";
 const TARGET = "agent:main:dashboard:session-tools-target";
 const TARGET_ID = "session-tools-target-id";
 const INCOGNITO = "agent:main:dashboard:incognito-session-tools";
+let fixtureRun: Promise<void> | undefined;
 
-async function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
+  return (fixtureRun = withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       ...rolePolicyConfig(),
       agents: {
@@ -71,10 +72,33 @@ async function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<voi
     await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
       run(cfg),
     );
-  });
+  }));
 }
 
 describe("built-in session tool role authority", () => {
+  let runtimeSetup: Promise<unknown>[] = [];
+  beforeAll(() => {
+    // Load the real mutation runtime as suite preparation, outside scenario deadlines.
+    runtimeSetup = [
+      import("./server-methods/sessions-create.js"),
+      import("./server-methods/sessions-delete.js"),
+      import("./server-methods/sessions-mutations.js"),
+      import("./server-methods/sessions.runtime.js"),
+    ];
+    return Promise.all(runtimeSetup);
+  });
+  afterAll(async () => {
+    // A failed import does not cancel its siblings; drain their module setup too.
+    await Promise.allSettled(runtimeSetup);
+  });
+
+  afterEach(async () => {
+    // Vitest timeouts do not cancel the callback. Join its state cleanup before
+    // global resets or the next fixture can replace this process's environment.
+    await fixtureRun?.catch(() => {});
+    fixtureRun = undefined;
+  });
+
   it.each(["unchanged", "active", "replaced", "reset"] as const)(
     "visible-spawn rollback protects the admitted child generation (%s)",
     async (generation) => {

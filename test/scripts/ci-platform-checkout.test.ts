@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, expect, it, vi } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
@@ -25,6 +25,11 @@ import {
   withCiCheckoutFixture,
 } from "./ci-checkout.test-support.js";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
+import {
+  censusPreload,
+  expectCensusClosed,
+  registerWindowsCensusTests,
+} from "./ci-windows-process-census.test-support.js";
 
 // Each case owns its checkout and process trees. Overlap their real deadline
 // and drain waits while keeping subprocess pressure bounded within one worker.
@@ -109,6 +114,16 @@ it.concurrent.each([
           path.join(root, "checkout.sh"),
           setupFailure ? "printf 'unexpected workflow invocation\\n' >&2\nexit 99\n" : accelerated,
         );
+        if (process.platform === "win32") {
+          return censusPreload(
+            root,
+            "",
+            ["timeouts-exhausted", "recovery", "early-leader-exit", "harness-timeout"].includes(
+              scenario,
+            ),
+          );
+        }
+        return undefined;
       },
       (report, result, stderr, root) => {
         const workspace = path.join(root, "workspace");
@@ -130,6 +145,10 @@ it.concurrent.each([
         expect(result, stderr).toEqual({ code: 0, signal: null });
         expect(report.error, stderr).toBeUndefined();
         expectCiCheckoutCleanup(report);
+        expectCensusClosed(
+          root,
+          report.ownedProcesses.map((entry) => entry.pid),
+        );
         expect(report.code).toBe(code);
         expect(readFileSync(path.join(workspace, ".git/preexisting.lock"), "utf8")).toBe(
           "not invocation-owned\n",
@@ -522,69 +541,7 @@ it.concurrent.each([
   55_000,
 );
 
-it("joins an unregistered sentinel before supervisor close on disconnect", async () => {
-  await withCiCheckoutFixture(
-    "early-leader-exit",
-    (root) => {
-      writeFileSync(path.join(root, "checkout.sh"), "exit 99\n");
-      const preload = path.join(root, "startup.mjs");
-      // Fault only the asynchronous startup boundary; keep the real safe preflight.
-      writeFileSync(
-        preload,
-        String.raw`
-import assert from "node:assert/strict";
-import cp from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
-import path from "node:path";
-const [mode, root] = process.argv.slice(2);
-if (mode === "sentinel") {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-}
-if (mode === "supervise") {
-  const spawn = cp.spawn;
-  cp.spawn = (...args) => {
-    const child = spawn(...args);
-    if (args[1]?.[1] === "sentinel") {
-      assert(child.pid > 1, "sentinel spawn did not return an owned PID");
-      // Record at the creator: proof must not depend on sentinel JS ever starting.
-      writeFileSync(path.join(root, "spawned-pid"), String(child.pid));
-      child.once("close", (code, signal) => {
-        writeFileSync(path.join(root, "sentinel-close.json"), JSON.stringify({
-          code, signal, reportExists: existsSync(path.join(root, "report.json")),
-        }));
-      });
-      queueMicrotask(() => process.disconnect());
-    }
-    return child;
-  };
-  syncBuiltinESMExports();
-}
-`,
-      );
-      return { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` };
-    },
-    (report, result, stderr, root) => {
-      const spawnedPid = path.join(root, "spawned-pid");
-      const sentinelClose = path.join(root, "sentinel-close.json");
-      expect(report.error, stderr).toBe("test parent disconnected");
-      const pid = Number(readFileSync(spawnedPid, "utf8"));
-      expect(isProcessAlive(pid), "supervisor closed with an unregistered writer alive").toBe(
-        false,
-      );
-      expect(JSON.parse(readFileSync(sentinelClose, "utf8"))).toEqual({
-        code: null,
-        signal: "SIGKILL",
-        reportExists: false,
-      });
-      expect(result, stderr).toEqual({ code: 1, signal: null });
-      expect(report.ownedProcesses).toEqual([]);
-      expect(report.cleanupRemaining).toEqual([]);
-      expect(report.boundaries).toEqual([]);
-      expect(report.commands).toEqual([]);
-    },
-  );
-}, 55_000);
+registerWindowsCensusTests();
 
 it.each(["prepare", "inspect"])(
   "removes checkout artifacts after %s assertion failure",
@@ -845,7 +802,7 @@ it("does not revive a terminated fixture instance when its PID is reused", () =>
       "-S",
       "-c",
       String.raw`
-import json, os, pathlib, runpy, subprocess, sys, tempfile
+import contextlib, json, os, pathlib, runpy, subprocess, sys, tempfile
 
 with tempfile.TemporaryDirectory(prefix="checkout-pid-reuse-") as directory:
     root = pathlib.Path(directory).resolve()
@@ -882,7 +839,22 @@ cp.spawnSync = (command, args, options) => {
 require("node:module").syncBuiltinESMExports();
 ''')
     with subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.read()"],
-                          stdin=subprocess.PIPE) as child:
+                          stdin=subprocess.PIPE) as child, contextlib.ExitStack() as cleanup:
+        if os.name == "nt":
+            broker = cleanup.enter_context(subprocess.Popen([
+                sys.argv[1], "--input-type=module", "-e", """
+const { createWindowsProcessCensus } = await import(process.argv[1]);
+const owner = createWindowsProcessCensus({ root: process.argv[2], token: "owned",
+  onFailure: error => { console.error(error); process.exitCode = 1; void owner.close(); } });
+try {
+  await owner.ready;
+  console.log("ready");
+  await new Promise(resolve => { process.stdin.once("end", resolve); process.stdin.resume(); });
+} finally { await owner.close(); }
+""", sys.argv[4], str(root)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+            # EOF retires the broker and sampler before the Python namespace owner leaves.
+            cleanup.callback(lambda: broker.communicate(timeout=4))
+            assert broker.stdout.readline().strip() == "ready", "census owner failed to initialize"
         retired = dict(pid=child.pid, role="grandchild", attempt=1, instance="retired")
         current = dict(pid=os.getpid(), role="grandchild", attempt=2, instance="current")
         if os.name == "nt":
@@ -921,6 +893,7 @@ print("fixture lifetime contract passed")
       process.execPath,
       ciCheckoutFixture,
       fileURLToPath(new URL("./fixtures/ci-windows-process-census.py", import.meta.url)),
+      new URL("./fixtures/ci-windows-process-census.mjs", import.meta.url).href,
     ],
     { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
   );

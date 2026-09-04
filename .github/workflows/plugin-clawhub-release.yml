@@ -615,7 +615,7 @@ jobs:
         approve_plugins_clawhub_release,
       ]
     if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@db2a12c4625ffa162910a3e6aa2cb786ced89e2f # reviewed parent receipt contract
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@0f6803b4611fc47547d2322dd8903e7b02f5e126 # reviewed parent receipt contract
     permissions:
       actions: read
       contents: read

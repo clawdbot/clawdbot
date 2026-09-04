@@ -445,11 +445,8 @@ afterEach(() => {
 });
 
 describe("runReplyAgent pending operator input", () => {
-  it("claims a direct CLI answer before active-run queueing", async () => {
-    const gatewayCall = vi.fn(async (_method, _opts, params) => ({
-      status: "answered",
-      answers: (params as { answers: { answers: Record<string, string[]> } }).answers,
-    }));
+  it("refuses an unbound question without falling through to active-run queueing", async () => {
+    const gatewayCall = vi.fn(async () => ({ status: "answered" }));
     const reservation = registerPendingAgentQuestion({
       questionId: "ask_direct_cli_answer",
       sessionKey: "main",
@@ -480,21 +477,16 @@ describe("runReplyAgent pending operator input", () => {
     });
 
     try {
-      await expect(testRun.run()).resolves.toBeUndefined();
-      expect(gatewayCall).toHaveBeenCalledWith(
-        "question.resolve",
-        {},
-        {
-          id: "ask_direct_cli_answer",
-          answers: { answers: { color: ["Green"] } },
-          resolvedBy: "plain-text",
-        },
-      );
+      await expect(testRun.run()).resolves.toEqual({
+        text: expect.stringContaining("pending question has no prepared creator authority"),
+        isError: true,
+      });
+      expect(gatewayCall).not.toHaveBeenCalled();
       expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(runCliAgentMock).not.toHaveBeenCalled();
       expect(testRun.typing.cleanup).toHaveBeenCalledOnce();
       expect(replyOperationRunState).toEqual({
-        admission: { status: "accepted", mode: "steer" },
+        admission: { status: "skipped", reason: "question-response-refused" },
       });
     } finally {
       reservation.dispose();

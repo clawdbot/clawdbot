@@ -342,22 +342,15 @@ function loadGeneratedPluginSkillRecords(params: {
   source: string;
   limits: ResolvedSkillDiscoveryLimits;
 }): LoadedSkillRecord[] {
-  const candidates = discoverPluginSkills({
-    ...params,
-    pluginSkillDirs: params.pluginSkillRoots.map((root) => root.dir),
-  });
+  const candidates = discoverPluginSkills(params);
   const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
   const loadedSkills: LoadedSkillRecord[] = [];
   for (const candidate of candidates) {
-    const pluginRoot = params.pluginSkillRoots.find((root) => {
-      const rootRealPath = tryRealpath(root.dir);
-      return rootRealPath !== null && isPathInside(rootRealPath, candidate.skillDirRealPath);
-    });
     const loadedRecords = loadContainedSkillRecords({
       skillDir: candidate.skillDir,
       source: params.source,
       maxSkillFileBytes: params.limits.maxSkillFileBytes,
-      rejectHardlinks: pluginRoot?.rejectHardlinks ?? true,
+      rejectHardlinks: candidate.rejectHardlinks,
     });
     loadedSkills.push(
       ...loadedRecords.map((record) =>
