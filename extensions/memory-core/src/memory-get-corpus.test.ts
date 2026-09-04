@@ -316,7 +316,7 @@ describe("memory_get corpus outcomes", () => {
       path: lookup,
       corpus: "all",
     });
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(15_000);
 
     await expect(pending).resolves.toMatchObject({
       details: {
@@ -326,7 +326,7 @@ describe("memory_get corpus outcomes", () => {
           {
             corpus: "wiki",
             outcome: "unavailable",
-            error: "memory_get timed out after 60s",
+            error: "memory_get timed out after 15s",
           },
         ],
       },

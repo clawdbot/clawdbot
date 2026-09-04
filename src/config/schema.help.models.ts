@@ -201,7 +201,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "memory.search.enabled":
     "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",
   "memory.search.timeoutMs":
-    "Sets the overall memory_search and memory_get deadline in milliseconds. Defaults to 60000 and accepts 1000 through 120000. Increase it only when a healthy large corpus cannot finish within the default budget.",
+    "Sets the overall memory_search and memory_get deadline in milliseconds. Defaults to 15000 and accepts 1000 through 120000. Increase it only when a healthy large corpus cannot finish within the default budget.",
   "memory.search.rememberAcrossConversations":
     'Use relevant context from this agent\'s other private conversations through protected transcript recall. Defaults on only when global session.dmScope is unset or "main" and no binding overrides DM scope; any configured DM isolation defaults it off. An explicit true or false always wins.',
   "memory.search.sources":
