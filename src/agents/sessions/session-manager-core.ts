@@ -1,6 +1,5 @@
 import {
   loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -572,22 +571,6 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
-  }
-
-  protected replacePersistedTranscript(options?: {
-    leafAppendParentId?: string | null;
-    leafAppendMode?: "side";
-  }): void {
-    if (!this.persistenceTarget) {
-      return;
-    }
-    const leafAppendParentId =
-      options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
-    replaceTranscriptEventsSync(
-      this.persistenceTarget,
-      this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
-    );
-    this.persistenceHeaderPending = false;
   }
 
   /** SQLite appends are synchronous; retained for the AgentSession contract. */
