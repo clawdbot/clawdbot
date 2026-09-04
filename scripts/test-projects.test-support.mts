@@ -1691,49 +1691,30 @@ function listImportGraphGrepMatches(
   const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
     cwd,
     encoding: "utf8",
-    // A frontier can exceed the platform argv limit; both search tools accept stdin patterns.
+    // A frontier can exceed the platform argv limit; Git accepts stdin patterns.
     input: missing.join("\n"),
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["pipe", "pipe", "pipe"],
   };
-  let result = spawnSync(
-    "rg",
-    [
-      "--files-with-matches",
-      "--fixed-strings",
-      "--hidden",
-      "--no-ignore",
-      ...suffixes.flatMap((suffix) => ["--glob", `*${suffix}`]),
-      "--glob",
-      "!**/node_modules/**",
-      "--glob",
-      "!**/dist/**",
-      "--glob",
-      "!**/vendor/**",
-      "-f",
-      "-",
-      "--",
-      ...roots,
-    ],
+  const result = spawnSync(
+    "git",
+    ["grep", "-l", "--fixed-strings", "-f", "-", "--", ...grepPaths],
     spawnOptions,
   );
-  if (result.error || (result.status !== 0 && result.status !== 1)) {
-    result = spawnSync(
-      "git",
-      ["grep", "-l", "--fixed-strings", "-f", "-", "--", ...grepPaths],
-      spawnOptions,
-    );
-  }
   for (const term of missing) {
-    matches.set(term, result.status === 0 || result.status === 1 ? [] : null);
+    matches.set(term, []);
   }
-  if (result.status === 0) {
+  if (result.status !== 1) {
     const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
-    const candidates = result.stdout
-      .split("\n")
-      .map((line) => normalizePathPattern(line.trim()))
-      .filter((file) => trackedFiles.has(file))
-      .toSorted((left, right) => left.localeCompare(right));
+    // Source archives use the same filesystem inventory and native reader as the full graph.
+    const candidates = (
+      result.status === 0
+        ? result.stdout
+            .split("\n")
+            .map((line) => normalizePathPattern(line.trim()))
+            .filter((file) => trackedFiles.has(file))
+        : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
+    ).toSorted((left, right) => left.localeCompare(right));
     // Per-term membership protects the broad cap and helper first-success rule.
     // Cached edges need only term facts; full-graph acquisition reuses their parsing.
     for (const { edges, matches: fileTerms } of readImportGraphEdges(
