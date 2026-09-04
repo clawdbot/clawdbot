@@ -76,11 +76,8 @@ const mocks = vi.hoisted(() => ({
     providers: [],
   })),
   loadProviderUsageSummary: vi.fn<LoadProviderUsageSummary>(async () => emptyUsageSummary()),
-  listProviderUsagePluginDescriptors: vi.fn(() => [
-    { provider: "anthropic", displayName: "Claude" },
-    { provider: "deepseek", displayName: "DeepSeek" },
-    { provider: "openai", displayName: "OpenAI" },
-  ]),
+  listProviderUsagePluginDescriptors:
+    vi.fn<typeof import("../../plugins/provider-runtime.js").listProviderUsagePluginDescriptors>(),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -357,6 +354,11 @@ function resetAuthStatusMocks(): void {
     profiles: [],
     providers: [],
   });
+  mocks.listProviderUsagePluginDescriptors.mockReturnValue([
+    { provider: "anthropic", displayName: "Claude" },
+    { provider: "deepseek", displayName: "DeepSeek" },
+    { provider: "openai", displayName: "OpenAI" },
+  ]);
   mocks.loadProviderUsageSummary.mockResolvedValue(emptyUsageSummary());
   mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValue(false);
   mocks.refreshPreparedModelRuntimeSnapshots.mockResolvedValue();
@@ -1501,7 +1503,7 @@ describe("models.authStatus", () => {
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
   });
 
-  it("does not publish usage captured before a concurrent logout", async () => {
+  it.each(["before", "during"])("revokes usage admitted %s logout", async (admission) => {
     let releaseUsage: (() => void) | undefined;
     let releaseRemoval: ((store: AuthProfileStore) => void) | undefined;
     let usageFinished = false;
@@ -1527,7 +1529,7 @@ describe("models.authStatus", () => {
       profiles: [oauthProfile],
       providers: [{ provider: "openrouter", status: "ok", profiles: [oauthProfile] }],
     });
-    mocks.listProviderUsagePluginDescriptors.mockReturnValueOnce([
+    mocks.listProviderUsagePluginDescriptors.mockReturnValue([
       { provider: "openrouter", displayName: "OpenRouter" },
     ]);
     mocks.loadProviderUsageSummary.mockImplementationOnce(async (options) => {
@@ -1549,19 +1551,31 @@ describe("models.authStatus", () => {
       };
     });
 
-    const first = await readAuthStatus();
-    expect(first.providers[0]?.usage).toBeUndefined();
-    expect(first.providers[0]?.profiles[0]?.usageRefreshPending).toBe(true);
-    await waitForFast(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
+    const startUsage = async () => {
+      const first = await readAuthStatus();
+      expect(first.providers[0]?.usage).toBeUndefined();
+      expect(first.providers[0]?.profiles[0]?.usageRefreshPending).toBe(true);
+      await waitForFast(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
+    };
+    if (admission === "before") {
+      await startUsage();
+    }
     const logout = logoutHandler(createLogoutOptions({ provider: "openrouter" }));
     await waitForFast(() =>
       expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledOnce(),
     );
+    if (admission === "during") {
+      await startUsage();
+      releaseRemoval?.({ version: 1, profiles: {} });
+      await logout;
+    }
     releaseUsage?.();
     await waitForFast(() => expect(usageFinished).toBe(true));
     expect(providerFetches).toBe(0);
-    releaseRemoval?.({ version: 1, profiles: {} });
-    await logout;
+    if (admission === "before") {
+      releaseRemoval?.({ version: 1, profiles: {} });
+      await logout;
+    }
 
     const afterLogout = await readAuthStatus();
     expect(afterLogout.providers[0]?.usage).toBeUndefined();

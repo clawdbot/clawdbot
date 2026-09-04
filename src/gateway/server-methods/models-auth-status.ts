@@ -249,15 +249,22 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       // Otherwise usage work can finish while the auth store is being updated
       // and publish a result for credentials that logout is removing.
       invalidateModelAuthStatusCache();
-      const removed = selection.profileIds
-        ? await removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: removedProfiles })
-        : await removeProviderAuthProfilesAcrossOwnerStores({
-            provider,
-            agentDir,
-            profileIds: removedProfiles,
-          });
-      if (!removed) {
+      let removed: boolean;
+      try {
+        removed = selection.profileIds
+          ? await removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: removedProfiles })
+          : await removeProviderAuthProfilesAcrossOwnerStores({
+              provider,
+              agentDir,
+              profileIds: removedProfiles,
+            });
         await refreshActiveProviderAuthRuntimeSnapshot();
+      } finally {
+        // Status reads can admit new usage while removal or publication awaits.
+        // Revoke that generation before acknowledging either success or failure.
+        invalidateModelAuthStatusCache();
+      }
+      if (!removed) {
         respond(
           false,
           undefined,
@@ -268,7 +275,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      await refreshActiveProviderAuthRuntimeSnapshot();
       void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch(
         (err: unknown) => {
           log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
