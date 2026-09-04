@@ -71,12 +71,14 @@ describe("shared proof capture", () => {
       writeFileSync(options.path, "sidebar-proof");
       return Buffer.from("sidebar-proof");
     });
-    // SAFETY: this fixture implements only the screenshot method used by the capture helper.
-    const page = { screenshot } as unknown as Page;
+    const video = vi.fn(() => null);
+    // SAFETY: this fixture implements the non-recording Page boundary used by the capture helper.
+    const page = { screenshot, video } as unknown as Page;
 
     await captureSidebarUiProof(owner, page, "state.png");
     expect(readdirSync(parent)).toEqual([]);
     expect(screenshot).not.toHaveBeenCalled();
+    expect(video).not.toHaveBeenCalled();
 
     vi.stubEnv("OPENCLAW_CAPTURE_UI_PROOF", "1");
     await captureSidebarUiProof(owner, page, "state.png");

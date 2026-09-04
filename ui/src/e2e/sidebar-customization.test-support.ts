@@ -21,16 +21,17 @@ export async function captureSidebarUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
-  surface: Locator = page.locator(".shell"),
-  content: readonly Locator[] = [surface],
+  surface?: Locator,
+  content?: readonly Locator[],
 ): Promise<void> {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
   if (page.video()) {
+    const proofSurface = surface ?? page.locator(".shell");
     await writeFile(
       path.join(owner.artifactDir, fileName),
-      await takeControlUiViewportScreenshot(page, surface, content),
+      await takeControlUiViewportScreenshot(page, proofSurface, content ?? [proofSurface]),
     );
     return;
   }
