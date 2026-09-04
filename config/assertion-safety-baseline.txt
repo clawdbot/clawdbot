@@ -1786,7 +1786,6 @@ src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	17
 src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	4
 src/agents/embedded-agent-runner/run/attempt-tool-call-text-promotion.ts	3
 src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts	3
-src/agents/embedded-agent-runner/run/attempt-transcript-helpers.ts	1
 src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle.ts	1
 src/agents/embedded-agent-runner/run/attempt-user-transcript-context-registry.ts	1
 src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.ts	6
