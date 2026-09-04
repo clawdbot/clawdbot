@@ -3,6 +3,7 @@ import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
@@ -65,6 +66,25 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   private promptPort?: MessagePort;
   private sandboxOrigin = "";
   private releaseTheme?: () => void;
+  private scriptsAllowed = true;
+  private sandboxGeneration = 0;
+
+  @property({ type: Boolean })
+  get allowScripts(): boolean {
+    return this.scriptsAllowed;
+  }
+
+  set allowScripts(value: boolean) {
+    if (value !== this.scriptsAllowed) {
+      // Revoke prompt access before Lit replaces the browsing context.
+      this.clearSandbox();
+      this.sandboxGeneration += 1;
+      if (this.view) {
+        this.error = "";
+      }
+      this.scriptsAllowed = value;
+    }
+  }
 
   get documentHtml(): string | undefined {
     return this.isCurrent(this.binding) ? this.view?.html : undefined;
@@ -84,6 +104,10 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   private clearView(): void {
     this.binding = undefined;
     this.view = undefined;
+    this.clearSandbox();
+  }
+
+  private clearSandbox(): void {
     this.sandboxHost?.dispose();
     this.sandboxHost = undefined;
     this.promptPort?.close();
@@ -138,7 +162,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
     const frame = this.querySelector<HTMLIFrameElement>("iframe");
     const view = this.view;
     const binding = this.binding;
-    if (!frame || !view || !this.isCurrent(binding) || this.sandboxHost) {
+    if (!this.allowScripts || !frame || !view || !this.isCurrent(binding) || this.sandboxHost) {
       return;
     }
     this.releaseTheme = registerWidgetThemeFrame(frame, this.sandboxOrigin);
@@ -155,11 +179,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
   }
 
   private fail(error: unknown): void {
-    this.sandboxHost?.dispose();
-    this.promptPort?.close();
-    this.promptPort = undefined;
-    this.releaseTheme?.();
-    this.releaseTheme = undefined;
+    this.clearSandbox();
     this.error = formatUiError(error);
   }
 
@@ -247,29 +267,35 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
         ${t("common.loading")}
       </div>`;
     }
-    let src: string;
+    let src: string | undefined;
     try {
-      src = resolveSandboxHostUrl(
-        this.view.sandboxUrl,
-        this.view.sandboxPort,
-        this.view.sandboxOrigin,
-        this.context.gateway.connection.gatewayUrl,
-        window.location.origin,
-      );
-      this.sandboxOrigin = new URL(src).origin;
+      if (this.allowScripts) {
+        src = resolveSandboxHostUrl(
+          this.view.sandboxUrl,
+          this.view.sandboxPort,
+          this.view.sandboxOrigin,
+          this.context.gateway.connection.gatewayUrl,
+          window.location.origin,
+        );
+        this.sandboxOrigin = new URL(src).origin;
+      }
     } catch (error) {
       return html`<div role="alert">${formatUiError(error)}</div>`;
     }
     const height = this.contentHeight ?? this.preferredHeight;
-    return html`<iframe
-      class="chat-tool-card__preview-frame"
-      title=${this.title}
-      src=${src}
-      sandbox="allow-scripts allow-same-origin allow-forms"
-      referrerpolicy="origin"
-      style=${height ? `height:${height}px;min-height:${height}px` : nothing}
-      @error=${() => this.sandboxHost?.handleFrameError()}
-    ></iframe>`;
+    return keyed(
+      this.sandboxGeneration,
+      html`<iframe
+        class="chat-tool-card__preview-frame"
+        title=${this.title}
+        src=${src ?? nothing}
+        srcdoc=${this.allowScripts ? nothing : this.view.html}
+        sandbox=${this.allowScripts ? "allow-scripts allow-same-origin allow-forms" : ""}
+        referrerpolicy="origin"
+        style=${height ? `height:${height}px;min-height:${height}px` : nothing}
+        @error=${() => this.sandboxHost?.handleFrameError()}
+      ></iframe>`,
+    );
   }
 }
 

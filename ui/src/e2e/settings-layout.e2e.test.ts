@@ -184,6 +184,80 @@ function createCronLayoutMethodResponses() {
 }
 
 suite.define(() => {
+  it("loads provider-settings copy after New Session and Chat without startup errors", async () => {
+    const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const errors: string[] = [];
+    const failedScripts: string[] = [];
+    const scripts: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") {
+        errors.push(message.text());
+      }
+    });
+    page.on("requestfailed", (request) => {
+      if (request.resourceType() === "script") {
+        failedScripts.push(request.url());
+      }
+    });
+    await installMockGateway(page);
+    // Capture before delivery: Chromium drops response bodies after navigation,
+    // including late script loads that were absent from a Promise.all snapshot.
+    await page.route("**/*", async (route) => {
+      if (route.request().resourceType() !== "script") {
+        await route.fallback();
+        return;
+      }
+      const response = await route.fetch();
+      if (!response.ok()) {
+        failedScripts.push(response.url());
+      }
+      scripts.push(await response.text());
+      await route.fulfill({ response });
+    });
+
+    try {
+      const providerCopy = "Model providers with auth, plan, quota, and cost data.";
+      for (const route of ["new", "chat"]) {
+        await page.goto(`${suite.server.baseUrl}${route}`);
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        expect(scripts.join("\n")).not.toContain(providerCopy);
+        if (recordVisuals) {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${route}.png`),
+            fullPage: true,
+          });
+        }
+      }
+      await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+      await page.getByRole("heading", { name: /^Configured providers\b/ }).waitFor();
+      expect(scripts.join("\n")).toContain(providerCopy);
+      expect(await page.locator(".model-providers__defaults").textContent()).toContain(
+        "Utility Model",
+      );
+      expect(errors).toEqual([]);
+      expect(failedScripts).toEqual([]);
+      if (recordVisuals) {
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "settings.png"),
+          fullPage: true,
+        });
+      }
+    } finally {
+      try {
+        await page.unrouteAll({ behavior: "wait" });
+      } finally {
+        await context.close();
+      }
+    }
+  });
+
   it("aligns settings-style workspace headers with their content columns", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
