@@ -1,11 +1,7 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 // Workboard plugin module implements tools behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
-import type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  OpenClawPluginToolContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
 import { redactClaimToken } from "./card-redaction.js";
@@ -171,7 +167,6 @@ const CardIdSchema = strictObject({
 });
 
 export function createWorkboardTools(params: {
-  api: OpenClawPluginApi;
   context?: OpenClawPluginToolContext;
   store?: WorkboardStore;
 }): AnyAgentTool[] {

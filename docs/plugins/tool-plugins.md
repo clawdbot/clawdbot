@@ -273,7 +273,8 @@ output schema because it could drift from the runtime tool.
 OpenClaw also grades the call outcome from `details`, so `status`, `ok`,
 `success`, `error`, `timedOut`, and `exitCode` are reserved names. A `status`
 of `blocked`, `denied`, `invalid`, `cancelled`, or any other failure value
-marks the call failed even when `execute` returned normally. Domain data that
+marks the call failed unless `ok` or `success` is explicitly `true`, even when
+`execute` returned normally. Domain data that
 uses one of those names belongs under a wrapper key, such as `{ card }`,
 instead of at the top level of `details`.
 
