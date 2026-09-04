@@ -31,11 +31,7 @@ import {
 import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
-import {
-  CodexResponseCompletionProjection,
-  normalizeCodexResponseTokenUsage,
-  projectCodexThreadUsageUpdate,
-} from "./event-projector-usage.js";
+import { CodexUsageProjection } from "./event-projector-usage.js";
 import { readCodexErrorNotificationMessage, readItem } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
 import {
@@ -80,10 +76,9 @@ export class CodexAppServerEventProjector {
   private promptErrorSource: AttemptFailureSource | null = null;
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
-  private tokenUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
   private contextTokens: number | undefined;
   private contextTokensSource: "runtime" | "runtime-configured" | "resolved" | undefined;
-  private readonly responseCompletions = new CodexResponseCompletionProjection();
+  private readonly usageProjection = new CodexUsageProjection();
   private completedCompactionCount = 0;
   private pendingSteeringAssistantBoundaryItemId: string | undefined;
 
@@ -308,31 +303,25 @@ export class CodexAppServerEventProjector {
       case "hook/completed":
         this.eventProjection.handleHook(notification.method, params);
         break;
-      case "thread/tokenUsage/updated":
-        projectCodexThreadUsageUpdate(
-          params,
-          this.tokenUsage,
-          (usage) => (this.tokenUsage = usage),
-          (data) => {
-            if (data.modelContextWindow !== undefined) {
-              this.contextTokens = data.modelContextWindow;
-              // Codex reports the effective thread window. When OpenClaw supplied an
-              // authored cap, retain that fact so removing the cap cannot make the
-              // constrained observation look like uncapped native telemetry.
-              this.contextTokensSource =
-                this.params.authoredContextTokenCap === undefined
-                  ? "runtime"
-                  : "runtime-configured";
-            }
-            this.emitAgentEvent({ stream: "usage", data });
-          },
-        );
+      case "thread/tokenUsage/updated": {
+        const data = this.usageProjection.recordThread(params);
+        if (data.modelContextWindow !== undefined) {
+          this.contextTokens = data.modelContextWindow;
+          // Retain an authored cap so its removal cannot make a constrained
+          // native window look like an uncapped runtime observation.
+          this.contextTokensSource =
+            this.params.authoredContextTokenCap === undefined ? "runtime" : "runtime-configured";
+        }
+        if (Object.keys(data).length > 0) {
+          this.emitAgentEvent({ stream: "usage", data });
+        }
         break;
+      }
       case "turn/completed":
         await this.handleTurnCompleted(params);
         break;
       case "rawResponse/completed":
-        this.responseCompletions.record(params, this.params.hostCapabilities.reportOutputTokens);
+        this.usageProjection.record(params, this.params.hostCapabilities.reportOutputTokens);
         break;
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);
@@ -342,7 +331,7 @@ export class CodexAppServerEventProjector {
         this.eventProjection.handleModelRerouted(params);
         break;
       case "error": {
-        this.responseCompletions.clear();
+        this.usageProjection.invalidateContext();
         if (params.willRetry === true) {
           break;
         }
@@ -395,7 +384,6 @@ export class CodexAppServerEventProjector {
         this.promptErrorSource = this.promptErrorSource ?? "prompt";
       },
       aborted: this.aborted,
-      tokenUsage: this.tokenUsage,
       contextTokens: this.contextTokens,
       contextTokensSource: this.contextTokensSource,
       completedCompactionCount: this.completedCompactionCount,
@@ -407,7 +395,7 @@ export class CodexAppServerEventProjector {
       nativeToolLifecycleProjection: this.nativeToolLifecycleProjector,
       assistantProjection: this.assistantProjection,
       reasoningProjection: this.reasoningProjection,
-      responseCompletions: this.responseCompletions,
+      usageProjection: this.usageProjection,
       toolTranscriptProjection: this.toolTranscriptProjection,
       toolProgressProjection: this.toolProgressProjection,
       generatedMediaProjection: this.generatedMediaProjection,
@@ -452,7 +440,7 @@ export class CodexAppServerEventProjector {
 
   markAborted(): void {
     this.aborted = true;
-    this.responseCompletions.clear();
+    this.usageProjection.invalidateContext();
   }
 
   isCompacting(): boolean {
@@ -590,7 +578,7 @@ export class CodexAppServerEventProjector {
       turn.status === "failed" &&
       (turn.error?.codexErrorInfo === "serverOverloaded" || compactionFailure);
     if (turn.status !== "completed") {
-      this.responseCompletions.clear();
+      this.usageProjection.invalidateContext();
     }
     if (turn.status === "failed") {
       this.promptError =

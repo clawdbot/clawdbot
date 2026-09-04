@@ -2427,6 +2427,7 @@ describe("shared Codex app-server client", () => {
 
     // The ordinary lease is gone, but native completion still explicitly owns
     // the detached process and repeated cleanup must not close that owner.
+    expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(false);
     expect(retireSharedCodexAppServerClientIfCurrent(client)).toEqual({
       activeLeases: 1,
       closed: false,

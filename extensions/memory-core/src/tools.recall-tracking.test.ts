@@ -58,10 +58,12 @@ describe("memory_search recall tracking", () => {
       ],
       get: async () => null,
     });
-    const tool = createSearchTool({
-      memory: { citations: "on" },
-      plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
-    });
+    const tool = createSearchTool(
+      asOpenClawConfig({
+        memory: { citations: "on" },
+        plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
+      }),
+    );
 
     const result = await tool.execute("balanced_recall", {
       query: "remember",

@@ -59,6 +59,8 @@ type SharedCodexAppServerClientEntry = {
   client?: CodexAppServerClient;
   startup?: SharedCodexAppServerClientStartup;
   activeLeases: number;
+  // Anonymous releases cannot consume explicit native-subagent retains.
+  anonymousLeases: number;
   pendingAcquires: number;
   closeWhenIdle: boolean;
   closeError?: Error;
@@ -102,7 +104,6 @@ type SharedCodexAppServerClientState = {
   liveClients: Set<CodexAppServerClient>;
   isolatedClients: Set<CodexAppServerClient>;
   entriesByClient: WeakMap<CodexAppServerClient, SharedCodexAppServerClientEntry>;
-  leasedReleases: WeakMap<CodexAppServerClient, Array<() => void>>;
   desktopGenerationDrainChecks: Set<() => void>;
   startup: CodexAppServerStartupLifetime;
   startMetadata: WeakMap<CodexAppServerClient, CodexAppServerClientStartMetadata>;
@@ -152,7 +153,6 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
     liveClients: new Set(),
     isolatedClients: new Set(),
     entriesByClient: new WeakMap(),
-    leasedReleases: new WeakMap(),
     desktopGenerationDrainChecks: new Set(),
     startup: createStartupLifetime(),
     startMetadata: new WeakMap(),
@@ -548,39 +548,27 @@ function shouldTrackDesktopGeneration(
 }
 
 /** Gets or starts a shared Codex app-server client without retaining a lease. */
-export async function getSharedCodexAppServerClient(
+export function getSharedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
-  return (await acquireSharedCodexAppServerClient(options)).client;
+  return acquireSharedCodexAppServerClient(options);
 }
 
 /** Gets or starts a shared Codex app-server client and records a release lease. */
-export async function getLeasedSharedCodexAppServerClient(
+export function getLeasedSharedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
-  const acquired = await acquireSharedCodexAppServerClient(options, { leased: true });
-  const state = getSharedCodexAppServerClientState();
-  const releases = state.leasedReleases.get(acquired.client) ?? [];
-  releases.push(acquired.release);
-  state.leasedReleases.set(acquired.client, releases);
-  return acquired.client;
+  return acquireSharedCodexAppServerClient(options, true);
 }
 
 /** Releases one outstanding lease for a shared Codex app-server client. */
 export function releaseLeasedSharedCodexAppServerClient(client: CodexAppServerClient): boolean {
-  const state = getSharedCodexAppServerClientState();
-  const releases = state.leasedReleases.get(client);
-  if (!releases) {
+  const entry = getSharedCodexAppServerClientState().entriesByClient.get(client);
+  if (!entry || entry.anonymousLeases === 0) {
     return false;
   }
-  const release = releases.pop();
-  if (!release) {
-    return false;
-  }
-  if (releases.length === 0) {
-    state.leasedReleases.delete(client);
-  }
-  release();
+  entry.anonymousLeases -= 1;
+  releaseSharedClientEntry(entry, "activeLeases");
   return true;
 }
 
@@ -681,15 +669,8 @@ export async function withLeasedCodexAppServerClientStartSelectionRetry<T>(param
 
 async function acquireSharedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
-): Promise<{ client: CodexAppServerClient }>;
-async function acquireSharedCodexAppServerClient(
-  options: CodexAppServerClientOptions | undefined,
-  leaseOptions: { leased: true },
-): Promise<{ client: CodexAppServerClient; release: () => void }>;
-async function acquireSharedCodexAppServerClient(
-  options?: CodexAppServerClientOptions,
-  leaseOptions?: { leased: true },
-): Promise<{ client: CodexAppServerClient; release?: () => void }> {
+  leased = false,
+): Promise<CodexAppServerClient> {
   const timeoutMs = options?.timeoutMs ?? 0;
   const state = getSharedCodexAppServerClientState();
   const { context, lifetime, abandonSignal, startedAt, assertCurrent } =
@@ -827,8 +808,11 @@ async function acquireSharedCodexAppServerClient(
       authMode: preparedAuth?.kind === "api-key" ? "prepared-api-key" : "profile",
       config: options?.config,
     });
-    const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
-    return release ? { client, release } : { client };
+    if (leased) {
+      entry.anonymousLeases += 1;
+      entry.activeLeases += 1;
+    }
+    return client;
   } catch (error) {
     // This deadline belongs to one waiter, not the shared physical client.
     // Release first so only the final claimant can tear down stalled startup.
@@ -1297,7 +1281,6 @@ export function resetSharedCodexAppServerClientForTests(): void {
   state.liveClients.clear();
   state.isolatedClients.clear();
   state.entriesByClient = new WeakMap();
-  state.leasedReleases = new WeakMap();
   for (const client of clients) {
     client.close();
   }
@@ -1608,6 +1591,7 @@ function getOrCreateSharedClientEntry(
     entry = {
       key,
       activeLeases: 0,
+      anonymousLeases: 0,
       pendingAcquires: 0,
       closeWhenIdle: false,
       onStartedClientCallbacks: new Set(),
@@ -1651,10 +1635,17 @@ function retainSharedClientEntry(
       return;
     }
     released = true;
-    entry[counter] = Math.max(0, entry[counter] - 1);
-    closeRetiredSharedClientEntryIfIdle(entry);
-    notifyDesktopGenerationDrainChecks(getSharedCodexAppServerClientState());
+    releaseSharedClientEntry(entry, counter);
   };
+}
+
+function releaseSharedClientEntry(
+  entry: SharedCodexAppServerClientEntry,
+  counter: "activeLeases" | "pendingAcquires",
+): void {
+  entry[counter] -= 1;
+  closeRetiredSharedClientEntryIfIdle(entry);
+  notifyDesktopGenerationDrainChecks(getSharedCodexAppServerClientState());
 }
 
 function closeRetiredSharedClientEntryIfIdle(entry: SharedCodexAppServerClientEntry): boolean {

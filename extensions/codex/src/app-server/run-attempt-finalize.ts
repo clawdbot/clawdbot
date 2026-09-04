@@ -444,16 +444,14 @@ export async function finalizeCodexAttempt(
         // Only turns whose prompt WAS a no-engine continuity projection may
         // calibrate: a dense direct or active-engine prompt must never persist a
         // sample that later shrinks continuity history it did not measure.
-        // Normalized usage splits total input into uncached + cacheRead + cacheWrite;
-        // the density sample needs the full input cost, or the derived ratio loosens
-        // the continuity cap in the unsafe direction.
+        // Billing spans every model call; density needs only the latest full prompt.
         continuityCalibration: context.promptState.noEngineContinuityProjectionApplied
           ? buildCodexContinuityCalibration({
               promptChars: prompt.turnState.codexTurnPromptText.length,
               inputTokens:
-                (result.attemptUsage?.input ?? 0) +
-                (result.attemptUsage?.cacheRead ?? 0) +
-                (result.attemptUsage?.cacheWrite ?? 0),
+                result.attemptUsage?.contextUsage?.state === "available"
+                  ? (result.attemptUsage.contextUsage.promptTokens ?? 0)
+                  : 0,
             })
           : undefined,
       });
