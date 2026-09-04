@@ -320,6 +320,61 @@ describe("Doctor ACP owner migration", () => {
     });
   });
 
+  it("rejects divergent source metadata after an interrupted claim", async () => {
+    await withStateDirEnv("openclaw-doctor-acp-meta-divergence-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const cfg = createConfig(stateDir);
+      seedLegacySession({ cfg, env });
+      expect(
+        claimAcpSessionMetaForOwnerMigration({
+          cfg,
+          entry,
+          env,
+          expectedAgent: "codex",
+          sourceAgentId: "codex",
+          sourceSessionKey: sourceKey,
+          targetAgentId: "reviewer",
+          targetSessionKey: targetKey,
+        }),
+      ).toBe("claimed");
+      writeAcpSessionMetaForMigration({
+        env,
+        lifecycleRevision: entry.lifecycleRevision,
+        meta: {
+          agent: "codex",
+          backend: "acpx",
+          lastActivityAt: 20,
+          mode: "persistent",
+          runtimeSessionName: "newer-legacy-peer",
+          state: "idle",
+        },
+        sessionKey: sourceKey,
+      });
+
+      const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
+
+      expect(report).toMatchObject({ conflicts: 1, eligible: 1, migrated: 0 });
+      expect(
+        readAcpSessionMetaForEntry({
+          agentId: "codex",
+          cfg,
+          entry,
+          env,
+          sessionKey: sourceKey,
+        })?.runtimeSessionName,
+      ).toBe("newer-legacy-peer");
+      expect(
+        readAcpSessionMetaForEntry({
+          agentId: "reviewer",
+          cfg,
+          entry,
+          env,
+          sessionKey: targetKey,
+        })?.runtimeSessionName,
+      ).toBe("legacy-peer");
+    });
+  });
+
   it("canonicalizes matching target metadata left under a legacy key", async () => {
     await withStateDirEnv("openclaw-doctor-acp-target-meta-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

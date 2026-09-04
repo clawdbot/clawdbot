@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { Insertable } from "kysely";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -6,6 +7,7 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import {
   acpSessionRowMatchesEntry,
   type AcpSessionEntryBinding,
+  type AcpSessionRow,
   type AcpSessionsTable,
   buildAcpDatabaseSessionKey,
   getAcpSessionKysely,
@@ -80,6 +82,19 @@ export function claimAcpSessionMetaForOwnerMigration(params: {
           result = "conflict";
           return;
         }
+        const divergentSource = [...new Set(sourceDatabaseKeys)]
+          .map((key) => selectAcpSessionRow(database.db, key))
+          .find(
+            (row) =>
+              row !== undefined &&
+              row.agent === params.expectedAgent &&
+              acpSessionRowMatchesEntry(row, params.entry) &&
+              !sameAcpSessionMetadata(row, targetRow),
+          );
+        if (divergentSource) {
+          result = "conflict";
+          return;
+        }
         if (targetMatch.key !== targetDatabaseKey) {
           insertRow(database.db, {
             ...targetRow,
@@ -132,6 +147,10 @@ export function claimAcpSessionMetaForOwnerMigration(params: {
     { env: params.env, path: params.databasePath },
   );
   return result;
+}
+
+function sameAcpSessionMetadata(left: AcpSessionRow, right: AcpSessionRow): boolean {
+  return isDeepStrictEqual(rowToAcpSessionMeta(left), rowToAcpSessionMeta(right));
 }
 
 function deleteMatchingRows(params: {
