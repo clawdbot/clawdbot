@@ -6,13 +6,11 @@ vi.hoisted(() => {
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { subagentRuns } from "../src/agents/subagents/registry/subagent-registry-memory.js";
-import type {
-  SubagentRunRecord,
-} from "../src/agents/subagents/registry/subagent-registry.types.js";
+import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { waitForDescendantSubagentSummary } from "../src/cron/isolated-agent/subagent-followup.js";
+import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,

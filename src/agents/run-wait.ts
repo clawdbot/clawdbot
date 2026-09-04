@@ -53,14 +53,10 @@ function resolveRunWaitDeadlineAtMs(
   );
 }
 
-export function resolveMonotonicDeadlineMs(
-  deadlineAtMs: number,
-  nowMs = Date.now(),
-): number {
+export function resolveMonotonicDeadlineMs(deadlineAtMs: number, nowMs = Date.now()): number {
   // Capture elapsed budget once so wall-clock corrections cannot extend later waits.
   return (
-    performance.now() +
-    (Number.isFinite(deadlineAtMs) ? Math.max(0, deadlineAtMs - nowMs) : 0)
+    performance.now() + (Number.isFinite(deadlineAtMs) ? Math.max(0, deadlineAtMs - nowMs) : 0)
   );
 }
 
