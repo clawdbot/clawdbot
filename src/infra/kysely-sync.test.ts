@@ -112,21 +112,46 @@ describe("kysely sync helpers", () => {
     }
   });
 
-  it("preserves string binding and set semantics in JSON-backed selections", () => {
-    database = new DatabaseSync(":memory:");
-    database.exec("create table items (id integer primary key, name text not null unique)");
-    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
-    const values = ["", "plain", "λ🦞", "\uFFFD", "nul\0tail", "'); DROP TABLE items; --"];
-    for (const name of values) {
-      executeSqliteQuerySync(database, db.insertInto("items").values({ name }));
-    }
-    for (const names of [[], values, ["plain", "plain"], ["\uD800"], ["\uDC00"], ["absent"]]) {
-      const query = db.selectFrom("items").selectAll().orderBy("name");
-      expect(
-        executeSqliteQuerySync(database, query.where("name", "in", sqliteStringSet(names))).rows,
-      ).toEqual(executeSqliteQuerySync(database, query.where("name", "in", names)).rows);
-    }
-  });
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+    "preserves string binding and set semantics (%s)",
+    (encoding) => {
+      database = new DatabaseSync(":memory:");
+      database.exec(`PRAGMA encoding = '${encoding}'`);
+      database.exec("create table items (id integer primary key, name text not null unique)");
+      const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+      const values = [
+        "",
+        "plain",
+        "λ🦞",
+        "\uFFFD",
+        "nul",
+        "nul\0tail",
+        "\0",
+        "\0\0",
+        "\\u0000",
+        "\\x00",
+        "slash\\\0tail",
+        "'); DROP TABLE items; --",
+      ];
+      for (const name of values) {
+        executeSqliteQuerySync(database, db.insertInto("items").values({ name }));
+      }
+      for (const names of [
+        [],
+        values,
+        ["plain", "plain"],
+        ...values.map((value) => [value]),
+        ["\uD800"],
+        ["\uDC00"],
+        ["absent"],
+      ]) {
+        const query = db.selectFrom("items").selectAll().orderBy("name");
+        expect(
+          executeSqliteQuerySync(database, query.where("name", "in", sqliteStringSet(names))).rows,
+        ).toEqual(executeSqliteQuerySync(database, query.where("name", "in", names)).rows);
+      }
+    },
+  );
 
   it("keeps prepared query bindings independent during synchronous callback re-entry", () => {
     database = new DatabaseSync(":memory:");

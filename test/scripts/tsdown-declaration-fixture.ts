@@ -9,6 +9,7 @@ import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -115,12 +116,8 @@ export function createFixture(
     "@openclaw/fs-safe",
     "@typescript/native-preview",
     "playwright-core",
-    "tsdown",
     "tsx",
-    "typescript",
-    ...(groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS
-      ? ["@types/node", "apache-arrow", "pretty-ms"]
-      : []),
+    ...(groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS ? ["pretty-ms"] : []),
   ]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -130,6 +127,7 @@ export function createFixture(
       "junction",
     );
   }
+  materializeDeclarationPackages(root, groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
   const write = (source: string, contents: string) => {
     const relative = path.relative(root, path.resolve(root, source));
     if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {

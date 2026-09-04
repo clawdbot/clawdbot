@@ -274,13 +274,13 @@ export let STATE_DIR = resolveStateDir();
  */
 export function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
+  stateDir?: string,
 ): string {
   const override = env.OPENCLAW_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
-  return path.join(stateDir, CONFIG_FILENAME);
+  return path.join(stateDir ?? resolveStateDir(env, envHomedir(env)), CONFIG_FILENAME);
 }
 
 /**
@@ -291,6 +291,11 @@ export function resolveConfigPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {
+  const override = env.OPENCLAW_CONFIG_PATH?.trim();
+  if (override) {
+    // Explicit selection is independent of existence, including during bootstrap.
+    return resolveUserPath(override, env, homedir);
+  }
   if (isFastTestRuntimeEnv(env)) {
     return resolveCanonicalConfigPath(env, resolveStateDir(env, homedir));
   }
@@ -313,20 +318,21 @@ export function resolveConfigPathCandidate(
  */
 export function resolveConfigPath(
   env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
+  stateDir?: string,
   homedir: () => string = envHomedir(env),
 ): string {
   const override = env.OPENCLAW_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
+  const selectedStateDir = stateDir ?? resolveStateDir(env, envHomedir(env));
   if (isFastTestRuntimeEnv(env)) {
-    return path.join(stateDir, CONFIG_FILENAME);
+    return path.join(selectedStateDir, CONFIG_FILENAME);
   }
   const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
   const candidates = [
-    path.join(stateDir, CONFIG_FILENAME),
-    ...LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name)),
+    path.join(selectedStateDir, CONFIG_FILENAME),
+    ...LEGACY_CONFIG_FILENAMES.map((name) => path.join(selectedStateDir, name)),
   ];
   const existing = candidates.find((candidate) => {
     try {
@@ -339,13 +345,13 @@ export function resolveConfigPath(
     return existing;
   }
   if (stateOverride) {
-    return path.join(stateDir, CONFIG_FILENAME);
+    return path.join(selectedStateDir, CONFIG_FILENAME);
   }
   const defaultStateDir = resolveStateDir(env, homedir);
-  if (path.resolve(stateDir) === path.resolve(defaultStateDir)) {
+  if (path.resolve(selectedStateDir) === path.resolve(defaultStateDir)) {
     return resolveConfigPathCandidate(env, homedir);
   }
-  return path.join(stateDir, CONFIG_FILENAME);
+  return path.join(selectedStateDir, CONFIG_FILENAME);
 }
 
 export let CONFIG_PATH = resolveConfigPathCandidate();

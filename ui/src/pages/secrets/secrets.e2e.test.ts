@@ -1,9 +1,11 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import type { Locator, Page } from "playwright";
+import { beforeEach, expect, it } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
@@ -14,7 +16,15 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "secrets-store");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    proofDir = createControlUiE2eArtifactDir(
+      "secrets-store",
+      path.join(process.cwd(), ".artifacts", "control-ui-e2e", "secrets-store"),
+    );
+  }
+});
 
 const envEntry: SecretStoreEntry = {
   name: "SERVICE_URL",
@@ -50,16 +60,30 @@ const bulkSecretEntry: SecretStoreEntry = {
   allowedHosts: [],
 };
 
-async function capture(page: Page, fileName: string) {
+async function capture(
+  page: Page,
+  fileName: string,
+  surface: Locator = page.locator(".shell"),
+  content: readonly Locator[] = [
+    page.locator(".settings-section__heading", { hasText: "Secrets" }),
+  ],
+) {
   if (!captureUiProofEnabled) {
     return;
   }
   await mkdir(proofDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, fileName),
-  });
+  if (page.video()) {
+    await writeFile(
+      path.join(proofDir, fileName),
+      await takeControlUiViewportScreenshot(page, surface, content),
+    );
+  } else {
+    await page.screenshot({
+      animations: "disabled",
+      fullPage: true,
+      path: path.join(proofDir, fileName),
+    });
+  }
 }
 
 async function tableBodyContrast(page: Page): Promise<number> {
@@ -253,7 +277,9 @@ suite.define(() => {
         await addDialog.getByText(/The agent can print, transmit, or persist it/u).waitFor();
         await addDialog.getByLabel("Name", { exact: true }).fill("SERVICE_URL");
         await addDialog.getByLabel("Value", { exact: true }).fill("https://service.test");
-        await capture(page, "02-add-dialog.png");
+        await capture(page, "02-add-dialog.png", addDialog.locator("dialog"), [
+          addDialog.getByLabel("Value", { exact: true }),
+        ]);
         await addDialog.getByRole("button", { name: "Save", exact: true }).click();
         await page
           .getByRole("status")
@@ -270,7 +296,9 @@ suite.define(() => {
         ).toBe(true);
         await secretDialog.getByLabel("Value", { exact: true }).fill("super-secret-material");
         await secretDialog.locator('textarea[name="allowed-hosts"]').fill("api.example.com");
-        await capture(page, "02-secret-allowed-hosts.png");
+        await capture(page, "02-secret-allowed-hosts.png", secretDialog.locator("dialog"), [
+          secretDialog.locator('textarea[name="allowed-hosts"]'),
+        ]);
         await secretDialog.getByLabel("Name", { exact: true }).press("Enter");
         await page
           .getByRole("status")
@@ -296,7 +324,9 @@ suite.define(() => {
           .getByRole("textbox", { name: "Value", exact: true })
           .fill('BULK_PRIVATE_KEY="line one\nline two"\nBULK_URL=https://bulk.test');
         await bulkDialog.getByText("1 protected secret detected").waitFor();
-        await capture(page, "03-bulk-add-dialog.png");
+        await capture(page, "03-bulk-add-dialog.png", bulkDialog.locator("dialog"), [
+          bulkDialog.getByRole("textbox", { name: "Value", exact: true }),
+        ]);
         await bulkDialog.getByRole("button", { name: "Save", exact: true }).click();
         await page
           .getByRole("status")

@@ -9,7 +9,8 @@ const { createHash } = require("node:crypto");
 const { isUtf8 } = require("node:buffer");
 const { spawnSync } = require("node:child_process");
 const expected = JSON.parse(process.argv[1]);
-const cwd = process.cwd();
+const syncRoot = process.cwd();
+const cwd = process.argv[2] ?? syncRoot;
 let temporary;
 function fail(message) { throw new Error(message); }
 function stat(file) {
@@ -37,9 +38,14 @@ function hashFile(file, algorithm, blob = false) {
   } finally { fs.closeSync(fd); }
 }
 try {
-  const capsule = ".openclaw-crabbox-changed-gate.bundle";
+  if (process.argv[2] && (cwd === syncRoot || cwd.startsWith(syncRoot + path.sep) || syncRoot.startsWith(cwd + path.sep)))
+    fail("Testbox execution and sync workspaces overlap; stop this lease and warm a fresh one");
+  const capsule = path.join(syncRoot, ".openclaw-crabbox-changed-gate.bundle");
   if (!stat(capsule)?.isFile() || hashFile(capsule, "sha256") !== expected.digest)
     fail("missing or mismatched source capsule; rerun from the local candidate");
+  // Native cleanup owns only syncRoot. Source application and the payload share
+  // the prepared workspace, so ignored runtime never enters the native delete walk.
+  process.chdir(cwd);
   temporary = fs.mkdtempSync(path.join(cwd, ".openclaw-source-"));
   const bundle = path.join(temporary, "source.bundle");
   fs.copyFileSync(capsule, bundle);
@@ -167,7 +173,7 @@ try {
     }
   } finally { fs.closeSync(input); }
   git(["read-tree", expected.tree]);
-  remove(capsule);
+  fs.rmSync(capsule);
   for (const file of git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean)) {
     if (!file.startsWith(path.basename(temporary) + "/")) fail("unexpected source entry: " + file);
   }
@@ -202,8 +208,19 @@ try {
 }
 `;
 
-export function remoteSourceBootstrap(capsule: CrabboxSourceCapsule, alias: string) {
+export function remoteSourceBootstrap(
+  capsule: CrabboxSourceCapsule,
+  alias: string,
+  testboxWorkspace: boolean,
+) {
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   const { sourceSha, baseSha, tree, carrier, digest } = capsule;
-  return `node -e ${quote(receiver)} ${quote(JSON.stringify({ sourceSha, baseSha, tree, carrier, digest, alias }))}`;
+  const command = `node -e ${quote(receiver)} ${quote(JSON.stringify({ sourceSha, baseSha, tree, carrier, digest, alias }))}`;
+  if (!testboxWorkspace) {
+    return command;
+  }
+  return [
+    'openclaw_source_root="$(cd ./.git/crabbox-artifact-root && pwd -P)" || { echo "[crabbox] missing prepared Testbox execution workspace; stop this lease and warm a fresh one" >&2; exit 2; };',
+    `${command} "$openclaw_source_root" && cd "$openclaw_source_root"`,
+  ].join(" ");
 }

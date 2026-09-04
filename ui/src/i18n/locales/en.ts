@@ -898,6 +898,8 @@ export const en: TranslationMap & {
     cloudRecoveryUnavailable:
       "Cloud workers are unavailable because this connection does not support task recovery. Reconnect or update the Gateway.",
     placementStartFailed: "The session was created, but runner startup failed: {error}",
+    placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
+    discardUnsavedAndReload: "Discard unsaved starts and reload",
     placementSyncsFolder: "Syncs {folder} to the selected runner",
     folder: "Folder",
     folderPlaceholder: "Agent workspace",

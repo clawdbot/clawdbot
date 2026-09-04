@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,8 @@ function createFakeGh(): string {
   const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-metadata-"));
   const gh = join(dir, "gh");
   tempDirs.push(dir);
+  writeFileSync(join(dir, "pr-view-count"), "0\n");
+  writeFileSync(join(dir, "pr-view-count.sleeps"), "");
   writeFileSync(
     gh,
     `#!/usr/bin/env bash
@@ -121,11 +123,19 @@ function readPrMetadata(
     restFileCount?: string;
   } = {},
 ) {
-  return spawnSync(
+  const result = spawnSync(
     "bash",
     [
       "-c",
-      "set -euo pipefail; source scripts/lib/plain-gh.sh; source scripts/pr-lib/worktree.sh; source scripts/pr-lib/common.sh; pr_meta_json 42",
+      [
+        "set -euo pipefail",
+        "source scripts/lib/plain-gh.sh",
+        "source scripts/pr-lib/worktree.sh",
+        "source scripts/pr-lib/common.sh",
+        // Keep the real retry loop, but record its delays in this child shell only.
+        'sleep() { printf "%s\\n" "$*" >> "$FAKE_PR_VIEW_COUNT_FILE.sleeps"; }',
+        "pr_meta_json 42",
+      ].join("; "),
     ],
     {
       cwd: process.cwd(),
@@ -149,6 +159,15 @@ function readPrMetadata(
       encoding: "utf8",
     },
   );
+  return {
+    ...result,
+    prViewAttempts: Number(readFileSync(join(fakeGhDir, "pr-view-count"), "utf8")),
+    retryDelays: readFileSync(join(fakeGhDir, "pr-view-count.sleeps"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(Number),
+  };
 }
 
 afterEach(() => {
@@ -167,6 +186,8 @@ describe("PR metadata", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+    expect(result.prViewAttempts).toBe(2);
+    expect(result.retryDelays).toEqual([]);
   });
 
   it("uses cacheable GraphQL file metadata when the complete list fits", () => {
@@ -296,8 +317,11 @@ describe("PR metadata", () => {
     const result = readPrMetadata(createFakeGh(), { prViewFailureMode });
 
     expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.prViewAttempts).toBe(3);
+    expect(result.retryDelays).toEqual([1, 2]);
     expect(result.stderr).toContain(
-      `GitHub API failure while reading PR #42: gh pr view ${detail}`,
+      `GitHub API failure while reading PR #42: gh pr view ${detail} after 3 attempts.`,
     );
     expect(result.stderr).toContain("HTTP 503: No server is currently available");
     expect(result.stderr).not.toContain("integer expected");
@@ -313,8 +337,11 @@ describe("PR metadata", () => {
     });
 
     expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.prViewAttempts).toBe(4);
+    expect(result.retryDelays).toEqual([1, 2]);
     expect(result.stderr).toContain(
-      "GitHub API failure while reading PR #42: gh pr view returned empty stdout",
+      "GitHub API failure while reading PR #42: gh pr view returned empty stdout after 3 attempts.",
     );
     expect(result.stderr).not.toContain("PR head changed");
   });
@@ -329,6 +356,8 @@ describe("PR metadata", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+    expect(result.prViewAttempts).toBe(3);
+    expect(result.retryDelays).toEqual([1]);
     expect(JSON.parse(result.stdout)).toMatchObject({ headRefOid: "head-a", changedFiles: 2 });
   });
 });

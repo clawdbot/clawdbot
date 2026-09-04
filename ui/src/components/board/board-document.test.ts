@@ -44,6 +44,13 @@ it("binds an acknowledged conversation only while the dashboard document is moun
   );
   await element.updateComplete;
   expect(element.querySelector("openclaw-board-view")).not.toBeNull();
+  element.gatewaySnapshot = {
+    client,
+    phase: "connected",
+    hello: { features: { methods: ["board.get"] } },
+  } as ApplicationGatewaySnapshot;
+  await element.updateComplete;
+  expect(request).toHaveBeenCalledTimes(2);
   element.remove();
   await element.updateComplete;
   expect(removeListener).toHaveBeenCalledOnce();
@@ -52,4 +59,94 @@ it("binds an acknowledged conversation only while the dashboard document is moun
   document.body.append(element);
   await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
   expect(request).toHaveBeenLastCalledWith("board.get", { sessionKey: "global", agentId: "work" });
+});
+
+it("uses a prepared gallery session without describing it again", async () => {
+  const request = vi.fn(async (method: string) => {
+    if (method === "sessions.describe") {
+      throw new Error("prepared sessions must not be described");
+    }
+    return { sessionKey: "dashboard", revision: 1, tabs: [], widgets: [] };
+  });
+  const client = {
+    request,
+    addEventListener: vi.fn(() => vi.fn()),
+  } as unknown as GatewayBrowserClient;
+  const element = document.createElement("openclaw-board-document");
+  mounted.push(element);
+  element.preparedSession = { sessionKey: "dashboard", agentId: "main" };
+  element.gatewaySnapshot = {
+    client,
+    phase: "connected",
+    hello: { features: { methods: ["board.get"] } },
+  } as ApplicationGatewaySnapshot;
+  document.body.append(element);
+
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("board.get", {
+      sessionKey: "dashboard",
+      agentId: "main",
+    }),
+  );
+  expect(request).toHaveBeenCalledOnce();
+});
+
+it("keeps passive documents live while exposing only capability-free HTML", async () => {
+  const request = vi.fn(async () => ({
+    sessionKey: "dashboard",
+    revision: 1,
+    tabs: [{ tabId: "main", title: "Main", position: 0 }],
+    widgets: [
+      {
+        name: "status",
+        tabId: "main",
+        contentKind: "html",
+        sizeW: 12,
+        sizeH: 6,
+        position: 0,
+        grantState: "granted",
+        revision: 1,
+        frameUrl: "data:text/html,status",
+      },
+      {
+        name: "tools",
+        tabId: "main",
+        contentKind: "mcp-app",
+        sizeW: 12,
+        sizeH: 6,
+        position: 1,
+        grantState: "granted",
+        revision: 1,
+      },
+    ],
+  }));
+  const client = {
+    request,
+    addEventListener: vi.fn(() => vi.fn()),
+  } as unknown as GatewayBrowserClient;
+  const element = document.createElement("openclaw-board-document");
+  mounted.push(element);
+  element.passive = true;
+  element.preparedSession = { sessionKey: "dashboard", agentId: "main" };
+  element.gatewaySnapshot = {
+    client,
+    phase: "connected",
+    hello: {
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: { methods: ["board.get", "board.widget.appView"] },
+    },
+  } as ApplicationGatewaySnapshot;
+  document.body.append(element);
+
+  const view = await vi.waitFor(() => {
+    const current = element.querySelector("openclaw-board-view");
+    expect(current).not.toBeNull();
+    return current!;
+  });
+  expect(view.active).toBe(true);
+  expect(view.bridgeEnabled).toBe(false);
+  expect(view.canMutate).toBe(false);
+  expect(view.canGrant).toBe(false);
+  expect(view.snapshot?.widgets.map((widget) => widget.name)).toEqual(["status"]);
+  expect(request).toHaveBeenCalledOnce();
 });

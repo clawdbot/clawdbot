@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as runtimeWorkerUrl from "../../infra/runtime-worker-url.js";
+import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
@@ -12,6 +13,7 @@ import {
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP,
   resolveOpenClawAgentSqlitePath,
+  withAgentDatabaseMaintenanceLease,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -362,6 +364,14 @@ describe("session transcript reconcile worker lifecycle", () => {
               expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
               expect(database.db.isOpen).toBe(false);
               expect(countAgentDatabaseLeases(database.path)).toBe(1);
+              expect(() => assertNoOpenClawAgentDatabaseLeases("main")).toThrow(
+                "still open in another process",
+              );
+              const maintain = vi.fn(async () => undefined);
+              await expect(withAgentDatabaseMaintenanceLease({}, maintain)).rejects.toThrow(
+                "still open in another process",
+              );
+              expect(maintain).not.toHaveBeenCalled();
             }
           } finally {
             probe.release();
@@ -464,7 +474,7 @@ describe("session transcript reconcile worker lifecycle", () => {
     { expectedTerminal: "done" as const, failAfterFirstPlan: false },
     { expectedTerminal: "failed" as const, failAfterFirstPlan: true },
   ])(
-    "releases its database before reporting $expectedTerminal",
+    "keeps the operation pending until lease release after $expectedTerminal",
     async ({ expectedTerminal, failAfterFirstPlan }) => {
       const stateDir = tempDirs.make("openclaw-transcript-worker-cleanup-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -527,6 +537,7 @@ describe("session transcript reconcile worker lifecycle", () => {
           const baselineLeaseCount = countAgentDatabaseLeases(databasePath);
           expect(baselineLeaseCount).toBe(1);
           const probe = createCleanupFenceProbe();
+          let settled = false;
           const outcome = reconcileSessionTranscriptIndexes({
             agentId: "main",
             createWorker: probe.createWorker,
@@ -536,21 +547,22 @@ describe("session transcript reconcile worker lifecycle", () => {
             (error: unknown) => ({ status: "rejected" as const, error }),
           );
 
-          let terminalWhileCleanupWasFenced: TerminalType | undefined;
+          void outcome.then(() => {
+            settled = true;
+          });
           try {
             await probe.planStarted;
             expect(countAgentDatabaseLeases(databasePath)).toBe(baselineLeaseCount + 1);
             await waitForCurrentProjection(databasePath, primarySessionId);
-            terminalWhileCleanupWasFenced = await Promise.race([
-              probe.terminal,
-              delay(1_000).then(() => undefined),
-            ]);
+            await expect(probe.terminal).resolves.toBe(expectedTerminal);
+            await delay(25);
+            expect(settled).toBe(false);
+            expect(countAgentDatabaseLeases(databasePath)).toBe(baselineLeaseCount + 1);
           } finally {
             probe.release();
           }
 
           const result = await outcome;
-          expect(terminalWhileCleanupWasFenced).toBeUndefined();
           await expect(probe.terminal).resolves.toBe(expectedTerminal);
           expect(countAgentDatabaseLeases(databasePath)).toBe(baselineLeaseCount);
           if (expectedTerminal === "done") {

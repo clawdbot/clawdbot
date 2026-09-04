@@ -1024,7 +1024,6 @@
   "ui/src/app/native-gateways.runtime.ts",
   "ui/src/app/native-link-routing.ts",
   "ui/src/app/native-nav-state.ts",
-  "ui/src/app/native-notifications.ts",
   "ui/src/app/native-route-memory.ts",
   "ui/src/app/native-web-chrome.ts",
   "ui/src/app/native-window-drag.ts",

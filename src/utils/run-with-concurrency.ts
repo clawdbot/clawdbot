@@ -1,4 +1,5 @@
-import pLimit from "p-limit";
+import { AsyncLocalStorage } from "node:async_hooks";
+import pMap from "p-map";
 
 /** Controls whether the worker pool keeps scheduling after a task failure. */
 export type ConcurrencyErrorMode = "continue" | "stop";
@@ -43,10 +44,10 @@ export async function runTasksWithConcurrency<T>(
   const results: T[] = Array.from({ length: tasks.length });
   let firstError: unknown = undefined;
   let hasError = false;
-  const limiter = pLimit(resolvedLimit);
-
-  const runs = tasks.map((task, index) =>
-    limiter(async () => {
+  // Admit tasks lazily instead of allocating a queued promise for every input.
+  // Caller rejection is separate from mapper completion so continue mode still drains.
+  return new Promise((resolve, reject) => {
+    const runOne = async (task: () => Promise<T>, index: number) => {
       if (errorMode === "stop" && hasError) {
         return;
       }
@@ -57,18 +58,26 @@ export async function runTasksWithConcurrency<T>(
           firstError = error;
           hasError = true;
         }
-        onTaskError?.(error, index);
+        let rejectionError = error;
+        try {
+          onTaskError?.(error, index);
+        } catch (callbackError) {
+          rejectionError = callbackError;
+        }
         if (throwOnError) {
-          throw error;
+          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the public runner's original task or error-hook rejection value.
+          reject(rejectionError);
         }
       }
-    }),
-  );
-
-  if (throwOnError) {
-    await Promise.all(runs);
-  } else {
-    await Promise.allSettled(runs);
-  }
-  return { results, firstError, hasError };
+    };
+    // Capture the caller context, but run each task in a fresh continuation so
+    // enterWith cannot mutate the shared bound resource on Node 22.
+    const mapper = AsyncLocalStorage.bind((task: () => Promise<T>, index: number) =>
+      Promise.resolve().then(() => runOne(task, index)),
+    );
+    void pMap(tasks.slice(), mapper, { concurrency: resolvedLimit }).then(
+      () => resolve({ results, firstError, hasError }),
+      reject,
+    );
+  });
 }

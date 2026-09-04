@@ -629,6 +629,12 @@ the service. The requesting operation can finish its audit, history, and respons
 submission during that drain;
 this does not guarantee that the client receives the response before disconnecting.
 
+After the normal grace period, stop cancels the remaining runs owned by that
+Gateway and waits for their commands and cleanup to settle. Ordinary stop does
+not schedule restart recovery. A required cleanup failure produces a nonzero exit and
+prevents an in-process replacement, including when startup failed before the
+Gateway became ready.
+
 Ownership or preparation failures leave the Gateway serving and return an error.
 Linux uses an independent transient control scope, in the owning systemd manager,
 so the stop command survives service cgroup termination. On macOS, hosted stop
