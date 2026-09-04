@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
@@ -26,6 +27,36 @@ const temps = useAutoCleanupTempDirTracker(afterEach);
 type TestTunnel = Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand"> & {
   remoteWorkspaceDir: string;
 };
+
+function reaperBootstrapMutation(mutateSource: string): string {
+  return String.raw`script=>{const z=require('node:zlib'),match=/^const s=("[A-Za-z0-9+/=]+");/.exec(script);if(!match)throw Error('unexpected reaper bootstrap');const source=z.inflateRawSync(Buffer.from(JSON.parse(match[1]),'base64')).toString(),changed=(${mutateSource})(source),compressed=z.deflateRawSync(changed).toString('base64');return script.replace(match[1],JSON.stringify(compressed));}`;
+}
+
+function shortenAllocationLease(
+  command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
+) {
+  const match = /Buffer\.from\(("[A-Za-z0-9+/=]+"),'base64'\)/.exec(command.argv[2]!);
+  if (!match?.[1]) {
+    throw new Error("unexpected resource runtime bootstrap");
+  }
+  const source = inflateRawSync(Buffer.from(JSON.parse(match[1]), "base64")).toString();
+  const changed = source.replace("leaseMs=60000,sweepMs=1000", "leaseMs=3000,sweepMs=20");
+  if (changed === source) {
+    throw new Error("resource runtime mutation did not apply");
+  }
+  const runtime = command.argv[2]!.replace(
+    match[1],
+    JSON.stringify(deflateRawSync(changed).toString("base64")),
+  );
+  const shortenReaperMaximum = reaperBootstrapMutation(
+    String.raw`script=>script.replace("const maxLeaseMs=60000","const maxLeaseMs=3000")`,
+  );
+  const wrapSpawn = `(()=>{const childProcess=require('node:child_process'),original=childProcess.spawn;childProcess.spawn=(file,args,options)=>{const adjusted=[...args];if(adjusted[2]==='initialize')adjusted[1]=(${shortenReaperMaximum})(adjusted[1]);return original(file,adjusted,options);};})();`;
+  return {
+    ...command,
+    argv: [command.argv[0]!, command.argv[1]!, wrapSpawn + runtime],
+  };
+}
 
 function createSpawnTunnel(remoteWorkspaceDir: string): TestTunnel {
   return {
@@ -786,9 +817,11 @@ describe("remote-exec skill resources", () => {
             tunnel: {
               remoteWorkspaceDir: transport.remoteWorkspaceDir,
               runWorkspaceCommand: async (command) => {
-                const result = await transport.runWorkspaceCommand(command);
+                const operation = JSON.parse(command.input!);
+                const result = await transport.runWorkspaceCommand(
+                  operation.op === "init" ? shortenAllocationLease(command) : command,
+                );
                 if (!initializedRoot) {
-                  const operation = JSON.parse(command.input!);
                   initializedRoot = resourceRootFor(transport.remoteWorkspaceDir, operation.id);
                   controller.abort();
                 }
@@ -798,7 +831,12 @@ describe("remote-exec skill resources", () => {
           }),
         ).rejects.toMatchObject({ name: "AbortError" });
         expect(initializedRoot).toBeDefined();
-        await expect(fs.stat(initializedRoot!)).rejects.toMatchObject({ code: "ENOENT" });
+        await vi.waitFor(
+          async () => {
+            await expect(fs.stat(initializedRoot!)).rejects.toMatchObject({ code: "ENOENT" });
+          },
+          { interval: 50, timeout: 5_000 },
+        );
       } finally {
         if (initializedRoot) {
           await fs.rm(initializedRoot, { recursive: true, force: true });

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -19,6 +20,37 @@ const registryPrefix = ".openclaw-skill-resource-lease-";
 
 function reaperBootstrapMutation(mutateSource: string): string {
   return String.raw`script=>{const z=require('node:zlib'),match=/^const s=("[A-Za-z0-9+/=]+");/.exec(script);if(!match)throw Error('unexpected reaper bootstrap');const source=z.inflateRawSync(Buffer.from(JSON.parse(match[1]),'base64')).toString(),changed=(${mutateSource})(source),compressed=z.deflateRawSync(changed).toString('base64');return script.replace(match[1],JSON.stringify(compressed));}`;
+}
+
+function replaceRuntimeSource(script: string, needle: string, replacement: string): string {
+  const match = /Buffer\.from\(("[A-Za-z0-9+/=]+"),'base64'\)/.exec(script);
+  if (!match?.[1]) {
+    throw new Error("unexpected resource runtime bootstrap");
+  }
+  const source = inflateRawSync(Buffer.from(JSON.parse(match[1]), "base64")).toString();
+  const changed = source.replace(needle, replacement);
+  if (changed === source) {
+    throw new Error("resource runtime mutation did not apply");
+  }
+  return script.replace(match[1], JSON.stringify(deflateRawSync(changed).toString("base64")));
+}
+
+function shortenAllocationLease(
+  command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
+) {
+  const shortenReaperMaximum = reaperBootstrapMutation(
+    String.raw`script=>script.replace("const maxLeaseMs=60000","const maxLeaseMs=3000")`,
+  );
+  const wrapSpawn = `(()=>{const childProcess=require('node:child_process'),original=childProcess.spawn;childProcess.spawn=(file,args,options)=>{const adjusted=[...args];if(adjusted[2]==='initialize')adjusted[1]=(${shortenReaperMaximum})(adjusted[1]);return original(file,adjusted,options);};})();`;
+  const runtime = replaceRuntimeSource(
+    command.argv[2]!,
+    "leaseMs=60000,sweepMs=1000",
+    "leaseMs=3000,sweepMs=20",
+  );
+  return {
+    ...command,
+    argv: [command.argv[0]!, command.argv[1]!, wrapSpawn + runtime],
+  };
 }
 
 function createSpawnTunnel(remoteWorkspaceDir: string) {
@@ -342,15 +374,39 @@ describe("remote-exec skill resource ownership recovery", () => {
     },
   );
 
-  it("queues failed setup through the coordinator while ownership is unchanged", async () => {
+  it("recovers a verified provisional locator after allocated-state persistence fails", async () => {
     const remoteWorkspaceDir = await fs.realpath(temps.make("resource-setup-retire-"));
     const carrier = createSpawnTunnel(remoteWorkspaceDir);
     const stateDir = temps.make("resource-setup-retire-state-");
     const current = createCoordinator(stateDir, "3".repeat(32));
     let allocationId: string | undefined;
-    let rejectRenewal = true;
+    let renewalAccepted = false;
     let cleanupDispatches = 0;
-
+    const cleanupResults: Array<{ code: number | null; stderr: string }> = [];
+    vi.spyOn(current.coordinator, "markAllocated").mockRejectedValue(
+      new Error("fixture allocated-state persistence failure"),
+    );
+    const instrumented = {
+      runWorkspaceCommand: async (
+        command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
+      ) => {
+        const operation = JSON.parse(command.input!);
+        const result = await carrier.runWorkspaceCommand(
+          operation.op === "init" ? shortenAllocationLease(command) : command,
+        );
+        if (operation.op === "init") {
+          allocationId = operation.id;
+        }
+        if (operation.op === "renew" && result.code === 0) {
+          renewalAccepted = true;
+        }
+        if (operation.op === "cleanup") {
+          cleanupDispatches += 1;
+          cleanupResults.push({ code: result.code, stderr: result.stderr });
+        }
+        return result;
+      },
+    };
     await expect(
       transferSkillResources({
         snapshot: await createSnapshot(),
@@ -361,47 +417,46 @@ describe("remote-exec skill resource ownership recovery", () => {
           environmentId: "setup-retire-environment",
           ownerEpoch: 1,
         },
-        tunnel: {
-          runWorkspaceCommand: async (command) => {
-            const operation = JSON.parse(command.input!);
-            if (operation.op === "init") {
-              allocationId = operation.id;
-            }
-            if (operation.op === "renew" && rejectRenewal) {
-              rejectRenewal = false;
-              return {
-                stdout: "",
-                stderr: "fixture renewal failure",
-                code: 1,
-                termination: "exit" as const,
-                signal: null,
-                killed: false,
-              };
-            }
-            if (operation.op === "cleanup") {
-              cleanupDispatches += 1;
-            }
-            return await carrier.runWorkspaceCommand(command);
-          },
-        },
+        tunnel: instrumented,
       }),
-    ).rejects.toThrow("Skill resource transfer failed");
+    ).rejects.toThrow("fixture allocated-state persistence failure");
 
     const queued = await current.ledger.list();
-    for (const leftover of queued) {
-      await current.ledger.removeAfterEnvironmentDestroyed(
-        leftover.allocationId,
-        leftover.revision,
-      );
-    }
-    await fs.rm(path.join(remoteWorkspaceDir, `${registryPrefix}${allocationId}`), {
-      force: true,
-      recursive: true,
-    });
     await current.coordinator.stop();
+    const replacement = createCoordinator(stateDir, "6".repeat(32));
+    const recoveryOptions = {
+      getEnvironment: () => ({
+        state: "attached" as const,
+        ownerEpoch: 2,
+        leaseId: "lease-replacement",
+      }),
+      startTunnel: async () => instrumented as never,
+    };
+    await replacement.coordinator.recover(recoveryOptions);
+    const afterImmediateRecovery = await replacement.ledger.list();
+    const registryPath = path.join(remoteWorkspaceDir, `${registryPrefix}${allocationId}`);
+    const resourceRoot = path.join(
+      registryPath,
+      skillResourceAllocationDirectoryName(allocationId!),
+    );
+    const claimedPermit = path.join(remoteWorkspaceDir, `${permitPrefix}${allocationId}.claimed`);
+    await vi.waitFor(
+      async () => {
+        await expect(fs.stat(resourceRoot)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(claimedPermit)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+      { interval: 50, timeout: 5_000 },
+    );
+    await replacement.coordinator.recover(recoveryOptions);
+    const afterRecovery = await replacement.ledger.list();
+    const registryRemoved = await fs
+      .stat(registryPath)
+      .then(() => false)
+      .catch(() => true);
+    await replacement.coordinator.stop();
 
-    expect(rejectRenewal).toBe(false);
-    expect(cleanupDispatches).toBe(1);
+    expect(renewalAccepted).toBe(true);
+    expect(cleanupDispatches).toBe(3);
     expect(queued).toMatchObject([
       {
         allocationId,
@@ -414,6 +469,144 @@ describe("remote-exec skill resource ownership recovery", () => {
         },
       },
     ]);
+    expect(afterImmediateRecovery).toHaveLength(1);
+    expect(cleanupResults.slice(0, 2)).toEqual([
+      expect.objectContaining({
+        code: 1,
+        stderr: expect.stringContaining("permit is still active"),
+      }),
+      expect.objectContaining({
+        code: 1,
+        stderr: expect.stringContaining("permit is still active"),
+      }),
+    ]);
+    expect(cleanupResults.at(-1)).toEqual({ code: 0, stderr: "" });
+    expect(afterRecovery).toEqual([]);
+    expect(registryRemoved).toBe(true);
+  });
+
+  it("keeps an unverified init locator out of durable cleanup recovery", async () => {
+    const remoteWorkspaceDir = await fs.realpath(temps.make("resource-forged-locator-"));
+    const carrier = createSpawnTunnel(remoteWorkspaceDir);
+    const stateDir = temps.make("resource-forged-locator-state-");
+    const current = createCoordinator(stateDir, "4".repeat(32));
+    let allocationId: string | undefined;
+    let cleanupIntentDispatches = 0;
+    let cleanupDispatches = 0;
+    const cleanupResults: Array<{
+      operation: "cleanup" | "cleanup-intent";
+      code: number | null;
+      stderr: string;
+    }> = [];
+    const instrumented = {
+      runWorkspaceCommand: async (
+        command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
+      ) => {
+        const operation = JSON.parse(command.input!);
+        if (operation.op === "cleanup-intent") {
+          cleanupIntentDispatches += 1;
+        } else if (operation.op === "cleanup") {
+          cleanupDispatches += 1;
+        }
+        const executedCommand = operation.op === "init" ? shortenAllocationLease(command) : command;
+        const result = await carrier.runWorkspaceCommand(executedCommand);
+        if (operation.op === "cleanup-intent" || operation.op === "cleanup") {
+          cleanupResults.push({
+            operation: operation.op,
+            code: result.code,
+            stderr: result.stderr,
+          });
+        }
+        if (operation.op !== "init") {
+          return result;
+        }
+        allocationId = operation.id;
+        return {
+          ...result,
+          stdout: JSON.stringify({ ...JSON.parse(result.stdout), identity: "0:0" }),
+        };
+      },
+    };
+
+    await expect(
+      transferSkillResources({
+        snapshot: await createSnapshot(),
+        remoteWorkspaceDir,
+        assertCurrent: () => {},
+        allocationOwner: {
+          coordinator: current.coordinator,
+          environmentId: "forged-locator-environment",
+          ownerEpoch: 1,
+        },
+        tunnel: instrumented,
+      }),
+    ).rejects.toThrow("Skill resource transfer failed");
+
+    const beforeRecovery = (await current.ledger.list()).map((record) => ({
+      phase: record.phase,
+      revision: record.revision,
+      hasLocation: record.location !== null,
+    }));
+    await current.coordinator.stop();
+    const replacement = createCoordinator(stateDir, "5".repeat(32));
+    const recoveryOptions = {
+      getEnvironment: () => ({
+        state: "attached" as const,
+        ownerEpoch: 2,
+        leaseId: "lease-replacement",
+      }),
+      startTunnel: async () => instrumented as never,
+    };
+    await replacement.coordinator.recover(recoveryOptions);
+    const afterImmediateRecovery = await replacement.ledger.list();
+    const registryPath = path.join(remoteWorkspaceDir, `${registryPrefix}${allocationId}`);
+    const resourceRoot = path.join(
+      registryPath,
+      skillResourceAllocationDirectoryName(allocationId!),
+    );
+    await vi.waitFor(
+      async () => {
+        await expect(fs.stat(resourceRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+      { interval: 50, timeout: 5_000 },
+    );
+    await replacement.coordinator.recover(recoveryOptions);
+    const afterRecovery = await replacement.ledger.list();
+    const registryRemoved = await fs
+      .stat(registryPath)
+      .then(() => false)
+      .catch(() => true);
+    for (const leftover of afterRecovery) {
+      await replacement.ledger.removeAfterEnvironmentDestroyed(
+        leftover.allocationId,
+        leftover.revision,
+      );
+    }
+    await fs.rm(registryPath, { force: true, recursive: true });
+    await replacement.coordinator.stop();
+
+    expect(beforeRecovery).toEqual([{ phase: "cleanup-pending", revision: 2, hasLocation: false }]);
+    expect(afterImmediateRecovery).toHaveLength(1);
+    expect(afterRecovery).toEqual([]);
+    expect(registryRemoved).toBe(true);
+    expect(cleanupIntentDispatches).toBe(3);
+    expect(cleanupDispatches).toBe(0);
+    expect(cleanupResults.slice(0, 2)).toEqual([
+      expect.objectContaining({
+        operation: "cleanup-intent",
+        code: 1,
+        stderr: expect.stringContaining("resource allocation permit is still active"),
+      }),
+      expect.objectContaining({
+        operation: "cleanup-intent",
+        code: 1,
+        stderr: expect.stringContaining("resource allocation permit is still active"),
+      }),
+    ]);
+    expect(cleanupResults.at(-1)).toMatchObject({
+      operation: "cleanup-intent",
+      code: 0,
+    });
   });
 
   it.each([

@@ -496,7 +496,7 @@ export async function transferSkillResources(params: {
   try {
     await execute({ op: "renew", ...leaseLocation });
   } catch (error) {
-    await retireProvisional().catch(() => undefined);
+    await retireIntent().catch(() => undefined);
     throw error;
   }
   try {
