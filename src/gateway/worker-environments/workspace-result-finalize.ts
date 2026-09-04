@@ -8,6 +8,7 @@ import type { SessionPlacementTurnParams } from "../../agents/session-placement-
 import { withSessionPlacementComputer } from "../../agents/session-placement-computer.js";
 import { withSessionSkillResources } from "../../agents/session-placement-skill-resources.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
@@ -313,12 +314,14 @@ function appendWorkspaceConflict(
     payloads.push({ text: workspaceConflict.summary });
   } else {
     const payload = payloads[textIndex]!;
-    payloads[textIndex] = {
+    // Error settlement still needs to distinguish a tool warning from a
+    // terminal failure after workspace-conflict decoration.
+    payloads[textIndex] = copyReplyPayloadMetadata(payload, {
       ...payload,
       text: payload.text
         ? `${payload.text}\n\n${workspaceConflict.summary}`
         : workspaceConflict.summary,
-    };
+    });
   }
   return { ...result, payloads };
 }

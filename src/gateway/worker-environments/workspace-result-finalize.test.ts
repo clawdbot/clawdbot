@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createAgentCommandLifecycle } from "../../agents/command/lifecycle.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
@@ -40,6 +45,96 @@ vi.mock("../../node-host/node-worker-transfer-client.js", async (importOriginal)
 describe("concurrent worker workspace results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it("preserves tool-warning provenance through conflict decoration and command settlement", async () => {
+    const remote = path.join(await fs.realpath(root), "remote");
+    await fs.mkdir(remote);
+    seedActivePlacement("remote-exec", remote);
+    const placement = placements.get(SESSION_ID);
+    if (placement?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const inputTurn = turn("warning-conflict");
+    const turnClaim = placements.claimTurn({
+      ...sessionTarget,
+      owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      claimId: inputTurn.runId,
+      runId: inputTurn.runId,
+    });
+    const warning = setReplyPayloadMetadata(
+      { text: "An earlier write failed.", isError: true },
+      { toolErrorWarning: { toolName: "write" } },
+    );
+    const tunnel: WorkerTunnelHandle = {
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      runWorkspaceCommand: async (command) =>
+        await runCommandWithTimeout([...command.argv], {
+          cwd: remote,
+          input: command.input,
+          timeoutMs: 5_000,
+          signal: command.signal,
+        }),
+      quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
+      reconcileWorkspace: async (request) => {
+        if (!request.stagedResult) {
+          throw new Error("expected a staged workspace result");
+        }
+        request.stagedResult.record(request.stagedResult.ref);
+        request.journal.commit(MANIFEST_REF);
+        return {
+          manifestRef: MANIFEST_REF,
+          changed: false,
+          verifyStable: async () => {},
+          verifyLocalStable: async () => {},
+          getAppliedWorkspaceResult: () => ({
+            manifestRef: MANIFEST_REF,
+            manifest: { version: 1 as const, baseCommit: null, entries: [] },
+            conflictPaths: ["src/local.ts"],
+            verifyLocalStable: async () => {},
+          }),
+        };
+      },
+      syncWorkspace: vi.fn(),
+      stop: async () => {},
+    };
+    const result = await executeRemoteExecTurn({
+      environments: { get: attachedEnvironment, startTunnel: async () => tunnel },
+      onHandoff: () => {},
+      placement,
+      placements,
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      turn: inputTurn,
+      turnClaim,
+      localWorkspaceDir: root,
+      runLocal: async () => ({
+        payloads: [warning],
+        meta: {
+          durationMs: 1,
+          error: { kind: "incomplete_turn", message: "A later runtime failure ended the turn." },
+        },
+      }),
+    });
+    const decorated = result.payloads?.[0];
+    if (!decorated) {
+      throw new Error("expected the decorated warning payload");
+    }
+    expect(decorated.text).toContain("src/local.ts");
+    expect(getReplyPayloadMetadata(decorated)?.toolErrorWarning).toEqual({ toolName: "write" });
+    const lifecycle = createAgentCommandLifecycle({
+      runId: inputTurn.runId,
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 1,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    });
+    expect(lifecycle.resolveResultError(result, false)).toBe("Agent run failed");
+    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+  });
 
   it("reports cleanup failure and reclaims the inputs before the next turn without skills", async () => {
     const remote = path.join(await fs.realpath(root), "remote");

@@ -61,6 +61,7 @@ type ClassifiedAssistantErrorFacts = {
   providerRuntimeFailureKind: ReturnType<typeof classifyProviderRuntimeFailureKind>;
   reason: FailoverReason | null;
   status?: number;
+  synthesizedRunFailure: boolean;
 };
 function classifyAssistantErrorFacts(
   msg: AssistantMessage,
@@ -84,6 +85,8 @@ function classifyAssistantErrorFacts(
           : null,
     status: signal.status ?? extractErrorHttpStatus(signal.message ?? "")?.code,
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
+    synthesizedRunFailure:
+      msg.diagnostics?.some((diagnostic) => diagnostic.type === "synthesized_run_failure") === true,
   };
 }
 function isMissingToolCallInputError(raw: string): boolean {
@@ -305,7 +308,7 @@ export function formatAssistantErrorText(
   }
 
   // Never return raw unhandled errors - log for debugging but return safe message
-  if (raw.length > 600) {
+  if (raw.length > 600 && !classifiedFacts.synthesizedRunFailure) {
     log.warn(`Long error truncated: ${truncateUtf16Safe(raw, 200)}`);
   }
   return raw.length > 600 ? `${truncateUtf16Safe(raw, 600)}…` : raw;
@@ -338,6 +341,14 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
+  return resolveAssistantErrorPresentation(msg, opts).text;
+}
+
+/** One presentation decision for reply text and public lifecycle diagnostics. */
+export function resolveAssistantErrorPresentation(
+  msg: AssistantMessage,
+  opts?: AssistantErrorTextOptions,
+): { text: string; attribution: "provider" | "runtime" } {
   const rawError = msg.errorMessage?.trim();
   const facts = classifyAssistantErrorFacts(msg, opts);
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
@@ -357,8 +368,21 @@ export function formatUserFacingAssistantErrorText(
           ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
           : undefined
         : friendlyError;
-  if (safeFriendlyError) {
-    return safeFriendlyError.trim();
+  // The selected model is context, not evidence that an unclassified runtime
+  // failure came from that provider. Preserve classified recovery copy above.
+  if (
+    facts.synthesizedRunFailure &&
+    !facts.reason &&
+    facts.status === undefined &&
+    (!safeFriendlyError || safeFriendlyError === "LLM request failed with an unknown error.")
+  ) {
+    return { text: GENERIC_ASSISTANT_ERROR_TEXT, attribution: "runtime" };
   }
-  return renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT;
+  if (safeFriendlyError) {
+    return { text: safeFriendlyError.trim(), attribution: "provider" };
+  }
+  return {
+    text: renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT,
+    attribution: "provider",
+  };
 }

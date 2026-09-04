@@ -673,9 +673,13 @@ export async function finalizeEmbeddedAgentCommand(params: {
       }
     }
 
-    hasResultError = Boolean(fallbackExhausted || lifecycle.resolveResultError(result, false));
+    // Delivery may remove text and private payload provenance. Terminal failure
+    // selection still belongs to the original completed attempt.
+    hasResultError = Boolean(
+      fallbackExhausted || lifecycle.resolveResultError(params.attempt.result, false),
+    );
     if (hasResultError) {
-      lifecycle.emitResultError(result, fallbackExhausted, terminal);
+      lifecycle.emitResultError(params.attempt.result, fallbackExhausted, terminal);
     } else {
       lifecycle.emitEnd(terminal);
     }
