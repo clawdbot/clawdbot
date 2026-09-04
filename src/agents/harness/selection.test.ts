@@ -70,6 +70,7 @@ import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl 
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
+import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
 import {
   agentHarnessBuildsOpenClawTools,
   agentHarnessExposesOpenClawTools,
@@ -1493,6 +1494,13 @@ describe("runAgentHarnessAttempt", () => {
     expect(resolveAvailableAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
       runtime: "openclaw",
       runtimeSource: "implicit",
+    });
+
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry: getActivePluginRegistry() ?? undefined,
     });
 
     const result = await runAgentHarnessAttempt({
@@ -3118,11 +3126,18 @@ describe("selectAgentHarness", () => {
 
   it.each(["default", "auto"] as const)(
     "falls back from configured %s to OpenClaw when implicit Codex is unavailable or unsupported",
-    (runtime) => {
+    async (runtime) => {
       const config = providerRuntimeConfig("openai", runtime);
       expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4", config })).toEqual(
         { runtime: "codex", runtimeSource: "implicit" },
       );
+      await ensureSelectedAgentHarnessPlugin({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        config,
+        workspaceDir: "/tmp/workspace",
+        pluginRegistry: getActivePluginRegistry() ?? undefined,
+      });
       expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4", config }).id).toBe(
         "openclaw",
       );

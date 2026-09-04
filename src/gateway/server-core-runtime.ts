@@ -596,6 +596,7 @@ export async function startGatewayCoreRuntime(input: {
         config: params.nextConfig,
         workspaceDir: pluginWorkspaceDir,
         broadcastPluginEvent,
+        getCronService: () => runtimeState.cronState.cron,
         onHandle: (handle) => pluginRuntimeGeneration.publishServices(replacement.claim, handle),
       });
       if (

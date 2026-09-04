@@ -236,16 +236,19 @@ export function createSubagentRegistryRestorer(config: {
           );
           continue;
         }
+        const groupId = entry.groupId ?? "";
+        const requesterSessionKey = entry.swarmRequesterSessionKey ?? entry.requesterSessionKey;
         const groupRuns = listSwarmRunsForGroup(
-          entry.groupId ?? "",
-          entry.swarmRequesterSessionKey ?? entry.requesterSessionKey,
+          groupId,
+          requesterSessionKey,
           entry.requesterAgentId,
         );
         const currentSwarmConfig = resolveSwarmConfig(cfg, entry.requesterAgentId);
         let launchTerminationConfirmed = false;
         let launchLifecycleGeneration: string | undefined;
         enqueueSwarmRun({
-          groupId: launch.schedulerGroupKey,
+          // Global session keys repeat across agent stores, including restored queues.
+          groupId: JSON.stringify([entry.requesterAgentId, requesterSessionKey, groupId]),
           runId,
           maxConcurrent: currentSwarmConfig.maxConcurrent,
           activeRunIds: groupRuns

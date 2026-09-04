@@ -29,6 +29,7 @@ import {
 import { abortQueuedChatTurns, type QueuedChatTurnMap } from "./chat-queued-turns.js";
 import {
   collectGatewayProcessMemoryUsageMb,
+  markGatewayRestartTrace,
   measureGatewayRestartTrace,
   recordGatewayRestartTrace,
 } from "./restart-trace.js";
@@ -742,8 +743,10 @@ export function createGatewayCloseHandler(
       typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
         ? Math.max(0, Math.floor(opts.restartExpectedMs))
         : null;
-    const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
-      measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
+    const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) => {
+      markGatewayRestartTrace(`restart.close.${name}.begin`);
+      return measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
+    };
     try {
       // Fence async session-state writes before the first awaited shutdown step.
       fenceSessionSuspensionWritesForGatewayShutdown();

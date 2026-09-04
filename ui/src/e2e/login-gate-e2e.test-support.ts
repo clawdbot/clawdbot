@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
+import { expect, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   installMockGateway,
@@ -255,29 +256,25 @@ export async function waitForPhoneProofServiceWorker(
   page: Page,
   expected: PhoneRecoveryObservation["serviceWorker"],
 ): Promise<ServiceWorkerObservation> {
-  if (expected === "normal") {
-    await page.waitForFunction(async () => {
-      if (!("serviceWorker" in navigator)) {
-        return false;
-      }
-      const registration = await navigator.serviceWorker.ready;
-      return (
-        registration.active?.state === "activated" &&
-        navigator.serviceWorker.controller?.state === "activated"
+  // Playwright's waitForFunction treats an async predicate's Promise as truthy.
+  // Poll and return the same snapshot so activation cannot race a second read.
+  return vi.waitFor(
+    async () => {
+      const observation = await observePhoneProofServiceWorker(page);
+      expect(observation).toMatchObject(
+        expected === "normal"
+          ? {
+              supported: true,
+              controlled: true,
+              controllerState: "activated",
+              registrations: [{ activeState: "activated" }],
+            }
+          : { controlled: false, controllerState: null, registrations: [] },
       );
-    });
-  } else {
-    await page.waitForFunction(async () => {
-      if (!("serviceWorker" in navigator)) {
-        return true;
-      }
-      return (
-        navigator.serviceWorker.controller === null &&
-        (await navigator.serviceWorker.getRegistrations()).length === 0
-      );
-    });
-  }
-  return observePhoneProofServiceWorker(page);
+      return observation;
+    },
+    { timeout: 30_000 },
+  );
 }
 
 export async function observeInstalledArtifact(page: Page): Promise<InstalledArtifactObservation> {

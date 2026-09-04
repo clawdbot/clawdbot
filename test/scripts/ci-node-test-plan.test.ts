@@ -2560,6 +2560,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(shardNames).toContain("agentic-plugin-sdk");
   });
 
+  it("keeps changed native browser tests in UI jobs and out of extension fallback", () => {
+    const target = "extensions/workboard/browser/catalog.test.ts";
+    const shards = createChangedNodeTestShards([target]);
+    expect(shards).not.toBeNull();
+    expect(shards?.flatMap((shard) => shard.targets ?? shard.includePatterns ?? [])).toContain(
+      target,
+    );
+    expect(createChangedExtensionFallbackShards([target])).toEqual([]);
+  });
+
   it("retains the changed host plugin test when the store-alias diff forces fallback", () => {
     expect(createChangedNodeTestShards(STORE_ALIAS_CHANGED_PATHS)).toBeNull();
     const options = {

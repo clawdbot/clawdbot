@@ -46,10 +46,9 @@ const workspaceSourceAliases = [
     find: "../logging/redact.js",
     replacement: path.resolve(here, "src/lib/browser-redact.ts"),
   },
-  {
-    find: "openclaw/plugin-sdk/test-fixtures",
-    replacement: path.resolve(repoRoot, "src/plugin-sdk/test-fixtures.ts"),
-  },
+  ...sharedVitestConfig.resolve.alias.filter(
+    (alias) => typeof alias.find === "string" && alias.find.startsWith("openclaw/plugin-sdk/"),
+  ),
   {
     find: /^@openclaw\/model-catalog-core\/(.+)$/u,
     replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/$1.ts"),
@@ -101,10 +100,10 @@ const workspaceSourceAliases = [
 ];
 function includeUiTests(patterns: string[], env = process.env): string[] {
   const selected = intersectIncludePatterns(
-    patterns.map((pattern) => `ui/${pattern}`),
+    patterns.map((pattern) => path.posix.normalize(`ui/${pattern}`)),
     loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
   );
-  return selected ? relativizeScopedPatterns(selected, "ui") : patterns;
+  return selected ? selected.map((pattern) => path.posix.relative("ui", pattern)) : patterns;
 }
 
 const sharedUiTestConfig = {
@@ -179,7 +178,10 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       name: "browser",
       // No cleanup runner: it imports node:fs and repo server modules, which
       // cannot load in browser mode. Browser files own their own teardown.
-      include: includeUiTests(["src/**/*.browser.test.ts"], env),
+      include: includeUiTests(
+        ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
+        env,
+      ),
       exclude: [...nodeDrivenBrowserLayoutTests],
       setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
       browser: {
@@ -219,11 +221,14 @@ export default defineConfig({
           // The cleanup runner retires that state per file; without it the lane
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
-          include: includeUiTests(["src/**/*.test.ts"]),
+          include: includeUiTests(["src/**/*.test.ts", "../extensions/*/browser/**/*.test.ts"]),
           exclude: [
             "src/**/*.browser.test.ts",
             "src/**/*.e2e.test.ts",
             "src/**/*.node.test.ts",
+            "../extensions/*/browser/**/*.browser.test.ts",
+            "../extensions/*/browser/**/*.e2e.test.ts",
+            "../extensions/*/browser/**/*.node.test.ts",
             ...mockRegistryUnitTests,
           ],
           environment: "jsdom",
@@ -259,7 +264,11 @@ export default defineConfig({
           // No cleanup runner: this project also carries the Playwright-driven
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
-          include: includeUiTests(["src/**/*.node.test.ts", ...nodeDrivenBrowserLayoutTests]),
+          include: includeUiTests([
+            "src/**/*.node.test.ts",
+            "../extensions/*/browser/**/*.node.test.ts",
+            ...nodeDrivenBrowserLayoutTests,
+          ]),
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
