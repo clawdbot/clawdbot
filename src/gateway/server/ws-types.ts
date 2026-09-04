@@ -59,6 +59,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Authenticated Control UI admin admission; never accepted from wire params. */
+    controlUiAdmin?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     /** Server-attested role-policy actor; never accepted from WebSocket wire params. */

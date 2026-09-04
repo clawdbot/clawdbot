@@ -46,10 +46,13 @@ export class SidebarAttentionStoreController implements StoreController {
   private loadedOwner: SidebarAttentionOwner | null = null;
   private loadedClient = this.sources.gateway.snapshot.client;
   private loadedAgentScope = { ...this.sources.agentSelection.state };
-  private loadedAtMs = 0;
+  private cronLoadedAtMs = 0;
+  private modelAuthLoadedAtMs = 0;
   private dismissedScope: string | null = null;
   private dismissed: SidebarAttentionDismissals = {};
   private loadGeneration = 0;
+  private cronRefresh: { generation: number; requested: boolean } | null = null;
+  private modelAuthRefresh: { generation: number; requested: boolean } | null = null;
   private readonly stopGateway: () => void;
   private readonly stopEvents: () => void;
   private readonly stopSelection: () => void;
@@ -185,14 +188,13 @@ export class SidebarAttentionStoreController implements StoreController {
     }
     const owner = this.owner();
     const agentScope = { ...this.sources.agentSelection.state };
-    const generation = ++this.loadGeneration;
+    const generation = this.loadGeneration;
     this.loadedOwner = owner;
     this.loadedClient = client;
     this.loadedAgentScope = agentScope;
-    const cron = createInitialCronState({ client, connected: true });
-    cron.cronAgentId = agentScope.scopeId;
     const current = () =>
       generation === this.loadGeneration &&
+      this.sources.gateway.snapshot.phase === "connected" &&
       this.sources.gateway.snapshot.client === client &&
       this.ownerEquals(owner, this.owner()) &&
       this.sources.agentSelection.state.selectedId === agentScope.selectedId &&
@@ -204,36 +206,85 @@ export class SidebarAttentionStoreController implements StoreController {
       if (!current()) {
         return;
       }
-      this.loadedAtMs = Date.now();
+      if (scope.modelAuthAgentId) {
+        this.modelAuthLoadedAtMs = Date.now();
+      } else {
+        this.cronLoadedAtMs = Date.now();
+      }
       this.reconcileDismissals(scope);
       this.onChange();
     };
-    void Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]).then(() => {
-      if (current()) {
-        this.cronJobs = cron.cronJobs;
-        this.cronSchedulerEnabled = cron.cronStatus?.enabled ?? null;
-        publishSource({
-          cronInventoryComplete: agentScope.scopeId === null,
-          modelAuthAgentId: null,
-        });
-      }
-    });
+    if (this.cronRefresh?.generation === generation) {
+      this.cronRefresh.requested = true;
+    } else {
+      const refresh = { generation, requested: true };
+      this.cronRefresh = refresh;
+      void (async () => {
+        try {
+          // One scope owns both reads. Events during either read request one
+          // trailing inventory; retired scopes never drain queued network work.
+          while (refresh.requested && current()) {
+            refresh.requested = false;
+            const cron = createInitialCronState({ client, connected: true });
+            cron.cronAgentId = agentScope.scopeId;
+            await Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]);
+            if (current()) {
+              if (!cron.cronJobsError) {
+                this.cronJobs = cron.cronJobs;
+              }
+              if (!cron.cronError) {
+                this.cronSchedulerEnabled = cron.cronStatus?.enabled ?? null;
+              }
+              publishSource({
+                // Keep progress visible under sustained events, but only a fresh,
+                // successful inventory can establish absence and retire dismissals.
+                cronInventoryComplete:
+                  agentScope.scopeId === null &&
+                  !cron.cronJobsHasMore &&
+                  !refresh.requested &&
+                  !cron.cronJobsError &&
+                  !cron.cronError,
+                modelAuthAgentId: null,
+              });
+            }
+          }
+        } finally {
+          if (this.cronRefresh === refresh) {
+            this.cronRefresh = null;
+          }
+        }
+      })();
+    }
     if (
       (refreshModelAuth || agentScope.selectedId !== this.modelAuthAgentId) &&
       agentScope.selectedId
     ) {
-      void loadModelAuthStatus(client, { agentId: agentScope.selectedId })
-        .catch(() => null)
-        .then((status) => {
-          if (current()) {
-            this.modelAuthStatus = status;
-            this.modelAuthAgentId = agentScope.selectedId;
-            publishSource({
-              cronInventoryComplete: false,
-              modelAuthAgentId: agentScope.selectedId,
-            });
+      if (this.modelAuthRefresh?.generation === generation) {
+        // Only explicit freshness loads queue auth work; cron events cannot
+        // invalidate a pending auth response or schedule another auth request.
+        this.modelAuthRefresh.requested ||= refreshModelAuth;
+      } else {
+        const refresh = { generation, requested: true };
+        const agentId = agentScope.selectedId;
+        this.modelAuthRefresh = refresh;
+        void (async () => {
+          try {
+            while (refresh.requested && current()) {
+              refresh.requested = false;
+              const status = await loadModelAuthStatus(client, { agentId }).catch(() => null);
+              if (current()) {
+                this.modelAuthStatus = status;
+                this.modelAuthAgentId = agentId;
+                publishSource({ cronInventoryComplete: false, modelAuthAgentId: agentId });
+              }
+            }
+          } finally {
+            if (this.modelAuthRefresh === refresh) {
+              this.modelAuthRefresh = null;
+            }
           }
-        });
+        })();
+      }
     } else if (!agentScope.selectedId) {
       this.modelAuthStatus = null;
       this.modelAuthAgentId = null;
@@ -283,13 +334,18 @@ export class SidebarAttentionStoreController implements StoreController {
     if (scopeChanged) {
       this.onChange();
     }
+    this.loadGeneration += 1;
     this.load();
   }
 
   private readonly refreshIfStale = () => {
+    // Recent cron events cannot postpone an overdue auth refresh.
+    const loadedAtMs = this.sources.agentSelection.state.selectedId
+      ? Math.min(this.cronLoadedAtMs, this.modelAuthLoadedAtMs)
+      : this.cronLoadedAtMs;
     if (
       document.visibilityState === "visible" &&
-      Date.now() - this.loadedAtMs >= VISIBILITY_REFRESH_MIN_AGE_MS
+      Date.now() - loadedAtMs >= VISIBILITY_REFRESH_MIN_AGE_MS
     ) {
       this.load();
     }

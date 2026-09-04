@@ -11,6 +11,7 @@ import {
 } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
@@ -791,7 +792,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       };
 
-      await persistCliSessionBindingResult({
+      const settled = await persistCliSessionBindingResult({
         assertSettlementCurrent: () => {},
         expectedSession: sessionStore[sessionKey],
         provider: "claude-cli",
@@ -801,6 +802,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         result,
       });
 
+      expect(settled).toBe(result);
       expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "cli-session-123",
       });
@@ -3093,6 +3095,114 @@ describe("recordCliCompactionInStore", () => {
 });
 
 describe("CLI binding settlement", () => {
+  it.each([
+    { state: "successful", terminal: {}, reason: "failed" },
+    {
+      state: "failed",
+      terminal: {
+        error: {
+          kind: "incomplete_turn",
+          message: "Primary execution failure",
+          fallbackSafe: true,
+        },
+      },
+      reason: "failed",
+    },
+    {
+      state: "timed-out",
+      terminal: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      reason: "hard_timeout",
+    },
+    { state: "cancelled", terminal: { aborted: true, stopReason: "stop" }, reason: "cancelled" },
+  ] as const)(
+    "retains a $state result when CLI binding publication fails",
+    async ({ terminal, reason }) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const sessionKey = "agent:main:cli-settlement-result";
+        const entry: SessionEntry = { sessionId: "local-session", updatedAt: 1 };
+        await seedSessionStore(storePath, { [sessionKey]: entry });
+        const beforeEntry = loadPersistedSessionEntry(storePath, sessionKey);
+        const result: EmbeddedAgentRunResult = {
+          payloads: [{ text: "Captured answer" }],
+          didSendViaMessagingTool: true,
+          didDeliverSourceReplyViaMessageTool: true,
+          messagingToolSentTexts: ["Already delivered"],
+          acceptedSessionSpawns: [
+            {
+              runId: "child",
+              childSessionKey: "agent:main:subagent:child",
+              expectsCompletionMessage: true,
+            },
+          ],
+          meta: {
+            durationMs: 25,
+            finalAssistantVisibleText: "Captured answer",
+            finalAssistantRawText: "Captured raw answer",
+            terminalReply: {
+              disposition: "visible",
+              text: "Captured answer",
+              modelRouteChange: "Captured route",
+            },
+            agentMeta: {
+              sessionId: "native-session",
+              provider: "fixture-cli",
+              model: "fixture-model",
+              usage: { input: 71, output: 9, total: 80 },
+              cliSessionBinding: { sessionId: "native-session" },
+            },
+            ...terminal,
+          },
+        };
+        const beforeResult = structuredClone(result);
+        const failure = new Error("Synthetic persistence failure (password=fixture-secret);", {
+          cause: new Error(`Synthetic storage cause ${"x".repeat(2_000)}`),
+        });
+        const settled = await persistCliSessionBindingResult({
+          result,
+          provider: "fixture-cli",
+          sessionKey,
+          storePath,
+          expectedSession: entry,
+          assertSettlementCurrent: () => {
+            throw failure;
+          },
+        });
+        const { payloads, meta: originalMeta, ...facts } = result;
+        const { error: primaryError, ...meta } = originalMeta;
+        expect(settled).toMatchObject({ ...facts, meta: { ...meta, replayInvalid: true } });
+        expect(settled.payloads?.slice(0, -1)).toEqual(payloads);
+        const diagnostic = settled.payloads?.at(-1);
+        expect(diagnostic).toMatchObject({
+          isError: true,
+          text: expect.stringContaining("CLI session continuity could not be saved"),
+        });
+        expect(diagnostic?.text).toContain("Synthetic storage cause");
+        expect(diagnostic?.text).not.toContain("fixture-secret");
+        expect(diagnostic?.text?.length).toBeLessThanOrEqual(1_024);
+        expect(settled.meta.error).toMatchObject({
+          kind: primaryError?.kind ?? "incomplete_turn",
+          fallbackSafe: false,
+        });
+        if (primaryError) {
+          expect(settled.meta.error?.message).toContain(primaryError.message);
+        }
+        expect(
+          buildAgentRunTerminalOutcomeFromLifecycleEvent({
+            phase: "error",
+            data: { ...settled.meta, error: settled.meta.error?.message },
+          }).reason,
+        ).toBe(reason);
+        expect(settled).not.toBe(result);
+        expect(result).toEqual(beforeResult);
+        expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(beforeEntry);
+      });
+    },
+  );
   it.each(["deleted", "session", "lifecycle", "writer"])(
     "cannot publish a native binding after its owner is %s",
     async (change) => {
@@ -3189,9 +3299,17 @@ describe("CLI binding settlement", () => {
             loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings,
           ).toBeUndefined();
         } else {
-          await expect(settlement).rejects.toThrow(
-            operation.startsWith("closed") ? "owner closed" : "run aborted",
-          );
+          expect(await settlement).toMatchObject({
+            meta: {
+              replayInvalid: true,
+              error: {
+                message: expect.stringContaining(
+                  operation.startsWith("closed") ? "owner closed" : "run aborted",
+                ),
+                fallbackSafe: false,
+              },
+            },
+          });
           expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(before);
         }
       });

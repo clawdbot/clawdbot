@@ -18,24 +18,3 @@ export function startAsyncSearchSync(params: {
     params.onError(err);
   }
 }
-
-export async function awaitPendingManagerWork(params: {
-  pendingSync?: Promise<void> | null;
-  pendingProviderInit?: Promise<void> | null;
-  onError?: (err: unknown) => void;
-}): Promise<void> {
-  if (params.pendingSync) {
-    try {
-      await params.pendingSync;
-    } catch (err: unknown) {
-      params.onError?.(err);
-    }
-  }
-  if (params.pendingProviderInit) {
-    try {
-      await params.pendingProviderInit;
-    } catch (err: unknown) {
-      params.onError?.(err);
-    }
-  }
-}

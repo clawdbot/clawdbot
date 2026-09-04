@@ -67,6 +67,13 @@ When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
 before the method runs; retry within the request's budget. Started requests
 complete concurrently, so responses can arrive out of order.
 
+Ordinary UI/SDK requests may outlive a socket disconnect, but cannot start a
+handler in a retiring Gateway instance. Shutdown fences new request entry and
+joins pending handler loading and authorization before releasing their runtime.
+Already-started methods retain their own shutdown behavior; shutdown does not
+wait for every RPC to finish. Exact pending node progress and result replies
+remain available during node cleanup, until transport shutdown seals entry.
+
 Clients should branch on `code` and `details.code`; `message` remains human-readable
 and can change except where a compatibility note says otherwise. Method-level
 authorization failures use top-level `code: "FORBIDDEN"` with structured
@@ -90,11 +97,12 @@ Side-effecting methods require idempotency keys (see schema).
 
 ## Gateway-controlled WebRTC Talk
 
-`talk.client.create` accepts the additive capability
-`gateway-control-v1`. It is currently available only for OpenAI GA Realtime
-sessions with resolvable Platform API-key authentication. A successful result
-includes `clientControl: { owner: "gateway" }`, a 60-second single-use Gateway
-broker token in `clientSecret`, and the relative
+`talk.client.create` accepts the additive capability `gateway-control-v1`.
+OpenAI GA Realtime requires resolvable Platform API-key authentication for this
+mode. Native GPT-Live retains its configured ChatGPT OAuth or Platform
+API-key authentication. A successful result includes
+`clientControl: { owner: "gateway" }`, a 60-second single-use Gateway broker
+token in `clientSecret`, and the relative
 `offerUrl: "/plugins/openai/realtime/calls"`.
 
 The client sends only `application/sdp` to that route with the broker token. It
@@ -104,6 +112,11 @@ transcript, steering, cancellation, and close lifecycle. Clients that omit the
 capability retain the existing browser session behavior. A Gateway or
 configured authentication path that cannot provide the requested owner returns
 `UNAVAILABLE`; it never downgrades the request to client-owned control.
+
+Clients must close their local media peer if the Gateway connection is lost or
+a `talk.event` for their current `voiceSessionId` contains
+`talkEvent.type: "session.closed"`. Ignore terminal events for other calls;
+a recoverable `session.error` alone is not a close notification.
 
 ## Handshake
 
@@ -190,6 +203,10 @@ Gateway responds with `hello-ok`:
 reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
+`controlUiUrl` optionally advertises the Gateway's configured public Control UI
+origin and base path for shareable links, independent of the client's tunnel or
+development-server address. It is omitted when `gateway.publicOrigin` is unset
+or the Control UI is disabled. It contains no credentials and grants no access.
 `policy.attachments` is optional (older gateways omit it) and advertises
 the decoded-size ceilings chat attachments face on `chat.send`, `sessions.send`,
 and session-creation initial turns:
@@ -430,6 +447,8 @@ method scope (`operator.pairing`), based on the pending request's declared
 In this table, `fs.listDir` is the node command relayed through `node.invoke`.
 The top-level Gateway `fs.listDir` RPC needs `operator.write` for
 workspace-contained host browsing and `operator.admin` when `nodeId` is present.
+Pass directory paths exactly as returned by `fs.listDir`: whitespace in directory
+names, including trailing spaces, is significant.
 
 ### Caps/commands/permissions (node)
 
@@ -671,14 +690,14 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.session.appendAudio` appends base64 PCM input audio to gateway-owned realtime relay and transcription sessions.
     - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in gateway relay sessions. Send the current `talk.event.turnId`; the result is `applied`, `stale`, or `idle`.
     - `talk.session.submitToolResult` completes a provider tool call emitted by a gateway-owned realtime relay session. The request waits for any asynchronous completion signal exposed by the provider bridge; failed submissions keep the linked run active and do not emit a successful tool-result event. Pass `options: { willContinue: true }` for interim tool output or `options: { suppressResponse: true }` when the provider bridge advertises suppression support and the result should not start another response.
-    - `talk.session.steer` sends active-run voice control into a gateway-owned agent-backed Talk session: `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text.
+    - `talk.session.steer` sends active-run voice control into a gateway-owned agent-backed Talk session: `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text. It selects only work bound to that logical voice call, not another call sharing the connection and agent session.
     - `talk.session.close` closes a gateway-owned relay, transcription, or managed-room session and emits terminal Talk events.
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
     - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call. Clients that negotiate `gateway-control-v1` keep WebRTC media direct but move the provider control channel and tool lifecycle to the Gateway.
     - `talk.client.transcript` appends one finalized `{ role, text }` item to the normal agent session. The required `entryId` is idempotent within `voiceSessionId`; retries do not duplicate transcript messages.
     - `talk.client.close` closes the logical voice session after pending transcript writes. Closing is idempotent and may deliver a mutation-only call digest to the session's last non-WebChat channel.
     - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get `runId`, `agentId`, and canonical `agentSessionKey` and wait for normal chat lifecycle events before submitting the provider-specific tool result. Use the returned target for `chat.abort` and `chat.history`; keep the original key for voice-session requests. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact final execution action and the next consult supplies the `confirmationId`; policy or hook rewrites require confirmation again.
-    - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
+    - `talk.client.steer` sends session-scoped active-run voice control for client-owned realtime transports. The gateway resolves owned active work from `sessionKey`, without a voice call ID, and returns a structured accepted/rejected result instead of silently dropping steering. Provider-attached Gateway controls are call-scoped instead.
     - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
     - `tts.status` returns TTS enabled state, active provider, fallback providers, and provider config state.

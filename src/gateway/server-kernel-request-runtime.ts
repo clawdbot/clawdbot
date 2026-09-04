@@ -236,6 +236,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
     });
   });
+  gatewayRequestContext.requestEntryLifetime = runtime.requestEntryLifetime;
   bindApprovalPublicationContext(gatewayRequestContext);
   await attachInitialGatewayLifetimeSidecars({
     chatMetadataLifecycle,

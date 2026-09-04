@@ -113,6 +113,10 @@ type ChatScrollOptions = {
   source?: "auto" | "manual" | "resize";
 };
 
+// An explicit jump owns the next commit/frame. Incidental render and resize
+// follow requests must not replace it with the previous reader policy.
+const pendingManualChatScrolls = new WeakSet<ChatScrollHost>();
+
 function cancelCommittedChatScroll(host: ChatScrollHost): void {
   if (host.chatScrollFrame != null) {
     cancelAnimationFrame(host.chatScrollFrame);
@@ -121,6 +125,7 @@ function cancelCommittedChatScroll(host: ChatScrollHost): void {
 }
 
 export function cancelChatScroll(host: ChatScrollHost): void {
+  pendingManualChatScrolls.delete(host);
   host.chatScrollGeneration += 1;
   host.chatScrollCommitCleanup?.();
   host.chatScrollCommitCleanup = null;
@@ -144,13 +149,20 @@ export function scheduleCommittedChatScroll(
   smooth = false,
   options: ChatScrollOptions = {},
 ): void {
+  if (options.source !== "manual" && pendingManualChatScrolls.has(host)) {
+    return;
+  }
   cancelCommittedChatScroll(host);
+  if (options.source === "manual") {
+    pendingManualChatScrolls.add(host);
+  }
   const generation = host.chatScrollGeneration;
   host.chatScrollFrame = requestAnimationFrame(() => {
     host.chatScrollFrame = null;
     if (generation !== host.chatScrollGeneration) {
       return;
     }
+    pendingManualChatScrolls.delete(host);
     const target = host.chatScrollElement?.();
     if (!target) {
       return;
@@ -204,7 +216,13 @@ export function scheduleChatScroll(
   smooth = false,
   options: ChatScrollOptions = {},
 ): void {
+  if (options.source !== "manual" && pendingManualChatScrolls.has(host)) {
+    return;
+  }
   cancelChatScroll(host);
+  if (options.source === "manual") {
+    pendingManualChatScrolls.add(host);
+  }
   const generation = host.chatScrollGeneration;
   let committed = false;
   const cancelCommit = host.renderLifecycle.afterCommit(() => {

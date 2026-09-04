@@ -8,6 +8,7 @@ import {
   renderProviderBrandIcon,
 } from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
+import { generateUUID } from "../../../lib/uuid.ts";
 import {
   type ChatContextWindowControlParams,
   renderContextWindowControl,
@@ -82,7 +83,7 @@ function ensureModelPickerIds(menu: HTMLElement): void {
   if (!details || !input || listboxes.length === 0) {
     return;
   }
-  const prefix = details.dataset.chatModelPickerId ?? `chat-model-picker-${crypto.randomUUID()}`;
+  const prefix = details.dataset.chatModelPickerId ?? `chat-model-picker-${generateUUID()}`;
   details.dataset.chatModelPickerId = prefix;
   listboxes.forEach((listbox, index) => {
     listbox.id = `${prefix}-listbox-${index}`;

@@ -72,7 +72,7 @@ function appViewPayload() {
   return {
     sandboxUrl: "/mcp-app-sandbox",
     sandboxPort,
-    html: "<!doctype html><output>Dashboard app</output>",
+    html: '<!doctype html><output>Dashboard app</output><label>Draft note <input aria-label="Draft note"></label>',
     toolInput: {},
     toolResult: { content: [{ type: "text", text: "ready" }] },
     messageSupported: false,
@@ -339,6 +339,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     const context = await browser.newContext({
       permissions: ["local-network-access"],
       viewport: { width: 1280, height: 800 },
+      ...(artifactDir ? { recordVideo: { dir: artifactDir } } : {}),
     });
     contexts.add(context);
     const page = await context.newPage();
@@ -389,6 +390,32 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await expectRetainedBoardPresentation(page, "expanded");
 
     await sidePanel.getByRole("button", { name: "Collapse" }).click();
+    await expectRetainedBoardPresentation(page, "split");
+
+    const draftNote = page
+      .frameLocator("mcp-app-view iframe")
+      .frameLocator("iframe")
+      .getByRole("textbox", { name: "Draft note" });
+    await draftNote.fill("Keep this unsaved dashboard note");
+    if (artifactDir) {
+      await page.screenshot({ path: `${artifactDir}/04-note-before-minimize.png` });
+    }
+    await sidePanel.locator(".side-panel__minimize").click();
+    await page.locator(".chat-thread").waitFor();
+    await expect
+      .poll(() => readBoardIdentity(page))
+      .toEqual({
+        connected: true,
+        hidden: true,
+        inert: true,
+        same: true,
+      });
+    await page.locator(".chat-side-panel-toggle").click();
+    await draftNote.waitFor();
+    if (artifactDir) {
+      await page.screenshot({ path: `${artifactDir}/05-note-after-reopen.png` });
+    }
+    await expect.poll(() => draftNote.inputValue()).toBe("Keep this unsaved dashboard note");
     await expectRetainedBoardPresentation(page, "split");
 
     const typeMenu = sidePanel.locator("wa-dropdown.side-panel-type-menu");

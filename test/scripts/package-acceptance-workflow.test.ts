@@ -4418,6 +4418,62 @@ NODE
     }
   });
 
+  it("retries pnpm store path resolution after a transient executable download failure", () => {
+    const action = parse(readFileSync(SETUP_PNPM_STORE_CACHE_ACTION, "utf8")) as {
+      runs: { steps: WorkflowStep[] };
+    };
+    const step = action.runs.steps.find(
+      (candidate) => candidate.name === "Resolve pnpm store path",
+    );
+    expect(step?.run).toBeDefined();
+
+    const root = tempDirs.make("pnpm-store-path-retry-");
+    const binDir = join(root, "bin");
+    const attemptsPath = join(root, "attempts");
+    const sleepPath = join(root, "sleeps");
+    const outputPath = join(root, "output");
+    const storePath = join(root, "store");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, "pnpm"),
+      `#!/bin/sh
+attempts=$(cat "$MOCK_ATTEMPTS" 2>/dev/null || printf 0)
+attempts=$((attempts + 1))
+printf '%s' "$attempts" > "$MOCK_ATTEMPTS"
+if [ "$attempts" -lt 3 ]; then
+  printf 'transient pnpm download failure\\n' >&2
+  exit 1
+fi
+printf '%s\\n' "$MOCK_STORE_PATH"
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(binDir, "sleep"),
+      `#!/bin/sh
+printf '%s\\n' "$1" >> "$MOCK_SLEEPS"
+`,
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync("bash", ["-c", step?.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: outputPath,
+        MOCK_ATTEMPTS: attemptsPath,
+        MOCK_SLEEPS: sleepPath,
+        MOCK_STORE_PATH: storePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(attemptsPath, "utf8")).toBe("3");
+    expect(readFileSync(sleepPath, "utf8")).toBe("5\n10\n");
+    expect(readFileSync(outputPath, "utf8")).toContain(`path=${storePath}`);
+  });
+
   it("runs trusted npm preflight pnpm commands from the tooling checkout", () => {
     const root = tempDirs.make("npm-preflight-tooling-pnpm-");
     const toolingDir = join(root, ".artifacts/plugin-sdk-release-tooling");
@@ -5996,9 +6052,6 @@ describe("package artifact reuse", () => {
     );
     expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
     expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
-    expect(publishedUpgradeSurvivor).toContain("plugin_deps_cleanup_plugin_dirs");
-    expect(publishedUpgradeSurvivor).toContain('"$(package_root)/extensions/$plugin"');
-    expect(publishedUpgradeSurvivor).toContain("probe_gateway_endpoint");
     expect(publishedUpgradeSurvivor).toContain("configure_watchos_tls_fixture");
     expect(publishedUpgradeSurvivor).toContain('"publicUrl":"wss://localhost:18789"');
     expect(publishedUpgradeSurvivor).toContain('export NODE_EXTRA_CA_CERTS="$WATCH_TLS_CA_CERT"');
@@ -6006,16 +6059,24 @@ describe("package artifact reuse", () => {
       "--base-url http://127.0.0.1:18789/api/nodes/watch",
     );
     expect(publishedUpgradeSurvivor).toContain(
-      "assert_legacy_plugin_dependency_debris_before_doctor",
+      "source scripts/e2e/lib/upgrade-survivor/plugin-dependency-fixtures.sh",
     );
+    expect(publishedUpgradeSurvivor).toContain("probe_gateway_endpoint");
+    const preDoctorCleanupIndex = publishedUpgradeSurvivor.indexOf(
+      "run_plugin_fixture_phase assert-package-local-dependency-cleanup assert_legacy_plugin_dependency_debris_cleaned",
+    );
+    const doctorIndex = publishedUpgradeSurvivor.indexOf("phase doctor run_doctor");
+    const postDoctorCleanupIndex = publishedUpgradeSurvivor.indexOf(
+      "run_plugin_fixture_phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned",
+    );
+    expect(preDoctorCleanupIndex).toBeGreaterThan(-1);
+    expect(doctorIndex).toBeGreaterThan(preDoctorCleanupIndex);
+    expect(postDoctorCleanupIndex).toBeGreaterThan(doctorIndex);
     expect(publishedUpgradeSurvivor.indexOf("phase seed-source-only-plugin-shadow")).toBeLessThan(
       publishedUpgradeSurvivor.indexOf("phase assert-baseline"),
     );
     expect(publishedUpgradeSurvivor).toContain('"id": "opik-openclaw"');
     expect(publishedUpgradeSurvivor).toContain('"configSchema": {');
-    expect(publishedUpgradeSurvivor).toContain(
-      "Legacy plugin dependency debris was already removed before doctor",
-    );
     expect(
       publishedUpgradeSurvivor.indexOf('validate_baseline_package_spec "$baseline_spec"'),
     ).toBeLessThan(
@@ -11236,7 +11297,7 @@ promote_windows_release_assets
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
-      "openclaw/clawhub/.github/workflows/package-publish.yml@0f6803b4611fc47547d2322dd8903e7b02f5e126",
+      "openclaw/clawhub/.github/workflows/package-publish.yml@d118f17fd366e5cdc3ad9c8abcea51941b97636f",
     );
     expect(clawHubPublish.permissions).toMatchObject({
       actions: "read",

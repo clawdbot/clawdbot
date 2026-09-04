@@ -16,12 +16,15 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { createLazyCoreHandlers } from "../../server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandler, RespondFn } from "../../server-methods/types.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
 } from "./authenticated-request-dispatch.test-support.js";
 import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
+// Compile the real router before timed cases; family preparation remains controlled below.
+import "../../server-methods.js";
 
 const scheduling = vi.hoisted(() => ({ start: vi.fn<() => Promise<void> | null>() }));
 vi.mock("./request-start.js", async (importOriginal) => ({
@@ -75,6 +78,62 @@ function createRequest(handler: GatewayRequestHandler, method = "health") {
 }
 
 describe("authenticated Gateway RPC diagnostics", () => {
+  it.each(["family", "nested family", "family rejection"])(
+    "keeps %s preparation separate from actual handler entry",
+    async (preparation) => {
+      let now = 100;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const reached = createDeferredCore();
+      const release = createDeferredCore();
+      const handler: GatewayRequestHandler = ({ respond }) => {
+        now = 240;
+        respond(true);
+      };
+      const observed = observeRequests();
+      const client = createOperatorWsClient();
+      const harness = createDispatchTestHarness({
+        extraHandlers: createLazyCoreHandlers({
+          methods: ["health"],
+          loadHandlers: async () => {
+            reached.resolve();
+            await release.promise;
+            if (preparation === "family rejection") {
+              throw new Error("expected handler preparation failure");
+            }
+            const handlers = { health: handler };
+            return preparation === "nested family"
+              ? createLazyCoreHandlers({ methods: ["health"], loadHandlers: async () => handlers })
+              : handlers;
+          },
+        }),
+      });
+      try {
+        await harness.dispatcher.dispatch(
+          { type: "req", id: "prepared", method: "health" },
+          client,
+        );
+        await reached.promise;
+        now = 200;
+        release.resolve();
+        await observed.finished;
+        await waitForDiagnosticEventsDrained();
+        if (preparation === "family rejection") {
+          expect(observed.events.some((event) => event.phase === "handler")).toBe(false);
+          expect(observed.events.at(-1)).toMatchObject({ phase: "dispatch", outcome: "threw" });
+          return;
+        }
+        expect(observed.events.find((event) => event.phase === "handler")).toMatchObject({
+          admissionMs: 100,
+          durationMs: 40,
+          outcome: "returned",
+        });
+      } finally {
+        release.resolve();
+        await observed.finished;
+      }
+    },
+  );
+
   it("separates start admission, first response, and handler settlement without delaying ACK", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);

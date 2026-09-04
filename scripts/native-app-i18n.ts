@@ -57,12 +57,14 @@ export type NativeI18nQualityFinding = {
 };
 type NativeTranslator = typeof translateNativeEntries;
 type NativeLocaleSyncOptions = {
+  force?: boolean;
   glossary?: Array<{ source: string; target: string }>;
   translate?: NativeTranslator;
   translationsDir?: string;
 };
 type NativeI18nCommand = {
   command: "baseline" | "check" | "sync" | "verify";
+  force?: boolean;
   locale?: string;
   write: boolean;
 };
@@ -1611,14 +1613,14 @@ export async function syncNativeLocale(
   }
   const glossaryChanged = previous?.version === 2 && previous.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter((entry) => glossaryChanged || !reusableById.get(entry.id))
+    .filter((entry) => options.force || glossaryChanged || !reusableById.get(entry.id))
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
       sourcePath: entry.sites[0]?.path ?? "apps/.i18n/native-source.json",
     }));
   const translated =
-    pending.length && !migratingV1
+    pending.length && (!migratingV1 || options.force)
       ? await (options.translate ?? translateNativeEntries)(
           pending,
           locale,
@@ -1666,13 +1668,18 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   const [command, ...args] = argv;
   if (command !== "baseline" && command !== "check" && command !== "sync" && command !== "verify") {
     throw new Error(
-      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>]|verify",
+      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>] [--force]|verify",
     );
   }
   let locale: string | undefined;
+  let force = false;
   let write = false;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
+    if (argument === "--force") {
+      force = true;
+      continue;
+    }
     if (argument === "--write") {
       write = true;
       continue;
@@ -1707,7 +1714,10 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   if (command === "baseline" && !write) {
     throw new Error("native i18n baseline requires `--write`");
   }
-  return { command, locale, write };
+  if (force && (command !== "sync" || !write || !locale)) {
+    throw new Error("native full refresh requires `sync --write --locale <code> --force`");
+  }
+  return { command, locale, write, ...(force ? { force } : {}) };
 }
 
 async function main() {
@@ -1722,7 +1732,7 @@ async function main() {
       parsed.locale === undefined,
   });
   if (parsed.locale) {
-    await syncNativeLocale(parsed.locale, entries);
+    await syncNativeLocale(parsed.locale, entries, { force: parsed.force });
   }
   if (parsed.command === "verify" || parsed.command === "check") {
     const android = await import("./android-app-i18n.ts");

@@ -6,6 +6,7 @@ import { setTimeout as realDelay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { killPidIfAlive } from "../../../test-utils/process-tree.js";
 import { createProcessSupervisor } from "../supervisor.js";
 import { createChildAdapter } from "./child.js";
 
@@ -207,9 +208,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     } finally {
       vi.useRealTimers();
       supervisor.cancel(runId);
-      if (commandPid && isAlive(commandPid)) {
-        process.kill(commandPid, "SIGKILL");
-      }
+      killPidIfAlive(commandPid);
       await pendingRun.catch(() => {});
       await supervisor.shutdown();
     }

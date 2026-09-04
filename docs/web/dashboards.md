@@ -12,6 +12,8 @@ widget is pinned, the dashboard opens beside the conversation in a resizable
 side panel. Use **Expand side panel** to give the dashboard the full task area,
 **Collapse** to return to the split layout, or close the panel to return to chat
 alone. Later widget updates leave your current panel layout unchanged.
+Closing and reopening the panel does not restart loaded widgets or discard their
+unsaved input. Reloading the page starts fresh widget views.
 
 There is nothing to set up and no separate app to configure: dashboards are a
 core feature, owned by the thread, stored with the agent, and they survive
@@ -83,7 +85,8 @@ never needs the agent.
   **Collapse** to bring the chat back beside it, or close it for chat alone.
 - **Agent parity.** The agent's `dashboard` tool creates or updates trusted
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
-  the visible tab, and requests a split or expanded dashboard. The `show_widget` tool
+  the visible tab, and requests a split or expanded dashboard with
+  `set_presentation` and `presentation: "split"` or `"expanded"`. The `show_widget` tool
   creates or refreshes custom HTML and registered-source widgets; updating an
   existing widget uses `pin: true`, the same `name`, and new `widget_code`.
   Board snapshots identify each widget's `contentOwner` and, when applicable,
@@ -94,6 +97,9 @@ never needs the agent.
   Switching the visible tab or dashboard presentation requires a connected
   Control UI. If none is connected, the command returns `UNAVAILABLE`; open the
   Control UI and retry.
+  `focus_tab` opens the side panel. Call `set_presentation` after focusing the tab:
+  `presentation: "expanded"` expands it; `"split"` shows it beside chat using the
+  current panel layout.
 
 ## What widgets are allowed to do
 

@@ -39,12 +39,12 @@ describe("buildCopilotPromptGuidance", () => {
     expect(guidance).toContain("Need announced results before reply: `sessions_yield`");
     expect(guidance).toContain("Collectors require explicit result collection instead.");
     expect(guidance).toContain("`subagents(action=list)` only for requested status/debug.");
-    expect(guidance).toContain("For the current source conversation, reply normally");
+    expect(guidance).toContain("You can participate in the conversation throughout your work.");
     expect(guidance?.indexOf("## Skill Workshop")).toBeLessThan(
       guidance?.indexOf("## Delegation") ?? 0,
     );
     expect(guidance?.indexOf("## Delegation")).toBeLessThan(
-      guidance?.indexOf("For the current source conversation") ?? 0,
+      guidance?.indexOf("You can participate in the conversation throughout your work.") ?? 0,
     );
   });
 
@@ -65,7 +65,7 @@ describe("buildCopilotPromptGuidance", () => {
     const guidance = buildGuidance(attempt);
 
     expect(guidance).not.toContain("## Delegation");
-    expect(guidance).toContain("For the current source conversation, reply normally");
+    expect(guidance).toContain("You can participate in the conversation throughout your work.");
   });
 
   it.each([

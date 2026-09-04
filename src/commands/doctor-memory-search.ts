@@ -24,6 +24,7 @@ import {
 } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isSecretRef } from "../config/types.secrets.js";
 import type { DoctorMemoryEmbeddingRuntimePayload } from "../gateway/server-methods/doctor.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -849,6 +850,7 @@ async function hasApiKeyForProvider(
 ): Promise<boolean> {
   const authProviderId = MEMORY_EMBEDDING_PROVIDER_AUTH_IDS.get(provider) ?? provider;
   if (
+    isSecretRef(findNormalizedProviderValue(cfg.models?.providers, authProviderId)?.apiKey) ||
     resolveEnvApiKey(authProviderId) ||
     resolveUsableCustomProviderApiKey({ cfg, provider: authProviderId })
   ) {

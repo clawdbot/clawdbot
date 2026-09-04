@@ -1,7 +1,9 @@
 // Root-owned integration combines the real Gateway with public telemetry plugin surfaces.
 import { once } from "node:events";
+import { performance } from "node:perf_hooks";
 import { beforeEach, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createLazyCoreHandlers } from "../src/gateway/server-methods/lazy-core-handlers.js";
 import {
   connectOk,
   getGatewayTestPort,
@@ -70,6 +72,8 @@ it("exports first ACK before handler settlement through real authenticated WebSo
         import("../extensions/diagnostics-prometheus/index.js"),
       ]);
       const receiver = startLocalOtlpReceiver();
+      const familyReached = createDeferredCore<number>();
+      const releaseFamily = createDeferredCore();
       const releaseHandler = createDeferredCore();
       const otel = createDiagnosticsOtelService();
       let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
@@ -81,13 +85,22 @@ it("exports first ACK before handler settlement through real authenticated WebSo
       try {
         const receiverPort = await receiver.listen();
         const registry = createEmptyPluginRegistry();
-        registry.gatewayHandlers["test.trace"] = async ({ req, respond }) => {
-          respond(true, { accepted: true });
-          if (req.id === "held-rpc-proof") {
-            await releaseHandler.promise;
-            respond(true, { complete: true });
-          }
-        };
+        registry.gatewayHandlers = createLazyCoreHandlers({
+          methods: ["test.trace"],
+          loadHandlers: async () => {
+            familyReached.resolve(performance.now());
+            await releaseFamily.promise;
+            return {
+              "test.trace": async ({ req, respond }) => {
+                respond(true, { accepted: true });
+                if (req.id === "held-rpc-proof") {
+                  await releaseHandler.promise;
+                  respond(true, { complete: true });
+                }
+              },
+            };
+          },
+        });
         const services: OpenClawPluginService[] = [];
         prometheusPlugin.register(
           createTestPluginApi({
@@ -194,9 +207,25 @@ it("exports first ACK before handler settlement through real authenticated WebSo
         expect(denied.status).toBe(401);
         await denied.arrayBuffer();
 
-        expect(await sendTraceRequest(ws, "held-rpc-proof", firstTraceparent)).toMatchObject({
-          ok: true,
-        });
+        const firstResponse = sendTraceRequest(ws, "held-rpc-proof", firstTraceparent);
+        const familyStartedAt = await Promise.race([
+          familyReached.promise,
+          firstResponse.then(() => {
+            throw new Error("response sent before handler family preparation");
+          }),
+        ]);
+        await waitForDiagnosticEventsDrained();
+        const preparing = await scrape();
+        expect(preparing).toContain('openclaw_gateway_rpc_requests_total{method="other"} 1');
+        expect(preparing).not.toContain(
+          'openclaw_gateway_rpc_first_response_seconds_count{method="other"}',
+        );
+        expect(preparing).not.toContain(
+          'openclaw_gateway_rpc_handler_seconds_count{method="other"}',
+        );
+        const familyHeldMs = performance.now() - familyStartedAt;
+        releaseFamily.resolve();
+        expect(await firstResponse).toMatchObject({ ok: true });
         await waitForDiagnosticEventsDrained();
         const acknowledged = await scrape();
         expect(acknowledged).toContain('openclaw_gateway_rpc_requests_total{method="other"} 1');
@@ -259,6 +288,9 @@ it("exports first ACK before handler settlement through real authenticated WebSo
           const response = observations.find((event) => event.phase === "response");
           if (handler?.phase !== "handler" || response?.phase !== "response") {
             throw new Error("missing real request timing observations");
+          }
+          if (traceId === firstTraceId) {
+            expect(handler.admissionMs).toBeGreaterThanOrEqual(familyHeldMs);
           }
           expect(handler.admissionMs).toBeLessThanOrEqual(response.durationMs);
           expect(handler.admissionMs + handler.durationMs).toBeGreaterThanOrEqual(
@@ -338,6 +370,7 @@ it("exports first ACK before handler settlement through real authenticated WebSo
           /private-rpc-proof|held-rpc-proof|concurrent-rpc-proof/,
         );
       } finally {
+        releaseFamily.resolve();
         releaseHandler.resolve();
         // Drain real requests before flushing exporters, and leave the receiver alive for that flush.
         // Attempt every owner cleanup even if an earlier close fails during a failed assertion.

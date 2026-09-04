@@ -5,6 +5,10 @@ import {
   resolveInboundSessionEnvelopeContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  resolveChannelGroups,
+  resolveChannelGroupsConfigPath,
+} from "openclaw/plugin-sdk/channel-policy";
+import {
   resolveChannelContextVisibilityMode,
   shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
@@ -50,6 +54,12 @@ import { hasMattermostThreadParticipationWithPersistence } from "./thread-partic
 
 export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
   const { account, botUserId, botUsername, cfg, core, groupPolicy, pairing, resources } = monitor;
+  const groupsConfigPath = resolveChannelGroupsConfigPath({
+    cfg,
+    channel: "mattermost",
+    accountId: account.accountId,
+    groups: resolveChannelGroups(cfg, "mattermost", account.accountId),
+  });
   const { resolveMattermostMedia, resolveUserInfo } = resources;
   const channelHistories = new Map<string, HistoryEntry[]>();
   const historyLimit = Math.max(
@@ -303,9 +313,14 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       return;
     }
     if (mentionDecision.shouldSkip) {
-      monitor.logVerboseMessage(
-        `mattermost: drop group message (missing mention channel=${channelId} sender=${senderId} requireMention=${shouldRequireMention} bypass=${shouldBypassMention} canDetectMention=${canDetectMention})`,
-      );
+      logInboundDrop({
+        log: monitor.runtime.log,
+        channel: "mattermost",
+        reason: "no mention",
+        target: channelId,
+        onceKey: JSON.stringify([account.accountId, channelId]),
+        hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(channelId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+      });
       recordPendingHistory();
       return;
     }

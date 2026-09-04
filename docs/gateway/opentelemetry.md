@@ -439,8 +439,8 @@ only `openclaw.gateway.rpc.phase` and `openclaw.gateway.rpc.outcome`, so errors 
 not multiply every method's series. No request, connection, session, or trace IDs
 appear in metric attributes.
 
-Admission includes authorization, lazy router loading, and operator start-queue
-wait. Queue wait is a subset of admission for handlers that start; it is separate
+Admission includes authorization, lazy router and handler loading, and operator
+start-queue wait. Queue wait is a subset of admission for handlers that start; it is separate
 from command/session lane `openclaw.queue.wait_ms`. Handler and admission samples
 exist only for invoked handlers. Queue wait is recorded when dispatch settles.
 

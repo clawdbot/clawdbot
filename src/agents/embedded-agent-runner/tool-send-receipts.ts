@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSessionManagerRuntimeRegistry } from "../agent-hooks/session-manager-runtime-registry.js";
 
 type EmbeddedToolReceiptResult = {
@@ -8,6 +9,26 @@ type EmbeddedToolReceiptResult = {
 };
 
 const registry = createSessionManagerRuntimeRegistry<Map<string, EmbeddedToolReceiptResult>>();
+
+export function snapshotEmbeddedToolReceipt(
+  details: unknown,
+  includeMessageDelivery: boolean,
+): { toolSend?: unknown; messageDelivery?: unknown } | undefined {
+  const record = asOptionalRecord(details);
+  const snapshot = (value: unknown) => {
+    const valueRecord = asOptionalRecord(value);
+    return valueRecord ? { ...valueRecord } : value;
+  };
+  const toolSend = record?.toolSend;
+  const messageDelivery = includeMessageDelivery ? record?.messageDelivery : undefined;
+  if (toolSend === undefined && messageDelivery === undefined) {
+    return undefined;
+  }
+  return {
+    ...(toolSend !== undefined ? { toolSend: snapshot(toolSend) } : {}),
+    ...(messageDelivery !== undefined ? { messageDelivery: snapshot(messageDelivery) } : {}),
+  };
+}
 
 export function recordEmbeddedToolReceipt(
   sessionManager: unknown,
