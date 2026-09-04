@@ -106,7 +106,7 @@ export interface ShellViewHost {
   openApprovals(): void;
   openNewSession(agentId: string, target?: NewSessionTarget): void;
   openPalette(): void;
-  refreshControlUi: () => void;
+  refreshControlUi: () => Promise<boolean>;
   replaceChatWithCurrentSession(): boolean;
   requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;

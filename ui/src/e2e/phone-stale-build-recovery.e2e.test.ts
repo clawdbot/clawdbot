@@ -425,6 +425,34 @@ suite.define(() => {
         );
         expect(terminalInvocationCount).toBe(0);
 
+        const documentCountBeforeFailedProbe = documentRequests.length;
+        await page.evaluate(() => {
+          const originalFetch = window.fetch.bind(window);
+          let remainingFailures = 1;
+          window.fetch = async (input, init) => {
+            if (remainingFailures > 0 && init?.method === "HEAD") {
+              remainingFailures -= 1;
+              sessionStorage.setItem("openclaw.control-ui-e2e.failed-refresh-probes", "1");
+              return new Response(null, { status: 503 });
+            }
+            return originalFetch(input, init);
+          };
+        });
+        await recovery.tap();
+        await page.waitForFunction(
+          () => sessionStorage.getItem("openclaw.control-ui-e2e.failed-refresh-probes") === "1",
+        );
+        const failedRecovery = page.locator(".sidebar-update-card--floating .sidebar-update-card");
+        await expect.poll(() => failedRecovery.getByRole("button").isEnabled()).toBe(true);
+        await expect.poll(() => failedRecovery.textContent()).toContain("Retry now");
+        await expect.poll(() => failedRecovery.textContent()).toContain("Gateway reconnects");
+        expect(documentRequests).toHaveLength(documentCountBeforeFailedProbe);
+        expect(
+          await failedRecovery.evaluate(
+            (card) => card.closest("[role='status']")?.textContent ?? "",
+          ),
+        ).not.toMatch(/openclaw (?:triage|update)|terminal command|run .*terminal/iu);
+
         await recovery.tap();
         await expect.poll(() => documentRequests.length).toBe(3);
         expect(documentRequests.map((request) => request.recoveryMarker)).toEqual([
