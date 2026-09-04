@@ -1,4 +1,3 @@
-/** Shared predicates and mutations for plugin host-owned session-state cleanup. */
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../../sessions/session-key-utils.js";
@@ -188,9 +187,10 @@ export function matchesPluginHostCleanupSession(
   if (!normalizedSessionKey) {
     return true;
   }
+  // Only session keys have opaque peer spans; runtime IDs remain case-insensitive.
   return (
     normalizeSessionKeyPreservingOpaquePeerIds(entryKey) === normalizedSessionKey ||
-    normalizeSessionKeyPreservingOpaquePeerIds(entry.sessionId) === normalizedSessionKey
+    entry.sessionId.trim().toLowerCase() === sessionKey?.trim().toLowerCase()
   );
 }
 
