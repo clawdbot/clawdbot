@@ -213,15 +213,17 @@ export async function recoverPendingWorkspaceResults(
   };
   const stagedResultOwners = new Set<string>();
   for (const pending of placements.listPendingWorkspaceResults()) {
+    // Preserve every owner from the recovery snapshot before scoped processing can await or
+    // mutate rows. Otherwise later teardown may misclassify an out-of-scope staged ref.
+    if (pending.stagedResultRef) {
+      stagedResultOwners.add(pending.sessionId);
+    }
     const placement = placements.get(pending.sessionId);
     if (environmentId !== undefined && placement?.environmentId !== environmentId) {
       continue;
     }
     const interruptedDelegatedChild =
       placement !== undefined && deps.isInterruptedDelegatedChild?.(placement) === true;
-    if (pending.stagedResultRef) {
-      stagedResultOwners.add(pending.sessionId);
-    }
     const sameGatewayInstance =
       pending.gatewayInstanceId === placements.workspaceResultInstanceId();
     if (
