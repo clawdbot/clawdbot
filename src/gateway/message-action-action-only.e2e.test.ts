@@ -122,6 +122,18 @@ describe("message.action action-only Gateway proof", () => {
         expect(gatewayTrace).toEqual([
           { action: "send", gatewayBound: true, target: CURRENT_TARGET },
         ]);
+        if (process.env.OPENCLAW_PR_PROOF === "1") {
+          console.log(
+            `[gateway-proof] positive ${JSON.stringify({
+              handledBy: result.handledBy,
+              channel: result.kind === "send" ? result.channel : undefined,
+              to: result.kind === "send" ? result.to : undefined,
+              action: gatewayTrace[0]?.action,
+              gatewayBound: gatewayTrace[0]?.gatewayBound,
+              actionCalls: handleAction.mock.calls.length,
+            })}`,
+          );
+        }
 
         const disabledResult = await runMessageAction(sourceInput({} as OpenClawConfig, port));
         expect(disabledResult).toMatchObject({
@@ -131,6 +143,16 @@ describe("message.action action-only Gateway proof", () => {
           to: "current-run",
         });
         expect(handleAction).toHaveBeenCalledOnce();
+        if (process.env.OPENCLAW_PR_PROOF === "1") {
+          console.log(
+            `[gateway-proof] negative ${JSON.stringify({
+              handledBy: disabledResult.handledBy,
+              channel: disabledResult.kind === "send" ? disabledResult.channel : undefined,
+              to: disabledResult.kind === "send" ? disabledResult.to : undefined,
+              actionCalls: handleAction.mock.calls.length,
+            })}`,
+          );
+        }
       },
       { serverOptions: { auth: { mode: "token", token: GATEWAY_TOKEN } } },
     );
