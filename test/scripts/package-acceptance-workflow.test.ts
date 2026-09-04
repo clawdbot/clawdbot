@@ -11292,7 +11292,7 @@ promote_windows_release_assets
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
-      "openclaw/clawhub/.github/workflows/package-publish.yml@0f6803b4611fc47547d2322dd8903e7b02f5e126",
+      "openclaw/clawhub/.github/workflows/package-publish.yml@d118f17fd366e5cdc3ad9c8abcea51941b97636f",
     );
     expect(clawHubPublish.permissions).toMatchObject({
       actions: "read",
