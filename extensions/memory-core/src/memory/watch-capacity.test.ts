@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -40,10 +39,12 @@ describe("memory watch capacity", () => {
         on: ReturnType<typeof vi.fn>;
         close: ReturnType<typeof vi.fn>;
       }> = [];
+      const nestedDir = path.join(memoryDir, "nested");
       const nativeWatch = vi.fn((watchPath: string) => {
         if (
           (failurePoint === "root" && watchPath === memoryDir) ||
-          (failurePoint === "parent" && watchPath === state.workspaceDir)
+          (failurePoint === "parent" && watchPath === state.workspaceDir) ||
+          (failurePoint === "subtree" && watchPath === nestedDir)
         ) {
           throw capacityError();
         }
@@ -54,21 +55,13 @@ describe("memory watch capacity", () => {
         nativeWatchers.push(watcher);
         return watcher;
       });
-      const originalReaddir = fsSync.readdirSync.bind(fsSync);
-      const readdirSpy = vi.spyOn(fsSync, "readdirSync");
-      readdirSpy.mockImplementation((...args: Parameters<typeof fsSync.readdirSync>) => {
-        if (failurePoint === "subtree" && String(args[0]) === memoryDir) {
-          throw capacityError();
-        }
-        return originalReaddir(...args);
-      });
       Reflect.set(globalThis, CHOKIDAR_FACTORY_KEY, chokidarWatch);
       Reflect.set(globalThis, NATIVE_FACTORY_KEY, nativeWatch);
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       let manager: MemoryIndexManager | null = null;
       try {
         await configureMemoryCoreDreamingStateForTests(state.env);
-        await fs.mkdir(memoryDir);
+        await fs.mkdir(nestedDir, { recursive: true });
         await fs.writeFile(path.join(memoryDir, "baseline.md"), "Existing memory content.");
         const cfg: OpenClawConfig = {
           plugins: { enabled: false },
@@ -111,7 +104,6 @@ describe("memory watch capacity", () => {
           expect(nativeWatchers.every((watcher) => watcher.close.mock.calls.length > 0)).toBe(true);
         }
       } finally {
-        readdirSpy.mockRestore();
         await manager?.close();
         Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
         await state.cleanup();

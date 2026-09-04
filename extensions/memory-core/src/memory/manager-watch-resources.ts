@@ -116,6 +116,9 @@ export abstract class MemoryManagerWatchResources extends MemoryManagerSyncBase 
     }
   }
 
+  // Watcher create/error only. Scan-side codes (readdir/lstat/stat ENOSPC)
+  // can mean a full disk, not an exhausted watch table; those callers keep
+  // closeAndFallback so watching can resume after the host recovers.
   protected degradeMemoryWatchCapacity(
     watchPath: string,
     err: unknown,

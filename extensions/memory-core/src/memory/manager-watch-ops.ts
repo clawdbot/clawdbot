@@ -293,10 +293,16 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerWatchResources 
     // we can reattach the main watcher on the new inode. Without this,
     // `rm -rf memory && mkdir memory` would leave the main watcher bound
     // to the dead inode and silently miss subsequent file changes.
+    const parentDir = path.dirname(dir);
+    const baseName = path.basename(dir);
+    let parentInode: number;
     try {
-      const parentDir = path.dirname(dir);
-      const baseName = path.basename(dir);
-      const parentInode = fsSync.statSync(parentDir).ino;
+      parentInode = fsSync.statSync(parentDir).ino;
+    } catch (err) {
+      log.warn(`memory ${label} parent watcher could not start on ${parentDir}: ${String(err)}`);
+      return;
+    }
+    try {
       let parentWatcher: fsSync.FSWatcher | null = null;
       parentWatcher = resolveMemoryNativeWatchFactory()(
         parentDir,
@@ -480,7 +486,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerWatchResources 
             }
             if (filename == null) {
               markDirty();
-              if (!this.attachLinuxSubtree(watchDir, attachDirectory, markDirty)) {
+              if (!this.attachLinuxSubtree(watchDir, attachDirectory)) {
                 closeAndFallback(
                   `failed to refresh Linux memory directory watchers under ${watchDir}; falling back to chokidar`,
                 );
@@ -502,7 +508,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerWatchResources 
               if (eventType === "rename") {
                 closeDirectorySubtree(full);
               }
-              if (!this.attachLinuxSubtree(full, attachDirectory, markDirty)) {
+              if (!this.attachLinuxSubtree(full, attachDirectory)) {
                 closeAndFallback(
                   `failed to attach Linux memory directory watcher under ${full}; falling back to chokidar`,
                 );
@@ -544,7 +550,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerWatchResources 
     }
     pair = { dir, main: mainWatcher, parent: null, treeWatchers };
     this.nativeMemoryWatchPairs.push(pair);
-    let subtreeAttached = this.attachLinuxSubtree(dir, attachDirectory, markDirty);
+    let subtreeAttached = this.attachLinuxSubtree(dir, attachDirectory);
     // Scan errors can refer to a missing child, not the root. Only the root's
     // identity can decide whether an existing parent should retain coverage.
     try {
@@ -572,13 +578,13 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerWatchResources 
   private attachLinuxSubtree(
     root: string,
     attachDirectory: (dir: string) => fsSync.FSWatcher | null,
-    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
   ): boolean {
     let rootStats: fsSync.Stats | undefined;
     try {
       rootStats = fsSync.lstatSync(root, { throwIfNoEntry: false }) ?? undefined;
-    } catch (err) {
-      this.degradeMemoryWatchCapacity(root, err, markDirty);
+    } catch {
+      // Directory-scan failures (including ENOSPC disk-full) are not watcher
+      // capacity. Returning false keeps closeAndFallback's Chokidar path.
       return false;
     }
     if (
@@ -593,15 +599,16 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerWatchResources 
     let entries: fsSync.Dirent[];
     try {
       entries = fsSync.readdirSync(root, { withFileTypes: true });
-    } catch (err) {
-      this.degradeMemoryWatchCapacity(root, err, markDirty);
+    } catch {
+      // Same scan-side contract as the lstat catch above: do not permanently
+      // disable watching after a full disk or a racy child listing.
       return false;
     }
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.isSymbolicLink()) {
         continue;
       }
-      if (!this.attachLinuxSubtree(path.join(root, entry.name), attachDirectory, markDirty)) {
+      if (!this.attachLinuxSubtree(path.join(root, entry.name), attachDirectory)) {
         return false;
       }
     }

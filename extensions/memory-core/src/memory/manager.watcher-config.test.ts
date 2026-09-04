@@ -723,7 +723,7 @@ describe("memory watcher config", () => {
     }
   });
 
-  it.each(["ENOENT", "EACCES", "ROOT_REPLACED", "CHILD_STAT_MISSING"])(
+  it.each(["ENOENT", "EACCES", "ROOT_REPLACED", "CHILD_STAT_MISSING", "ENOSPC"])(
     "handles Linux subtree scan %s",
     async (code) => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
@@ -744,6 +744,9 @@ describe("memory watcher config", () => {
       readdirSpy.mockImplementation((...args: Parameters<typeof fsSync.readdirSync>) => {
         if (String(args[0]) === nestedDir && code === "CHILD_STAT_MISSING") {
           throw Object.assign(new Error("DT_UNKNOWN child disappeared"), { code: "ENOENT" });
+        }
+        if (String(args[0]) === nestedDir && code === "ENOSPC") {
+          throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
         }
         if (String(args[0]) === nestedDir && code === "ROOT_REPLACED") {
           fsSync.renameSync(dir, path.join(workspaceDir, "previous-memory"));
