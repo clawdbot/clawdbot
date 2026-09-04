@@ -19,6 +19,7 @@ import {
   clearRestartSentinelIfRevision,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
+  formatUpdateOutcomeNotice,
   readRestartSentinel,
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
@@ -429,6 +430,7 @@ async function loadRestartSentinelStartupTask(params: {
   }
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
+  const noticeMessage = payload.kind === "update" ? formatUpdateOutcomeNotice(payload) : message;
   const summary = summarizeRestartSentinel(payload);
   const wakeDeliveryContext = mergeDeliveryContext(
     payload.threadId != null
@@ -535,7 +537,7 @@ async function loadRestartSentinelStartupTask(params: {
         expectedSessionId: entry.sessionId,
         expectedLifecycleRevision: entry.lifecycleRevision ?? null,
         storePath,
-        text: message,
+        text: noticeMessage,
         idempotencyKey: `restart-sentinel-notice:${canonicalKey}:${sentinelRevision}`,
       }).catch((error: unknown) => ({ ok: false as const, reason: formatErrorMessage(error) }));
       internalNoticeWritten = notice.ok;
@@ -593,7 +595,7 @@ async function loadRestartSentinelStartupTask(params: {
       const queuedNotice = await enqueueRestartSentinelNotice({
         cfg,
         ...route,
-        message,
+        message: noticeMessage,
         sessionKey: canonicalKey,
         revision: sentinelRevision,
       });
@@ -620,7 +622,7 @@ async function loadRestartSentinelStartupTask(params: {
         cfg,
         sessionKey: canonicalKey,
         summary,
-        message,
+        message: noticeMessage,
         ...route,
         queueId: noticeQueueId,
       });

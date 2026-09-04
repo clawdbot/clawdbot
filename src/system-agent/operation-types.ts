@@ -49,6 +49,7 @@ export type SystemAgentOperation =
 /** Interactive actions owned by the host chat, never by delegated model turns. */
 export type SystemAgentNavigationOperation =
   | { kind: "model-setup"; workspace?: string }
+  | { kind: "model-accounts" }
   | { kind: "channel-setup"; channel: string }
   | { kind: "skills-setup" }
   | { kind: "search-setup" }
@@ -71,6 +72,7 @@ export function isSystemAgentNavigationOperation(
     case "gateway-config-setup":
     case "memory-import":
     case "model-setup":
+    case "model-accounts":
     case "open-setup":
     case "open-tui":
       return true;

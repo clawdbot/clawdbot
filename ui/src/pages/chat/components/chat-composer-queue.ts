@@ -199,14 +199,16 @@ export function renderChatQueue(props: ChatQueueProps) {
   // it in place; that is what keeps focus on the handle the operator is using.
   return html`
     <div class="chat-queue" role="status" aria-live="polite">
-      ${globalState
-        ? html`<div
-            class="chat-queue__global-state"
-            data-chat-queue-global-state=${globalState.tone}
-          >
-            ${globalState.label}
-          </div>`
-        : nothing}
+      ${
+        globalState
+          ? html`<div
+              class="chat-queue__global-state"
+              data-chat-queue-global-state=${globalState.tone}
+            >
+              ${globalState.label}
+            </div>`
+          : nothing
+      }
       <div
         class="chat-queue__scroll"
         data-scrollable=${visibleQueue.length > 3 ? "true" : "false"}
@@ -326,290 +328,326 @@ function renderChatQueueItem(
           queueDoubleClickEditRows.add(row);
         }
       }}
-      @dblclick=${canEdit
-        ? (event: MouseEvent) => {
-            const row = event.currentTarget;
-            if (!(row instanceof Element) || !queueDoubleClickEditRows.has(row)) {
-              return;
-            }
-            queueDoubleClickEditRows.delete(row);
-            event.stopPropagation();
-            markQueueEditFocus(row, false);
-            props.onQueueEdit?.(item.id);
-          }
-        : undefined}
-      @dragover=${canMove
-        ? (event: DragEvent) => {
-            if (!event.dataTransfer?.types.includes(DRAG_MIME)) {
-              return;
-            }
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
-            setDropTarget(event, true);
-          }
-        : undefined}
-      @dragleave=${canMove ? (event: DragEvent) => setDropTarget(event, false) : undefined}
-      @drop=${canMove
-        ? (event: DragEvent) => {
-            const draggedId = event.dataTransfer?.getData(DRAG_MIME);
-            setDropTarget(event, false);
-            // Index space is per segment, so a drop from another one would land
-            // the row at an unrelated position; refuse it instead of guessing.
-            if (!draggedId || draggedId === item.id || !segment.includes(draggedId)) {
-              return;
-            }
-            event.preventDefault();
-            move?.(draggedId, moveIndex);
-          }
-        : undefined}
-    >
-      ${showsHandle
-        ? html`<button
-            class="chat-queue__leading chat-queue__grip"
-            type="button"
-            draggable=${canMove ? "true" : "false"}
-            ?disabled=${!canMove}
-            aria-label=${canMove
-              ? t("chat.queue.reorderQueuedMessage")
-              : t("chat.queue.reorderUnavailable")}
-            aria-keyshortcuts=${ifDefined(canMove ? "ArrowUp ArrowDown" : undefined)}
-            @dragstart=${canMove
-              ? (event: DragEvent) => {
-                  event.dataTransfer?.setData(DRAG_MIME, item.id);
-                  if (event.dataTransfer) {
-                    event.dataTransfer.effectAllowed = "move";
-                  }
-                }
-              : undefined}
-            @dragend=${stopQueueDragAutoScroll}
-            @keydown=${(event: KeyboardEvent) => {
-              if (!canMove) {
+      @dblclick=${
+        canEdit
+          ? (event: MouseEvent) => {
+              const row = event.currentTarget;
+              if (!(row instanceof Element) || !queueDoubleClickEditRows.has(row)) {
                 return;
               }
-              const delta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
-              if (delta === 0) {
+              queueDoubleClickEditRows.delete(row);
+              event.stopPropagation();
+              markQueueEditFocus(row, false);
+              props.onQueueEdit?.(item.id);
+            }
+          : undefined
+      }
+      @dragover=${
+        canMove
+          ? (event: DragEvent) => {
+              if (!event.dataTransfer?.types.includes(DRAG_MIME)) {
                 return;
               }
-              // The handle owns reordering for pointer and keyboard alike, so
-              // arrow keys here must not also scroll the transcript.
               event.preventDefault();
-              move?.(item.id, moveIndex + delta);
-            }}
-          >
-            <span class="chat-queue__grip-state chat-queue__grip-state--idle" aria-hidden="true"
-              >${leadingIcon}</span
-            >
-            ${canMove
-              ? html`<span
-                  class="chat-queue__grip-state chat-queue__grip-state--active"
-                  aria-hidden="true"
-                  >${icons.gripVertical}</span
-                >`
-              : nothing}
-          </button>`
-        : html`<span class="chat-queue__leading chat-queue__icon" aria-hidden="true"
-            >${leadingIcon}</span
-          >`}
-      ${authorAvatar}
-      ${editing
-        ? html`<textarea
-            class="chat-queue__edit-input"
-            rows="1"
-            ${ref((element) => mountQueueEditInput(element, props.editingText ?? item.text))}
-            aria-label=${t("chat.queue.editQueuedMessage")}
-            @beforeinput=${(event: InputEvent) => {
-              if (event.currentTarget instanceof HTMLTextAreaElement) {
-                queueMentionInputs.set(event.currentTarget, {
-                  value: event.currentTarget.value,
-                  start: event.currentTarget.selectionStart,
-                  end: event.currentTarget.selectionEnd,
-                  inputType: event.inputType,
-                });
-              }
-            }}
-            @input=${(event: Event) => {
-              if (event.currentTarget instanceof HTMLTextAreaElement) {
-                const textarea = event.currentTarget;
-                fitQueueEditInput(textarea);
-                if (mentions?.length) {
-                  props.onQueueEditChange?.(
-                    textarea.value,
-                    updateHumanMentions(
-                      mentionText,
-                      textarea.value,
-                      mentions,
-                      queueMentionInputs.get(textarea),
-                    ),
-                  );
-                } else {
-                  props.onQueueEditChange?.(textarea.value);
-                }
-                queueMentionInputs.delete(textarea);
-              }
-            }}
-            @keydown=${(event: KeyboardEvent) => {
-              if (event.isComposing || event.keyCode === 229) {
+              event.dataTransfer.dropEffect = "move";
+              setDropTarget(event, true);
+            }
+          : undefined
+      }
+      @dragleave=${canMove ? (event: DragEvent) => setDropTarget(event, false) : undefined}
+      @drop=${
+        canMove
+          ? (event: DragEvent) => {
+              const draggedId = event.dataTransfer?.getData(DRAG_MIME);
+              setDropTarget(event, false);
+              // Index space is per segment, so a drop from another one would land
+              // the row at an unrelated position; refuse it instead of guessing.
+              if (!draggedId || draggedId === item.id || !segment.includes(draggedId)) {
                 return;
               }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                event.stopPropagation();
-                props.onQueueEditCancel?.();
-              } else if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                props.onQueueEditSubmit?.();
+              event.preventDefault();
+              move?.(draggedId, moveIndex);
+            }
+          : undefined
+      }
+    >
+      ${
+        showsHandle
+          ? html`<button
+              class="chat-queue__leading chat-queue__grip"
+              type="button"
+              draggable=${canMove ? "true" : "false"}
+              ?disabled=${!canMove}
+              aria-label=${
+                canMove ? t("chat.queue.reorderQueuedMessage") : t("chat.queue.reorderUnavailable")
               }
-            }}
-          ></textarea>`
-        : html`<span class="chat-queue__copy">
-            <span class="chat-queue__text" title=${text}>${text}</span>
-            ${steered
-              ? html`<span class="chat-queue__badge chat-queue__badge--steered"
-                  >${t("chat.queue.steer")}</span
-                >`
-              : nothing}
-            ${stateLabel && (!failed || !item.sendError)
-              ? html`<span
-                  class=${failed
-                    ? "chat-queue__badge"
-                    : reconnecting
-                      ? "chat-queue__badge chat-queue__badge--reconnect"
-                      : "chat-queue__state"}
-                  title=${ifDefined(reconnecting ? item.sendError : undefined)}
-                  >${stateLabel}</span
-                >`
-              : nothing}
-          </span>`}
-      <span class="chat-queue__actions">
-        ${failed && !editing && props.onQueueRetry
-          ? html`
-              <button
-                class="chat-queue__action chat-queue__retry"
-                type="button"
-                aria-label=${t("chat.queue.retryQueuedMessage")}
-                @click=${() => props.onQueueRetry?.(item.id)}
-              >
-                ${icons.refresh}
-                <span>${t("chat.queue.retry")}</span>
-              </button>
-            `
-          : nothing}
-        ${showsSteer
-          ? html`
-              <button
-                class="chat-queue__action chat-queue__steer"
-                type="button"
-                ?disabled=${!canSteer}
-                aria-label=${t("chat.queue.steerQueuedMessage")}
-                @click=${() => props.onQueueSteer?.(item.id)}
-              >
-                ${icons.arrowUp}
-                <span>${t("chat.queue.steer")}</span>
-              </button>
-            `
-          : nothing}
-        ${editing
-          ? html`
-              <button
-                class="chat-queue__edit-submit"
-                type="button"
-                aria-label=${t("chat.runControls.sendMessage")}
-                @click=${() => props.onQueueEditSubmit?.()}
-              >
-                ${icons.check}
-              </button>
-              <button
-                class="chat-queue__edit-cancel"
-                type="button"
-                aria-label=${t("chat.queue.cancelEdit")}
-                @click=${() => props.onQueueEditCancel?.()}
-              >
-                ${icons.x}
-              </button>
-            `
-          : nothing}
-        ${busy || editing
-          ? nothing
-          : html`
-              <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>
-                <button
-                  class="chat-queue__remove"
-                  type="button"
-                  ?disabled=${editing}
-                  aria-label=${t("chat.queue.removeQueuedMessage")}
-                  @click=${(event: MouseEvent) => {
-                    // Chromium retargets click 2 after row removal; detail still owns the gesture.
-                    if (event.detail <= 1) {
-                      props.onQueueRemove(item.id);
+              aria-keyshortcuts=${ifDefined(canMove ? "ArrowUp ArrowDown" : undefined)}
+              @dragstart=${
+                canMove
+                  ? (event: DragEvent) => {
+                      event.dataTransfer?.setData(DRAG_MIME, item.id);
+                      if (event.dataTransfer) {
+                        event.dataTransfer.effectAllowed = "move";
+                      }
                     }
-                  }}
-                  @dblclick=${(event: MouseEvent) => event.stopPropagation()}
-                >
-                  ${icons.trash}
-                </button>
-              </openclaw-tooltip>
-            `}
-        ${editing || !editable
-          ? nothing
-          : html`
-              <wa-dropdown
-                class="chat-queue__overflow"
-                placement="top-end"
-                @wa-select=${(event: CustomEvent<{ item: Element & { value?: string } }>) => {
-                  const selectedItem = event.detail.item;
-                  if (selectedItem.value === "edit" && canEdit) {
-                    const dropdown = event.currentTarget;
-                    const row =
-                      dropdown instanceof Element ? dropdown.closest(".chat-queue__item") : null;
-                    const keyboard = selectedItem.matches(":focus-visible");
-                    markQueueEditFocus(row, keyboard);
-                    props.onQueueEdit?.(item.id);
-                  }
-                }}
+                  : undefined
+              }
+              @dragend=${stopQueueDragAutoScroll}
+              @keydown=${(event: KeyboardEvent) => {
+                if (!canMove) {
+                  return;
+                }
+                const delta = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+                if (delta === 0) {
+                  return;
+                }
+                // The handle owns reordering for pointer and keyboard alike, so
+                // arrow keys here must not also scroll the transcript.
+                event.preventDefault();
+                move?.(item.id, moveIndex + delta);
+              }}
+            >
+              <span class="chat-queue__grip-state chat-queue__grip-state--idle" aria-hidden="true"
+                >${leadingIcon}</span
               >
+              ${
+                canMove
+                  ? html`<span
+                      class="chat-queue__grip-state chat-queue__grip-state--active"
+                      aria-hidden="true"
+                      >${icons.gripVertical}</span
+                    >`
+                  : nothing
+              }
+            </button>`
+          : html`<span class="chat-queue__leading chat-queue__icon" aria-hidden="true"
+              >${leadingIcon}</span
+            >`
+      }
+      ${authorAvatar}
+      ${
+        editing
+          ? html`<textarea
+              class="chat-queue__edit-input"
+              rows="1"
+              ${ref((element) => mountQueueEditInput(element, props.editingText ?? item.text))}
+              aria-label=${t("chat.queue.editQueuedMessage")}
+              @beforeinput=${(event: InputEvent) => {
+                if (event.currentTarget instanceof HTMLTextAreaElement) {
+                  queueMentionInputs.set(event.currentTarget, {
+                    value: event.currentTarget.value,
+                    start: event.currentTarget.selectionStart,
+                    end: event.currentTarget.selectionEnd,
+                    inputType: event.inputType,
+                  });
+                }
+              }}
+              @input=${(event: Event) => {
+                if (event.currentTarget instanceof HTMLTextAreaElement) {
+                  const textarea = event.currentTarget;
+                  fitQueueEditInput(textarea);
+                  if (mentions?.length) {
+                    props.onQueueEditChange?.(
+                      textarea.value,
+                      updateHumanMentions(
+                        mentionText,
+                        textarea.value,
+                        mentions,
+                        queueMentionInputs.get(textarea),
+                      ),
+                    );
+                  } else {
+                    props.onQueueEditChange?.(textarea.value);
+                  }
+                  queueMentionInputs.delete(textarea);
+                }
+              }}
+              @keydown=${(event: KeyboardEvent) => {
+                if (event.isComposing || event.keyCode === 229) {
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  props.onQueueEditCancel?.();
+                } else if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  props.onQueueEditSubmit?.();
+                }
+              }}
+            ></textarea>`
+          : html`<span class="chat-queue__copy">
+              <span class="chat-queue__text" title=${text}>${text}</span>
+              ${
+                steered
+                  ? html`<span class="chat-queue__badge chat-queue__badge--steered"
+                      >${t("chat.queue.steer")}</span
+                    >`
+                  : nothing
+              }
+              ${
+                stateLabel && (!failed || !item.sendError)
+                  ? html`<span
+                      class=${
+                        failed
+                          ? "chat-queue__badge"
+                          : reconnecting
+                            ? "chat-queue__badge chat-queue__badge--reconnect"
+                            : "chat-queue__state"
+                      }
+                      title=${ifDefined(reconnecting ? item.sendError : undefined)}
+                      >${stateLabel}</span
+                    >`
+                  : nothing
+              }
+            </span>`
+      }
+      <span class="chat-queue__actions">
+        ${
+          failed && !editing && props.onQueueRetry
+            ? html`
                 <button
-                  slot="trigger"
-                  class="chat-queue__more"
+                  class="chat-queue__action chat-queue__retry"
                   type="button"
-                  ?disabled=${!canEdit}
-                  aria-label=${t("chat.queue.moreActions")}
-                  @dblclick=${(event: MouseEvent) => event.stopPropagation()}
+                  aria-label=${t("chat.queue.retryQueuedMessage")}
+                  @click=${() => props.onQueueRetry?.(item.id)}
                 >
-                  ${icons.moreHorizontal}
+                  ${icons.refresh}
+                  <span>${t("chat.queue.retry")}</span>
                 </button>
-                <wa-dropdown-item value="edit" ?disabled=${!canEdit}>
-                  <span slot="icon" aria-hidden="true">${icons.pencil}</span>
-                  ${t("chat.queue.editQueuedMessage")}
-                </wa-dropdown-item>
-              </wa-dropdown>
-            `}
-      </span>
-      ${mentions?.length
-        ? html`<span class="chat-queue__mentions">
-            ${t("chat.mentions.selected", {
-              names: mentions.map(({ start, end }) => mentionText.slice(start, end)).join(", "),
-            })}
-            ${editing
-              ? html`<button
-                  class="chat-queue__remove"
+              `
+            : nothing
+        }
+        ${
+          showsSteer
+            ? html`
+                <button
+                  class="chat-queue__action chat-queue__steer"
                   type="button"
-                  aria-label=${t("chat.mentions.remove")}
-                  @click=${() => props.onQueueEditChange?.(mentionText, [])}
+                  ?disabled=${!canSteer}
+                  aria-label=${t("chat.queue.steerQueuedMessage")}
+                  @click=${() => props.onQueueSteer?.(item.id)}
+                >
+                  ${icons.arrowUp}
+                  <span>${t("chat.queue.steer")}</span>
+                </button>
+              `
+            : nothing
+        }
+        ${
+          editing
+            ? html`
+                <button
+                  class="chat-queue__edit-submit"
+                  type="button"
+                  aria-label=${t("chat.runControls.sendMessage")}
+                  @click=${() => props.onQueueEditSubmit?.()}
+                >
+                  ${icons.check}
+                </button>
+                <button
+                  class="chat-queue__edit-cancel"
+                  type="button"
+                  aria-label=${t("chat.queue.cancelEdit")}
+                  @click=${() => props.onQueueEditCancel?.()}
                 >
                   ${icons.x}
-                </button>`
-              : nothing}
-          </span>`
-        : nothing}
+                </button>
+              `
+            : nothing
+        }
+        ${
+          busy || editing
+            ? nothing
+            : html`
+                <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>
+                  <button
+                    class="chat-queue__remove"
+                    type="button"
+                    ?disabled=${editing}
+                    aria-label=${t("chat.queue.removeQueuedMessage")}
+                    @click=${(event: MouseEvent) => {
+                      // Chromium retargets click 2 after row removal; detail still owns the gesture.
+                      if (event.detail <= 1) {
+                        props.onQueueRemove(item.id);
+                      }
+                    }}
+                    @dblclick=${(event: MouseEvent) => event.stopPropagation()}
+                  >
+                    ${icons.trash}
+                  </button>
+                </openclaw-tooltip>
+              `
+        }
+        ${
+          editing || !editable
+            ? nothing
+            : html`
+                <wa-dropdown
+                  class="chat-queue__overflow"
+                  placement="top-end"
+                  @wa-select=${(event: CustomEvent<{ item: Element & { value?: string } }>) => {
+                    const selectedItem = event.detail.item;
+                    if (selectedItem.value === "edit" && canEdit) {
+                      const dropdown = event.currentTarget;
+                      const row =
+                        dropdown instanceof Element ? dropdown.closest(".chat-queue__item") : null;
+                      const keyboard = selectedItem.matches(":focus-visible");
+                      markQueueEditFocus(row, keyboard);
+                      props.onQueueEdit?.(item.id);
+                    }
+                  }}
+                >
+                  <button
+                    slot="trigger"
+                    class="chat-queue__more"
+                    type="button"
+                    ?disabled=${!canEdit}
+                    aria-label=${t("chat.queue.moreActions")}
+                    @dblclick=${(event: MouseEvent) => event.stopPropagation()}
+                  >
+                    ${icons.moreHorizontal}
+                  </button>
+                  <wa-dropdown-item value="edit" ?disabled=${!canEdit}>
+                    <span slot="icon" aria-hidden="true">${icons.pencil}</span>
+                    ${t("chat.queue.editQueuedMessage")}
+                  </wa-dropdown-item>
+                </wa-dropdown>
+              `
+        }
+      </span>
+      ${
+        mentions?.length
+          ? html`<span class="chat-queue__mentions">
+              ${t("chat.mentions.selected", {
+                names: mentions.map(({ start, end }) => mentionText.slice(start, end)).join(", "),
+              })}
+              ${
+                editing
+                  ? html`<button
+                      class="chat-queue__remove"
+                      type="button"
+                      aria-label=${t("chat.mentions.remove")}
+                      @click=${() => props.onQueueEditChange?.(mentionText, [])}
+                    >
+                      ${icons.x}
+                    </button>`
+                  : nothing
+              }
+            </span>`
+          : nothing
+      }
       ${
         // Reconnect rows auto-retry, so the raw transport error is noise there;
         // it stays inspectable via the badge tooltip. Failed/unconfirmed rows
         // keep the visible error because the user must act on them.
         item.sendError && !reconnecting
           ? html`<span class="chat-queue__error">
-              ${failed && stateLabel
-                ? html`<span class="chat-queue__badge">${stateLabel}</span>`
-                : nothing}
+              ${
+                failed && stateLabel
+                  ? html`<span class="chat-queue__badge">${stateLabel}</span>`
+                  : nothing
+              }
               <span class="chat-queue__error-text">${item.sendError}</span>
             </span>`
           : nothing

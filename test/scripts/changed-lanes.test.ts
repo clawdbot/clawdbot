@@ -1755,16 +1755,21 @@ describe("scripts/changed-lanes", () => {
   });
 
   it.each([
-    {
-      name: "selects compiler-owned graphs for core test leaf changes",
-      path: "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
+    ...[
+      "src/agents/embedded-agent-runner/run/attempt-system-prompt.test.ts",
+      "src/plugin-sdk/config-runtime.test.ts",
+      "src/plugins/contracts/registry.retry.test.ts",
+      "src/channels/plugins/config-schema.test.ts",
+    ].map((changedPath) => ({
+      name: "selects core test graphs",
+      path: changedPath,
       expected: {
         lanes: { coreTests: true },
         includes: ["tsgo:core:test"],
-        excludes: ["tsgo:core"],
+        excludes: ["tsgo:core", "tsgo:extensions", "tsgo:extensions:test", "lint:extensions"],
         coreTestChecks: ["checkBoundary", "checkTypes"],
       },
-    },
+    })),
     {
       name: "routes core test-only changes to core test lanes only",
       path: "packages/normalization-core/src/string-normalization.test-support.ts",
@@ -1792,12 +1797,13 @@ describe("scripts/changed-lanes", () => {
         excludes: ["tsgo:extensions"],
       },
     },
-  ])("$name", ({ path: changedPath, expected }) => {
+  ])("$name: $path", ({ path: changedPath, expected }) => {
     const result = detectChangedLanes([changedPath]);
     const plan = createChangedCheckPlan(result);
     const commands = plan.commands.map((command) => command.args[0]);
 
     expectLanes(result.lanes, expected.lanes);
+    expect(result.extensionImpactFromCore).toBe(false);
     expect(plan.commands.flatMap((command) => command.coreTestCheck ?? [])).toEqual(
       "coreTestChecks" in expected ? expected.coreTestChecks : [],
     );
@@ -1809,10 +1815,25 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it.each([{ otherPaths: [] }, { otherPaths: [githubActivityHelper] }])(
-    "expands public core/plugin contracts with $otherPaths to extension validation",
-    ({ otherPaths }) => {
-      const result = detectChangedLanes(["src/plugin-sdk/core.ts", ...otherPaths]);
+  it.each([
+    { contractPath: "src/plugin-sdk/core.ts", otherPaths: [] },
+    { contractPath: "src/plugin-sdk/core.ts", otherPaths: [githubActivityHelper] },
+    ...[
+      "src/plugin-sdk/qa-runtime.test-helpers.ts",
+      "src/plugin-sdk/channel-contract.ts",
+      "src/plugins/contracts/registry.ts",
+      "src/plugins/contracts/contract.suite.ts",
+      "src/channels/plugins/contracts/test-helpers/surface-contract-suite.ts",
+      "src/channels/plugins/types.plugin.ts",
+      "scripts/lib/plugin-sdk-entrypoints.json",
+    ].map((contractPath) => ({
+      contractPath,
+      otherPaths: ["src/plugin-sdk/test-state.test.ts"],
+    })),
+  ])(
+    "expands public core/plugin contract $contractPath with $otherPaths to extension validation",
+    ({ contractPath, otherPaths }) => {
+      const result = detectChangedLanes([contractPath, ...otherPaths]);
       const plan = createChangedCheckPlan(result);
 
       expect(result.extensionImpactFromCore).toBe(true);
@@ -1821,7 +1842,7 @@ describe("scripts/changed-lanes", () => {
         coreTests: true,
         extensions: true,
         extensionTests: true,
-        tooling: otherPaths.length > 0,
+        tooling: otherPaths.includes(githubActivityHelper),
       });
       expect(plan.commands.map((command) => command.args[0])).toEqual(
         expect.arrayContaining([

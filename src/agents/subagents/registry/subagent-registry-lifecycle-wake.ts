@@ -1,9 +1,6 @@
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import {
-  runWithGatewayIndependentRootWorkContinuation,
-  runWithGatewayIndependentRootWorkAdmission,
-} from "../../../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
@@ -318,8 +315,8 @@ export function scheduleRequesterSettleWake(
   // Wake turns outlive their spawning attempt; clear its owner before both
   // dispatch and chained re-arms so transcript writes acquire a fresh lock.
   runWithoutOwnedSessionTranscriptWrites(() => {
-    void runWithGatewayIndependentRootWorkContinuation(
-      () =>
+    void context
+      .runRequesterSettleWake(runId, () =>
         params.maybeWakeRequesterAfterAllChildrenSettled({
           requesterSessionKey,
           requesterOrigin: entry.requesterOrigin,
@@ -329,8 +326,7 @@ export function scheduleRequesterSettleWake(
           completeBatch: (runIds, rearmGeneration, outcome) =>
             completeRequesterSettleWakeBatch(context, runIds, rearmGeneration, outcome),
         }),
-      "subagents:lifecycle-wake",
-    )
+      )
       .catch((error: unknown) => {
         const safeError = buildSafeLifecycleErrorMeta(error);
         params.warn("requester settle wake failed", {

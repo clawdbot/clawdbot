@@ -1414,6 +1414,34 @@ describe("shared Codex app-server client", () => {
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
+  it("does not start isolated auth after its caller retires during initialization", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const retired = new Error("isolated client caller retired");
+    let current = true;
+    const options = {
+      timeoutMs: 1_000,
+      assertCurrent: () => {
+        if (!current) {
+          throw retired;
+        }
+      },
+    };
+    const clientPromise = createIsolatedCodexAppServerClient(options);
+    const rejection = expect(clientPromise).rejects.toBe(retired);
+    try {
+      await harness.waitForWrite(0);
+      current = false;
+      await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
+
+      await rejection;
+      expect(mocks.applyCodexAppServerAuthProfile).not.toHaveBeenCalled();
+      expect(harness.process.stdin.destroyed).toBe(true);
+    } finally {
+      harness.client.close();
+    }
+  });
+
   it("passes the selected auth profile through the bridge helper", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);

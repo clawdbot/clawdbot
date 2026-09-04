@@ -1,4 +1,5 @@
 // Applies command feature gates before command handlers execute.
+import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import {
   isCommandFlagEnabled,
   isRestartEnabled,
@@ -112,10 +113,15 @@ export function rejectNonOwnerCommand(
   logVerbose(
     `Ignoring ${commandLabel} from non-owner sender: ${redactIdentifier(params.command.senderId)}`,
   );
-  if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
-    return commandReply("You are not authorized to use this command.");
+  if (!params.command.isAuthorizedSender) {
+    return rejectUnauthorizedCommand(params, commandLabel);
   }
-  return { shouldContinue: false };
+  const hint = formatCommandOwnerHint({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    id: params.command.senderId,
+  });
+  return commandReply(`You are not authorized to use this owner-only command. ${hint}`);
 }
 
 export function requireGatewayClientScope(

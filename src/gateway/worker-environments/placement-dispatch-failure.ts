@@ -1,7 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
-import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  placementTurnOwner,
+  type WorkerPlacementExecutionMode,
+} from "./placement-record.js";
 import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
@@ -246,7 +250,9 @@ export function createPlacementFailureActions(deps: {
       ownerEpoch: placement.activeOwnerEpoch,
       ...(authorize ? { authorize } : {}),
     });
-    if (teardownErrors.length > 0) {
+    // Forced abandonment is a committed decision used by Continue on Gateway. Retrying
+    // physical cleanup must not replace that decision or advance its placement generation.
+    if (teardownErrors.length > 0 && placement.recoveryError !== FORCED_WORKER_ABANDONMENT_ERROR) {
       const recoveryError = [placement.recoveryError, ...teardownErrors].filter(Boolean).join("; ");
       placements.fail({
         sessionId: placement.sessionId,

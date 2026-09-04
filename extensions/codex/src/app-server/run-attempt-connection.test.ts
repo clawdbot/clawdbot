@@ -457,7 +457,9 @@ describe("prepareCodexAttemptConnection", () => {
         pluginConfig: { appServer: { homeScope: "user" } },
       },
     });
-    const request = vi.fn(async () => ({ account: { type: "chatgpt" } }));
+    const request = vi.fn(async (_method: string, _params?: unknown) => ({
+      account: { type: "chatgpt" },
+    }));
 
     expect(connection.startupAuthProfileId).toBeUndefined();
     expect(connection.startupPreparedAuth).toBeUndefined();
@@ -470,8 +472,9 @@ describe("prepareCodexAttemptConnection", () => {
         authRequirement: connection.startupAuthRequirement,
       }),
     ).resolves.toBeUndefined();
-    expect(request).toHaveBeenCalledExactlyOnceWith("account/read", { refreshToken: false });
-    expect(request).not.toHaveBeenCalledWith("account/login/start", expect.anything());
+    expect(
+      request.mock.calls.map(([method, requestParams]) => ({ method, params: requestParams })),
+    ).toEqual([{ method: "account/read", params: { refreshToken: false } }]);
   });
 
   it.each([

@@ -1,6 +1,5 @@
 // Daemon service tests cover service install, start, stop, and status flows.
 import fs from "node:fs/promises";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,8 +16,19 @@ import {
 } from "./service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "./service.test-helpers.js";
 
+const probePortUsage = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/ports-probe.js").probePortUsage>(),
+);
+
+vi.mock("../infra/ports-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/ports-probe.js")>()),
+  probePortUsage,
+}));
+
 beforeEach(() => {
   mockSystemAccountHome();
+  probePortUsage.mockReset();
+  probePortUsage.mockRejectedValue(new Error("unexpected port probe"));
 });
 
 function setPlatform(value: NodeJS.Platform) {
@@ -32,6 +42,43 @@ afterEach(() => {
 function createService(overrides: Partial<GatewayService> = {}): GatewayService {
   return createMockGatewayService(overrides);
 }
+
+const managerlessPreflightCases = [
+  ...(["git", "package"] as const).flatMap((updateInstallKind) =>
+    ([false, true] as const).map((shouldRestart) => ({
+      updateInstallKind,
+      shouldRestart,
+      condition: "absent",
+      portUsage: "free" as const,
+      portSource: "env" as const,
+    })),
+  ),
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "installed" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "global definition" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "unreadable" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "manager" },
+  {
+    updateInstallKind: "package" as const,
+    shouldRestart: true,
+    condition: "busy port",
+    portUsage: "busy" as const,
+    portSource: "env" as const,
+  },
+  {
+    updateInstallKind: "package" as const,
+    shouldRestart: true,
+    condition: "configured busy port",
+    portUsage: "busy" as const,
+    portSource: "config" as const,
+  },
+  {
+    updateInstallKind: "package" as const,
+    shouldRestart: true,
+    condition: "unknown port",
+    portUsage: "unknown" as const,
+    portSource: "env" as const,
+  },
+];
 
 describe("resolveGatewayService", () => {
   it.each([
@@ -139,26 +186,9 @@ describe("resolveGatewayService", () => {
 });
 
 describe("readGatewayServiceState", () => {
-  it.each([
-    { updateInstallKind: "git" as const, shouldRestart: false, condition: "absent" },
-    { updateInstallKind: "git" as const, shouldRestart: true, condition: "absent" },
-    { updateInstallKind: "package" as const, shouldRestart: false, condition: "absent" },
-    { updateInstallKind: "package" as const, shouldRestart: true, condition: "absent" },
-    ...[
-      "installed",
-      "global definition",
-      "unreadable",
-      "manager",
-      "listener",
-      "configured listener",
-    ].map((condition) => ({
-      updateInstallKind: "package" as const,
-      shouldRestart: true,
-      condition,
-    })),
-  ])(
+  it.each(managerlessPreflightCases)(
     "handles managerless Linux preflight for $updateInstallKind restart=$shouldRestart ($condition)",
-    async ({ updateInstallKind, shouldRestart, condition }) => {
+    async ({ updateInstallKind, shouldRestart, condition, portUsage, portSource }) => {
       const { maybeStopManagedServiceBeforeMutableUpdate } =
         await import("../cli/update-cli/update-command-service.js");
       const home = await makeTempWorkspace("openclaw-managerless-preflight-");
@@ -185,7 +215,6 @@ describe("readGatewayServiceState", () => {
         "SUDO_USER",
       ];
       const snapshot = captureEnv(keys);
-      const listener = net.createServer();
       try {
         setPlatform("linux");
         for (const key of keys) {
@@ -193,26 +222,18 @@ describe("readGatewayServiceState", () => {
         }
         process.env.HOME = home;
         process.env.PATH = home;
-        await new Promise<void>((resolve) => {
-          listener.listen(0, "127.0.0.1", resolve);
-        });
-        const address = listener.address();
-        if (!address || typeof address === "string") {
-          throw new Error("missing listener port");
-        }
-        process.env.OPENCLAW_GATEWAY_PORT = String(address.port);
-        if (condition !== "listener" && condition !== "configured listener") {
-          await new Promise<void>((resolve) => {
-            listener.close(() => resolve());
-          });
-        }
-        if (condition === "configured listener") {
-          delete process.env.OPENCLAW_GATEWAY_PORT;
+        const expectedPort = portSource === "config" ? 19902 : 19901;
+        if (portSource === "config") {
           await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
           await fs.writeFile(
             path.join(home, ".openclaw/openclaw.json"),
-            JSON.stringify({ gateway: { port: address.port } }),
+            JSON.stringify({ gateway: { port: expectedPort } }),
           );
+        } else {
+          process.env.OPENCLAW_GATEWAY_PORT = String(expectedPort);
+        }
+        if (portUsage) {
+          probePortUsage.mockResolvedValue(portUsage);
         }
         const unit = path.join(home, ".config/systemd/user/openclaw-gateway.service");
         if (condition === "installed") {
@@ -250,18 +271,22 @@ describe("readGatewayServiceState", () => {
           expect(result.blockMessage).toBeUndefined();
           expect(result.serviceMutationSkipMessage).toContain("no Gateway service or listener");
           expect(result.serviceUpdateVerdict?.kind).toBe("absent");
+        } else if (portUsage) {
+          expect(result.blockMessage).toContain("Refusing to mutate code");
+          expect(result.serviceUpdateVerdict).toMatchObject({ kind: "unavailable" });
         } else {
           expect(result.blockMessage).toContain("Refusing to mutate code");
           expect(result.serviceUpdateVerdict?.kind).not.toBe("absent");
         }
         expect(result.serviceMutationAllowed).toBe(false);
         expect(result.stopped).toBe(false);
-      } finally {
-        if (listener.listening) {
-          await new Promise<void>((resolve) => {
-            listener.close(() => resolve());
-          });
+        if (portUsage) {
+          expect(probePortUsage).toHaveBeenCalledOnce();
+          expect(probePortUsage).toHaveBeenCalledWith(expectedPort);
+        } else {
+          expect(probePortUsage).not.toHaveBeenCalled();
         }
+      } finally {
         snapshot.restore();
         await fs.rm(home, { recursive: true, force: true });
       }

@@ -490,7 +490,6 @@ export function startManagedGatewayConfigReloader(
         applyLoggingConfig(nextConfig.logging);
       }
       resetSkillSnapshotConfigFingerprintCache();
-      params.commitTerminalConfig(nextConfig);
     },
     onConfigRevisionApplied: publishAppliedConfigHash,
     hasOutstandingGatewayRestart,

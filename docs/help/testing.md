@@ -985,7 +985,8 @@ Useful env vars:
 ## Docs sanity
 
 Run docs checks after doc edits: `pnpm check:docs`.
-Run full Mintlify anchor validation when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
+Run the shared publishing parser's anchor audit when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
+Diagnostics show `unknown` when a reliable source line is unavailable.
 
 ## Offline regression (CI-safe)
 

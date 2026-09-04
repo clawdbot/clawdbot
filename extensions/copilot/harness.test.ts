@@ -721,45 +721,65 @@ describe("createCopilotAgentHarness", () => {
   });
 
   it.each(["client acquisition", "session creation"] as const)(
-    "rejects expired completion authority after %s without sending the prompt",
-    async (checkpoint) => {
+    "releases resources without further SDK dispatch when the owner is revoked during %s",
+    async (stage) => {
+      const controller = new AbortController();
+      const retired = new Error("isolated completion owner retired");
       let current = true;
-      const expired = new Error("completion owner expired during setup");
       const session = {
         abort: vi.fn().mockResolvedValue(undefined),
         disconnect: vi.fn().mockResolvedValue(undefined),
-        sendAndWait: vi.fn(),
-      };
-      const createSession = vi.fn(async () => {
-        current = false;
-        return session;
-      });
-      const client = createMockCopilotClient({ createSession });
-      const handle = { client, key: TEST_POOL_KEY };
-      const pool = makePoolMock();
-      pool.acquire.mockImplementation(async () => {
-        if (checkpoint === "client acquisition") {
-          current = false;
-        }
-        return handle;
-      });
-      const harness = createCopilotAgentHarness({ pool });
-
-      await expect(
-        harness.runIsolatedCompletionV2?.({
-          ...ISOLATED_COMPLETION_PARAMS,
-          assertCurrent: () => {
-            if (!current) {
-              throw expired;
-            }
-          },
+        sendAndWait: vi.fn().mockResolvedValue({
+          type: "assistant.message",
+          data: { content: "Must not be returned", messageId: "revoked-owner" },
         }),
-      ).rejects.toBe(expired);
+      };
+      const sessionReady = createDeferred<typeof session>();
+      const createSession = vi
+        .fn()
+        .mockReturnValue(
+          stage === "session creation" ? sessionReady.promise : Promise.resolve(session),
+        );
+      const handle = { client: createMockCopilotClient({ createSession }), key: TEST_POOL_KEY };
+      const handleReady = createDeferred<typeof handle>();
+      const pool = makePoolMock();
+      pool.acquire.mockReturnValue(
+        stage === "client acquisition" ? handleReady.promise : Promise.resolve(handle),
+      );
+      pool.release.mockResolvedValue(undefined);
+      const harness = createCopilotAgentHarness({ pool });
+      const pending = harness.runIsolatedCompletionV2?.({
+        ...ISOLATED_COMPLETION_PARAMS,
+        abortSignal: controller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw retired;
+          }
+        },
+      });
+      try {
+        await vi.waitFor(() =>
+          expect(
+            stage === "client acquisition" ? pool.acquire : createSession,
+          ).toHaveBeenCalledOnce(),
+        );
+        current = false;
+      } finally {
+        handleReady.resolve(handle);
+        sessionReady.resolve(session);
+      }
+
+      await expect(pending).rejects.toBe(retired);
       await flushAsyncWork();
+      expect(controller.signal.aborted).toBe(false);
       expect(session.sendAndWait).not.toHaveBeenCalled();
-      expect(createSession).toHaveBeenCalledTimes(checkpoint === "session creation" ? 1 : 0);
-      expect(session.disconnect).toHaveBeenCalledTimes(checkpoint === "session creation" ? 1 : 0);
       expect(pool.release).toHaveBeenCalledExactlyOnceWith(handle);
+      if (stage === "client acquisition") {
+        expect(createSession).not.toHaveBeenCalled();
+      } else {
+        expect(session.abort).toHaveBeenCalledOnce();
+        expect(session.disconnect).toHaveBeenCalledOnce();
+      }
     },
   );
 

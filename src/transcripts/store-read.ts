@@ -83,20 +83,18 @@ export function queryTranscriptReadEntries(
       .groupBy(["session_id", "session_started_at", "speaker_label"])
       .orderBy("first", "asc"),
   ).rows;
-  const entries = rows.map(
-    (row): TranscriptReadEntry => ({
-      session: sessionFromRow(row),
-      selector: row.selector,
-      utteranceCount: 0,
-      participants: [],
-      hasSummary: row.summary_id !== null,
-      overview: typeof row.overview === "string" ? row.overview : undefined,
-      summarySource:
-        row.summary_source === "model" || row.summary_source === "heuristic"
-          ? row.summary_source
-          : undefined,
-    }),
-  );
+  const entries = rows.map((row): TranscriptReadEntry => ({
+    session: sessionFromRow(row),
+    selector: row.selector,
+    utteranceCount: 0,
+    participants: [],
+    hasSummary: row.summary_id !== null,
+    overview: typeof row.overview === "string" ? row.overview : undefined,
+    summarySource:
+      row.summary_source === "model" || row.summary_source === "heuristic"
+        ? row.summary_source
+        : undefined,
+  }));
   const byIdentity = new Map(
     entries.map((entry) => [
       JSON.stringify([entry.session.sessionId, entry.session.startedAt]),

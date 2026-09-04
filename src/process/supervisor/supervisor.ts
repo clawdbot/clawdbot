@@ -168,8 +168,10 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   const waitForScope = (scopeKey: string): Promise<void> => waitForRuns(scopeKey);
 
   const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
-    // A scope fence can outlive its caller; reject before replacing the surviving process.
-    input.assertCurrent?.();
+    // A queued replacement must still own authority before stopping the surviving run.
+    if (!owner.terminationReason) {
+      input.assertCurrent?.();
+    }
     const { runId, scopeKey } = owner;
     const startedAtMs = Date.now();
     const startingTerminationReason = owner.terminationReason;

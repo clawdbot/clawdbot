@@ -94,6 +94,9 @@ never needs the agent.
   Switching the visible tab or dashboard presentation requires a connected
   Control UI. If none is connected, the command returns `UNAVAILABLE`; open the
   Control UI and retry.
+  `focus_tab` opens the side panel. `set_chat_dock` with `dock: "hidden"` expands
+  it; `"left"`, `"right"`, and `"bottom"` all show it beside chat using the current
+  panel layout.
 
 ## What widgets are allowed to do
 

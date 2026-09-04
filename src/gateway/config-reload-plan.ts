@@ -113,9 +113,9 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.nodes.pluginTools.enabled", kind: "hot" },
   { prefix: "gateway.nodes.allowSkills", kind: "hot" },
   { prefix: "gateway.push.apns.relay", kind: "hot" },
-  // New PTYs use the committed shell; existing detached PTYs retain their disconnect time.
-  { prefix: "gateway.terminal.shell", kind: "hot" },
-  { prefix: "gateway.terminal.detachedSessionTimeoutSeconds", kind: "hot" },
+  { prefix: "gateway.terminal", kind: "hot" },
+  { prefix: "gateway.auth.rateLimit", kind: "hot" },
+  { prefix: "discovery.mdns.mode", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {
@@ -239,12 +239,10 @@ function listReloadRules(): ReloadRule[] {
         return rule;
       })
       .concat(
-        (plugin.reload?.noopPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "none",
-          }),
-        ),
+        (plugin.reload?.noopPrefixes ?? []).map((prefix): ReloadRule => ({
+          prefix,
+          kind: "none",
+        })),
       );
   });
   const channelPluginStateRules: ReloadRule[] = channelPlugins.flatMap((plugin) => [
@@ -259,40 +257,28 @@ function listReloadRules(): ReloadRule[] {
     },
   ]);
   const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
-    (entry.registration.restartPrefixes ?? [])
-      .map(
-        (prefix): ReloadRule => ({
-          prefix,
-          kind: "restart",
-        }),
-      )
-      .concat(
-        (entry.registration.hotPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "hot",
-          }),
-        ),
-        (entry.registration.noopPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "none",
-          }),
-        ),
-      ),
+    (
+      [
+        ["restart", entry.registration.restartPrefixes],
+        ["hot", entry.registration.hotPrefixes],
+        ["none", entry.registration.noopPrefixes],
+      ] as const
+    ).flatMap(([kind, prefixes]) => (prefixes ?? []).map((prefix) => ({ prefix, kind }))),
   );
   const rules: ReloadRule[] = [
     ...BASE_RELOAD_RULES,
     ...pluginReloadRules,
     ...channelReloadRules,
     ...channelPluginStateRules,
-    // Channel snapshots capture the shared fallback. Fan out by default while
+    // Channel snapshots capture shared policy. Fan out by default while
     // preserving explicit plugin/channel policies above on equal-prefix ties.
-    {
-      prefix: "agents.defaults.mediaMaxMb",
-      kind: "hot",
-      actions: channelPlugins.map(({ id }): ReloadAction => `restart-channel:${id}`),
-    },
+    ...["agents.defaults.mediaMaxMb", "channels.defaults", "channels.modelByChannel"].map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "hot",
+        actions: channelPlugins.map(({ id }): ReloadAction => `restart-channel:${id}`),
+      }),
+    ),
     ...BASE_RELOAD_RULES_TAIL,
   ];
   // Narrow config contracts must override broad owner fallbacks. Sort once per

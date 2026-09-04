@@ -698,6 +698,18 @@ The Control UI can drag files into an open paired-node terminal. The native node
 
 Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the node host inside WSL for native WSL paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
 
+### Agent file transfers
+
+The [File Transfer plugin](/plugins/reference/file-transfer) provides independently
+selectable directory-listing, fetch, and write tools. Allowing one tool does not
+make the others available; node-command and path policies still apply.
+
+Every successful file fetch saves the bytes in the Gateway's file-transfer media
+store and returns both `localPath` and `mediaId`, including for inlined text and
+images. When node writing is available, pass that `mediaId` as `sourceMediaId` to
+reuse the saved bytes. `sourceMediaId` does not accept a local path or an ID from
+another media store. For inline bytes, use `contentBase64` instead.
+
 ## Invoking commands
 
 Low-level (raw RPC):

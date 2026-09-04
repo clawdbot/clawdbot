@@ -284,9 +284,9 @@ export function renderAttachmentFileIcon(options: {
       ? fileIconAssetPath(`compact/dark/${resolved.compact}`)
       : fileIconAssetPath("compact/unknown-dark");
   return html`<span
-    class="chat-attachment-file-icon ${options.unavailable
-      ? "chat-attachment-file-icon--unavailable"
-      : ""}"
+    class="chat-attachment-file-icon ${
+      options.unavailable ? "chat-attachment-file-icon--unavailable" : ""
+    }"
     data-family=${resolved.family}
     data-mode=${options.mode}
     aria-hidden="true"

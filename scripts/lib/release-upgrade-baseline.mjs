@@ -17,50 +17,65 @@ function compareOpenClawVersions(leftVersion, rightVersion) {
   return comparison;
 }
 
-function normalizePublishedVersions(publishedVersions) {
-  return [
-    ...new Set(
-      publishedVersions
-        .filter((version) => typeof version === "string")
-        .map((version) => version.trim())
-        .filter(Boolean),
-    ),
-  ]
-    .filter((version) => parseVersion(version)?.channel === "stable")
-    .toSorted((left, right) => compareOpenClawVersions(right, left));
-}
-
 function normalizeTargetContextRef(value) {
   const raw = typeof value === "string" ? value.trim() : "";
   return raw.replace(/^refs\/heads\//u, "");
 }
 
-function isEarlierFinalSameExtendedStableLine(params) {
+function isEarlierStableSameReleaseMonth(params) {
   const { baseline, candidate } = params;
   return (
     baseline?.channel === "stable" &&
-    baseline.correctionNumber === undefined &&
     baseline.year === candidate.year &&
     baseline.month === candidate.month &&
-    baseline.patch >= 33 &&
     compareOpenClawVersions(baseline.version, candidate.version) < 0
   );
 }
 
-/**
- * Frozen extended-stable validation must upgrade from an earlier release in
- * the same line. A current latest install can have a newer SQLite schema.
- */
-export function resolveFrozenExtendedStableUpgradeBaseline(
-  candidateVersion,
-  publishedVersions,
-  context,
-) {
+export function resolveReleaseUpgradeBaseline(candidateVersion, publishedVersions, context = {}) {
   const targetContextRef = normalizeTargetContextRef(context.targetContextRef);
-  if (!targetContextRef.startsWith("extended-stable/")) {
-    return undefined;
+  const candidate = parseVersion(candidateVersion);
+  if (!candidate) {
+    throw new Error(`invalid candidate OpenClaw version: ${String(candidateVersion ?? "").trim()}`);
+  }
+  const allPublished = [
+    ...new Set(
+      publishedVersions
+        .filter((version) => typeof version === "string")
+        .map((version) => version.trim()),
+    ),
+  ].filter(Boolean);
+  if (context.candidatePublished && !allPublished.includes(candidate.version)) {
+    throw new Error(`published candidate ${candidate.version} is absent from npm versions`);
   }
 
+  const published = allPublished
+    .filter((version) => parseVersion(version)?.channel === "stable")
+    .toSorted((left, right) => compareOpenClawVersions(right, left));
+  const requestedBaseline = parseVersion(context.previousVersion);
+  if (context.previousVersion !== undefined && !requestedBaseline) {
+    throw new Error("previous_version must be a published stable predecessor");
+  }
+
+  if (!targetContextRef.startsWith("extended-stable/")) {
+    const baseline =
+      requestedBaseline?.version ??
+      published.find((version) => compareOpenClawVersions(version, candidate.version) < 0);
+    if (
+      !baseline ||
+      !published.includes(baseline) ||
+      compareOpenClawVersions(baseline, candidate.version) >= 0
+    ) {
+      throw new Error(
+        requestedBaseline
+          ? `previous_version ${requestedBaseline.version} is not a published stable predecessor of ${candidate.version}`
+          : `no published stable OpenClaw baseline predates candidate ${candidate.version}`,
+      );
+    }
+    return `openclaw@${baseline}`;
+  }
+
+  // Frozen lines cannot upgrade from a newer release with a possibly incompatible SQLite schema.
   const line = /^extended-stable\/(?<year>\d{4})\.(?<month>[1-9]\d?)\.33$/u.exec(
     targetContextRef,
   )?.groups;
@@ -68,9 +83,7 @@ export function resolveFrozenExtendedStableUpgradeBaseline(
     throw new Error(`invalid frozen extended-stable context: ${targetContextRef}`);
   }
 
-  const candidate = parseVersion(candidateVersion);
   if (
-    !candidate ||
     candidate.channel !== "stable" ||
     candidate.correctionNumber !== undefined ||
     candidate.year !== Number(line.year) ||
@@ -78,59 +91,27 @@ export function resolveFrozenExtendedStableUpgradeBaseline(
     candidate.patch < 33
   ) {
     throw new Error(
-      `candidate ${typeof candidateVersion === "string" ? candidateVersion.trim() : ""} is incompatible with frozen extended-stable context ${targetContextRef}`,
+      `candidate ${candidate.version} is incompatible with frozen extended-stable context ${targetContextRef}`,
     );
   }
 
-  const published = normalizePublishedVersions(publishedVersions);
-  const requestedBaseline = parseVersion(context.previousVersion);
-  if (context.previousVersion !== undefined && !requestedBaseline) {
-    throw new Error("previous_version must be a final published extended-stable predecessor");
-  }
-  if (requestedBaseline) {
-    if (
-      !isEarlierFinalSameExtendedStableLine({ baseline: requestedBaseline, candidate }) ||
-      !published.includes(requestedBaseline.version)
-    ) {
-      throw new Error(
-        `previous_version ${requestedBaseline.version} is not a published final predecessor of ${candidate.version} on ${targetContextRef}`,
-      );
-    }
-    return `openclaw@${requestedBaseline.version}`;
-  }
-
-  const baseline = published.find((version) =>
-    isEarlierFinalSameExtendedStableLine({ baseline: parseVersion(version), candidate }),
-  );
-  if (!baseline) {
+  const baseline =
+    requestedBaseline?.version ??
+    published.find((version) =>
+      isEarlierStableSameReleaseMonth({ baseline: parseVersion(version), candidate }),
+    );
+  if (
+    !baseline ||
+    !published.includes(baseline) ||
+    !isEarlierStableSameReleaseMonth({ baseline: parseVersion(baseline), candidate })
+  ) {
     throw new Error(
-      `no published final extended-stable baseline predates candidate ${candidate.version} on ${targetContextRef}`,
+      requestedBaseline
+        ? `previous_version ${requestedBaseline.version} is not a published stable predecessor of ${candidate.version} on ${targetContextRef}`
+        : `no published stable baseline from the frozen release month predates candidate ${candidate.version} on ${targetContextRef}`,
     );
   }
   return `openclaw@${baseline}`;
-}
-
-export function resolveDefaultReleaseUpgradeBaseline(candidateVersion, publishedVersions) {
-  const candidate = parseVersion(candidateVersion);
-  if (!candidate) {
-    const candidateText = typeof candidateVersion === "string" ? candidateVersion.trim() : "";
-    throw new Error(`invalid candidate OpenClaw version: ${candidateText}`);
-  }
-
-  const versions = normalizePublishedVersions(publishedVersions);
-  const older = versions.find((version) => compareOpenClawVersions(version, candidate.version) < 0);
-  if (older) {
-    return `openclaw@${older}`;
-  }
-
-  const same = versions.find(
-    (version) => compareOpenClawVersions(version, candidate.version) === 0,
-  );
-  if (same) {
-    return `openclaw@${same}`;
-  }
-
-  throw new Error(`no published stable OpenClaw baseline is <= candidate ${candidate.version}`);
 }
 
 export function parseArgs(argv) {
@@ -189,14 +170,10 @@ if (isMain) {
   const publishedVersions = readPublishedVersions(args);
   const targetContextRef = args.get("target-context-ref");
   const previousVersion = args.get("previous-version");
-  const baseline = targetContextRef
-    ? resolveFrozenExtendedStableUpgradeBaseline(candidateVersion, publishedVersions, {
-        ...(previousVersion ? { previousVersion } : {}),
-        targetContextRef,
-      })
-    : resolveDefaultReleaseUpgradeBaseline(candidateVersion, publishedVersions);
-  if (!baseline) {
-    throw new Error("target-context-ref does not identify a frozen extended-stable release");
-  }
+  const baseline = resolveReleaseUpgradeBaseline(candidateVersion, publishedVersions, {
+    candidatePublished: args.get("candidate-published") === "true",
+    ...(previousVersion ? { previousVersion } : {}),
+    ...(targetContextRef ? { targetContextRef } : {}),
+  });
   process.stdout.write(`${baseline}\n`);
 }

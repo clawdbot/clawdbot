@@ -56,6 +56,32 @@ changing config.
 | Image generation or editing                       | `openai/gpt-image-2`                                               | Works with `OPENAI_API_KEY` or Codex OAuth.                         |
 | Transparent-background images                     | `openai/gpt-image-1.5`                                             | Set `outputFormat` to `png` or `webp` and `background=transparent`. |
 
+## GPT-6 Astra
+
+Select `openai/gpt-6-astra` with an OpenAI API-key profile or a ChatGPT/Codex
+subscription that has access to Astra. Access is rolling out; a successful
+account catalog remains authoritative, so adding model support does not grant
+access to an account that has not received it.
+If ChatGPT/Codex catalog discovery is unavailable, the offline fallback list
+omits Astra until account discovery succeeds.
+
+```bash
+openclaw models set openai/gpt-6-astra
+```
+
+Astra uses the Responses API for agent tool calls. It supports text and image
+input, a 1,050,000-token context window, and up to 128,000 output tokens.
+OpenClaw retains its ordinary 272,000-token active input budget by default.
+The supported reasoning efforts are `low`, `medium`, `high`, `xhigh`, and `max`.
+An existing `minimal` setting maps to `low`. Astra cannot disable reasoning;
+`off` never sends the unsupported `none` effort.
+Temperature is not sent.
+
+Standard pricing per million tokens is $10 input, $1 cache reads, $12.50 cache
+writes, and $50 output. Requests above 272K input tokens have higher rates.
+See the [Astra model reference](https://developers.openai.com/api/docs/models/gpt-6-astra)
+and [migration guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra).
+
 ## Naming map
 
 | Name you see                            | Layer             | Meaning                                                                                  |
@@ -1012,6 +1038,28 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     such as `fable`, `nova`, or `onyx` is not valid for Realtime sessions.
     Set the model explicitly to `gpt-realtime-2.1-mini` when you prefer the
     smaller, lower-cost Realtime 2.1 variant.
+
+    #### Gateway-controlled Realtime call cleanup
+
+    Closing a Gateway-controlled GA Realtime WebRTC session retires its Gateway
+    authority and closes the local sideband before asking OpenAI to hang up the
+    provider call. These are separate events; control closure does not establish
+    provider acknowledgment or recall already queued media.
+
+    If hangup fails, explicit cancellation or cleanup reports the failure. The
+    broker retries automatically after 1 second, then 5 seconds, with the existing
+    30-second timeout for each attempt. After all three attempts fail, the log
+    reports `cleanup INCOMPLETE`. The exact cleanup obligation and its capacity
+    remain reserved, including across plugin replacement: eight sessions globally
+    and two per Gateway client. Restore provider connectivity; a later OpenAI
+    broker/plugin runtime cleanup can retry these retained calls. Repeating End
+    or `talk.client.close` is not that retry boundary because the Gateway session
+    may already be retired.
+
+    Cleanup obligations are in memory only. Gateway exit, crash, or restart can
+    lose them; restarting is not proof that the provider call ended. The
+    adapter's 30-minute active-session lease is not a remote-lifetime guarantee
+    or a fallback after failed hangup.
 
     #### GA Realtime browser Talk over ChatGPT OAuth
 

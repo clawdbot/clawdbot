@@ -21,6 +21,8 @@ import {
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../daemon/constants.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
+import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { isBetaTag } from "../infra/update-channels.js";
@@ -74,9 +76,10 @@ const serviceReadRuntime = vi.fn();
 const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid]));
 const terminateStaleGatewayPids = vi.fn();
 const inspectPortUsage = vi.fn();
+const probePortUsage = vi.fn();
 const classifyPortListener = vi.fn();
 const formatPortDiagnostics = vi.fn();
-const probeGateway = vi.fn();
+const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
@@ -483,13 +486,19 @@ vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
 }));
 
+vi.mock("../infra/ports-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/ports-probe.js")>()),
+  probePortUsage: (...args: unknown[]) => probePortUsage(...args),
+}));
+
 vi.mock("../infra/ports-format.js", () => ({
   classifyPortListener: (...args: unknown[]) => classifyPortListener(...args),
   formatPortDiagnostics: (...args: unknown[]) => formatPortDiagnostics(...args),
 }));
 
-vi.mock("../gateway/probe.js", () => ({
-  probeGateway: (...args: unknown[]) => probeGateway(...args),
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGateway: (opts: CallGatewayOptions) => callGateway(opts),
 }));
 
 vi.mock("./update-cli/restart-helper.js", () => ({
@@ -894,7 +903,7 @@ describe("update-cli", () => {
     }
   };
 
-  const probeGatewayCall = (index = 0) => probeGateway.mock.calls[index]?.[0];
+  const gatewayHealthCall = (index = 0) => callGateway.mock.calls[index]?.[0];
 
   const pluginWarning = (result?: UpdateRunResult) => result?.postUpdate?.plugins?.warnings?.[0];
   const pluginOutcome = (result?: UpdateRunResult) => result?.postUpdate?.plugins?.npm.outcomes[0];
@@ -1477,7 +1486,7 @@ describe("update-cli", () => {
         pid: gatewayFixturePid,
         state: "running",
       });
-      mockGatewayProbe(manifest.version, "updated-gateway");
+      mockGatewayHealth(manifest.version, "updated-gateway");
     };
   };
 
@@ -1563,20 +1572,8 @@ describe("update-cli", () => {
     expect(logs).not.toContain("Update Result: OK");
   };
 
-  const mockGatewayProbe = (version: string, connId: string, buildId?: string) => {
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-      server: { version, connId, buildId },
-      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-      connectLatencyMs: 1,
-      error: null,
-      url: "ws://127.0.0.1:18789",
-    });
+  const mockGatewayHealth = (version: string, connId: string, buildId?: string) => {
+    callGateway.mockImplementation(gatewayHealthResponse({ server: { version, connId, buildId } }));
   };
 
   const completeChangedPostCorePluginUpdate = (
@@ -1666,7 +1663,7 @@ describe("update-cli", () => {
         pid: gatewayFixturePid,
         state: "running",
       });
-      mockGatewayProbe("2026.4.27", "updated-work");
+      mockGatewayHealth("2026.4.27", "updated-work");
     });
     return updatedEntrypoint;
   };
@@ -1768,6 +1765,7 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    probePortUsage.mockResolvedValue("free");
     serviceEnabled.mockResolvedValue(true);
     serviceDefinitionMutationCapability.mockResolvedValue(undefined);
     readPersistedInstalledPluginIndex.mockResolvedValue(null);
@@ -1888,7 +1886,7 @@ describe("update-cli", () => {
     });
     classifyPortListener.mockReturnValue("gateway");
     formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
-    mockGatewayProbe("1.0.0", "conn-test");
+    mockGatewayHealth("1.0.0", "conn-test");
     pathExists.mockResolvedValue(false);
     syncPluginsForUpdateChannel.mockResolvedValue(pluginSyncResult(baseConfig));
     updateNpmInstalledPlugins.mockResolvedValue(npmPluginUpdateResult(baseConfig));
@@ -2129,7 +2127,7 @@ describe("update-cli", () => {
           : path.join(root, "dist", "index.js");
       if (kind === "package") {
         mockPackageInstallStatus(root);
-        mockGatewayProbe("9999.0.0", "updated-service");
+        mockGatewayHealth("9999.0.0", "updated-service");
       } else {
         mockGitUpdateAfterMutation(makeOkUpdateResult({ mode: "git", root }));
       }
@@ -3260,7 +3258,7 @@ describe("update-cli", () => {
         expect(syncPluginsForUpdateChannel).toHaveBeenCalledOnce();
         expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
       }
-      expectNoSideEffects(runDaemonInstall, probeGateway);
+      expectNoSideEffects(runDaemonInstall, callGateway);
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     },
   );
@@ -4984,7 +4982,7 @@ describe("update-cli", () => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
     vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
     mockOwnedGitService(root);
-    mockGatewayProbe("1.0.0", "restored", "fixture-original-build");
+    mockGatewayHealth("1.0.0", "restored", "fixture-original-build");
     const entrypoint = path.join(root, "dist", "index.js");
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
 
@@ -7616,7 +7614,7 @@ describe("update-cli", () => {
     mockFileBackedPathExists();
     mockNpmGlobalCommands(nodeModules, undefined, canonicalGitRoot);
     mockRunningManagedGateway(["node", packageEntrypoint, "gateway", "run"]);
-    mockGatewayProbe("2026.4.21", "updated-checkout");
+    mockGatewayHealth("2026.4.21", "updated-checkout");
     serviceReadCommand.mockImplementation(async () => ({
       programArguments: [
         "node",
@@ -9330,7 +9328,7 @@ describe("update-cli", () => {
           });
         });
       }
-      mockGatewayProbe("2026.4.24", "updated-gateway");
+      mockGatewayHealth("2026.4.24", "updated-gateway");
 
       await updateCommand({ yes: true, json });
 
@@ -9374,7 +9372,7 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(true);
     primeServiceCommand(["node", updatedEntrypoint, "gateway", "run"]);
     mockGatewayInstallFailure(updatedEntrypoint);
-    mockGatewayProbe("2026.4.24", "matching-old-gateway");
+    mockGatewayHealth("2026.4.24", "matching-old-gateway");
 
     await updateCommand({ yes: true });
 
@@ -9407,7 +9405,7 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(true);
     primeServiceCommand(["node", oldEntrypoint, "gateway", "run"]);
     mockGatewayInstallFailure(updatedEntrypoint);
-    mockGatewayProbe("2026.4.24", "matching-old-service");
+    mockGatewayHealth("2026.4.24", "matching-old-service");
 
     await updateCommand({ yes: true });
 
@@ -9428,7 +9426,7 @@ describe("update-cli", () => {
     const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
     prepareRestartScript.mockResolvedValue(null);
     serviceLoaded.mockResolvedValue(true);
-    mockGatewayProbe("2026.4.23", "old-gateway");
+    mockGatewayHealth("2026.4.23", "old-gateway");
 
     await expect(updateCommand({ yes: true, json: true, timeout: "123" })).rejects.toEqual(
       new ExitError(1),
@@ -9440,8 +9438,7 @@ describe("update-cli", () => {
     expect(restartCall?.[0].slice(1)).toEqual([updatedEntrypoint, "gateway", "restart", "--json"]);
     expect(restartCall?.[1].cwd).toBe(updatedRoot);
     expect(restartCall?.[1].timeoutMs).toBe(123_000);
-    const probeCall = probeGatewayCall() as { includeDetails?: boolean } | undefined;
-    expect(probeCall?.includeDetails).toBe(true);
+    expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "restart-unhealthy" });
     expect(getErrorOutput()).toContain(
@@ -9485,7 +9482,7 @@ describe("update-cli", () => {
   it("skips the post-refresh restart script when LaunchAgent already serves the expected package version", async () => {
     const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
     serviceLoaded.mockResolvedValue(true);
-    mockGatewayProbe("2026.4.24", "updated-gateway");
+    mockGatewayHealth("2026.4.24", "updated-gateway");
 
     await updateCommand({ yes: true });
 
@@ -9496,8 +9493,7 @@ describe("update-cli", () => {
     expect(installCall?.[1].timeoutMs).toBe(60_000);
     expect(gatewayCommandCall(updatedEntrypoint, "restart")).toBeUndefined();
     expect(runRestartScript).not.toHaveBeenCalled();
-    const probeCall = probeGatewayCall() as { includeDetails?: boolean } | undefined;
-    expect(probeCall?.includeDetails).toBe(true);
+    expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
     expect(getLogOutput()).toContain("Gateway: restarted and verified.");
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
@@ -9514,7 +9510,7 @@ describe("update-cli", () => {
       beforeUpdate: () => {
         setupNpmUpdatedRootRefresh();
         serviceLoaded.mockResolvedValue(true);
-        mockGatewayProbe("2026.4.24", "updated-gateway");
+        mockGatewayHealth("2026.4.24", "updated-gateway");
       },
     });
     expect(sentinel?.payload.status).toBe("ok");
@@ -9604,12 +9600,12 @@ describe("update-cli", () => {
           setupNpmUpdatedRootRefresh();
           prepareRestartScript.mockResolvedValue(null);
           serviceLoaded.mockResolvedValue(true);
-          mockGatewayProbe("2026.4.23", "old-gateway");
+          mockGatewayHealth("2026.4.23", "old-gateway");
           if (consumed) {
-            const probeResult = await probeGateway();
-            probeGateway.mockImplementation(async () => {
+            const respond = expectDefined(callGateway.getMockImplementation(), "health response");
+            callGateway.mockImplementation(async (opts) => {
               sentinelConsumed = (await clearRestartSentinel()) || sentinelConsumed;
-              return probeResult;
+              return respond(opts);
             });
           }
         },
@@ -9631,40 +9627,29 @@ describe("update-cli", () => {
     setupNpmUpdatedRootRefresh();
     readPackageVersion.mockResolvedValue("2026.4.24");
     serviceLoaded.mockResolvedValue(true);
-    probeGateway.mockResolvedValue({
-      ok: true,
-      close: null,
-      server: {
-        version: "2026.4.24",
-        connId: "updated-gateway",
-      },
-      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
-      health: {
-        ok: true,
-        plugins: {
-          errors: [
-            {
-              id: "telegram",
-              origin: "bundled",
-              activated: true,
-              error: "failed to load plugin dependency: ENOSPC",
-            },
-          ],
+    callGateway.mockImplementation(
+      gatewayHealthResponse({
+        server: { version: "2026.4.24", connId: "updated-gateway" },
+        health: {
+          ok: true,
+          plugins: {
+            errors: [
+              {
+                id: "telegram",
+                origin: "bundled",
+                activated: true,
+                error: "failed to load plugin dependency: ENOSPC",
+              },
+            ],
+          },
         },
-      },
-      status: null,
-      presence: null,
-      configSnapshot: null,
-      connectLatencyMs: 1,
-      error: null,
-      url: "ws://127.0.0.1:18789",
-    });
+      }),
+    );
 
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
     expect(runRestartScript).toHaveBeenCalledTimes(1);
-    const probeCall = probeGatewayCall() as { includeDetails?: boolean } | undefined;
-    expect(probeCall?.includeDetails).toBe(true);
+    expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(getLogOutput()).toContain("- telegram: failed to load plugin dependency: ENOSPC");
   });

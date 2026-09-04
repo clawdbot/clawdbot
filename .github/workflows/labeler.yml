@@ -137,6 +137,7 @@ jobs:
               per_page: 100,
             });
 
+            let remainingLabelCount = currentLabels.length;
             for (const label of currentLabels) {
               const name = label.name ?? "";
               if (!sizeLabels.includes(name)) {
@@ -151,14 +152,28 @@ jobs:
                 issue_number: pullRequest.number,
                 name,
               });
+              remainingLabelCount -= 1;
             }
 
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pullRequest.number,
-              labels: [targetSizeLabel],
-            });
+            // actions/labeler already caps its result at GitHub's 100-label limit.
+            // Its optional area-label limit skips all new matches; it reserves no slots here.
+            if (remainingLabelCount >= 100 && !currentLabels.some((label) => label.name === targetSizeLabel)) {
+              core.warning(`Skipping ${targetSizeLabel}: PR #${pullRequest.number} already has 100 labels.`);
+              return;
+            }
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: [targetSizeLabel],
+              });
+            } catch (error) {
+              if (error?.status !== 422 || !/cannot have more than 100 labels/i.test(error.message ?? "")) {
+                throw error;
+              }
+              core.warning(`Skipping ${targetSizeLabel}: ${error.message}`);
+            }
       - name: Apply maintainer or trusted-contributor label
         if: ${{ github.event.action != 'edited' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9

@@ -460,7 +460,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/profile/profile-page.ts",
+      "path": "ui/src/pages/profile/profile-hero.ts",
       "text": "OpenClaw"
     },
     {

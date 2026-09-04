@@ -113,9 +113,11 @@ export function renderNewSessionDraftView(options: {
             ? undefined
             : () => void submission.submit(undefined, true),
       })}
-      ${!isCatalogTarget
-        ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")
-        : nothing}
+      ${
+        !isCatalogTarget
+          ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")
+          : nothing
+      }
     </div>
   `;
 }

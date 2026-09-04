@@ -11,7 +11,10 @@ import {
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
+  queueAgentHarnessMessage,
+  setActiveEmbeddedRun,
   type AgentHarness,
+  type AgentHarnessQuestionGatewayCall,
   type AgentHarnessAttemptParams,
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessSideQuestionParams,
@@ -209,6 +212,49 @@ describe("agent harness runtime SDK facade", () => {
         ? true
         : false
     >().toEqualTypeOf<false>();
+
+    // v2026.8.1 queue/register callers need neither a source predicate nor V2.
+    type QueueOptions = Parameters<typeof queueAgentHarnessMessage>[2];
+    const legacyInjection = {
+      isAvailable: () => true,
+      queueMessage: async (_text: string, _options?: QueueOptions) => {},
+    };
+    const legacyHandle = {
+      queueMessage: legacyInjection.queueMessage,
+      messageInjection: legacyInjection,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
+    expectTypeOf(legacyHandle).toMatchTypeOf<Parameters<typeof setActiveEmbeddedRun>[1]>();
+    expectTypeOf(queueAgentHarnessMessage).returns.toEqualTypeOf<boolean>();
+    type GuardedInjection = NonNullable<
+      Parameters<typeof setActiveEmbeddedRun>[1]["messageInjectionV2"]
+    >;
+    expectTypeOf<Parameters<GuardedInjection["queueMessage"]>[2]>().toEqualTypeOf<() => void>();
+    expectTypeOf<Parameters<GuardedInjection["queueMessage"]>[3]>().toEqualTypeOf<
+      "run" | "source-bound"
+    >();
+    expectTypeOf<Parameters<GuardedInjection["queueMessage"]>["length"]>().toEqualTypeOf<4>();
+  });
+
+  it("keeps legacy question callbacks and requires explicit guarded dispatch authority", () => {
+    type Legacy = (
+      method: string,
+      opts: { timeoutMs?: number },
+      params?: unknown,
+      extra?: { signal?: AbortSignal },
+    ) => Promise<unknown>;
+    expectTypeOf<AgentHarnessQuestionGatewayCall>().toEqualTypeOf<Legacy>();
+    type Override = Parameters<typeof agentHarnessStructuredInput.run>[0]["gatewayCall"];
+    expectTypeOf<Legacy>().toMatchTypeOf<Override>();
+    expectTypeOf<undefined>().toMatchTypeOf<Override>();
+    type Dispatcher = Exclude<Override, Legacy | undefined>;
+    type Request = Parameters<Dispatcher["call"]>[0];
+    type Protected = Extract<Request["authority"], { kind: "source-bound" }>;
+    expectTypeOf<Dispatcher["version"]>().toEqualTypeOf<2>();
+    expectTypeOf<Protected["assertCurrent"]>().toEqualTypeOf<() => void>();
+    expectTypeOf<Omit<Protected, "assertCurrent">>().not.toMatchTypeOf<Protected>();
   });
 
   it("exposes attached model request transport metadata helpers", () => {

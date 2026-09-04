@@ -46,16 +46,18 @@ export async function ensureBoardViewElement(): Promise<boolean> {
 function renderBoardView(props: BoardSessionSurfaceProps) {
   return html`
     <div class="board-session-surface__board">
-      ${props.workboardCardChip
-        ? html`
-            <openclaw-workboard-card-chip
-              .active=${props.workboardCardChip.active}
-              .basePath=${props.workboardCardChip.basePath}
-              .client=${props.workboardCardChip.client}
-              .sessionKey=${props.workboardCardChip.sessionKey}
-            ></openclaw-workboard-card-chip>
-          `
-        : nothing}
+      ${
+        props.workboardCardChip
+          ? html`
+              <openclaw-workboard-card-chip
+                .active=${props.workboardCardChip.active}
+                .basePath=${props.workboardCardChip.basePath}
+                .client=${props.workboardCardChip.client}
+                .sessionKey=${props.workboardCardChip.sessionKey}
+              ></openclaw-workboard-card-chip>
+            `
+          : nothing
+      }
       <openclaw-board-view
         .active=${props.active}
         .snapshot=${props.snapshot}

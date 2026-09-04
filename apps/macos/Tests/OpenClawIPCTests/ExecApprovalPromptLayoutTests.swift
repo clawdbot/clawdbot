@@ -93,7 +93,7 @@ struct ExecApprovalPromptLayoutTests {
                 allowlistAuthorizationSatisfied: false,
                 allowlistSatisfied: false,
                 allowlistMatch: nil,
-                skillAllow: false,
+                skillTrust: nil,
                 policySnapshot: ExecApprovalPolicySnapshot(
                     security: security,
                     ask: .onMiss,

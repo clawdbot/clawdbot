@@ -117,17 +117,15 @@ describe("memory index", () => {
   });
 
   it("indexes trailing recall annotations only from curated memory files", async () => {
-    await fs.writeFile(
-      path.join(fixture.paths.workspace, "MEMORY.md"),
-      [
-        "# Curated entries",
-        "",
-        "- Alpha deploy preference. <!-- trigger: alpha deploy --> <!-- importance: 4 --> <!-- project: alpha-key -->",
-        "  Keep the alpha gateway local.",
-        "- Beta deploy preference. <!-- trigger: beta deploy --> <!-- importance: 9 --> <!-- project: beta-key -->",
-        "- Global deploy preference. <!-- trigger: global defaults --> <!-- importance: 7 -->",
-      ].join("\n"),
-    );
+    const curatedContent = [
+      "# Curated entries",
+      "",
+      "- Alpha deploy preference. <!-- trigger: alpha deploy --> <!-- importance: 4 --> <!-- project: alpha-key -->",
+      "  Keep the alpha gateway local.",
+      "- Beta deploy preference. <!-- trigger: beta deploy --> <!-- importance: 9 --> <!-- project: beta-key -->",
+      "- Global deploy preference. <!-- trigger: global defaults --> <!-- importance: 7 -->",
+    ].join("\n");
+    await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), curatedContent);
     await fs.writeFile(
       path.join(fixture.paths.workspace, "USER.md"),
       "- Prefer concise replies. <!-- trigger: writing style --> <!-- importance: 7 -->\n",
@@ -146,7 +144,16 @@ describe("memory index", () => {
 
     const manager = await getFreshManager(createCfg({}));
     try {
-      await manager.sync({ reason: "test", force: true });
+      const split = vi.spyOn(String.prototype, "split");
+      try {
+        await manager.sync({ reason: "test", force: true });
+        // Indexing may decompose the annotation source once, independent of chunk count.
+        expect(
+          split.mock.contexts.filter((source) => source === curatedContent).length,
+        ).toBeLessThanOrEqual(1);
+      } finally {
+        split.mockRestore();
+      }
       const db = Reflect.get(manager, "db") as DatabaseSync;
       const rows = db
         .prepare(

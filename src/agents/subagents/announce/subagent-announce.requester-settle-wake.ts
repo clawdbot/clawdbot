@@ -15,7 +15,6 @@ import {
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
 import {
-  INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
@@ -514,7 +513,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         requesterOrigin: requesterSessionOrigin,
         directOrigin,
         sourceSessionKey: currentSettledEntry.childSessionKey,
-        sourceChannel: INTERNAL_MESSAGE_CHANNEL,
         sourceTool: "subagent_announce",
         targetRequesterSessionKey: requesterSessionKey,
         requesterIsSubagent: false,

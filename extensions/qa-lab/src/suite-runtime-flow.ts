@@ -101,6 +101,7 @@ export async function runQaSuiteScenarioSteps(
 ): Promise<QaSuiteScenarioResult> {
   const stepResults: QaSuiteScenarioResult["steps"] = [];
   let timing: QaSuiteScenarioResult["timing"];
+  let rttMeasurement: QaSuiteScenarioResult["rttMeasurement"];
   for (const step of steps) {
     try {
       if (process.env.OPENCLAW_QA_DEBUG === "1") {
@@ -111,6 +112,13 @@ export async function runQaSuiteScenarioSteps(
       if (outcome?.timing) {
         timing ??= {};
         Object.assign(timing, outcome.timing);
+      }
+      if (outcome?.rttMeasurement) {
+        rttMeasurement = outcome.rttMeasurement;
+      }
+      if (rttMeasurement) {
+        timing ??= {};
+        timing.rttMs = rttMeasurement.finalMatchedReplyRttMs;
       }
       if (process.env.OPENCLAW_QA_DEBUG === "1") {
         console.error(`[qa-suite] pass scenario="${name}" step="${step.name}"`);
@@ -130,6 +138,7 @@ export async function runQaSuiteScenarioSteps(
           steps: stepResults,
           details,
           ...(timing ? { timing } : {}),
+          ...(rttMeasurement ? { rttMeasurement } : {}),
         };
       }
       if (process.env.OPENCLAW_QA_DEBUG === "1") {
@@ -142,10 +151,17 @@ export async function runQaSuiteScenarioSteps(
         steps: stepResults,
         details,
         ...(timing ? { timing } : {}),
+        ...(rttMeasurement ? { rttMeasurement } : {}),
       };
     }
   }
-  return { name, status: "pass", steps: stepResults, ...(timing ? { timing } : {}) };
+  return {
+    name,
+    status: "pass",
+    steps: stepResults,
+    ...(timing ? { timing } : {}),
+    ...(rttMeasurement ? { rttMeasurement } : {}),
+  };
 }
 
 type QaSuiteScenarioDepsParams = {

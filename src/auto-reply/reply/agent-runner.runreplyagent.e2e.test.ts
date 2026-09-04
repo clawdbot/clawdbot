@@ -64,7 +64,7 @@ import {
 } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
@@ -449,10 +449,8 @@ function createMinimalRun(params?: {
     },
   } as unknown as FollowupRun;
   const activeOperation = replyRunRegistry.get(sessionKey);
-  if (activeOperation && params?.bindActiveAuthority !== false) {
-    activeOperation.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(followupRun),
-    );
+  if (activeOperation && params?.isActive && params.bindActiveAuthority !== false) {
+    activeOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
   }
 
   return {
@@ -625,22 +623,19 @@ describe("runReplyAgent active steering", () => {
       sessionId: "session",
       resetTriggered: false,
     });
-    active.bindToolAuthorityRoute(activeRoute);
-    active.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(
-        {
-          ...followupRun,
-          run: {
-            ...followupRun.run,
-            runtimePluginToolGrant: {
-              pluginId: "workboard",
-              toolNames: ["workboard_complete"],
-            },
+    active.bindToolAuthoritySnapshot(
+      prepareReplyToolAuthority({
+        ...followupRun,
+        run: {
+          ...followupRun.run,
+          runtimePluginToolGrant: {
+            pluginId: "workboard",
+            toolNames: ["workboard_complete"],
           },
         },
-        activeRoute,
-      ),
+      }),
     );
+    active.bindToolAuthorityRoute(activeRoute);
     active.setPhase("running");
 
     await expect(run()).resolves.toBeUndefined();
@@ -664,10 +659,8 @@ describe("runReplyAgent active steering", () => {
       sessionId: "session",
       resetTriggered: false,
     });
+    active.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
     active.bindToolAuthorityRoute(activeRoute);
-    active.bindToolAuthorityFingerprint(
-      resolveFollowupRunToolAuthorityFingerprint(followupRun, activeRoute),
-    );
     active.setPhase("running");
 
     await expect(run()).resolves.toBeUndefined();
@@ -689,7 +682,10 @@ describe("runReplyAgent active steering", () => {
       sessionId: "provided-session",
       resetTriggered: false,
     });
-    provided.bindToolAuthorityFingerprint("different-authority");
+    provided.bindToolAuthoritySnapshot({
+      fingerprint: () => "different-authority",
+      project: () => "different-authority",
+    });
     provided.setPhase("running");
     const { followupRun, run } = createMinimalRun({
       isActive: true,
@@ -4868,6 +4864,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       streamed: false,
     },
   ])("surfaces a configured backend failure when fallback produces $label", async (testCase) => {
+    const onAgentRunTerminalOutcome = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       if (testCase.streamed) {
         await params.onBlockReply?.(testCase.payload);
@@ -4883,7 +4880,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     try {
       const { run } = createMinimalRun({
-        opts: testCase.opts,
+        opts: { ...testCase.opts, onAgentRunTerminalOutcome },
         blockStreamingEnabled: testCase.streamed,
         runOverrides: {
           provider: "lmstudio",
@@ -4902,6 +4899,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
       expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
       expect(payload?.text).toContain("no visible reply");
+      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
     } finally {
       fallbackSpy.mockRestore();
     }

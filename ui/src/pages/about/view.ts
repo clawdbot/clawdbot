@@ -172,9 +172,11 @@ function renderHero(props: AboutProps) {
       </button>
       <h2 class="about-hero__name">${t("aboutPage.productName")}</h2>
       <p class="about-hero__tagline">${t("aboutPage.tagline")}</p>
-      ${props.buildInfo.version
-        ? html`<code class="about-hero__version" dir="ltr">v${props.buildInfo.version}</code>`
-        : nothing}
+      ${
+        props.buildInfo.version
+          ? html`<code class="about-hero__version" dir="ltr">v${props.buildInfo.version}</code>`
+          : nothing
+      }
       <nav class="about-hero__links" aria-label=${t("aboutPage.linksLabel")}>
         ${ABOUT_LINKS.map(
           (link) => html`
@@ -204,32 +206,40 @@ export function renderAbout(props: AboutProps) {
     >
       <dt>${t("aboutPage.version")}</dt>
       <dd>
-        ${props.buildInfo.version
-          ? html`<code dir="ltr" title=${props.buildInfo.version}>${props.buildInfo.version}</code>`
-          : renderUnavailable()}
+        ${
+          props.buildInfo.version
+            ? html`<code dir="ltr" title=${props.buildInfo.version}
+                >${props.buildInfo.version}</code
+              >`
+            : renderUnavailable()
+        }
       </dd>
       <dt>${t("aboutPage.commit")}</dt>
       <dd>${renderCommit(props)}</dd>
-      ${props.buildInfo.branch
-        ? html`
-            <dt>${t("aboutPage.branch")}</dt>
-            <dd>
-              <code dir="ltr" title=${props.buildInfo.branch}
-                >${props.buildInfo.branch}${props.buildInfo.dirty === true ? "*" : ""}</code
-              >
-            </dd>
-          `
-        : nothing}
+      ${
+        props.buildInfo.branch
+          ? html`
+              <dt>${t("aboutPage.branch")}</dt>
+              <dd>
+                <code dir="ltr" title=${props.buildInfo.branch}
+                  >${props.buildInfo.branch}${props.buildInfo.dirty === true ? "*" : ""}</code
+                >
+              </dd>
+            `
+          : nothing
+      }
       <dt>${t("aboutPage.built")}</dt>
       <dd>
-        ${buildDate && props.buildInfo.builtAt
-          ? html`<time
-              dir="auto"
-              datetime=${props.buildInfo.builtAt}
-              title=${props.buildInfo.builtAt}
-              >${buildDate}</time
-            >`
-          : renderUnavailable()}
+        ${
+          buildDate && props.buildInfo.builtAt
+            ? html`<time
+                dir="auto"
+                datetime=${props.buildInfo.builtAt}
+                title=${props.buildInfo.builtAt}
+                >${buildDate}</time
+              >`
+            : renderUnavailable()
+        }
       </dd>
     </dl>
   `;

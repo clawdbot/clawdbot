@@ -17,7 +17,7 @@ export const BOUNDARY_PLUGIN_UNITS = [
   ["memory-core", "api"],
   ["matrix", "test-api"],
   ["discord", "api"],
-  ["slack", "api"],
+  ["slack", "test-api"],
   ["telegram", "api"],
   ["whatsapp", "api"],
 ] as const;

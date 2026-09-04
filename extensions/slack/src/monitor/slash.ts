@@ -66,7 +66,6 @@ import {
   SLACK_EXTERNAL_ARG_MENU_PREFIX,
   type SlackExternalArgMenuChoice,
 } from "./external-arg-menu-store.js";
-import { resolveSlackRoutingContext } from "./message-handler/prepare-routing.js";
 import { escapeSlackMrkdwn } from "./mrkdwn.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import {
@@ -74,6 +73,7 @@ import {
   isSlackResponseAlreadyReportedError,
 } from "./response-url-budget.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
+import { resolveSlackSessionEventRoute } from "./session-event-route.js";
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
 const SLACK_COMMAND_ARG_ACTION_LISTENER = /^openclaw_cmdarg/;
@@ -638,25 +638,17 @@ export function createSlackCommandHandler(params: {
           return resolvedSlashRoute;
         }
         if (p.threadTs) {
-          const routing = resolveSlackRoutingContext({
+          resolvedSlashRoute = await resolveSlackSessionEventRoute({
             ctx: { ...ctx, cfg },
             account,
-            message: {
-              type: "message",
-              channel: command.channel_id,
-              user: command.user_id,
-              ts: p.eventTs,
-              thread_ts: p.threadTs,
-            },
-            isDirectMessage,
-            isGroupDm,
-            isRoom,
-            isRoomish,
+            channelId: command.channel_id,
+            userId: command.user_id,
+            eventTs: p.eventTs,
+            threadTs: p.threadTs,
+            channelType,
             channelConfig,
-            agentViewThreadTs: p.threadTs,
             eventScope,
           });
-          resolvedSlashRoute = { ...routing.route, sessionKey: routing.sessionKey };
           return resolvedSlashRoute;
         }
         const { resolveAgentRoute } = await loadSlashDispatchRuntime();

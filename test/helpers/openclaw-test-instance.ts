@@ -43,6 +43,7 @@ type OpenClawTestInstanceOptions = {
   env?: Record<string, string | undefined>;
   state?: Omit<OpenClawTestStateOptions, "applyEnv" | "gateway" | "env">;
   gatewayArgs?: string[];
+  gatewayCommandPrefix?: string[];
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
 };
@@ -604,7 +605,8 @@ export async function createOpenClawTestInstance(
   };
   const stopTimeoutMs = options.stopTimeoutMs ?? GATEWAY_STOP_TIMEOUT_MS;
   const spawnGatewayProcess = (args: string[], attemptStderr: string[]): OpenClawTestProcess => {
-    const next = spawn("node", args, {
+    const [command = "node", ...prefixArgs] = options.gatewayCommandPrefix ?? [];
+    const next = spawn(command, [...prefixArgs, ...args], {
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],

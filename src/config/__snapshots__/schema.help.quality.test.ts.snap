@@ -245,7 +245,6 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "messages.responseUsage",
   "messages.responseUsage.*",
   "messages.statusReactions.enabled",
-  "messages.suppressToolErrors",
   "messages.usageTemplate",
   "messages.usageTemplate.*",
   "messages.visibleReplies",
