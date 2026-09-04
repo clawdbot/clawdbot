@@ -24,6 +24,7 @@ test("sessions.list excludes ownerless sentinels for explicit multi-agent federa
       list: [{ id: "ops" }, { id: "research" }],
     };
     testState.agentConfig = { sessionStore: { agentId: "ops" } };
+    const linkedSessionKey = "subagent:workboard-default-owned";
     await writeSessionStore({
       storePath: storeTemplate.replace("{agentId}", "ops"),
       agentId: "ops",
@@ -36,7 +37,10 @@ test("sessions.list excludes ownerless sentinels for explicit multi-agent federa
     await writeSessionStore({
       storePath: storeTemplate.replace("{agentId}", "research"),
       agentId: "research",
-      entries: { main: { sessionId: "sess-research", updatedAt: 21 } },
+      entries: {
+        main: { sessionId: "sess-research", updatedAt: 21 },
+        [linkedSessionKey]: { sessionId: "sess-linked", updatedAt: 22 },
+      },
     });
 
     await expect(
@@ -49,12 +53,46 @@ test("sessions.list excludes ownerless sentinels for explicit multi-agent federa
       'Multiple agents are configured, but session key "global" has no explicit owner.',
     );
 
+    const linkedQuery = {
+      search: linkedSessionKey,
+      archived: "all",
+      limit: 2,
+      configuredAgentsOnly: false,
+      includeDerivedTitles: false,
+      includeLastMessage: false,
+    };
+    for (const sentinel of ["global", "unknown"]) {
+      await expect(
+        directSessionReq("sessions.list", {
+          ...linkedQuery,
+          includeGlobal: sentinel === "global",
+          includeUnknown: sentinel === "unknown",
+        }),
+      ).rejects.toThrow(
+        `Multiple agents are configured, but session key "${sentinel}" has no explicit owner.`,
+      );
+    }
+    const linked = await directSessionReq("sessions.list", {
+      ...linkedQuery,
+      includeGlobal: false,
+      includeUnknown: false,
+    });
+    expect(linked).toMatchObject({
+      ok: true,
+      payload: {
+        sessions: [{ key: `agent:research:${linkedSessionKey}`, agentId: "research" }],
+        hasMore: false,
+        totalCount: 1,
+      },
+    });
+
     const configuredOnly = await directSessionReq<{ sessions: Array<{ key: string }> }>(
       "sessions.list",
       { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
     );
     expect(configuredOnly.ok).toBe(true);
     expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
+      `agent:research:${linkedSessionKey}`,
       "agent:research:main",
       "agent:ops:main",
     ]);

@@ -23,6 +23,7 @@ import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
+import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
 import { createPluginServiceHealthGeneration } from "./service-health.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
@@ -54,6 +55,7 @@ function createServiceContext(params: {
   service: PluginServiceRegistration;
   serviceHealth: NonNullable<OpenClawPluginServiceContext["serviceHealth"]>;
   gatewayEvents?: OpenClawPluginServiceContext["gatewayEvents"];
+  getCron?: OpenClawPluginServiceContext["getCron"];
   lease: PluginRuntimeCapabilityLease;
 }): OpenClawPluginServiceContext {
   const isDiagnosticsExporter =
@@ -71,12 +73,12 @@ function createServiceContext(params: {
             params.lease.assertActive("internal diagnostic emitter");
             emitTrustedDiagnosticEventWithPrivateData(event, privateData);
           },
-          onEvent: (listener) => {
+          onEvent: (listener, filter) => {
             params.lease.assertActive("internal diagnostic listener");
             const trustedListener = isOtelExporter
               ? markTrustedOtelDiagnosticListener(listener)
               : listener;
-            return params.lease.retain(onTrustedInternalDiagnosticEvent(trustedListener));
+            return params.lease.retain(onTrustedInternalDiagnosticEvent(trustedListener, filter));
           },
           registerTracePropagationBridge: (bridge) => {
             params.lease.assertActive("diagnostic trace propagation bridge");
@@ -96,6 +98,7 @@ function createServiceContext(params: {
     stateDir: STATE_DIR,
     logger: createPluginLogger(),
     serviceHealth: params.serviceHealth,
+    ...(params.getCron ? { getCron: params.getCron } : {}),
     ...(params.gatewayEvents ? { gatewayEvents: params.gatewayEvents } : {}),
     ...(params.startupTrace
       ? {
@@ -189,6 +192,7 @@ export async function startPluginServices(params: {
   workspaceDir?: string;
   startupTrace?: PluginServiceStartupTrace;
   broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
+  getCronService?: () => PluginServiceCronHost | null | undefined;
   onHandle?: (handle: PluginServicesHandle) => void;
 }): Promise<PluginServicesHandle> {
   const healthGeneration = createPluginServiceHealthGeneration(params.registry);
@@ -364,6 +368,15 @@ export async function startPluginServices(params: {
         service: entry,
         serviceHealth: serviceHealth.health,
         gatewayEvents: scopedGatewayEvents.gatewayEvents,
+        ...(params.getCronService
+          ? {
+              getCron: createPluginServiceCronGetter({
+                getCron: params.getCronService,
+                lease,
+                isStopping: () => stopRequested,
+              }),
+            }
+          : {}),
         lease,
       });
       const ownedService = {

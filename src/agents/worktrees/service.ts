@@ -457,7 +457,7 @@ async function containsSnapshotGitMarker(
   checkoutRoot: string,
   snapshotPaths?: Iterable<Buffer>,
 ): Promise<boolean> {
-  const visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
+  let visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
   if (!snapshotPaths) {
     const indexEntries = splitNullBuffer(
       await requireGitBuffer(checkoutRoot, ["ls-files", "--stage", "-z"]),
@@ -466,7 +466,8 @@ async function containsSnapshotGitMarker(
       return true;
     }
     const visibleGitPaths = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
-    visiblePaths.push(...splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths)));
+    // Large checkouts exceed V8's argument limit when paths are spread into push().
+    visiblePaths = splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths));
   }
   const checked = new Set<string>();
   const ignoredPaths = splitNullBuffer(
@@ -1483,7 +1484,7 @@ export class ManagedWorktreeService {
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
-    const removed: string[] = [];
+    let removed: string[] = [];
     const records = listRegistryWorktrees(this.env);
     for (const record of records) {
       try {
@@ -1515,7 +1516,7 @@ export class ManagedWorktreeService {
         log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
       }
     }
-    removed.push(...(await this.enforceCleanupLimits(params)));
+    removed = removed.concat(await this.enforceCleanupLimits(params));
     const orphansDeleted = await this.reconcileOrphans(records);
     let snapshotsPruned = 0;
     for (const record of listRegistryWorktrees(this.env)) {

@@ -75,59 +75,92 @@ function getModuleLoader(modulePath: string) {
   });
 }
 
-function createLazyFacadeValueLoader<T>(load: () => T): () => T {
-  let loaded = false;
-  let value: T;
-  return () => {
-    if (!loaded) {
-      value = load();
-      loaded = true;
-    }
-    return value;
-  };
-}
-
-/** Create an object proxy that loads the underlying facade only on first property access. */
+/** Create an object proxy that loads the underlying facade only on first use. */
 export function createLazyFacadeObjectValue<T extends object>(load: () => T): T {
-  const resolve = createLazyFacadeValueLoader(load);
-  return new Proxy(
-    {},
-    {
-      defineProperty(_target, property, descriptor) {
-        return Reflect.defineProperty(resolve(), property, descriptor);
-      },
-      deleteProperty(_target, property) {
-        return Reflect.deleteProperty(resolve(), property);
-      },
-      get(_target, property, receiver) {
-        return Reflect.get(resolve(), property, receiver);
-      },
-      getOwnPropertyDescriptor(_target, property) {
-        return Reflect.getOwnPropertyDescriptor(resolve(), property);
-      },
-      getPrototypeOf() {
-        return Reflect.getPrototypeOf(resolve());
-      },
-      has(_target, property) {
-        return Reflect.has(resolve(), property);
-      },
-      isExtensible() {
-        return Reflect.isExtensible(resolve());
-      },
-      ownKeys() {
-        return Reflect.ownKeys(resolve());
-      },
-      preventExtensions() {
-        return Reflect.preventExtensions(resolve());
-      },
-      set(_target, property, value, receiver) {
-        return Reflect.set(resolve(), property, value, receiver);
-      },
-      setPrototypeOf(_target, prototype) {
-        return Reflect.setPrototypeOf(resolve(), prototype);
-      },
+  let resolvedValue: T | undefined;
+  const resolve = () => (resolvedValue ??= load());
+  const target = {};
+  // Proxy invariants inspect the target, even though the loaded object owns all values.
+  // Mirror descriptors and integrity at reflection boundaries, never on ordinary reads.
+  const syncProperty = (property: PropertyKey) => {
+    const descriptor = Reflect.getOwnPropertyDescriptor(resolve(), property);
+    if (descriptor) {
+      Object.defineProperty(target, property, descriptor);
+    } else {
+      Reflect.deleteProperty(target, property);
+    }
+    return descriptor;
+  };
+  const syncTarget = () => {
+    const original = resolve();
+    const descriptors = Object.getOwnPropertyDescriptors(original);
+    for (const property of Reflect.ownKeys(target)) {
+      if (!Object.hasOwn(descriptors, property)) {
+        Reflect.deleteProperty(target, property);
+      }
+    }
+    Object.defineProperties(target, descriptors);
+    Reflect.setPrototypeOf(target, Reflect.getPrototypeOf(original));
+    if (!Reflect.isExtensible(original)) {
+      Reflect.preventExtensions(target);
+    }
+  };
+  return new Proxy(target, {
+    defineProperty(_target, property, descriptor) {
+      const defined = Reflect.defineProperty(resolve(), property, descriptor);
+      if (defined) {
+        syncProperty(property);
+      }
+      return defined;
     },
-  ) as T;
+    deleteProperty(_target, property) {
+      return (
+        Reflect.deleteProperty(resolve(), property) && Reflect.deleteProperty(target, property)
+      );
+    },
+    get(_target, property, receiver) {
+      return Reflect.get(resolve(), property, receiver);
+    },
+    getOwnPropertyDescriptor(_target, property) {
+      return syncProperty(property);
+    },
+    getPrototypeOf() {
+      return Reflect.getPrototypeOf(resolve());
+    },
+    has(_target, property) {
+      const present = Reflect.has(resolve(), property);
+      if (!present) {
+        Reflect.deleteProperty(target, property);
+      }
+      return present;
+    },
+    isExtensible() {
+      const extensible = Reflect.isExtensible(resolve());
+      if (!extensible) {
+        syncTarget();
+      }
+      return extensible;
+    },
+    ownKeys() {
+      syncTarget();
+      return Reflect.ownKeys(resolve());
+    },
+    preventExtensions() {
+      if (!Reflect.preventExtensions(resolve())) {
+        return false;
+      }
+      syncTarget();
+      return true;
+    },
+    set(_target, property, value, receiver) {
+      return Reflect.set(resolve(), property, value, receiver);
+    },
+    setPrototypeOf(_target, prototype) {
+      return (
+        Reflect.setPrototypeOf(resolve(), prototype) && Reflect.setPrototypeOf(target, prototype)
+      );
+    },
+  }) as T;
 }
 
 /** Resolved public-surface module path plus the filesystem root it must stay within. */

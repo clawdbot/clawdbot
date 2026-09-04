@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   closeSync,
+  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
@@ -64,6 +65,31 @@ describe("Testbox lease freshness", () => {
     expect(prepared).not.toBeNull();
     recordTestboxLeaseFreshness(prepared);
     expect(fixture.prepare()).toEqual(prepared);
+  });
+
+  it("invalidates saved proof when executable source-sync owners change", () => {
+    const fixture = createLeaseFixture();
+    mkdirSync(join(fixture.root, "scripts"));
+    const owners = [
+      "crabbox-wrapper.mjs",
+      "crabbox-wrapper.mts",
+      "crabbox-source-capsule.mts",
+      "crabbox-source-receiver.mts",
+    ];
+    for (const owner of owners) {
+      writeFileSync(join(fixture.root, "scripts", owner), "original\n");
+    }
+    fixture.git(["add", "scripts"]);
+    fixture.advanceBase();
+    recordTestboxLeaseFreshness(fixture.prepare());
+    writeFileSync(join(fixture.root, "unrelated-source.ts"), "source change\n");
+    expect(() => fixture.prepare()).not.toThrow();
+    for (const owner of owners) {
+      const file = join(fixture.root, "scripts", owner);
+      writeFileSync(file, "changed executable owner\n");
+      expect(() => fixture.prepare(), owner).toThrow("environmentDigest");
+      writeFileSync(file, "original\n");
+    }
   });
 
   it.each(["baseSha", "dependencyDigest", "environmentDigest", "workflow", "job", "ref"])(

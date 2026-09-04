@@ -271,8 +271,11 @@ export function closeOpenClawStateDatabase(
   cachedDatabases.clear();
 }
 
-/** Test whether any cached shared state database handle is still open. */
-export function isOpenClawStateDatabaseOpen(): boolean {
+/** Test whether a cached shared state database handle is still open, optionally at one path. */
+export function isOpenClawStateDatabaseOpen(pathname?: string): boolean {
+  if (pathname !== undefined) {
+    return cachedDatabases.get(path.resolve(pathname))?.db.isOpen === true;
+  }
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 
