@@ -777,6 +777,39 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it("forwards the resolved topic route into the CLI run", async () => {
+    mockRunCronFallbackPassthrough();
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    const executor = createMessageToolExecutor({
+      resolvedDelivery: {
+        channel: "topicchat",
+        accountId: "ops",
+        to: "room",
+        threadId: 42,
+      },
+    });
+
+    await executor.runPrompt("send a message");
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    // Detached exec completions inherit this route; without it #138316 delivered
+    // forum-topic cron output to the owner DM.
+    expectRecordFields(
+      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      {
+        messageChannel: "topicchat",
+        agentAccountId: "ops",
+        currentChannelId: "room#42",
+        currentThreadTs: "42",
+      },
+      "CLI run params",
+    );
+  });
+
   it("keeps the message tool enabled when announce delivery is active", async () => {
     await expectMessageToolEnabledForPlan({
       requested: true,
