@@ -13,6 +13,10 @@ import {
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
+} from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
@@ -227,7 +231,7 @@ describe("SessionManager branch replacement", () => {
     expect(replacements).toEqual([]);
   });
 
-  it.each(["lifecycle", "metadata"])(
+  it.each(["lifecycle", "writer", "metadata", "guarded-target", "successor-writer"])(
     "revalidates queued %s changes before branching",
     async (change) => {
       const dir = tempDirs.make("openclaw-session-manager-");
@@ -237,6 +241,7 @@ describe("SessionManager branch replacement", () => {
       const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
       const scope = { agentId: "main", sessionId, sessionKey, storePath };
       await upsertSessionEntryCore(scope, {
+        activeWriterRunId: "branch-original-writer",
         lifecycleRevision: "branch-original-revision",
         sessionFile: marker,
         sessionId,
@@ -257,14 +262,32 @@ describe("SessionManager branch replacement", () => {
         parentId: user.messageId,
       });
       const sessionManager = SessionManager.open(scope, dir);
-
-      const beforeBranch = {
+      const runAsWriter = <T>(run: () => Promise<T>) =>
+        withOwnedSessionTranscriptWrites(
+          {
+            sessionTarget: {
+              ...scope,
+              expectedLifecycleRevision: "branch-original-revision",
+              expectedWriterRunId: "branch-original-writer",
+            },
+            ...(change === "guarded-target" ? { assertCommitAllowed: () => {} } : {}),
+            withTranscriptWrite: async (operation) => await operation(),
+          },
+          run,
+        );
+      if (change === "successor-writer") {
+        await runAsWriter(() => sessionManager.createBranchedSession(assistant.messageId));
+      }
+      const branchSourceId = sessionManager.getSessionId();
+      const readManagerState = () => ({
         entries: sessionManager.getEntries(),
         sessionId: sessionManager.getSessionId(),
         target: sessionManager.getSessionTarget(),
         leafId: sessionManager.getLeafId(),
         appendParentId: sessionManager.getAppendParentId(),
-      };
+      });
+      const beforeBranch = readManagerState();
+      const writerChanged = change === "writer" || change === "successor-writer";
       let releaseOwnerChange = () => {};
       const ownerChangeGate = new Promise<void>((resolve) => {
         releaseOwnerChange = resolve;
@@ -278,24 +301,20 @@ describe("SessionManager branch replacement", () => {
         await ownerChangeGate;
         return change === "lifecycle"
           ? { lifecycleRevision: "branch-replacement-revision" }
-          : { label: "updated while branch queued" };
+          : writerChanged
+            ? { activeWriterRunId: "branch-replacement-writer" }
+            : { label: "updated while branch queued" };
       });
       await ownerChangeStarted;
 
       const queuedAt = Date.now();
       const committedAt = queuedAt + 1_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
-      const branch = sessionManager.createBranchedSession(assistant.messageId);
+      const branch = runAsWriter(() => sessionManager.createBranchedSession(assistant.messageId));
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      const whileQueued = {
-        entries: sessionManager.getEntries(),
-        sessionId: sessionManager.getSessionId(),
-        target: sessionManager.getSessionTarget(),
-        leafId: sessionManager.getLeafId(),
-        appendParentId: sessionManager.getAppendParentId(),
-      };
+      const whileQueued = readManagerState();
       clock.mockReturnValue(committedAt);
       releaseOwnerChange();
 
@@ -309,12 +328,30 @@ describe("SessionManager branch replacement", () => {
           sessionId,
         });
         expect(sessionManager.getSessionId()).toBe(sessionId);
+      } else if (writerChanged || change === "guarded-target") {
+        await expect(branch).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+        expect(loadSessionEntry(scope)).toMatchObject({
+          sessionId: branchSourceId,
+          lifecycleRevision: "branch-original-revision",
+          activeWriterRunId: writerChanged ? "branch-replacement-writer" : "branch-original-writer",
+        });
+        if (change === "successor-writer") {
+          expect(() =>
+            sessionManager.appendMessage({
+              role: "user",
+              content: "stale successor append",
+              timestamp: committedAt,
+            }),
+          ).toThrow(SessionTranscriptWriterClaimReboundError);
+        }
+        expect(readManagerState()).toEqual(beforeBranch);
       } else {
         const branchId = await branch;
         expect(loadSessionEntry(scope)).toMatchObject({
           label: "updated while branch queued",
           sessionId: branchId,
           updatedAt: committedAt,
+          activeWriterRunId: "branch-original-writer",
         });
         expect(sessionManager.getSessionId()).toBe(branchId);
       }
