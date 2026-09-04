@@ -15,13 +15,15 @@ const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
   it.each([
-    { colorScheme: "dark", width: 1440 },
-    { colorScheme: "light", width: 1440 },
-    { colorScheme: "dark", width: 390 },
-    { colorScheme: "light", width: 390 },
+    { colorScheme: "dark", pointer: "fine", width: 1440 },
+    { colorScheme: "light", pointer: "fine", width: 1440 },
+    { colorScheme: "dark", pointer: "fine", width: 390 },
+    { colorScheme: "light", pointer: "fine", width: 390 },
+    { colorScheme: "dark", pointer: "coarse", width: 390 },
+    { colorScheme: "light", pointer: "coarse", width: 390 },
   ] as const)(
-    "keeps one $colorScheme child-row placeholder stable at $width px",
-    async ({ colorScheme, width }) => {
+    "keeps one $colorScheme child-row placeholder stable at $width px with a $pointer pointer",
+    async ({ colorScheme, pointer, width }) => {
       const baseTime = Date.parse("2026-09-04T12:00:00.000Z");
       const activeKey = "agent:main:loading-active";
       const parentKey = "agent:main:loading-parent";
@@ -34,6 +36,8 @@ suite.define(() => {
       });
       const context = await suite.browser.newContext({
         colorScheme,
+        hasTouch: pointer === "coarse",
+        isMobile: pointer === "coarse",
         locale: "en-US",
         reducedMotion: width === 390 ? "reduce" : "no-preference",
         serviceWorkers: "block",
@@ -62,6 +66,9 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, activeKey));
+        expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(
+          pointer === "coarse",
+        );
         if (width === 390) {
           const drawerToggle = page
             .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
@@ -80,7 +87,11 @@ suite.define(() => {
         );
         const loading = children.locator(":scope > .sidebar-session-tree__loading");
         await expect.poll(() => loading.count()).toBe(1);
-        await captureUiProof(suite, page, `sidebar-child-loading-${colorScheme}-${width}.png`);
+        await captureUiProof(
+          suite,
+          page,
+          `sidebar-child-loading-${colorScheme}-${width}-${pointer}.png`,
+        );
         expect(await children.locator(":scope > .skeleton").count()).toBe(1);
         expect(await loading.getAttribute("aria-busy")).toBe("true");
         expect(await loading.getAttribute("aria-label")).toBe("Loading…");
@@ -96,7 +107,7 @@ suite.define(() => {
             .getBoundingClientRect();
           return { left: barBounds.left, rowHeight: rowBounds.height };
         });
-        expect(loadingGeometry.rowHeight).toBe(30);
+        expect(loadingGeometry.rowHeight).toBe(pointer === "coarse" ? 44 : 30);
 
         await gateway.resolveDeferred("sessions.list");
         await expect.poll(() => loading.count()).toBe(0);
