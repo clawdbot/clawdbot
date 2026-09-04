@@ -10,6 +10,7 @@ import {
   resolveExecPreparedRunEnvironment,
   resolvePreparedExecEnvironment,
 } from "../agents/bash-tools.exec-request-preparation.js";
+import { resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import {
   getRuntimeConfig,
   getRuntimeConfigSnapshot,
@@ -18,12 +19,15 @@ import {
 import { pinRuntimePaths, resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AgentToolsConfig } from "../config/types.tools.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import {
   getInstallationTarget,
   resolveInstallationTarget,
   withInstallationTarget,
 } from "../infra/installation-target-context.js";
+import { runUpdateRepairLoop } from "../infra/update-repair-agent.js";
+import * as repairRuntime from "../infra/update-repair-agent.runtime.js";
 import { runUpdateRepairTurn } from "../infra/update-repair-agent.runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -88,47 +92,160 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("embedded repair installation target", () => {
-  it("preserves the owner's configured auth rotation in its temporary repair config", async () => {
+  it.each([false, true])(
+    "scopes prompt-free repair to its target (candidate=%s) while preserving policy and auth",
+    async (candidate) => {
+      await withOpenClawTestState({ layout: "split" }, async (state) => {
+        const config: OpenClawConfig = {
+          auth: { order: { fixture: ["preferred", "backup"] } },
+          tools: {
+            profile: candidate ? "minimal" : "coding",
+            allow: ["group:runtime", "group:fs", "browser"],
+            deny: ["browser"],
+            alsoAllow: ["group:runtime", "group:fs", "browser"],
+            exec: { mode: "ask", safeBins: ["cat"] },
+            fs: { workspaceOnly: true },
+            byProvider: {
+              fixture: { deny: ["browser"] },
+              "fixture/blocked": { deny: ["write"] },
+              "blocked-provider": { deny: ["edit"] },
+            },
+          },
+          agents: {
+            defaults: { systemAgent: { agentId: "diagnostic" } },
+            entries: {
+              diagnostic: {
+                model: "fixture/repair@preferred",
+                tools: { exec: { mode: "ask", safeBins: ["sed"] }, deny: ["browser"] },
+              },
+            },
+          },
+        };
+        const candidateRoot = state.path("candidate");
+        await fs.mkdir(candidateRoot);
+        const root = candidate ? candidateRoot : state.workspaceDir;
+        mocks.agentCommand.mockImplementation(async (opts) => {
+          const runConfig = getRuntimeConfig();
+          expect(opts.workspaceDir).toBe(root);
+          expect(opts.modelFallbacksOverride).toEqual(["fixture/fallback"]);
+          expect(runConfig.agents?.entries?.diagnostic?.workspace).toBe(root);
+          expect(runConfig.tools?.fs?.workspaceOnly).toBe(true);
+          expect(runConfig.agents?.entries?.diagnostic?.tools?.fs?.workspaceOnly).toBe(true);
+          expect(runConfig.tools?.exec).toMatchObject({ mode: "full", safeBins: ["cat"] });
+          expect(runConfig.agents?.entries?.diagnostic?.tools?.exec).toMatchObject({
+            mode: "full",
+            safeBins: ["sed"],
+          });
+          expect(runConfig.tools?.allow).toEqual([
+            "exec",
+            "process",
+            "read",
+            "write",
+            "edit",
+            "apply_patch",
+          ]);
+          expect(runConfig.tools?.alsoAllow).toEqual(runConfig.tools?.allow);
+          expect(runConfig.tools?.deny).toEqual(["browser"]);
+          expect(runConfig.agents?.entries?.diagnostic?.tools?.deny).toEqual(["browser"]);
+          expect(runConfig.tools?.byProvider).toEqual(config.tools?.byProvider);
+          expect(resolveExecToolConfig({ cfg: runConfig, agentId: "diagnostic" })).toMatchObject({
+            mode: "full",
+            security: "full",
+            ask: "off",
+            safeBins: ["sed"],
+          });
+          expect(runConfig.auth).toEqual(config.auth);
+          expect(runConfig.agents?.entries?.diagnostic?.model).toBe("fixture/repair@preferred");
+          return { payloads: [{ text: "Fixture completed." }], meta: { durationMs: 1 } };
+        });
+        const result = await runUpdateRepairTurn({
+          target: {
+            stateDir: state.stateDir,
+            configPath: state.configPath,
+            workspaceDir: state.workspaceDir,
+            installRoot: state.workspaceDir,
+            ...(candidate ? { candidateRoot } : {}),
+          },
+          route: {
+            runner: "embedded",
+            provider: "fixture",
+            model: "repair",
+            modelLabel: "fixture/repair",
+            authProfileId: "preferred",
+            agentId: "diagnostic",
+            agentDir: state.statePath("agents", "diagnostic", "agent"),
+            runConfig: config,
+          },
+          modelFallbacks: ["fixture/blocked", "blocked-provider/model", "fixture/fallback"],
+          prompt: "Check the installation.",
+          timeoutMs: 30_000,
+          maxToolCalls: 1,
+          signal: new AbortController().signal,
+        });
+        expect(result.status).toBe("completed");
+        if (result.status !== "completed") {
+          throw new Error(result.reason);
+        }
+        expect(result.envelope.error).toBeUndefined();
+        expect(result.exitCode).toBe(0);
+        expect(mocks.agentCommand).toHaveBeenCalledOnce();
+      });
+    },
+  );
+  it.each<{ name: string; tools?: OpenClawConfig["tools"]; agentTools?: AgentToolsConfig }>([
+    { name: "global exec mode", tools: { exec: { mode: "deny" as const } } },
+    { name: "agent exec mode", agentTools: { exec: { mode: "deny" as const } } },
+    { name: "legacy exec security", agentTools: { exec: { security: "deny" as const } } },
+    ...["exec", "write", "edit", "apply_patch"].map((tool) => ({
+      name: `denied ${tool}`,
+      tools: { deny: [tool] },
+    })),
+    { name: "agent tool deny", agentTools: { deny: ["exec"] } },
+    { name: "tool group deny", tools: { deny: ["group:runtime"] } },
+    { name: "explicit allow", tools: { allow: ["read"] } },
+    { name: "provider deny", tools: { byProvider: { fixture: { deny: ["exec"] } } } },
+  ])("reports $name as unavailable without an agent turn", async ({ tools, agentTools }) => {
     await withOpenClawTestState({ layout: "split" }, async (state) => {
       const config: OpenClawConfig = {
-        auth: { order: { fixture: ["preferred", "backup"] } },
+        tools,
         agents: {
           defaults: { systemAgent: { agentId: "diagnostic" } },
-          entries: { diagnostic: { model: "fixture/repair@preferred" } },
+          entries: { diagnostic: { tools: agentTools } },
         },
       };
-      mocks.agentCommand.mockImplementation(async () => {
-        const runConfig = getRuntimeConfig();
-        expect(runConfig.auth).toEqual(config.auth);
-        expect(runConfig.agents?.entries?.diagnostic?.model).toBe("fixture/repair@preferred");
-        return { payloads: [{ text: "Fixture completed." }], meta: { durationMs: 1 } };
+      vi.spyOn(repairRuntime, "prepareUpdateRepairInference").mockResolvedValue({
+        ok: true,
+        route: {
+          runner: "embedded",
+          provider: "fixture",
+          model: "repair",
+          modelLabel: "fixture/repair",
+          agentId: "diagnostic",
+          agentDir: state.statePath("agents", "diagnostic", "agent"),
+          runConfig: config,
+        },
+        modelFallbacks: [],
       });
-      const result = await runUpdateRepairTurn({
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "Should not run" }],
+        meta: { durationMs: 1 },
+      });
+      const result = await runUpdateRepairLoop({
         target: {
           stateDir: state.stateDir,
           configPath: state.configPath,
           workspaceDir: state.workspaceDir,
           installRoot: state.workspaceDir,
         },
-        route: {
-          runner: "embedded",
-          provider: "fixture",
-          model: "repair",
-          modelLabel: "fixture/repair",
-          authProfileId: "preferred",
-          agentId: "diagnostic",
-          agentDir: state.statePath("agents", "diagnostic", "agent"),
-          runConfig: config,
-        },
-        modelFallbacks: ["fixture/fallback"],
-        prompt: "Check the installation.",
-        timeoutMs: 30_000,
-        maxToolCalls: 1,
-        signal: new AbortController().signal,
+        context: { error: "Synthetic failure", phase: "validating" },
+        validate: async () => ({ ok: false, score: -1, summary: "Synthetic failure" }),
       });
-      expect(result.envelope.error).toBeUndefined();
-      expect(result.exitCode).toBe(0);
-      expect(mocks.agentCommand).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({
+        status: "unavailable",
+        reason: "exec-denied-by-policy",
+        attempts: [],
+      });
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
     });
   });
   it.each([

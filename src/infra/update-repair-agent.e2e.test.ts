@@ -18,16 +18,20 @@ type ModelRequest = {
   input?: Array<{ type?: string; call_id?: string; output?: string }>;
 };
 
-function writeRepairToolCall(response: ServerResponse): void {
+function writeRepairToolCall(response: ServerResponse, name: "exec" | "write"): void {
   const item = {
     type: "function_call",
-    id: "fc_repair_marker",
-    call_id: "call_repair_marker",
-    name: "exec",
-    arguments: JSON.stringify({
-      command:
-        "node -e \"require('node:fs').writeFileSync('repair-proof.txt', process.env.OPENCLAW_STATE_DIR)\"",
-    }),
+    id: `fc_repair_${name}`,
+    call_id: `call_repair_${name}`,
+    name,
+    arguments: JSON.stringify(
+      name === "write"
+        ? { path: "../outside-repair.txt", content: "must not escape" }
+        : {
+            command:
+              "node -e \"require('node:fs').writeFileSync('repair-proof.txt', process.env.OPENCLAW_STATE_DIR)\"",
+          },
+    ),
     status: "completed",
   };
   writeOpenAiResponsesSse(response, [
@@ -63,6 +67,7 @@ describe("update repair with a local model provider", () => {
         const requests: ModelRequest[] = [];
         const errors: unknown[] = [];
         let issuedRepair = false;
+        let issuedScopeProbe = false;
         await withServer(
           (request, response) => {
             void (async () => {
@@ -77,9 +82,14 @@ describe("update repair with a local model provider", () => {
               }
               const body = JSON.parse(await readText(request)) as ModelRequest;
               requests.push(body);
+              if (body.tools?.some((tool) => tool.name === "write") && !issuedScopeProbe) {
+                issuedScopeProbe = true;
+                writeRepairToolCall(response, "write");
+                return;
+              }
               if (body.tools?.some((tool) => tool.name === "exec") && !issuedRepair) {
                 issuedRepair = true;
-                writeRepairToolCall(response);
+                writeRepairToolCall(response, "exec");
                 return;
               }
               writeOpenAiResponsesText(response, {
@@ -98,6 +108,7 @@ describe("update repair with a local model provider", () => {
             const modelRef = "repair-test/repair-model";
             const config: OpenClawConfig = {
               plugins: { slots: { memory: "none" } },
+              tools: { exec: { mode: "ask", safeBins: ["cat"] }, fs: { workspaceOnly: false } },
               agents: {
                 defaults: {
                   model: { primary: modelRef },
@@ -158,11 +169,15 @@ describe("update repair with a local model provider", () => {
             expect(result, JSON.stringify(result)).toMatchObject({
               status: "repaired",
               finalValidation: { ok: true, score: 1 },
-              attempts: [{ toolCalls: 1, summary: "Created the target repair marker." }],
+              attempts: [{ toolCalls: 2, summary: "Created the target repair marker." }],
             });
             expect(requests.some((body) => body.tools?.some((tool) => tool.name === "exec"))).toBe(
               true,
             );
+            expect(issuedScopeProbe).toBe(true);
+            await expect(
+              fs.stat(path.join(state.workspaceDir, "..", "outside-repair.txt")),
+            ).rejects.toMatchObject({ code: "ENOENT" });
             expect(await fs.readFile(marker, "utf8")).toBe(state.stateDir);
           },
         );

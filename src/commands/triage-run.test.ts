@@ -165,6 +165,22 @@ describe("triage --run", () => {
     );
   });
 
+  it("explains policy-denied repair and points to the external handoff", async () => {
+    mocks.runUpdateRepairLoop.mockResolvedValue({
+      status: "unavailable",
+      reason: "exec-denied-by-policy",
+      attempts: [],
+      finalValidation: { ok: false, score: -1, summary: "Broken installation" },
+    });
+    await expect(
+      withTriageTerminal(true, () =>
+        triageCommand(createTriageRuntime(), { noExport: true, run: true }),
+      ),
+    ).rejects.toThrow(
+      "The operator's policy denies unattended repair (exec-denied-by-policy). Use `openclaw triage` for an external handoff.",
+    );
+  });
+
   it("reports Doctor collection failures to the repair oracle with secrets redacted", async () => {
     const secret = "sk-test-triage-oracle-secret-1234567890";
     mocks.runUtf8CommandWithTimeout.mockRejectedValue(

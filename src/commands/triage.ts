@@ -469,6 +469,11 @@ export async function triageCommand(
     return;
   }
   if (result.status === "unavailable") {
+    if (result.reason === "exec-denied-by-policy") {
+      throw new Error(
+        "The operator's policy denies unattended repair (exec-denied-by-policy). Use `openclaw triage` for an external handoff.",
+      );
+    }
     throw new Error(
       `Embedded agent unavailable: ${result.reason}. Run \`openclaw onboard\` or use a suggested handoff command.`,
     );

@@ -1,3 +1,9 @@
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
+import { resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
 import {
@@ -68,20 +74,63 @@ export async function prepareUpdateRepairInference(signal: AbortSignal, timeoutM
   }
 }
 
+// Operator-owned updates permit prompt-free exec, never past an explicit deny.
+// The repair workspace and filesystem tools stay within the install/candidate root;
+// host commands must follow that same scope contract.
 function repairRunConfig(
   route: SystemAgentConfiguredRoute,
-  modelFallbacks: string[],
-): OpenClawConfig {
+  fallbacks: string[],
+): Result<{ runConfig: OpenClawConfig; modelFallbacks: string[] }, string> {
   const base = route.runConfig;
+  const exec = resolveExecToolConfig({ cfg: base, agentId: route.agentId });
+  if (
+    resolveSandboxConfigForAgent(base, route.agentId).mode !== "off" ||
+    exec.host === "node" ||
+    exec.host === "sandbox"
+  ) {
+    return err(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
+  }
+  const allowedToolsForModel = (modelProvider: string, modelId: string) => {
+    const policy = resolveEffectiveToolPolicy({
+      config: base,
+      agentId: route.agentId,
+      modelProvider,
+      modelId,
+    });
+    const policies = [
+      policy.globalPolicy,
+      policy.agentPolicy,
+      policy.globalProviderPolicy,
+      policy.agentProviderPolicy,
+      mergeAlsoAllowPolicy(resolveToolProfilePolicy(policy.profile), policy.profileAlsoAllow),
+      mergeAlsoAllowPolicy(
+        resolveToolProfilePolicy(policy.providerProfile),
+        policy.providerProfileAlsoAllow,
+      ),
+    ];
+    return ["exec", "process", "read", "write", "edit", "apply_patch"].filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+  };
+  const permitsRepair = (tools: string[]) =>
+    ["exec", "write", "edit", "apply_patch"].every((tool) => tools.includes(tool));
+  const allowedTools = allowedToolsForModel(route.provider, route.model);
+  if (exec.security === "deny" || !permitsRepair(allowedTools)) {
+    return err("exec-denied-by-policy");
+  }
+  // Inference selection supplies canonical provider/model refs. A fallback must
+  // pass the same repair gate before it can inherit prompt-free host execution.
+  const modelFallbacks = fallbacks.filter((ref) => {
+    const slash = ref.indexOf("/");
+    return permitsRepair(allowedToolsForModel(ref.slice(0, slash), ref.slice(slash + 1)));
+  });
   const localExec = {
-    ...base.tools?.exec,
     host: "gateway" as const,
     mode: "full" as const,
     security: undefined,
     ask: undefined,
     node: undefined,
   };
-  const allowedTools = ["exec", "process", "read", "write", "edit", "apply_patch"];
   const nativeModels = Object.fromEntries(
     [route.modelLabel, ...modelFallbacks].map((ref) => [
       ref,
@@ -92,40 +141,41 @@ function repairRunConfig(
       },
     ]),
   );
-  const repairTools = {
-    profile: "coding" as const,
-    allow: allowedTools,
-    deny: [],
-    byProvider: {},
-    exec: localExec,
-    fs: { workspaceOnly: false },
-  };
-  return {
-    ...base,
-    agents: {
-      ...base.agents,
-      defaults: {
-        ...base.agents?.defaults,
-        sandbox: { mode: "off" },
-        models: { ...base.agents?.defaults?.models, ...nativeModels },
-      },
-      entries: Object.fromEntries(
-        Object.entries(base.agents?.entries ?? {}).map(([id, entry]) => [
-          id,
-          {
-            ...entry,
-            sandbox: { mode: "off" },
-            models: { ...entry.models, ...nativeModels },
-            tools: {
-              ...entry.tools,
-              ...repairTools,
+  return ok({
+    modelFallbacks,
+    runConfig: {
+      ...base,
+      agents: {
+        ...base.agents,
+        defaults: {
+          ...base.agents?.defaults,
+          models: { ...base.agents?.defaults?.models, ...nativeModels },
+        },
+        entries: Object.fromEntries(
+          Object.entries(base.agents?.entries ?? {}).map(([id, entry]) => [
+            id,
+            {
+              ...entry,
+              models: { ...entry.models, ...nativeModels },
+              tools: {
+                ...entry.tools,
+                exec: { ...entry.tools?.exec, ...localExec },
+                fs: { ...entry.tools?.fs, workspaceOnly: true },
+              },
             },
-          },
-        ]),
-      ),
+          ]),
+        ),
+      },
+      tools: {
+        ...base.tools,
+        profile: base.tools?.profile ?? "coding",
+        allow: allowedTools,
+        alsoAllow: base.tools?.alsoAllow?.length ? allowedTools : undefined,
+        exec: { ...base.tools?.exec, ...localExec },
+        fs: { ...base.tools?.fs, workspaceOnly: true },
+      },
     },
-    tools: { ...base.tools, ...repairTools },
-  };
+  });
 }
 
 export async function runUpdateRepairTurn(params: {
@@ -138,25 +188,15 @@ export async function runUpdateRepairTurn(params: {
   signal: AbortSignal;
   isCurrent?: () => boolean;
 }) {
-  const [{ agentExecCommand }, { resolveSandboxConfigForAgent }, { resolveExecToolConfig }] =
-    await Promise.all([
-      import("../commands/agent-exec.js"),
-      import("../agents/sandbox/config.js"),
-      import("../agents/lazy-exec-tool.js"),
-    ]);
   params.signal.throwIfAborted();
   const { route, target } = params;
-  const host = resolveExecToolConfig({ cfg: route.runConfig, agentId: route.agentId }).host;
-  // A local repair must not silently bypass the operator's configured isolation.
-  // Only after this refusal gate may its disposable snapshot enable unattended exec.
-  if (
-    resolveSandboxConfigForAgent(route.runConfig, route.agentId).mode !== "off" ||
-    host === "node" ||
-    host === "sandbox"
-  ) {
-    throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
+  const config = repairRunConfig(route, params.modelFallbacks);
+  if (!config.ok) {
+    return { status: "unavailable" as const, reason: config.error };
   }
-  return withInstallationTarget(
+  const { runConfig, modelFallbacks } = config.value;
+  const { agentExecCommand } = await import("../commands/agent-exec.js");
+  const result = await withInstallationTarget(
     {
       stateDir: target.stateDir,
       configPath: target.configPath,
@@ -168,13 +208,13 @@ export async function runUpdateRepairTurn(params: {
         {
           cwd: target.candidateRoot ?? target.installRoot,
           model: route.modelLabel,
-          fallback: params.modelFallbacks,
+          fallback: modelFallbacks,
           codeMode: "direct",
         },
         repairRuntime,
         {
-          baseConfig: repairRunConfig(route, params.modelFallbacks),
-          modelFallbacksOverride: params.modelFallbacks,
+          baseConfig: runConfig,
+          modelFallbacksOverride: modelFallbacks,
           agentId: route.agentId,
           abortSignal: params.signal,
           timeoutMs: params.timeoutMs,
@@ -183,4 +223,5 @@ export async function runUpdateRepairTurn(params: {
         },
       ),
   );
+  return { status: "completed" as const, ...result };
 }
