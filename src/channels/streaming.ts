@@ -20,8 +20,8 @@ import type {
   TextChunkMode,
 } from "../config/types.base.js";
 import { DEFAULT_PROGRESS_DRAFT_LABELS, selectProgressLabel } from "../shared/progress-labels.js";
+import { compactProgressText } from "../shared/text-truncate.js";
 import { asBoolean } from "../utils/boolean.js";
-import { compactProgressText } from "./progress-draft-lines.js";
 import {
   getChannelStreamingConfigObject,
   type StreamingCompatEntry,

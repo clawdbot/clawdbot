@@ -1,9 +1,9 @@
 // Progress-draft status text normalization for reasoning, preamble, and commentary lanes.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
+import { compactProgressText } from "../shared/text-truncate.js";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
-import { compactProgressText } from "./progress-draft-lines.js";
 
 const REASONING_PROGRESS_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
