@@ -4682,6 +4682,76 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     }
   });
 
+  it("reports cancellation while queued native CLI compaction is in flight", async () => {
+    const agentDir = await realpath(tempDirs.make("openclaw-native-compaction-queued-abort-"));
+    const controller = new AbortController();
+    const cliStarted = createDeferred<AbortSignal>();
+    try {
+      await upsertSessionEntryCore(
+        {
+          agentId: "main",
+          sessionKey: TEST_SESSION_KEY,
+          storePath: join(agentDir, "sessions.json"),
+        },
+        { sessionId: TEST_SESSION_ID, updatedAt: 1 },
+      );
+      resolveCliBackendConfigMock.mockReturnValue({
+        id: "claude-cli",
+        ownsNativeCompaction: true,
+        manualCompaction: {
+          buildPrompt: () => "/compact",
+          input: "arg",
+          validateOutput: () => ({ ok: true }),
+        },
+      });
+      runCliAgentMock.mockImplementationOnce((async (params: { abortSignal?: AbortSignal }) => {
+        const signal = expectDefined(params.abortSignal, "native CLI compaction abort signal");
+        cliStarted.resolve(signal);
+        return await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              const reason = signal.reason;
+              reject(reason instanceof Error ? reason : new Error("native CLI compaction aborted"));
+            },
+            { once: true },
+          );
+        });
+      }) as never);
+
+      const pending = compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          abortSignal: controller.signal,
+          agentDir,
+          sessionTarget: {
+            agentId: "main",
+            sessionId: TEST_SESSION_ID,
+            sessionKey: TEST_SESSION_KEY,
+            storePath: join(agentDir, "sessions.json"),
+          },
+          trigger: "manual",
+          provider: "anthropic",
+          model: "opus",
+          agentHarnessId: "claude-cli",
+          cliSessionId: "native-session",
+        }),
+      );
+      const nativeSignal = await cliStarted.promise;
+      controller.abort(new Error("request timed out"));
+
+      await expect(pending).resolves.toEqual({
+        ok: false,
+        compacted: false,
+        reason: "compaction aborted",
+      });
+      expect(nativeSignal.aborted).toBe(true);
+      expect(resolveContextEngineMock).not.toHaveBeenCalled();
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
+  });
+
   it("rejects a replaced writer claim before queued native CLI compaction", async () => {
     const agentDir = await realpath(
       await mkdtemp(join(tmpdir(), "openclaw-native-compaction-queued-replaced-")),
