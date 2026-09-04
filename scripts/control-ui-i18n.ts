@@ -35,6 +35,7 @@ import {
   type LocaleMeta,
   type TranslationBatchItem,
 } from "./lib/control-ui-i18n-sync-plan.ts";
+import { escapeRegExp } from "./lib/regexp.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
@@ -1388,7 +1389,26 @@ function isCliEntrypoint() {
 
 if (isCliEntrypoint()) {
   await main().catch((error: unknown) => {
-    console.error(formatErrorMessage(error));
+    console.error(
+      formatErrorMessage(error, {
+        // Keep failure reporting independent of Gateway logging configuration.
+        redact: (text) => {
+          let redacted = text;
+          for (const name of [
+            ENV_MODEL,
+            ENV_FALLBACK_MODEL,
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+          ]) {
+            const secret = process.env[name]?.trim();
+            if (secret) {
+              redacted = redacted.replaceAll(new RegExp(escapeRegExp(secret), "gi"), "[redacted]");
+            }
+          }
+          return redacted;
+        },
+      }),
+    );
     process.exit(1);
   });
 }

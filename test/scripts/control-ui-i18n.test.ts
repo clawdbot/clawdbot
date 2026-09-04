@@ -85,6 +85,19 @@ describe("translation provider privacy and fallback", () => {
     vi.unstubAllEnvs();
   });
 
+  it("reports CLI failures without disclosing configured model or key values", async () => {
+    const result = await runProcess(process.execPath, [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/control-ui-i18n.ts",
+      "sync",
+      "--locale",
+      `${primary.toUpperCase()}/${fallback}/test-key`,
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.stderr.trim()).toBe("unknown locale: [redacted]/[redacted]/[redacted]");
+  });
+
   it("translates outside the Gateway runtime without state access or model diagnostics", async () => {
     const temp = createTempDirTracker();
     const stateDir = path.join(temp.make("openclaw-translation-runtime-"), "state");
@@ -149,7 +162,7 @@ describe("translation provider privacy and fallback", () => {
       .mockResolvedValue(response());
     expect((await translateNativeEntries(entries, "fr")).size).toBe(entries.length);
     expect(complete.mock.calls.map(([model]) => model.id)).toEqual([primary, fallback, fallback]);
-    const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+    const log = vi.mocked(process.stdout).write.mock.calls.flat().join("");
     expect(log).toContain("primary model unavailable");
     expect(log).not.toContain(primary);
     expect(log).not.toContain(fallback);
@@ -169,7 +182,7 @@ describe("translation provider privacy and fallback", () => {
         "translation provider failed",
       );
       expect(complete.mock.calls.every(([model]) => model.id === primary)).toBe(true);
-      const log = vi.mocked(process.stdout.write).mock.calls.flat().join("");
+      const log = vi.mocked(process.stdout).write.mock.calls.flat().join("");
       expect(log).not.toContain(primary);
       expect(log).not.toContain(fallback);
     },
@@ -188,7 +201,7 @@ describe("translation provider privacy and fallback", () => {
     await expect(translateNativeEntries(entries.slice(0, 1), "fr")).rejects.toThrow(
       "provider_error",
     );
-    expect(vi.mocked(process.stdout.write).mock.calls.flat().join("")).not.toContain(primary);
+    expect(vi.mocked(process.stdout).write.mock.calls.flat().join("")).not.toContain(primary);
   });
 });
 
