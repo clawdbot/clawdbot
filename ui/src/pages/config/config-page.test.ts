@@ -700,13 +700,20 @@ describe("ConfigPage session observer models", () => {
     });
   });
 
-  it("keeps a same-client agent switch from restoring stale observer models", async () => {
-    const main = deferred<ModelCatalogResult>();
+  it("keeps same-client agent switches from restoring stale observer models", async () => {
+    const firstMain = deferred<ModelCatalogResult>();
     const writer = deferred<ModelCatalogResult>();
-    vi.spyOn(modelCatalogStore, "loadModelCatalog").mockImplementation((_client, options) =>
-      options.agentId === "writer" ? writer.promise : main.promise,
-    );
-    const client = {} as GatewayBrowserClient;
+    const secondMain = deferred<ModelCatalogResult>();
+    let mainRequests = 0;
+    const request = vi.fn((_method: string, params: unknown) => {
+      const agentId = (params as { agentId?: string }).agentId;
+      if (agentId === "writer") {
+        return writer.promise;
+      }
+      mainRequests += 1;
+      return mainRequests === 1 ? firstMain.promise : secondMain.promise;
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
     const gateway = {
       snapshot: { client, phase: "connected" },
     } as unknown as ApplicationGateway;
@@ -735,26 +742,41 @@ describe("ConfigPage session observer models", () => {
     const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
     writer.resolve({ models: writerModels });
     await writerLoad;
-    main.resolve({ models: [{ id: "main-model", name: "Main Model", provider: "openai" }] });
+    expect(state.sessionObserverModels).toEqual(writerModels);
+
+    modelCatalogStore.invalidateModelCatalogCache(client);
+    selectionState.selectedId = "main";
+    const secondMainLoad = state.ensureSessionObserverModels(client, "main");
+    const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
+    secondMain.resolve({ models: currentMainModels });
+    await secondMainLoad;
+    firstMain.resolve({
+      models: [{ id: "stale-main", name: "Stale Main", provider: "openai" }],
+    });
     await mainLoad;
 
-    expect(state.sessionObserverModels).toEqual(writerModels);
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, client, {
+    expect(state.sessionObserverModels).toEqual(currentMainModels);
+    expect(request).toHaveBeenNthCalledWith(1, "models.list", {
       agentId: "main",
       preparedOnly: true,
-      rejectOnFailure: true,
+      view: "configured",
     });
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(2, client, {
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       agentId: "writer",
       preparedOnly: true,
-      rejectOnFailure: true,
+      view: "configured",
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "models.list", {
+      agentId: "main",
+      preparedOnly: true,
+      view: "configured",
     });
 
     selectionState.selectedId = null;
     await state.ensureSessionObserverModels(client, null);
     expect(state.sessionObserverModels).toEqual([]);
     expect(state.sessionObserverModelsUnavailable).toBe(true);
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(3);
   });
 });
 

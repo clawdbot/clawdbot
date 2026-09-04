@@ -1,11 +1,6 @@
 // Qa Lab plugin module implements Slack live transport adapter behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-  createSlackWebClient,
-  createSlackWriteClient,
-  resolveSlackWebClientOptions,
-} from "@openclaw/slack/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { acquireDebugProxyCaptureStore } from "openclaw/plugin-sdk/proxy-capture";
@@ -33,6 +28,7 @@ import {
   listSlackThreadMessages,
   sendSlackChannelMessage,
 } from "./slack-live.observations.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
@@ -117,6 +113,8 @@ async function recordSlackObservedMessage(params: {
 export async function createSlackQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
+  const { createSlackWebClient, createSlackWriteClient, resolveSlackWebClientOptions } =
+    loadSlackQaRuntime();
   const options = context.adapterOptions ?? {};
   const lease = await acquireQaCredentialLease<SlackQaRuntimeEnv>({
     kind: "slack",

@@ -291,9 +291,10 @@ export function withPluginRegistrationContext<T>(
   registry: PluginRegistry,
   pluginId: string,
   run: () => T,
+  handlers?: Pick<NonNullable<RegistryState["registrationContext"]>, "registerMemoryCapability">,
 ): T {
   const previous = state.registrationContext;
-  state.registrationContext = { registry, pluginId };
+  state.registrationContext = { registry, pluginId, ...handlers };
   try {
     return run();
   } finally {

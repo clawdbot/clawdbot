@@ -99,4 +99,38 @@ describe("spawnWithFallback", () => {
     ).rejects.toThrow(/ENOENT/);
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not spawn a fallback after request authority retires during startup", async () => {
+    let current = true;
+    const retired = Object.assign(new Error("request authority retired"), { code: "EBADF" });
+    const firstChild = createStubChild();
+    Object.defineProperty(firstChild, "pid", { value: undefined });
+    const spawnMock = vi
+      .fn()
+      .mockReturnValueOnce(firstChild)
+      .mockImplementation(() => createStubChild());
+    const onFallback = vi.fn();
+    const run = spawnWithFallback({
+      argv: ["agent-cli"],
+      options: {},
+      fallbacks: [
+        { label: "no-detach", options: { detached: false } },
+        { label: "ignore-stdin", options: { stdio: "ignore" } },
+      ],
+      spawnImpl: spawnMock,
+      onFallback,
+      assertCurrent: () => {
+        if (!current) {
+          throw retired;
+        }
+      },
+    });
+    const outcome = Promise.allSettled([run]);
+    current = false;
+    firstChild.emit("error", Object.assign(new Error("spawn EBADF"), { code: "EBADF" }));
+
+    expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
+    expect(spawnMock).toHaveBeenCalledOnce();
+    expect(onFallback).toHaveBeenCalledOnce();
+  });
 });

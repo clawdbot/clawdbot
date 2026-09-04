@@ -39,11 +39,13 @@ class ElapsedTime extends OpenClawLightDomContentsElement {
     const end = this.endMs ?? Date.now();
     const minimumMs = this.minimumUnit === "minute" ? 60_000 : 1_000;
     const elapsedMs = Math.max(minimumMs, end - start);
-    return html`${this.singleUnit
-      ? formatDurationHuman(elapsedMs)
-      : formatDurationCompact(
-          this.minimumUnit === "minute" ? Math.floor(elapsedMs / 60_000) * 60_000 : elapsedMs,
-        )}`;
+    return html`${
+      this.singleUnit
+        ? formatDurationHuman(elapsedMs)
+        : formatDurationCompact(
+            this.minimumUnit === "minute" ? Math.floor(elapsedMs / 60_000) * 60_000 : elapsedMs,
+          )
+    }`;
   }
 }
 

@@ -56,6 +56,32 @@ changing config.
 | Image generation or editing                       | `openai/gpt-image-2`                                               | Works with `OPENAI_API_KEY` or Codex OAuth.                         |
 | Transparent-background images                     | `openai/gpt-image-1.5`                                             | Set `outputFormat` to `png` or `webp` and `background=transparent`. |
 
+## GPT-6 Astra
+
+Select `openai/gpt-6-astra` with an OpenAI API-key profile or a ChatGPT/Codex
+subscription that has access to Astra. Access is rolling out; a successful
+account catalog remains authoritative, so adding model support does not grant
+access to an account that has not received it.
+If ChatGPT/Codex catalog discovery is unavailable, the offline fallback list
+omits Astra until account discovery succeeds.
+
+```bash
+openclaw models set openai/gpt-6-astra
+```
+
+Astra uses the Responses API for agent tool calls. It supports text and image
+input, a 1,050,000-token context window, and up to 128,000 output tokens.
+OpenClaw retains its ordinary 272,000-token active input budget by default.
+The supported reasoning efforts are `low`, `medium`, `high`, `xhigh`, and `max`.
+An existing `minimal` setting maps to `low`. Astra cannot disable reasoning;
+`off` never sends the unsupported `none` effort.
+Temperature is not sent.
+
+Standard pricing per million tokens is $10 input, $1 cache reads, $12.50 cache
+writes, and $50 output. Requests above 272K input tokens have higher rates.
+See the [Astra model reference](https://developers.openai.com/api/docs/models/gpt-6-astra)
+and [migration guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra).
+
 ## Naming map
 
 | Name you see                            | Layer             | Meaning                                                                                  |

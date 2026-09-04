@@ -79,19 +79,17 @@ export function createGatewayChatUserTurnController(params: {
       })
     : undefined;
   let inputPromise = replyContextFieldsPromise
-    ? replyContextFieldsPromise.then(
-        (fields): UserTurnInput => ({
-          ...baseInput,
-          ...(fields.ReplyToBody
-            ? {
-                replyToPreview: {
-                  text: fields.ReplyToBody,
-                  ...(fields.ReplyToSender ? { senderLabel: fields.ReplyToSender } : {}),
-                },
-              }
-            : {}),
-        }),
-      )
+    ? replyContextFieldsPromise.then((fields): UserTurnInput => ({
+        ...baseInput,
+        ...(fields.ReplyToBody
+          ? {
+              replyToPreview: {
+                text: fields.ReplyToBody,
+                ...(fields.ReplyToSender ? { senderLabel: fields.ReplyToSender } : {}),
+              },
+            }
+          : {}),
+      }))
     : Promise.resolve(baseInput);
   const recorder = createUserTurnTranscriptRecorder({
     ...(request.goalOperation

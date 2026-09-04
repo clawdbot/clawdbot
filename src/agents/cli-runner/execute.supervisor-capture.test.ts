@@ -27,9 +27,15 @@ import { createTestAdmittedRunContext } from "../admitted-run-context.test-suppo
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
 import { findCliTerminalStopError } from "../failover-error.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
-import { executePreparedCliRun } from "./execute.js";
-import { createManagedRun, supervisorSpawnMock } from "./execute.test-support.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
+import {
+  createManagedRun,
+  supervisorSpawnMock,
+  wrapPreparedCliRunWithTestAdmission,
+} from "./execute.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
 // Gateway unit coverage owns quiet-admission timing. These integration cases only
 // need to drain calls already in flight, so skip the repeated 250 ms quiet window.

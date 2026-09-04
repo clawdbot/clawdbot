@@ -578,7 +578,11 @@ export function resolveRequiredNodeCommandAuthority(params: {
 }): RequiredNodeCommandAuthority | undefined {
   const declaredCommands = new Set(params.declaredCommands);
   const effectiveCommands = new Set(params.effectiveCommands);
-  const withheldCommands = new Set(params.withheldCommands);
+  // A denial anywhere in the required set takes precedence over pairing approval.
+  const denied = params.requiredCommands.find((cmd) => params.withheldCommands.includes(cmd));
+  if (denied) {
+    return { command: denied, state: "unauthorized" };
+  }
   for (const command of params.requiredCommands) {
     if (
       effectiveCommands.has(command) &&
@@ -593,7 +597,7 @@ export function resolveRequiredNodeCommandAuthority(params: {
     if (declaredCommands.has(command) && !effectiveCommands.has(command)) {
       return { command, state: "pending-approval" };
     }
-    if (declaredCommands.has(command) || withheldCommands.has(command)) {
+    if (declaredCommands.has(command)) {
       return { command, state: "unauthorized" };
     }
     return { command, state: "undeclared" };

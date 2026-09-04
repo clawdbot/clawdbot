@@ -5148,6 +5148,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         ];
       });
       expect(Math.max(...closedRowCenters) - Math.min(...closedRowCenters)).toBeLessThan(0.5);
+      await page.locator("#failed-outcome-probe").evaluate(finishElementAnimations);
       const outcomeColors = await page.evaluate(() => ({
         danger: getComputedStyle(document.querySelector("#danger-color-probe")!).color,
         failed: getComputedStyle(document.querySelector("#failed-outcome-probe")!).color,

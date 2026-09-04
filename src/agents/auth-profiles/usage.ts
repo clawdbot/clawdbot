@@ -88,6 +88,7 @@ async function updateOwnedAuthProfileUsage(
   let changed = false;
   const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
     ...update,
+    profileId,
     agentDir: resolvePersistedAuthProfileOwnerAgentDir({
       agentDir: update.agentDir,
       profileId,

@@ -365,6 +365,9 @@ type GatewayResidentBridgeContext = {
   githubOAuthService?: ReturnType<
     typeof import("../github-oauth-lifecycle.js").createGitHubOAuthLifecycle
   >;
+  modelAccountConnectService?: ReturnType<
+    typeof import("../model-account-connect.js").createModelAccountConnectService
+  >;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;

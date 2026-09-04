@@ -50,6 +50,10 @@ export async function createPtyAdapter(params: {
     setPtyTerminalName({ env: spawnEnv, name: terminalName, platform: process.platform });
   }
   params.assertCurrent?.();
+  // Construction can be cancelled while the native module loads.
+  if (params.abortSignal?.aborted) {
+    throw new Error("PTY construction aborted");
+  }
   const pty = spawn(preparedSpawn.command, preparedSpawn.args, {
     cwd: params.cwd,
     env: spawnEnv,
@@ -57,15 +61,6 @@ export async function createPtyAdapter(params: {
     cols: params.cols ?? 120,
     rows: params.rows ?? 30,
   });
-  if (params.abortSignal?.aborted) {
-    try {
-      pty.kill();
-    } catch {
-      // ignore kill errors
-    }
-    throw new Error("PTY construction aborted");
-  }
-
   let dataListener: IDisposable | null = null;
   let exitListener: IDisposable | null = null;
   const completion = createDeferredCore<{

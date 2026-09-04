@@ -56,7 +56,7 @@ import { createTestAdmittedRunContext } from "./admitted-run-context.test-suppor
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   restoreCliRunnerTestDeps,
-  runPreparedCliAgent,
+  runPreparedCliAgent as runPreparedCliAgentCore,
   setCliRunnerTestDeps,
 } from "./cli-runner.js";
 import {
@@ -66,7 +66,8 @@ import {
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { runCliRecovery } from "./cli-runner/cli-run-recovery.js";
-import { executePreparedCliRun } from "./cli-runner/execute.js";
+import { executePreparedCliRun as executePreparedCliRunCore } from "./cli-runner/execute.js";
+import { wrapPreparedCliRunWithTestAdmission } from "./cli-runner/execute.test-support.js";
 import {
   resolveCliNoOutputTimeoutMs,
   resolveCliRunTimeoutOverrideMs,
@@ -82,6 +83,8 @@ import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+const runPreparedCliAgent = wrapPreparedCliRunWithTestAdmission(runPreparedCliAgentCore);
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunCore);
 
 // Gateway unit coverage owns quiet-admission timing. These reliability cases only
 // need to drain calls already in flight, so skip the repeated 250 ms quiet window.

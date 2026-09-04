@@ -33,7 +33,7 @@ export type CompletionCacheGenerationOptions = ShellCompletionStatusOptions & {
 };
 
 async function installCompletionForDoctor(
-  shell: CompletionShell,
+  { shell, cachePath }: ShellCompletionStatus,
   cliName: string,
   action: "installed" | "upgraded",
 ): Promise<void> {
@@ -50,9 +50,10 @@ async function installCompletionForDoctor(
     if (!writeError) {
       throw err;
     }
-    const profilePath = writeError.path ?? resolveCompletionProfilePath(shell);
+    const failedPath = writeError.path ?? resolveCompletionProfilePath(shell);
+    const command = formatCompletionReloadCommand(shell, cachePath);
     note(
-      `Shell completion not ${action}: ${profilePath} is not writable. Run \`${cliName} completion --install\` against a writable profile file.`,
+      `Shell completion could not be ${action} (permission or read-only error at ${failedPath}). For this ${shell} session only, run:\n${command}`,
       "Shell completion",
     );
   }
@@ -220,7 +221,7 @@ export async function doctorShellCompletion(
       }
     }
 
-    await installCompletionForDoctor(status.shell, cliName, "upgraded");
+    await installCompletionForDoctor(status, cliName, "upgraded");
     return;
   }
 
@@ -261,7 +262,7 @@ export async function doctorShellCompletion(
         return;
       }
 
-      await installCompletionForDoctor(status.shell, cliName, "installed");
+      await installCompletionForDoctor(status, cliName, "installed");
     }
   }
 }

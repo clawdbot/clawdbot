@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { threadId } from "node:worker_threads";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
@@ -16,6 +17,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -36,7 +38,7 @@ export const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
 export const PLUGIN_ID = "worker-catalog-fixture";
 export const PROFILE_ID = `${SHARED_AUTH_PROVIDER_ID}:named`;
 export const MATERIALIZED_SECRET = "materialized-worker-secret-not-real";
-export const UNRELATED_SECRET = "unrelated-worker-secret-not-real";
+const UNRELATED_SECRET = "unrelated-worker-secret-not-real";
 export const REF_ONLY_API_PROVIDER_ID = `${PROVIDER_ID}-ref-api`;
 export const REF_ONLY_API_ENV = "OPENCLAW_WORKER_REF_ONLY_API_KEY";
 export const REF_ONLY_TOKEN_PROVIDER_ID = `${PROVIDER_ID}-ref-token`;
@@ -104,6 +106,7 @@ export function writeFixturePlugin(params: {
   pluginVersion?: string;
   builtPluginVersion?: string;
   nativeCatalog?: boolean;
+  asyncSyntheticAuth?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -121,6 +124,7 @@ export function writeFixturePlugin(params: {
     harnessId: HARNESS_ID,
     unrelatedId: UNRELATED_SYNTHETIC_AUTH_ID,
     pluginVersion: params.pluginVersion ?? "v1",
+    asyncSyntheticAuth: params.asyncSyntheticAuth,
   });
   fs.writeFileSync(
     pluginFile,
@@ -162,7 +166,8 @@ module.exports = {
         id,
         label: id,
         auth: [],
-        resolveSyntheticAuth() {
+        ${params.asyncSyntheticAuth ? "async prepareSyntheticAuth" : "resolveSyntheticAuth"}() {
+          ${params.asyncSyntheticAuth ? `if (require("node:worker_threads").threadId !== ${threadId}) throw Error("native auth probe entered worker");` : ""}
           fs.appendFileSync(${JSON.stringify(syntheticAuthProbePath)}, id + "\\n");
           return authenticated
             ? { apiKey: "discovered-native-login-not-real", source: "fixture native login", mode: "oauth" }
@@ -265,6 +270,7 @@ module.exports = {
       root: params.root,
       spinMs: params.spinMs,
       pluginVersion: params.builtPluginVersion,
+      asyncSyntheticAuth: params.asyncSyntheticAuth,
     });
     const distDir = path.join(pluginDir, "dist");
     fs.mkdirSync(distDir);
@@ -302,6 +308,102 @@ module.exports = {
     "utf8",
   );
   return pluginFile;
+}
+
+export function createCatalogFixture(
+  makeTempDir: (prefix: string) => string,
+  spinMs: number,
+  envOverride: NodeJS.ProcessEnv = {},
+  options?: {
+    hydrateExternalCliProviderIds?: readonly string[];
+    builtPluginVersion?: string;
+    asyncSyntheticAuth?: boolean;
+  },
+) {
+  const root = makeTempDir("openclaw-model-catalog-worker-");
+  const stateDir = path.join(root, "state");
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const workspaceDir = path.join(root, "workspace");
+  const marker = path.join(root, "worker-marker.txt");
+  const externalAuthPath = path.join(root, "external-auth.txt");
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const pluginFile = writeFixturePlugin({ root, spinMs, ...options });
+  fs.writeFileSync(externalAuthPath, "A", "utf8");
+  const env = {
+    ...process.env,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_WORKER_CATALOG_MARKER: marker,
+    [EXTERNAL_AUTH_PATH_ENV]: externalAuthPath,
+    ...envOverride,
+    [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
+    [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
+  };
+  const config = {
+    agents: {
+      defaults: {
+        model: `${PROVIDER_ID}/sqlite-model`,
+        models: {
+          [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
+        },
+      },
+    },
+    plugins: {
+      allow: [PLUGIN_ID],
+      load: { paths: [pluginFile] },
+      entries: { [PLUGIN_ID]: { enabled: true } },
+    },
+  } satisfies OpenClawConfig;
+  replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      agentDir,
+      store: {
+        version: 1,
+        profiles: {
+          [PROFILE_ID]: {
+            type: "token",
+            provider: SHARED_AUTH_PROVIDER_ID,
+            token: MATERIALIZED_SECRET,
+            tokenRef: { source: "env", provider: "default", id: "SHARED_SECRET_REF" },
+          },
+          "unrelated-provider:default": {
+            type: "api_key",
+            provider: "unrelated-provider",
+            key: UNRELATED_SECRET,
+            keyRef: { source: "env", provider: "default", id: "UNRELATED_SECRET_REF" },
+          },
+        },
+        order: { [SHARED_AUTH_PROVIDER_ID]: [PROFILE_ID] },
+      },
+    },
+  ]);
+  const hydratedAuthStore = options?.hydrateExternalCliProviderIds
+    ? ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+        config,
+        externalCliProviderIds: options.hydrateExternalCliProviderIds,
+        readOnly: true,
+        syncExternalCli: false,
+      })
+    : undefined;
+  replacePersistedPluginModelCatalogs({
+    agentDir,
+    pluginCatalogWrites: {
+      [encodePluginModelCatalogRelativePath(PLUGIN_ID)]: JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          [PROVIDER_ID]: {
+            baseUrl: "https://worker-catalog.invalid/v1",
+            api: "openai-completions",
+            apiKey: "WORKER_CATALOG_API_KEY",
+            models: [{ id: "sqlite-model", name: "SQLite model" }],
+          },
+        },
+      }),
+    },
+  });
+  return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
 }
 
 async function expectNativeHarnessModelsPublished(params: {

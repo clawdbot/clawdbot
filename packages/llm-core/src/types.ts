@@ -1,5 +1,4 @@
 import type { TSchema } from "typebox";
-// LLM Core type module defines shared TypeScript contracts.
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.js";
 export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 
@@ -128,6 +127,8 @@ export interface StreamOptions {
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
    */
   timeoutMs?: number;
+  /** @deprecated Ignored by built-in text transports; retries are owned by the host runner. */
+  maxRetries?: number;
   /**
    * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
    * If the server's requested delay exceeds this value, the request fails immediately
@@ -669,7 +670,6 @@ export interface VercelGatewayRouting {
   order?: string[];
 }
 
-// Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
   id: string;
   name: string;

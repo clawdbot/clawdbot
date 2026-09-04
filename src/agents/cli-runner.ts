@@ -230,6 +230,7 @@ async function runCliAgentInternal(
   try {
     context = await prepareCliRunContext(params);
   } catch (error) {
+    params.assertCurrent?.();
     await settleCliPreparationError(error, params);
     throw error;
   }
@@ -716,6 +717,7 @@ export async function runPreparedCliAgent(
   } catch (error) {
     cleanupError = error as Error;
   }
+  params.assertCurrent?.();
   return settleCliBackendOutcome({
     runResult,
     runError,

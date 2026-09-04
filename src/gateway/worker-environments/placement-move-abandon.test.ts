@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -9,7 +10,6 @@ import {
 import { environmentsHandlers } from "../server-methods/environments.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import { BUILD, transport, workspaceTransfer } from "./node-worker-tunnel.test-support.js";
-import { isUnavailableEnvironment } from "./placement-dispatch-failure.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
@@ -155,31 +155,67 @@ describe("offline device placement abandonment", () => {
     };
   }
 
+  function expectRetainedDeviceCleanup(fixture: Awaited<ReturnType<typeof deviceTeardown>>) {
+    expect(fixture.environments.get(fixture.active.environmentId)).toMatchObject({
+      state: "attached",
+      leaseId: "lease-device",
+      nodeDeviceId: "device-1",
+      ownerEpoch: fixture.active.activeOwnerEpoch,
+      attachedSessionIds: [fixture.active.sessionId],
+      destroyRequestedAtMs: 1_000,
+      teardownTerminalState: "failed",
+      lastError: FORCED_WORKER_ABANDONMENT_ERROR,
+    });
+    expect(fixture.provider.destroy).not.toHaveBeenCalled();
+  }
+
+  async function finishDeviceCleanup(fixture: Awaited<ReturnType<typeof deviceTeardown>>) {
+    fixture.reconnect();
+    await fixture.environments.destroy(fixture.active.environmentId);
+    expect(fixture.environments.get(fixture.active.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      nodeDeviceId: null,
+      attachedSessionIds: [],
+      lastError: FORCED_WORKER_ABANDONMENT_ERROR,
+    });
+    expect(fixture.invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+        params: expect.objectContaining({
+          environmentId: fixture.active.environmentId,
+          sessionId: fixture.active.sessionId,
+          ownerEpoch: fixture.active.activeOwnerEpoch,
+        }),
+      }),
+    );
+    expect(fixture.provider.destroy).toHaveBeenCalledOnce();
+  }
+
   it.each([false, true])(
     "abandons an unreachable device through real teardown (live tunnel: %s)",
     async (liveTunnel) => {
-      const { harness, active, environments, transfer, invoke } = await deviceTeardown(liveTunnel);
+      const fixture = await deviceTeardown(liveTunnel);
+      const { harness, active, transfer, invoke } = fixture;
       const fail = vi.spyOn(placements, "fail");
       await expect(harness.service.move(requestFor(active))).resolves.toMatchObject({
         state: "local",
       });
-      expect(isUnavailableEnvironment(environments.get(active.environmentId)!)).toBe(true);
-      expect(environments.get(active.environmentId)).toMatchObject({
-        state: "failed",
-        leaseId: null,
-        lastError: FORCED_WORKER_ABANDONMENT_ERROR,
-      });
+      expectRetainedDeviceCleanup(fixture);
       expect(fail).toHaveBeenCalledWith(
         expect.objectContaining({ recoveryError: FORCED_WORKER_ABANDONMENT_ERROR }),
       );
       expect(transfer.close).toHaveBeenCalledWith(active.environmentId);
       expect(invoke).not.toHaveBeenCalled();
       expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+      await finishDeviceCleanup(fixture);
+      expect(invoke).toHaveBeenCalledOnce();
     },
   );
 
   it("abandons a device whose supervisor proof disappears after discovery", async () => {
-    const { harness, active, environments, reconnect, invoke } = await deviceTeardown(false);
+    const fixture = await deviceTeardown(false);
+    const { harness, active, reconnect, invoke } = fixture;
     reconnect();
     invoke.mockResolvedValueOnce({
       ok: false,
@@ -190,15 +226,14 @@ describe("offline device placement abandonment", () => {
       state: "local",
     });
     expect(invoke).toHaveBeenCalledOnce();
-    expect(environments.get(active.environmentId)).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      lastError: FORCED_WORKER_ABANDONMENT_ERROR,
-    });
+    expectRetainedDeviceCleanup(fixture);
+    await finishDeviceCleanup(fixture);
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 
   it("force destroys an unreachable device and accepts its already fenced placement for abandonment", async () => {
-    const { harness, active, environments } = await deviceTeardown(false);
+    const fixture = await deviceTeardown(false);
+    const { harness, active, environments } = fixture;
     const respond = vi.fn();
     await environmentsHandlers["environments.destroy"]!({
       params: { environmentId: active.environmentId, force: true },
@@ -211,7 +246,7 @@ describe("offline device placement abandonment", () => {
     } as never);
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ worker: expect.objectContaining({ state: "failed" }) }),
+      expect.objectContaining({ worker: expect.objectContaining({ state: "attached" }) }),
       undefined,
     );
     const failed = placements.get(active.sessionId);
@@ -227,13 +262,22 @@ describe("offline device placement abandonment", () => {
         environmentService: environments,
         placement: failed,
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expectRetainedDeviceCleanup(fixture);
     await expect(
       harness.service.move({
         ...requestFor(active),
         source: { ...requestFor(active).source, generation: failed.generation },
       }),
     ).resolves.toMatchObject({ state: "local" });
+    await finishDeviceCleanup(fixture);
+    expect(fixture.invoke).toHaveBeenCalledOnce();
+    expect(
+      isFailedWorkerPlacementEnvironmentGone({
+        environmentService: environments,
+        placement: failed,
+      }),
+    ).toBe(true);
   });
 
   it("retries abandonment after an earlier forced attempt fenced the placement but failed to stop", async () => {

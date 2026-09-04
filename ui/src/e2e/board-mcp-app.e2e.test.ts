@@ -4,6 +4,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -330,7 +331,11 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     );
   });
 
-  it("retains one board runtime across split and expanded panel states", async () => {
+  it("retains one board runtime across split, expanded, and inactive panel states", async () => {
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("board-panel-retention", artifactRoot)
+      : undefined;
     const context = await browser.newContext({
       permissions: ["local-network-access"],
       viewport: { width: 1280, height: 800 },
@@ -355,6 +360,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
           expiresAtMs: Date.now() + 3_600_000,
         },
         "mcp.app.view": appViewPayload(),
+        "tasks.list": { tasks: [] },
       },
     });
 
@@ -369,12 +375,41 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     const stablePatchCount = (await gateway.getRequests("sessions.patch")).length;
     const stableListCount = (await gateway.getRequests("sessions.list")).length;
     const sidePanel = page.locator(".sidebar-region__right-runtime .side-panel");
+    const appContent = page
+      .frameLocator("mcp-app-view iframe")
+      .frameLocator("iframe")
+      .getByText("Dashboard app", { exact: true });
     await expectRetainedBoardPresentation(page, "split");
+    if (artifactDir) {
+      await appContent.waitFor();
+      await page.screenshot({ path: `${artifactDir}/01-dashboard.png`, fullPage: true });
+    }
 
     await sidePanel.getByRole("button", { name: "Expand side panel" }).click();
     await expectRetainedBoardPresentation(page, "expanded");
 
     await sidePanel.getByRole("button", { name: "Collapse" }).click();
+    await expectRetainedBoardPresentation(page, "split");
+
+    const typeMenu = sidePanel.locator("wa-dropdown.side-panel-type-menu");
+    await typeMenu.getByRole("button", { name: "Add side panel tab" }).click();
+    await typeMenu.locator("wa-dropdown-item").filter({ hasText: "Tasks" }).click();
+    await expect
+      .poll(() => typeMenu.evaluate((element) => Reflect.get(element, "open")))
+      .toBe(false);
+    await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
+    const inactiveIdentity = await readBoardIdentity(page);
+    if (artifactDir) {
+      await page.screenshot({ path: `${artifactDir}/02-tasks.png`, fullPage: true });
+    }
+
+    await sidePanel.getByRole("tab", { name: "Dashboard", exact: true }).click();
+    await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
+    if (artifactDir) {
+      await appContent.waitFor();
+      await page.screenshot({ path: `${artifactDir}/03-dashboard-restored.png`, fullPage: true });
+    }
+    expect(inactiveIdentity).toEqual({ connected: true, hidden: true, inert: true, same: true });
     await expectRetainedBoardPresentation(page, "split");
     expect(await gateway.getRequests("board.update")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.patch")).toHaveLength(stablePatchCount);

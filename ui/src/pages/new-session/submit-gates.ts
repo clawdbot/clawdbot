@@ -4,7 +4,6 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -191,8 +190,7 @@ export function resolveNewSessionSubmitBlock(
     return { gate: "route-pending", reason: t("newSession.catalogUnavailable") };
   }
   const modelUnavailableMessage =
-    kind === "session" &&
-    chatModelUnavailableMessage(place.modelControl.modelUnavailableReason(place.selectedAgent()));
+    kind === "session" && place.modelControl.modelSelectionBlockedReason(place.selectedAgent());
   if (modelUnavailableMessage) {
     return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }

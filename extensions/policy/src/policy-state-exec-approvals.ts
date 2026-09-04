@@ -226,15 +226,13 @@ function withExecApprovalAllowlistSource(
   value: unknown,
   sourceAgentId: string,
 ): readonly NormalizedExecApprovalAllowlistEntry[] {
-  return execApprovalAllowlistEntries(value).map(
-    (entry): NormalizedExecApprovalAllowlistEntry => ({
-      index: entry.index,
-      pattern: entry.pattern,
-      argPattern: entry.argPattern,
-      entrySource: entry.entrySource,
-      sourceAgentId,
-    }),
-  );
+  return execApprovalAllowlistEntries(value).map((entry): NormalizedExecApprovalAllowlistEntry => ({
+    index: entry.index,
+    pattern: entry.pattern,
+    argPattern: entry.argPattern,
+    entrySource: entry.entrySource,
+    sourceAgentId,
+  }));
 }
 
 function readExecApprovalAllowlistEntrySource(value: unknown): "allow-always" | undefined {

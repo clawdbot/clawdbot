@@ -113,9 +113,11 @@ function renderDashboardCard(data: DashboardsRouteData, row: DashboardRow) {
       <div class="dashboard-card__body">
         <div class="dashboard-card__heading">
           <h2>${title}</h2>
-          ${row.status === "running"
-            ? html`<span class="dashboard-card__live"><i></i>${t("dashboardsPage.live")}</span>`
-            : nothing}
+          ${
+            row.status === "running"
+              ? html`<span class="dashboard-card__live"><i></i>${t("dashboardsPage.live")}</span>`
+              : nothing
+          }
         </div>
         <div class="dashboard-card__author">
           <span class="dashboard-card__avatar" aria-hidden="true">${initial}</span>
@@ -124,9 +126,11 @@ function renderDashboardCard(data: DashboardsRouteData, row: DashboardRow) {
       </div>
       <footer class="dashboard-card__footer">
         <span>
-          ${row.updatedAt
-            ? t("dashboardsPage.updated", { time: formatRelativeTimestamp(row.updatedAt) })
-            : t("dashboardsPage.updatedUnknown")}
+          ${
+            row.updatedAt
+              ? t("dashboardsPage.updated", { time: formatRelativeTimestamp(row.updatedAt) })
+              : t("dashboardsPage.updatedUnknown")
+          }
         </span>
         <span class="dashboard-card__open" aria-hidden="true">${icons.arrowUpRight}</span>
       </footer>
@@ -209,19 +213,21 @@ function renderDashboardList(
     <div class="dashboards-results" role="status">
       ${t("dashboardsPage.resultCount", { count: String(visibleRows.length) })}
     </div>
-    ${visibleRows.length === 0
-      ? html`<div class="dashboards-no-results" data-dashboards-no-results>
-          <span aria-hidden="true">${icons.search}</span>
-          <strong>${t("dashboardsPage.noResultsTitle")}</strong>
-          <span>${t("dashboardsPage.noResultsDescription")}</span>
-        </div>`
-      : html`<div class="dashboards-grid">
-          ${repeat(
-            visibleRows,
-            (row) => row.key,
-            (row) => renderDashboardCard(data, row),
-          )}
-        </div>`}
+    ${
+      visibleRows.length === 0
+        ? html`<div class="dashboards-no-results" data-dashboards-no-results>
+            <span aria-hidden="true">${icons.search}</span>
+            <strong>${t("dashboardsPage.noResultsTitle")}</strong>
+            <span>${t("dashboardsPage.noResultsDescription")}</span>
+          </div>`
+        : html`<div class="dashboards-grid">
+            ${repeat(
+              visibleRows,
+              (row) => row.key,
+              (row) => renderDashboardCard(data, row),
+            )}
+          </div>`
+    }
   </section>`;
 }
 
@@ -253,12 +259,14 @@ export function renderDashboards(
         <div class="page-title">${titleForRoute("dashboards")}</div>
         <div class="page-subtitle">${t("subtitles.dashboards")}</div>
       </div>
-      ${data?.result
-        ? html`<div class="dashboards-header__count">
-            <strong>${data.result.sessions.length}</strong>
-            <span>${t("dashboardsPage.totalLabel")}</span>
-          </div>`
-        : nothing}
+      ${
+        data?.result
+          ? html`<div class="dashboards-header__count">
+              <strong>${data.result.sessions.length}</strong>
+              <span>${t("dashboardsPage.totalLabel")}</span>
+            </div>`
+          : nothing
+      }
     </section>
     ${renderSettingsWorkspace(body)}
   `;

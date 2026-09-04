@@ -16,6 +16,7 @@ import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { hasAuthoredProviderRequestParams } from "../model-extra-params.js";
 import { canonicalizeProviderModelId } from "../provider-model-route.js";
+import type { PreparedAgentRuntimeAuthAttempt } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
@@ -69,6 +70,28 @@ export function resolveAgentHarnessPreparedRouteSupport(
         runtimePolicy: support.runtimePolicy,
       }
     : {};
+}
+
+/** Projects one prepared compaction attempt into secret-free harness support facts. */
+export function projectPreparedModelProvider(params: {
+  model?: Pick<NonNullable<AgentHarnessSupportContext["modelProvider"]>, "api" | "baseUrl">;
+  plan?: AgentRuntimeAuthPlan;
+  attemptKind?: PreparedAgentRuntimeAuthAttempt["kind"];
+}): NonNullable<AgentHarnessSupportContext["modelProvider"]> {
+  const route = params.plan?.modelRoute;
+  return {
+    api: route?.api ?? params.model?.api,
+    baseUrl: route?.baseUrl ?? params.model?.baseUrl,
+    ...resolveAgentHarnessPreparedRouteSupport(params.plan),
+    ...(params.plan
+      ? {
+          preparedAuth: resolveAgentHarnessPreparedAuthSupport({
+            plan: params.plan,
+            source: params.attemptKind === "implicit" ? undefined : params.attemptKind,
+          }),
+        }
+      : {}),
+  };
 }
 
 /** Builds the provider/model facts passed to registered harness support probes. */

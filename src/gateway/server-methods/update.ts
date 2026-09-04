@@ -10,6 +10,7 @@ import {
   validateUpdateStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
+import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
@@ -82,24 +83,6 @@ import { assertValidParams } from "./validation.js";
 const MANAGED_HANDOFF_RESTART_DELAY_MS = 2000;
 const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
 
-// Explicit callers share only active checkout work for the exact config snapshot.
-// Reloaded config must never join work started under an older snapshot.
-const updateStatusCheckoutRefreshes = new WeakMap<OpenClawConfig, Promise<void>>();
-
-function refreshUpdateStatusCheckout(config: OpenClawConfig): Promise<void> {
-  const current = updateStatusCheckoutRefreshes.get(config);
-  if (current) {
-    return current;
-  }
-  const refresh = refreshGatewayUpdateStatus(config).finally(() => {
-    if (updateStatusCheckoutRefreshes.get(config) === refresh) {
-      updateStatusCheckoutRefreshes.delete(config);
-    }
-  });
-  updateStatusCheckoutRefreshes.set(config, refresh);
-  return refresh;
-}
-
 async function readPreUpdateConfigForPostCoreFinalize(): Promise<
   PreUpdateConfigRestoreInput | undefined
 > {
@@ -133,7 +116,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     const configChannel = normalizeUpdateChannel(config?.update?.channel);
     if (params.refreshCheckout === true && config) {
       try {
-        await refreshUpdateStatusCheckout(config);
+        await refreshGatewayUpdateStatus(config);
       } catch (err) {
         context?.logGateway?.warn(
           `update.status checkout refresh failed: ${formatErrorMessage(err)}`,
@@ -237,6 +220,8 @@ export const updateHandlers: GatewayRequestHandlers = {
     const noticeAttemptId = randomUUID();
     let ownsUpdateOutcome = false;
     let adoptedCampaignId: string | undefined;
+    const ownerRequiredMessage = () =>
+      `Only the OpenClaw owner can start an update from chat. ${formatCommandOwnerHint({ cfg: context.getRuntimeConfig(), channel: params.requester?.channel, id: params.requester?.senderId })}`;
     const refuseNonOwner = () => {
       const requester = params.requester;
       // Only external chat identities are revocable here; internal or channel-less
@@ -254,6 +239,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       respond(true, {
         ok: false,
         code: "owner_required",
+        message: ownerRequiredMessage(),
         ackDelivered,
         result: { status: "error", reason: "owner_required" },
       });
@@ -442,11 +428,12 @@ export const updateHandlers: GatewayRequestHandlers = {
             // Recheck after the awaited acknowledgement, immediately before the effect.
             if (refuseNonOwner()) {
               if (ackDelivered) {
-                await notify("failed", "⚠️ Update did not start: owner_required.");
+                await notify("failed", ownerRequiredMessage());
               }
               return;
             }
             const started = await startManagedServiceUpdateHandoff({
+              requester: params.requester,
               root: installRoot,
               timeoutMs,
               restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
@@ -548,7 +535,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         // Recheck after the awaited acknowledgement, immediately before the effect.
         if (refuseNonOwner()) {
           if (ackDelivered) {
-            await notify("failed", "⚠️ Update did not start: owner_required.");
+            await notify("failed", ownerRequiredMessage());
           }
           return;
         }

@@ -293,24 +293,26 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             props.onExit();
           }}
         />
-        ${props.searchQuery
-          ? html`
-              <button
-                type="button"
-                class="settings-sidebar__search-clear"
-                aria-label=${t("nav.settingsSearchClear")}
-                @click=${(event: MouseEvent) => {
-                  const searchInput = (
-                    event.currentTarget as HTMLElement
-                  ).parentElement?.querySelector<HTMLInputElement>("input");
-                  props.onSearchQueryChange("");
-                  searchInput?.focus();
-                }}
-              >
-                ${icons.x}
-              </button>
-            `
-          : nothing}
+        ${
+          props.searchQuery
+            ? html`
+                <button
+                  type="button"
+                  class="settings-sidebar__search-clear"
+                  aria-label=${t("nav.settingsSearchClear")}
+                  @click=${(event: MouseEvent) => {
+                    const searchInput = (
+                      event.currentTarget as HTMLElement
+                    ).parentElement?.querySelector<HTMLInputElement>("input");
+                    props.onSearchQueryChange("");
+                    searchInput?.focus();
+                  }}
+                >
+                  ${icons.x}
+                </button>
+              `
+            : nothing
+        }
       </div>
       <nav
         class="settings-sidebar__nav"
@@ -318,37 +320,45 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         @scroll=${(event: Event) =>
           syncSettingsSearchScrollShadow(event.currentTarget as HTMLElement)}
       >
-        ${navigationGroups.length === 0
-          ? html`<p class="settings-sidebar__empty" role="status">
-              ${t("nav.settingsSearchNoResults")}
-            </p>`
-          : navigationGroups.map(
-              (group) => html`
-                <div class="settings-sidebar__group">
-                  ${group.labelKey
-                    ? html`<div class="settings-sidebar__group-label">${t(group.labelKey)}</div>`
-                    : nothing}
-                  ${group.items.map(
-                    (item) => html`
-                      ${renderItem(props, item.routeId)}
-                      ${item.blocks.map((block) => renderBlockItem(props, block))}
-                    `,
-                  )}
-                </div>
-              `,
-            )}
+        ${
+          navigationGroups.length === 0
+            ? html`<p class="settings-sidebar__empty" role="status">
+                ${t("nav.settingsSearchNoResults")}
+              </p>`
+            : navigationGroups.map(
+                (group) => html`
+                  <div class="settings-sidebar__group">
+                    ${
+                      group.labelKey
+                        ? html`<div class="settings-sidebar__group-label">
+                            ${t(group.labelKey)}
+                          </div>`
+                        : nothing
+                    }
+                    ${group.items.map(
+                      (item) => html`
+                        ${renderItem(props, item.routeId)}
+                        ${item.blocks.map((block) => renderBlockItem(props, block))}
+                      `,
+                    )}
+                  </div>
+                `,
+              )
+        }
       </nav>
       <footer class="settings-sidebar__footer">
-        ${connectionStatus
-          ? renderSidebarConnectionStatus({
-              kind: connectionStatus,
-              queuedOutboxCount: props.queuedOutboxCount ?? 0,
-              title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
-              onRetry: props.onRetryConnect,
-            })
-          : html`<openclaw-settings-save-indicator
-              .props=${props.saveIndicator}
-            ></openclaw-settings-save-indicator>`}
+        ${
+          connectionStatus
+            ? renderSidebarConnectionStatus({
+                kind: connectionStatus,
+                queuedOutboxCount: props.queuedOutboxCount ?? 0,
+                title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
+                onRetry: props.onRetryConnect,
+              })
+            : html`<openclaw-settings-save-indicator
+                .props=${props.saveIndicator}
+              ></openclaw-settings-save-indicator>`
+        }
         <openclaw-sidebar-build-chip
           .basePath=${props.basePath}
           .gatewayVersion=${props.gatewayVersion || null}

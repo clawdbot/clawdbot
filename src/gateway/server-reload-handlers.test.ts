@@ -121,6 +121,12 @@ import {
 import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
+import { TerminalSessionManager } from "./terminal/session-manager.js";
+import {
+  baseOpenRequest,
+  expectTerminalOpen,
+  makeFakePty,
+} from "./terminal/session-manager.test-helpers.js";
 
 type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlersImpl>[0];
 type ManagedReloaderParams = Parameters<typeof startManagedGatewayConfigReloaderImpl>[0];
@@ -747,6 +753,7 @@ function createManagedRestartSequenceHarness(
   const invalidConfig = {
     gateway: {
       ...deferredConfig.gateway,
+      port: 18791,
       auth: {
         mode: "token",
         token: {
@@ -1514,19 +1521,37 @@ describe("managed channel credential publication", () => {
     });
   });
 
-  it("does not resume a manual stop when the provider recovers", async () => {
-    await withManagedChannelSecretFixture({}, async (fixture) => {
-      await fixture.manager.stopChannel("mattermost", "ada");
-      fixture.stops.length = 0;
-      expect(await fixture.write(fixture.nextSource(fixture.newPath))).toBe("applied");
-      expect(fixture.starts).toEqual([]);
-      expect(fixture.stops).toEqual([]);
-      expect(fixture.manager.isManuallyStopped("mattermost", "ada")).toBe(true);
-      expect(fixture.manager.getRuntimeSnapshot().channelAccounts.mattermost?.root?.running).toBe(
-        true,
-      );
-    });
-  });
+  it.each(["provider recovery", "shared defaults", "model routing"] as const)(
+    "does not resume a manual stop during %s",
+    async (change) => {
+      await withManagedChannelSecretFixture({}, async (fixture) => {
+        await fixture.manager.stopChannel("mattermost", "ada");
+        fixture.stops.length = 0;
+        const next: OpenClawConfig =
+          change === "provider recovery"
+            ? fixture.nextSource(fixture.newPath)
+            : {
+                ...fixture.initialSource,
+                channels: {
+                  ...fixture.initialSource.channels,
+                  ...(change === "shared defaults"
+                    ? { defaults: { groupPolicy: "open" as const } }
+                    : { modelByChannel: { mattermost: { "qa-room": "openai/after" } } }),
+                },
+              };
+        expect(await fixture.write(next)).toBe("applied");
+        expect(fixture.starts).toEqual(
+          change === "provider recovery" ? [] : [{ accountId: "root", token: "independent" }],
+        );
+        expect(fixture.stops).toEqual(change === "provider recovery" ? [] : ["root"]);
+        expect(fixture.manager.isManuallyStopped("mattermost", "ada")).toBe(true);
+        expect(fixture.manager.getRuntimeSnapshot().channelAccounts.mattermost?.root?.running).toBe(
+          true,
+        );
+        expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it.each([false, true])(
     "recovers a cold account without undoing a manual stop (%s)",
@@ -2746,9 +2771,9 @@ describe("gateway hot reload superseded tail recovery", () => {
   it("rearms detached stale-tail recovery against an already accepted config", async () => {
     vi.useFakeTimers();
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-    const prepareRuntimeConfig = vi.fn(
-      async (): Promise<OpenClawConfig> => ({ logging: { level: "debug" } }),
-    );
+    const prepareRuntimeConfig = vi.fn(async (): Promise<OpenClawConfig> => ({
+      logging: { level: "debug" },
+    }));
     const handlers = createReloadHandlersForTest(
       undefined,
       undefined,
@@ -5007,6 +5032,7 @@ describe("gateway Gmail hot reload handlers", () => {
 
       const safeConfig: OpenClawConfig = {
         ...initialConfig,
+        gateway: { ...initialConfig.gateway, terminal: { enabled: false } },
         logging: { level: "debug" },
       };
       writeConfig(safeConfig, "safe-reload");
@@ -5017,11 +5043,155 @@ describe("gateway Gmail hot reload handlers", () => {
       expect(promoteSnapshot).toHaveBeenCalledOnce();
       expect(logReload.error).not.toHaveBeenCalled();
       expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(safeConfig);
-      expect(terminalPolicy.isEnabled()).toBe(true);
+      expect(terminalPolicy.isEnabled()).toBe(false);
     } finally {
       await reloader.stop();
     }
   });
+
+  it.each([
+    { kind: "disabled", cronCleanupFails: false },
+    { kind: "sandboxed", cronCleanupFails: false },
+    { kind: "disabled", cronCleanupFails: true },
+  ] as const)(
+    "preserves terminals when a failed $kind restriction is replaced (cron cleanup fails: $cronCleanupFails)",
+    async ({ kind, cronCleanupFails }) => {
+      vi.useFakeTimers();
+      const initialConfig: OpenClawConfig = {
+        gateway: { reload: {}, terminal: { enabled: true } },
+      };
+      const disabledConfig: OpenClawConfig = {
+        gateway: { reload: {}, terminal: { enabled: false } },
+      };
+      const rejectedConfig: OpenClawConfig =
+        kind === "disabled"
+          ? disabledConfig
+          : {
+              ...initialConfig,
+              agents: { defaults: { sandbox: { mode: "all" } } },
+            };
+      const policy = createTerminalLaunchPolicy(initialConfig);
+      const livePty = makeFakePty();
+      const pendingPty = makeFakePty();
+      const spawnStarted = createDeferred();
+      const releaseSpawn = createDeferred();
+      const manager = new TerminalSessionManager({
+        emit: vi.fn(),
+        spawn: async ({ cwd }) => {
+          if (cwd === "/pending") {
+            spawnStarted.resolve();
+            await releaseSpawn.promise;
+            return pendingPty;
+          }
+          return livePty;
+        },
+      });
+      expectTerminalOpen(await manager.open(baseOpenRequest()));
+      const pending = manager.open(
+        baseOpenRequest({ owner: { kind: "conn", connId: "conn-2" }, cwd: "/pending" }),
+      );
+      await spawnStarted.promise;
+      activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
+      const writeListenerRef = createConfigWriteListenerRef();
+      const stopAndDrain = vi.fn(async () => {
+        throw new Error("cron cleanup failed after publication");
+      });
+      let state: Parameters<ReloadHandlerParams["setState"]>[0] = createDefaultGatewayReloadState();
+      state.cronState.cron.stopAndDrain = stopAndDrain;
+      const setState = vi
+        .fn((nextState: typeof state) => {
+          state = nextState;
+        })
+        .mockImplementationOnce(() => {
+          throw new Error("runtime publication refused");
+        });
+      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+      const reloader = startManagedGatewayConfigReloader({
+        initialConfig,
+        readSnapshot: async () => createValidConfigSnapshot(disabledConfig, "terminal-disable"),
+        subscribeToWrites: captureConfigWriteListener(writeListenerRef),
+        getState: () => state,
+        setState,
+        prepareTerminalConfig: (plan, config) =>
+          policy.prepareConfig(config, { restartPending: plan.restartGateway }),
+        reconcileRuntimePolicy: () =>
+          manager.closeDisallowedAgents((agentId) => policy.resolve(agentId).ok),
+        commitTerminalConfig: policy.commitConfig,
+        acceptTerminalConfig: policy.acceptConfig,
+        requestRecoveryRestart,
+      });
+      const writeConfig = (config: OpenClawConfig, revision: number) => {
+        const application = createRuntimeConfigWriteApplication();
+        if (!writeListenerRef.current) {
+          throw new Error("Expected managed config writer");
+        }
+        writeListenerRef.current(
+          attachRuntimeConfigWriteApplication(
+            createConfigWriteNotification(
+              config,
+              `terminal-disable-${revision}`,
+              revision,
+              `runtime-${revision}`,
+              `source-${revision}`,
+            ),
+            application,
+          ),
+        );
+        return application.result;
+      };
+
+      try {
+        const rejected = writeConfig(rejectedConfig, 1);
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(rejected).resolves.toBe("failed");
+        expect(policy.resolve()).toMatchObject({ ok: false, block: { kind } });
+        expect(livePty.killed).toBe(false);
+        expect(manager.size).toBe(1);
+        // This spawn was admitted before the candidate; failed publication must
+        // not abort it through irreversible session cleanup.
+        releaseSpawn.resolve();
+        expectTerminalOpen(await pending);
+        expect(pendingPty.killed).toBe(false);
+        expect(manager.size).toBe(2);
+
+        const recovered = writeConfig(
+          {
+            gateway: { ...initialConfig.gateway, terminal: { enabled: true, shell: "/bin/bash" } },
+          },
+          2,
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(recovered).resolves.toBe("applied");
+        expect(livePty.killed).toBe(false);
+        expect(pendingPty.killed).toBe(false);
+        expect(manager.size).toBe(2);
+        expect(policy.resolve().ok).toBe(true);
+
+        const accepted = writeConfig(
+          { ...disabledConfig, ...(cronCleanupFails ? { cron: { enabled: true } } : {}) },
+          3,
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(accepted).resolves.toBe(
+          cronCleanupFails ? "applied-restart-required" : "applied",
+        );
+        expect(livePty.killed).toBe(true);
+        expect(pendingPty.killed).toBe(true);
+        expect(manager.size).toBe(0);
+        expect(policy.isEnabled()).toBe(false);
+        expect(stopAndDrain).toHaveBeenCalledTimes(cronCleanupFails ? 1 : 0);
+        if (cronCleanupFails) {
+          await waitForFast(() => expect(requestRecoveryRestart).toHaveBeenCalledOnce());
+        }
+        expect(requestRecoveryRestart).toHaveBeenCalledTimes(cronCleanupFails ? 1 : 0);
+      } finally {
+        releaseSpawn.resolve();
+        await pending;
+        manager.disposeAll();
+        await reloader.stop();
+      }
+    },
+  );
 
   it("retires terminal restrictions after restart secrets preflight rejects and config reverts", async () => {
     vi.useFakeTimers();

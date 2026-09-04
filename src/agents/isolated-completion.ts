@@ -67,6 +67,7 @@ type RunIsolatedCompletionParams = {
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
+  /** Revalidate the caller's authority before credential handoff and dispatch. */
   assertCurrent?: () => void;
   thinkLevel?: ThinkLevel;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
@@ -183,6 +184,7 @@ async function runCliIsolatedCompletion(params: {
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
     async ({ dir }) => {
       const { runCliAgent } = await import("./cli-runner.runtime.js");
+      params.request.assertCurrent?.();
       const sessionId = `isolated-completion-${randomUUID()}`;
       const config = params.request.config ?? getRuntimeConfig();
       const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -418,17 +420,18 @@ async function prepareHostAuthorization(params: {
   };
 }
 
-/** Run one fresh completion without any model-callable tool surface or fallback. */
+/** Run one fresh, zero-tool completion through its selected runtime. */
 export async function runIsolatedCompletion(
   request: RunIsolatedCompletionParams,
 ): Promise<IsolatedCompletionResult> {
-  let active = true;
+  // Native callbacks may be retained; their authority ends with this completion.
+  let closed = false;
   const assertCurrent = () => {
-    if (!active) {
+    if (closed) {
       throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion has ended.");
     }
-    request.abortSignal?.throwIfAborted();
     request.assertCurrent?.();
+    request.abortSignal?.throwIfAborted();
   };
   assertCurrent();
   const config = request.config ?? {};
@@ -475,6 +478,7 @@ export async function runIsolatedCompletion(
         workspaceDir,
         pluginRegistry,
       });
+      assertCurrent();
       const runtime =
         runtimeOverride ??
         resolveEffectiveAgentRuntime({ cfg: config, provider, modelId: request.model, agentId });
@@ -548,6 +552,7 @@ export async function runIsolatedCompletion(
           }
           modelMaxTokens = runtimeModel.maxTokens;
           authProfileStore = ensureAuthProfileStore(agentDir, {
+            profileId: request.authProfileId,
             readOnly: true,
             allowKeychainPrompt: false,
             config,
@@ -648,7 +653,7 @@ export async function runIsolatedCompletion(
             result = await pending;
             break;
           } catch (error) {
-            // Retired authority is terminal, not a reason to try another credential.
+            // A retired caller cannot authorize another credential attempt.
             assertCurrent();
             firstError ??= error;
           }
@@ -670,6 +675,7 @@ export async function runIsolatedCompletion(
           workspaceDir,
           preparedModelRuntime: lease.snapshot,
         });
+        assertCurrent();
         const harnessParams: AgentHarnessIsolatedCompletionParams = {
           ...commonParams,
           streamParams: clampIsolatedStreamParams(
@@ -708,7 +714,7 @@ export async function runIsolatedCompletion(
     }
     return result;
   } finally {
-    active = false;
+    closed = true;
     lease.release();
   }
 }

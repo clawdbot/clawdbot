@@ -135,7 +135,10 @@ command handling is enabled for the surface.
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
   Explicit owner allowlist for owner-only command surfaces. Separate from
-  `commands.allowFrom` and DM pairing access.
+  `commands.allowFrom` and DM pairing access. CLI pairing approval records the
+  first owner; Control UI pairing has an explicit owner checkbox. Authorized
+  non-owners receive a refusal with the exact configuration command for their
+  sender ID when using an owner-only command such as `/restart` or `/update`.
 </ParamField>
 
 Channel plugins can enforce owner-only command access through their

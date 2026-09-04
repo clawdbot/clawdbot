@@ -74,6 +74,20 @@ enum GatewayDiscoveryPreferences {
     /// This intentionally ignores discovery ids: manual direct/SSH selections
     /// must still isolate device tokens before discovery has identified them.
     static func deviceAuthGatewayID(
+        root: [String: Any],
+        connectionMode: AppState.ConnectionMode? = nil) -> String?
+    {
+        let mode = connectionMode ?? ConnectionModeResolver.resolve(root: root).mode
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        return self.deviceAuthGatewayID(
+            connectionMode: mode,
+            remoteTransport: resolution.transport,
+            remoteURL: resolution.directURL?.absoluteString ?? GatewayRemoteConfig.resolveUrlString(root: root) ?? "",
+            remoteTarget: resolution.transport == .ssh ? CommandResolver.connectionSettings(configRoot: root)
+                .target : "")
+    }
+
+    static func deviceAuthGatewayID(
         connectionMode: AppState.ConnectionMode,
         remoteTransport: AppState.RemoteTransport,
         remoteURL: String,

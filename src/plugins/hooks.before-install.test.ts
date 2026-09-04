@@ -124,34 +124,30 @@ describe("before_install hook merger", () => {
   });
 
   it("short-circuits after block=true and preserves earlier findings", async () => {
-    const blocker = vi.fn(
-      (): PluginHookBeforeInstallResult => ({
-        findings: [
-          {
-            ruleId: "blocker",
-            severity: "critical",
-            file: "block.ts",
-            line: 3,
-            message: "blocked finding",
-          },
-        ],
-        block: true,
-        blockReason: "policy blocked",
-      }),
-    );
-    const skipped = vi.fn(
-      (): PluginHookBeforeInstallResult => ({
-        findings: [
-          {
-            ruleId: "skipped",
-            severity: "warn",
-            file: "skip.ts",
-            line: 4,
-            message: "should not appear",
-          },
-        ],
-      }),
-    );
+    const blocker = vi.fn((): PluginHookBeforeInstallResult => ({
+      findings: [
+        {
+          ruleId: "blocker",
+          severity: "critical",
+          file: "block.ts",
+          line: 3,
+          message: "blocked finding",
+        },
+      ],
+      block: true,
+      blockReason: "policy blocked",
+    }));
+    const skipped = vi.fn((): PluginHookBeforeInstallResult => ({
+      findings: [
+        {
+          ruleId: "skipped",
+          severity: "warn",
+          file: "skip.ts",
+          line: 4,
+          message: "should not appear",
+        },
+      ],
+    }));
 
     addBeforeInstallHook(
       registry,

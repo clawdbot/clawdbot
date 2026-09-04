@@ -4,6 +4,7 @@ import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { MsgContext } from "../templating.js";
 import { parseInlineSessionDirectives, type InlineDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 
@@ -14,6 +15,8 @@ export function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEn
 export async function applyMixedDirectives(params: {
   body: string;
   cfg?: OpenClawConfig;
+  ctx?: MsgContext;
+  agentDir?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   storePath?: string;
@@ -77,6 +80,7 @@ export async function applyMixedDirectives(params: {
 
   const result = await applyInlineDirectiveOverrides({
     ctx: {
+      ...params.ctx,
       Body: params.body,
       Provider: channel,
       Surface: channel,
@@ -84,7 +88,7 @@ export async function applyMixedDirectives(params: {
     },
     cfg,
     agentId: "main",
-    agentDir: "/tmp/agent",
+    agentDir: params.agentDir ?? "/tmp/agent",
     workspaceDir: "/tmp/workspace",
     agentCfg: cfg.agents?.defaults ?? {},
     sessionEntry,

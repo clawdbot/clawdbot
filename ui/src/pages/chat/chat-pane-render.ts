@@ -281,6 +281,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
           onModelSetup: () => this.context.navigate("model-setup"),
+          onModelAccounts: () => this.context.navigate("profile"),
         });
     const composerState = getChatComposerState(this.presentationId);
     const publicationScope = this.captureConnectionScope();

@@ -20,7 +20,7 @@ import {
   confirmGatewayReachable,
   resolveGatewayRestartProbeContext,
   type GatewayReachability,
-  type GatewayRestartProbeAuth,
+  type GatewayRestartProbeContext,
 } from "./restart-health-probe.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
@@ -129,7 +129,7 @@ export async function inspectGatewayRestart(params: {
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   includeUnknownListenersAsStale?: boolean;
-  probeAuth?: GatewayRestartProbeAuth;
+  probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
 }): Promise<GatewayRestartSnapshot> {
@@ -151,8 +151,7 @@ export async function inspectGatewayRestart(params: {
     if (!reachability) {
       reachability = await confirmGatewayReachable({
         port: params.port,
-        includeHealthDetails: requiresGatewayProbe,
-        auth: params.probeAuth,
+        ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
       });
@@ -365,7 +364,7 @@ export async function waitForGatewayHealthyRestart(params: {
     expectedVersion: params.expectedVersion,
     expectedBuildId: params.expectedBuildId,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-    probeAuth: probeContext.auth,
+    probeContext,
     configuredProbe,
     probeHosts,
   });
@@ -478,7 +477,7 @@ export async function waitForGatewayHealthyRestart(params: {
       expectedVersion: params.expectedVersion,
       expectedBuildId: params.expectedBuildId,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-      probeAuth: probeContext.auth,
+      probeContext,
       configuredProbe,
       probeHosts,
     });

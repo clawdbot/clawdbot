@@ -3,6 +3,7 @@ import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e
 import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
+  captureUiProof,
   chatSessionListResponse,
   controlUiSessionPath,
   createChatFlowE2eSuite,
@@ -765,7 +766,7 @@ suite.define(() => {
     }
   });
 
-  it("flips a sidebar short route before any list refresh and refreshes only for an outbox", async () => {
+  it("releases a retained queued send after the canonical session list records idle", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -774,12 +775,40 @@ suite.define(() => {
     const page = await context.newPage();
     const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
     const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
-    const sessions = chatSessionListResponse([
-      { key: firstKey, kind: "direct", label: "Instant A", updatedAt: 2 },
+    const activeSessions = chatSessionListResponse([
+      {
+        key: firstKey,
+        kind: "direct",
+        label: "Instant A",
+        updatedAt: 2,
+        activeRunIds: ["server-run"],
+        hasActiveRun: true,
+        status: "running",
+      },
+      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
+    ]);
+    const idleSessions = chatSessionListResponse([
+      {
+        key: firstKey,
+        kind: "direct",
+        label: "Instant A",
+        updatedAt: 3,
+        activeRunIds: [],
+        hasActiveRun: false,
+        lastRunId: "server-run",
+        status: "done",
+      },
       { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
-      methodResponses: { "sessions.list": sessions },
+      methodResponses: {
+        "chat.history": {
+          messages: [],
+          sessionInfo: { hasActiveRun: false, status: "done" },
+          thinkingLevel: null,
+        },
+        "sessions.list": activeSessions,
+      },
       sessionKey: firstKey,
     });
 
@@ -857,9 +886,18 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBe(emptyOutboxListCount + 1);
-      if (emptyOutboxListRequests.length === 0) {
-        await gateway.resolveDeferred("sessions.list", sessions);
-      }
+      const queued = page.locator(".chat-queue").getByText("flush after idle reconciliation");
+      await queued.waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await captureUiProof(suite, page, "queued-idle-release", "01-queued-before-idle.png");
+      await gateway.resolveDeferred("sessions.list", idleSessions);
+      const send = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(send.params)).toMatchObject({
+        message: "flush after idle reconciliation",
+        sessionKey: firstKey,
+      });
+      await queued.waitFor({ state: "detached" });
+      await captureUiProof(suite, page, "queued-idle-release", "02-sent-after-idle.png");
     } finally {
       await suite.closeBrowserContext(context);
     }

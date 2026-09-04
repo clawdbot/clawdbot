@@ -1,21 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createVoiceTranscriptOperationRegistry,
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "./voice-transcript.js";
 
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((accept) => {
-    resolve = accept;
-  });
-  return { promise, resolve };
-}
-
 describe("VoiceTranscriptOperationRegistry", () => {
   it("keeps overflow terminal through drain and releases it only on close", async () => {
     const registry = createVoiceTranscriptOperationRegistry(VOICE_TRANSCRIPT_QUEUE_POLICY);
-    const first = deferred();
+    const first = createDeferred();
     const key = "agent\0voice-overflow";
     const accepted = [
       registry.run(key, async () => await first.promise),

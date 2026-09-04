@@ -165,9 +165,54 @@ Gateway pairing.
 
 The iPhone must remain available to relay messages. If its Gateway connection
 is asleep, Watch messages use the same bounded background reconnect as Watch
-quick replies, respecting the iPhone's auto-connect setting. A queued message
-is not confirmation that the Gateway has processed it; open OpenClaw on the
-iPhone if delivery stalls.
+quick replies, respecting the iPhone's auto-connect setting. Update OpenClaw on
+both devices: older companion chat payloads cannot establish the ownership
+needed for safe delivery and are rejected with an update-required error.
+An older Watch app may still label a background transfer as queued; that label
+does not mean the updated phone accepted it. Check the phone's delivery warning
+and update both apps before sending again.
+
+Both apps save delivery state before acknowledging it. The Watch retains the
+original command while waiting for the phone to accept it, and the phone saves
+the accepted run and its reply before sending the result back. Reopening an
+app or losing a result acknowledgment can therefore redeliver a saved reply
+without submitting the same chat again. A queued message is still **not**
+confirmation that the Gateway has processed it.
+
+A permanent rejection, such as an expired message or retired Gateway route,
+does not mean the phone accepted the message. The Watch records that outcome
+without retrying the command. Reconnecting the Watch or requesting Refresh
+also retries saved result delivery without submitting another chat.
+
+If delivery stalls, open **Settings -> Apple Watch -> Message Delivery** on
+iPhone. **Delivery uncertain** means the phone cannot prove whether a send
+reached the Gateway; check the original conversation before resending. It does
+not automatically repeat that send. Messages saved by an older app that lack
+the new delivery context appear as **Needs review**. Copy their text to Chat
+if you still want to send it, or use **Discard** to delete that text. Completed
+cards offer **Dismiss**, which hides the card while preserving its original
+receipt for the Watch. Active deliveries offer neither action. Dismiss does
+not cancel a Gateway run or extend the reply's expiry.
+
+If the Gateway accepts a message but the phone cannot save that acceptance,
+a later refresh or reconnect retries the local save without sending again.
+If the app exits before saving it, the send is treated as uncertain on reopening.
+
+New commands and their saved app-local copies expire after 48 hours, measured
+from their original submission, not the most recent retry. Expiration stops
+automatic delivery and reply replay; it does not cancel remote work or delete
+the Gateway conversation. Expired app-local copies are removed on the next
+delivery operation or when the delivery list opens, not by a background timer.
+Previously saved messages marked **Needs review** remain on iPhone until you
+discard them or forget their Gateway.
+
+The phone retains hash-only import markers after Discard or Forget so an older
+app's saved queue cannot restore identical deleted text on a later upgrade.
+If older messages conflict with saved delivery data or a forgotten Gateway,
+the app preserves their source and shows a recovery error. Contact support to
+recover those messages. **Reset Onboarding** deliberately erases all local
+client state, including the old queue and its import markers; it is not a
+targeted message deletion.
 
 Only the reply belonging to the submitted turn is read aloud. Switching the
 Gateway or chat on iPhone retires the pending spoken reply and clears the old
@@ -182,10 +227,21 @@ resending. Long runs and interrupted return delivery can still require this
 manual readback. Keep the Gateway updated for reliable reply attribution when
 messages are collected into a later run.
 
-On multi-agent Gateways, use an agent-qualified session. The Watch relays the
-session key but not the iPhone's separate agent selection, so a shared `main`
-or `global` session can resolve to another owner or be rejected. Use iPhone
-Chat for those shared-session cases.
+The phone captures the Gateway, agent and exact session when it offers a chat
+or quick-reply action. Later changes to the selected chat cannot retarget a
+queued message, including shared `main` or `global` sessions. If that delivery
+context is unavailable, reconnect and refresh from iPhone rather than guessing
+the destination.
+
+Forgetting a Gateway removes its phone delivery records and invalidates old
+commands, even if you pair the same Gateway again. A disconnected Watch cannot
+be remotely erased immediately; it clears a stale command when it receives the
+phone's rejection. The Watch's **Forget direct setup** action affects only
+its separate direct connection, not the iPhone relay.
+
+These are [app-local SQLite journals](/reference/database-schemas#apple-companion-delivery-journals).
+They migrate when the apps open and do not require a Gateway database upgrade
+or `openclaw doctor` run.
 
 [Direct Watch node mode](/platforms/ios#optional-direct-apple-watch-node) does not remove the
 iPhone requirement for chat or voice. It only exposes the device and
