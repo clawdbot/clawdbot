@@ -567,6 +567,53 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(result).toBe("Completed despite gateway error.");
   });
 
+  it("keeps synthesis grace within the original monotonic budget after a wall-clock step", async () => {
+    vi.useFakeTimers();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const monotonicNow = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValue(100);
+    vi.mocked(listDescendantRunsForRequester)
+      .mockReturnValueOnce([
+        {
+          runId: "run-clock-step",
+          childSessionKey: "child-clock-step",
+          requesterSessionKey: "cron-session",
+          requesterDisplayKey: "cron-session",
+          task: "clock step",
+          cleanup: "keep",
+          createdAt: 1000,
+          execution: { status: "running" },
+        },
+      ])
+      .mockReturnValue([]);
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      dateNow.mockReturnValue(-100_000);
+      return { status: "timeout" };
+    });
+    vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
+
+    try {
+      const resultPromise = waitForDescendantSubagentSummary({
+        sessionKey: "cron-session",
+        initialReply: "on it",
+        timeoutMs: 100,
+        observedActiveDescendants: true,
+      });
+      const result = await resolveAfterAdvancingTimers(resultPromise);
+
+      expect(result).toBeUndefined();
+      expect(readLatestAssistantReply).toHaveBeenCalledOnce();
+    } finally {
+      dateNow.mockRestore();
+      monotonicNow.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     "NO_REPLY",
     "HEARTBEAT_OK",

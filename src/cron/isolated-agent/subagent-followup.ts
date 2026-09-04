@@ -1,5 +1,9 @@
 /** Reads or waits for descendant subagent summaries after isolated cron orchestration. */
-import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
+import {
+  readLatestAssistantReply,
+  resolveMonotonicDeadlineMs,
+  waitForAgentRunsToDrain,
+} from "../../agents/run-wait.js";
 import { resolveSubagentCompletionResultText } from "../../agents/subagents/completion/subagent-completion-result.js";
 import { listDescendantRunsForRequester } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { selectDeliverableSessionsReply } from "../../agents/tools/sessions-send-tokens.js";
@@ -97,7 +101,9 @@ export async function waitForDescendantSubagentSummary(params: {
 }): Promise<string | undefined> {
   const timings = resolveCronSubagentTimings();
   const initialReply = params.initialReply?.trim();
-  const deadline = Date.now() + Math.max(timings.waitMinMs, Math.floor(params.timeoutMs));
+  const nowMs = Date.now();
+  const deadline = nowMs + Math.max(timings.waitMinMs, Math.floor(params.timeoutMs));
+  const monotonicDeadlineMs = resolveMonotonicDeadlineMs(deadline, nowMs);
 
   // Snapshot the currently active descendant run IDs.
   const getActiveRuns = () =>
@@ -118,6 +124,7 @@ export async function waitForDescendantSubagentSummary(params: {
   // spawn more descendants, so the helper refreshes the run set until it drains.
   await waitForAgentRunsToDrain({
     deadlineAtMs: deadline,
+    monotonicDeadlineMs,
     initialPendingRunIds: initialActiveRuns.map((entry) => entry.runId),
     getPendingRunIds: () => getActiveRuns().map((entry) => entry.runId),
   });
@@ -126,8 +133,6 @@ export async function waitForDescendantSubagentSummary(params: {
   // After the subagent announces fire and the cron agent processes them, it
   // produces a new assistant message.  Poll briefly (bounded by
   // finalReplyGraceMs) to capture that synthesis.
-  const gracePeriodDeadline = Math.min(Date.now() + timings.finalReplyGraceMs, deadline);
-
   const resolveUsableLatestReply = async () => {
     const latest = (await readLatestAssistantReply({ sessionKey: params.sessionKey }))?.trim();
     if (
@@ -146,7 +151,11 @@ export async function waitForDescendantSubagentSummary(params: {
     return undefined;
   };
 
-  while (Date.now() < gracePeriodDeadline) {
+  const gracePeriodDeadline = Math.min(
+    monotonicDeadlineMs,
+    performance.now() + timings.finalReplyGraceMs,
+  );
+  while (performance.now() < gracePeriodDeadline) {
     const latest = await resolveUsableLatestReply();
     if (latest) {
       return latest;

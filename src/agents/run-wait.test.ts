@@ -711,6 +711,12 @@ describe("waitForAgentRunsToDrain", () => {
 
   it("keeps the drain bound when the wall clock moves backwards", async () => {
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const monotonicNow = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValue(1_001);
     let calls = 0;
     try {
       const result = await waitForAgentRunsToDrain({
@@ -722,9 +728,7 @@ describe("waitForAgentRunsToDrain", () => {
           if (calls === 1) {
             dateNow.mockReturnValue(-100_000);
           }
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 5);
-          });
+          await Promise.resolve();
           return { status: "timeout" } as T;
         },
       });
@@ -737,11 +741,18 @@ describe("waitForAgentRunsToDrain", () => {
       expect(calls).toBe(1);
     } finally {
       dateNow.mockRestore();
+      monotonicNow.mockRestore();
     }
   });
 
   it("samples the wall clock once when creating the drain deadline", async () => {
     const dateNow = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValue(-100_000);
+    const monotonicNow = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValue(1_001);
     let calls = 0;
     try {
       const result = await waitForAgentRunsToDrain({
@@ -750,9 +761,7 @@ describe("waitForAgentRunsToDrain", () => {
         getPendingRunIds: () => (calls >= 2 ? [] : ["run-1"]),
         callGateway: async <T = Record<string, unknown>>() => {
           calls += 1;
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 5);
-          });
+          await Promise.resolve();
           return { status: "timeout" } as T;
         },
       });
@@ -765,6 +774,7 @@ describe("waitForAgentRunsToDrain", () => {
       expect(calls).toBe(1);
     } finally {
       dateNow.mockRestore();
+      monotonicNow.mockRestore();
     }
   });
 });

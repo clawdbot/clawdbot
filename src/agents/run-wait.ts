@@ -53,6 +53,14 @@ function resolveRunWaitDeadlineAtMs(
   );
 }
 
+export function resolveMonotonicDeadlineMs(deadlineAtMs: number, nowMs = Date.now()): number {
+  // Capture elapsed budget once so wall-clock corrections cannot extend later waits.
+  return (
+    performance.now() +
+    (Number.isFinite(deadlineAtMs) ? Math.max(0, deadlineAtMs - nowMs) : 0)
+  );
+}
+
 /** Summary returned after waiting for a dynamic set of pending runs to drain. */
 type AgentRunsDrainResult = {
   timedOut: boolean;
@@ -260,11 +268,13 @@ export async function waitForAgentRunsToDrain(params: {
   initialPendingRunIds?: Iterable<string>;
   timeoutMs?: number;
   deadlineAtMs?: number;
+  monotonicDeadlineMs?: number;
   callGateway?: GatewayCaller;
 }): Promise<AgentRunsDrainResult> {
   const nowMs = Date.now();
   const deadlineAtMs = resolveRunWaitDeadlineAtMs(params, nowMs);
-  const monotonicDeadlineMs = performance.now() + Math.max(0, deadlineAtMs - nowMs);
+  const monotonicDeadlineMs =
+    params.monotonicDeadlineMs ?? resolveMonotonicDeadlineMs(deadlineAtMs, nowMs);
 
   // Runs may finish and spawn more runs, so refresh until no pending IDs remain.
   let pendingRunIds = new Set<string>(
