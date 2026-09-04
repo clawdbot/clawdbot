@@ -1785,6 +1785,43 @@ describe("cli session history", () => {
     },
   );
 
+  it("drops a local cli-assistant aggregate covered by uuid-less imported segments", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
+    const interim = "Thinking about the request";
+    const finalSegment = "Here is the finished answer.";
+    const localAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: `${interim}\n${finalSegment}` }],
+      timestamp,
+      idempotencyKey: "cli-assistant:run-1",
+    };
+    // Records without a uuid keep the importer's line-based id and no externalId.
+    const uuidless = (line: number) => ({
+      id: `claude-cli:session-1:line:${line}`,
+      importedFrom: "claude-cli",
+      cliSessionId: "session-1",
+    });
+    const importedInterim = {
+      role: "assistant",
+      content: [{ type: "text", text: interim }],
+      timestamp,
+      __openclaw: uuidless(2),
+    };
+    const importedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: finalSegment }],
+      timestamp: timestamp + 1,
+      __openclaw: uuidless(3),
+    };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [localAggregate],
+      importedMessages: [importedInterim, importedFinal],
+    });
+
+    expect(merged).toEqual([importedInterim, importedFinal]);
+  });
+
   it("keeps a local cli-assistant aggregate when only the final imported segment matches", () => {
     const timestamp = Date.parse("2026-03-26T16:29:55.700Z");
     const interim = "Thinking about the request";

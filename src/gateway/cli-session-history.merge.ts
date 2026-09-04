@@ -269,8 +269,11 @@ function hasComparableText(entry: ComparableHistoryMessage): entry is CliAssista
   return typeof entry.text === "string" && entry.text.length > 0;
 }
 
+// Provenance is the importedFrom stamp, the same signal the user-row check
+// above uses. Claude records without a uuid get no externalId, only the
+// importer's line-based id, and they are segments all the same.
 function isImportedClaudeCliAssistantSegment(entry: ComparableHistoryMessage): boolean {
-  if (entry.role !== "assistant" || !entry.externalIdentityKey || !hasComparableText(entry)) {
+  if (entry.role !== "assistant" || !hasComparableText(entry)) {
     return false;
   }
   const meta = asOptionalRecord(asOptionalRecord(entry.message)?.["__openclaw"]);
