@@ -20,8 +20,10 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
@@ -33,6 +35,14 @@ import { jsonResult } from "./tools/common.js";
 
 const hoisted = vi.hoisted(() => ({
   resolvePluginTools: vi.fn(),
+  approvalFreeHostExec: (params: unknown) => {
+    const policy = params as { security?: string; ask?: string };
+    return policy.security === "full" && policy.ask === "off";
+  },
+  hasApprovalFreeHostExecAuthority: vi.fn((params: unknown) => {
+    const policy = params as { security?: string; ask?: string };
+    return policy.security === "full" && policy.ask === "off";
+  }),
 }));
 const TEST_AGENT_DIR = path.join(os.tmpdir(), "openclaw-plugin-tool-auth-test");
 const observedGatewayCallerIdentities: unknown[] = [];
@@ -40,6 +50,11 @@ const observedGatewayCallerIdentities: unknown[] = [];
 vi.mock("../plugins/tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/tools.js")>()),
   resolvePluginTools: (...args: unknown[]) => hoisted.resolvePluginTools(...args),
+}));
+
+vi.mock("./approval-free-host-exec-authority.js", () => ({
+  hasApprovalFreeHostExecAuthority: (params: unknown) =>
+    hoisted.hasApprovalFreeHostExecAuthority(params),
 }));
 
 function firstResolvePluginToolsParams(): Record<string, unknown> {
@@ -54,6 +69,9 @@ function firstResolvePluginToolsParams(): Record<string, unknown> {
 describe("createOpenClawTools browser plugin integration", () => {
   afterEach(() => {
     hoisted.resolvePluginTools.mockReset();
+    hoisted.hasApprovalFreeHostExecAuthority
+      .mockReset()
+      .mockImplementation(hoisted.approvalFreeHostExec);
     vi.unstubAllEnvs();
     clearSecretsRuntimeSnapshot();
     resetConfigRuntimeState();
@@ -111,6 +129,90 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
 
     expect(tools.map((tool) => tool.name)).not.toContain("browser");
+  });
+
+  function registerPolicyBrowserFixture() {
+    const harnessExecute = vi.fn(async () => jsonResult({ engine: "browser-harness" }));
+    const nativeExecute = vi.fn(async () => jsonResult({ engine: "native" }));
+    hoisted.resolvePluginTools.mockImplementation(() => {
+      const browser = {
+        label: "Browser",
+        name: "browser",
+        description: "Browser Harness fixture",
+        parameters: { type: "object" as const, properties: {} },
+        execute: harnessExecute,
+        requiresApprovalFreeHostExec: true as const,
+        approvalFreeHostExecFallback: {
+          label: "Browser",
+          name: "browser",
+          description: "Native browser fixture",
+          parameters: { type: "object" as const, properties: {} },
+          execute: nativeExecute,
+        },
+      };
+      setPluginToolMeta(browser, { pluginId: "browser", optional: false });
+      return [browser];
+    });
+    return { harnessExecute, nativeExecute };
+  }
+
+  it("selects Browser Harness only when final policy retains unrestricted exec", async () => {
+    const { harnessExecute, nativeExecute } = registerPolicyBrowserFixture();
+    const tools = createOpenClawCodingTools({
+      workspaceDir: process.cwd(),
+      sessionPermissionPolicy: { root: process.cwd(), mode: "full" },
+      exec: { mode: "full", security: "full", ask: "off" },
+      config: { tools: { allow: ["exec", "browser"] } },
+    });
+    const browser = tools.find((tool) => tool.name === "browser");
+
+    await expect(browser?.execute("browser-full", {})).resolves.toMatchObject({
+      details: { engine: "browser-harness" },
+    });
+    expect(harnessExecute).toHaveBeenCalledOnce();
+    expect(nativeExecute).not.toHaveBeenCalled();
+  });
+
+  it("uses the native browser when exec is guarded or removed by final policy", async () => {
+    for (const options of [
+      {
+        sessionPermissionPolicy: { root: process.cwd(), mode: "guarded" as const },
+        exec: { mode: "ask" as const, security: "allowlist" as const, ask: "on-miss" as const },
+        config: { tools: { allow: ["exec", "browser"] } },
+      },
+      {
+        sessionPermissionPolicy: { root: process.cwd(), mode: "full" as const },
+        exec: { mode: "full" as const, security: "full" as const, ask: "off" as const },
+        config: { tools: { deny: ["exec"] } },
+      },
+    ]) {
+      const { harnessExecute, nativeExecute } = registerPolicyBrowserFixture();
+      const tools = createOpenClawCodingTools({ workspaceDir: process.cwd(), ...options });
+      const browser = tools.find((tool) => tool.name === "browser");
+
+      await expect(browser?.execute("browser-native", {})).resolves.toMatchObject({
+        details: { engine: "native" },
+      });
+      expect(nativeExecute).toHaveBeenCalledOnce();
+      expect(harnessExecute).not.toHaveBeenCalled();
+    }
+  });
+
+  it("revalidates unrestricted exec authority immediately before Harness I/O", async () => {
+    const { harnessExecute } = registerPolicyBrowserFixture();
+    const tools = createOpenClawCodingTools({
+      workspaceDir: process.cwd(),
+      sessionPermissionPolicy: { root: process.cwd(), mode: "full" },
+      exec: { mode: "full", security: "full", ask: "off" },
+      config: { tools: { allow: ["exec", "browser"] } },
+    });
+    const browser = tools.find((tool) => tool.name === "browser");
+
+    hoisted.hasApprovalFreeHostExecAuthority.mockReturnValue(false);
+    await expect(browser?.execute("browser-revoked", {})).rejects.toThrow(
+      "approval-free host exec authority was revoked",
+    );
+    expect(harnessExecute).not.toHaveBeenCalled();
   });
 
   it("forwards fsPolicy into plugin tool context", async () => {

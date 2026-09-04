@@ -60,6 +60,12 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
     catalogMode?: "direct-only";
     /** Gateway client capabilities required before this tool can be assembled. */
     requiredClientCaps?: string[];
+    /** Host execution equivalent; exposed only when final policy retains approval-free exec. */
+    requiresApprovalFreeHostExec?: true;
+    /** Same-name capability-free fallback selected only after final tool policy. */
+    approvalFreeHostExecFallback?: AnyAgentTool;
+    /** Recreate this descriptor for each tool surface instead of caching it. */
+    descriptorCacheMode?: "live";
     prepareBeforeToolCallParams?: AgentToolWithMeta<
       TSchema,
       unknown

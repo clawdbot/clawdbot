@@ -15,6 +15,7 @@ import type {
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isBrowserMachineOutput } from "./cli-output-mode.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
@@ -31,6 +32,19 @@ import {
   createBrowserToolSchema,
   resolveBrowserToolCapabilities,
 } from "./src/browser-tool.schema.js";
+import {
+  BrowserHarnessInstallError,
+  prepareManagedBrowserUseCliRuntime,
+} from "./src/browser-use-cli-install.js";
+import {
+  createBrowserUseCliTool,
+  prepareBrowserUseCliRuntime,
+  type BrowserUseCliRuntime,
+} from "./src/browser-use-cli-tool.js";
+import {
+  BrowserUseCliToolSchema,
+  describeBrowserUseCliTool,
+} from "./src/browser-use-cli-tool.schema.js";
 import { resolveBrowserConfig, resolveProfile } from "./src/browser/config.js";
 import { getBrowserProfileCapabilities } from "./src/browser/profile-capabilities.js";
 import { initializeBrowserSessionTabStore } from "./src/browser/session-tab-store.js";
@@ -40,6 +54,7 @@ import {
 } from "./src/browser/system-profile-import-state.js";
 
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
+const BROWSER_HARNESS_ORCHESTRATOR_ENV = "BH_ORCHESTRATOR_EXISTING_DAEMON";
 const logger = createSubsystemLogger("browser");
 
 const loadBrowserRegistrationRuntimeModule = createLazyRuntimeModule(
@@ -131,6 +146,87 @@ function createLazyBrowserTool(
           : { ...opts, toolCapabilities: capabilities },
       );
       return await tool.execute(toolCallId, args, signal, onUpdate);
+    },
+  };
+}
+
+function hasNativeBrowserConfiguration(
+  config: OpenClawPluginToolContext["runtimeConfig"],
+): boolean {
+  const pluginConfig = config?.plugins?.entries?.browser?.config;
+  const backend =
+    pluginConfig && typeof pluginConfig === "object" && !Array.isArray(pluginConfig)
+      ? Reflect.get(pluginConfig, "backend")
+      : undefined;
+  if (backend === "browser-harness") {
+    return false;
+  }
+  if (backend === "native") {
+    return true;
+  }
+  return config?.browser !== undefined;
+}
+
+function translateBrowserUseArgsForNative(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const input = Object.fromEntries(Object.entries(value));
+  switch (input.action) {
+    case "status":
+    case "start":
+    case "stop":
+      return { action: input.action };
+    case "open":
+      return { action: "open", url: input.url };
+    case "screenshot":
+      return { action: "screenshot", fullPage: input.fullPage };
+    default:
+      return undefined;
+  }
+}
+
+function createLazyBrowserUseCliTool(params: {
+  runtime: BrowserUseCliRuntime;
+  workspaceDir: string;
+  nativeTool: AnyAgentTool;
+  ssrfPolicy?: SsrFPolicy;
+}): AnyAgentTool {
+  let tool: AnyAgentTool | undefined;
+  return {
+    label: "Browser",
+    name: "browser",
+    resultContentSource: "network",
+    description: describeBrowserUseCliTool({
+      orchestratorOwned: params.runtime.kind === "orchestrator",
+    }),
+    parameters: BrowserUseCliToolSchema,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const runNativeFallback = async () => {
+        const translated = translateBrowserUseArgsForNative(args);
+        if (!translated) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Browser Harness could not be installed. OpenClaw kept its native browser backend; retry with action=open, screenshot, status, start, or stop.",
+              },
+            ],
+            details: { backend: "native", fallback: true },
+          };
+        }
+        return await params.nativeTool.execute(toolCallId, translated, signal, onUpdate);
+      };
+      tool ??= createBrowserUseCliTool(params);
+      try {
+        return await tool.execute(toolCallId, args, signal, onUpdate);
+      } catch (error) {
+        if (error instanceof BrowserHarnessInstallError) {
+          logger.warn(error.message);
+          return await runNativeFallback();
+        }
+        throw error;
+      }
     },
   };
 }
@@ -283,9 +379,45 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       maxEntries: 1,
     }),
   );
+  const useOrchestratorBrowserUseCli = process.env[BROWSER_HARNESS_ORCHESTRATOR_ENV] === "1";
   api.registerTool(((ctx: OpenClawPluginToolContext) => {
     const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
-    return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
+    if (config?.browser?.enabled === false) {
+      return null;
+    }
+    const nativeTool = createLazyBrowserTool(createBrowserToolOptions(ctx), config);
+    const hasBrowserBinding = Boolean(
+      ctx.toolBindings && Object.hasOwn(ctx.toolBindings, "browser"),
+    );
+    if (
+      !ctx.workspaceDir ||
+      ctx.sandboxed ||
+      ctx.browser?.sandboxBridgeUrl ||
+      ctx.browser?.allowHostControl === false ||
+      hasBrowserBinding ||
+      hasNativeBrowserConfiguration(config)
+    ) {
+      return nativeTool;
+    }
+    const runtime = useOrchestratorBrowserUseCli
+      ? prepareBrowserUseCliRuntime()
+      : prepareManagedBrowserUseCliRuntime();
+    if (!runtime) {
+      if (useOrchestratorBrowserUseCli) {
+        nativeTool.descriptorCacheMode = "live";
+      }
+      return nativeTool;
+    }
+    const browserUseCliTool = createLazyBrowserUseCliTool({
+      runtime,
+      workspaceDir: ctx.workspaceDir,
+      nativeTool,
+      ssrfPolicy: resolveBrowserConfig(config?.browser, config).ssrfPolicy,
+    });
+    browserUseCliTool.requiresApprovalFreeHostExec = true;
+    browserUseCliTool.approvalFreeHostExecFallback = nativeTool;
+    browserUseCliTool.descriptorCacheMode = "live";
+    return browserUseCliTool;
   }) as OpenClawPluginToolFactory);
   api.registerCli(
     async ({ program }) => {
