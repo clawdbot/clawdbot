@@ -84,6 +84,24 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("rejects raw JSON numeric overflow at the root and inside schemas", ({ skip }) => {
+    if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
+      skip();
+      return;
+    }
+    const overflow: unknown = JSON.rawJSON("1e400");
+    for (const schema of [
+      overflow,
+      { type: "object", properties: { score: { default: overflow } } },
+      { type: "object", anyOf: [{ $dynamicRef: "#value", default: overflow }] },
+    ]) {
+      expect(projectRuntimeToolInputSchema(schema)).toEqual({
+        schema: {},
+        violations: ["parameters is not a JSON value"],
+      });
+    }
+  });
+
   it("reports non-finite values returned by nested toJSON serializers", () => {
     expect(
       projectRuntimeToolInputSchema({
@@ -269,6 +287,27 @@ describe("runtime tool input schema projection", () => {
         },
       ],
     });
+  });
+
+  it("snapshots tool references before schema getters replace later array entries", () => {
+    const captured = { name: "captured", parameters: { type: "object" } };
+    const replacement = { name: "replacement", parameters: { type: "array" } };
+    const tools = [
+      {
+        name: "first",
+        get parameters() {
+          tools[1] = replacement;
+          return { type: "object" };
+        },
+      },
+      captured,
+    ];
+
+    expect(filterRuntimeCompatibleTools(tools)).toEqual({
+      tools: [tools[0], captured],
+      diagnostics: [],
+    });
+    expect(tools[1]).toBe(replacement);
   });
 
   it("keeps provider-normalizable object schemas for provider-specific cleanup", () => {

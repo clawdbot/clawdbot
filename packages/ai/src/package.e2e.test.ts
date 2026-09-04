@@ -18,14 +18,16 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const compatibility = {
   "@openclaw/ai/provider-types": {
-    values: [],
+    values: ["PROVIDER_CONTEXT_HANDOFF", "resolveProviderContext"],
     types: [
       "MediaContent",
       "ModelInputContent",
       "ProviderContext",
+      "ProviderContextHandoff",
       "ProviderMessage",
       "ProviderModel",
       "ProviderStreamFunction",
+      "ProviderStreamOptions",
       "ProviderUserMessage",
       "VideoContent",
     ],

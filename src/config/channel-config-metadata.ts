@@ -5,12 +5,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
 type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
   schemaPluginId?: string;
-  schemaPluginOrigin?: PluginOrigin;
+  schemaPluginOrigin: PluginOrigin;
 };
 
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
@@ -124,7 +125,9 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
 }
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
-export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): PluginUiMetadata[] {
+export function collectPluginSchemaMetadataCore(
+  registry: PluginManifestRegistry,
+): PluginUiMetadata[] {
   const deduped = new Map<
     string,
     PluginUiMetadata & {
@@ -154,11 +157,46 @@ export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): P
     .map(({ originRank: _originRank, ...record }) => record);
 }
 
+function prepareChannelConfigSchema(
+  origin: PluginOrigin,
+  channelId: string,
+  schema: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (origin === "bundled") {
+    return widenOfficialExternalChannelSecretSchema({ channelId, schema });
+  }
+  try {
+    const coreOwnedSchema = schema === undefined ? schema : normalizeCoreOwnedChannelSchema(schema);
+    return widenOfficialExternalChannelSecretSchema({ channelId, schema: coreOwnedSchema });
+  } catch {
+    // Normalization and official-channel widening both clone and walk the schema, so a deeply
+    // nested external manifest overflows here, before any validator runs. Surfacing the raw
+    // schema keeps metadata collection total and leaves the diagnostic to the one owner of it,
+    // validatePluginSchemaValue.
+    return schema;
+  }
+}
+
 /** Collects per-channel config metadata with the plugin that supplied the selected schema. */
 export function collectChannelSchemaMetadataWithOwnership(
   registry: PluginManifestRegistry,
+  selectedPluginIds?: ReadonlySet<string>,
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
+  const selectedOwners = new Map<string, string>();
+  for (const record of registry.plugins.toSorted(
+    (left, right) => PLUGIN_ORIGIN_RANK[left.origin] - PLUGIN_ORIGIN_RANK[right.origin],
+  )) {
+    if (!selectedPluginIds?.has(record.id)) {
+      continue;
+    }
+    for (const channelId of record.channels) {
+      // Runtime keeps the first eligible registration and diagnoses explicit duplicates.
+      if (!selectedOwners.has(channelId)) {
+        selectedOwners.set(channelId, record.id);
+      }
+    }
+  }
 
   for (const record of registry.plugins) {
     const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
@@ -166,6 +204,9 @@ export function collectChannelSchemaMetadataWithOwnership(
     const rootDescription = record.channelCatalogMeta?.blurb;
 
     for (const channelId of record.channels) {
+      if (selectedOwners.has(channelId) && selectedOwners.get(channelId) !== record.id) {
+        continue;
+      }
       const current = byChannelId.get(channelId);
       // Root channel catalog metadata can fill labels/descriptions before a channel-specific
       // config block appears, but it must not overwrite a closer-origin channel entry.
@@ -177,13 +218,16 @@ export function collectChannelSchemaMetadataWithOwnership(
           configSchema: current?.configSchema,
           configUiHints: current?.configUiHints,
           schemaPluginId: current?.schemaPluginId,
-          schemaPluginOrigin: current?.schemaPluginOrigin,
+          schemaPluginOrigin: current?.schemaPluginOrigin ?? record.origin,
           originRank,
         });
       }
     }
 
     for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
+      if (selectedOwners.has(channelId) && selectedOwners.get(channelId) !== record.id) {
+        continue;
+      }
       const current = byChannelId.get(channelId);
       if (
         current &&
@@ -194,18 +238,19 @@ export function collectChannelSchemaMetadataWithOwnership(
         // advertises the same channel id.
         continue;
       }
+      const configSchema = prepareChannelConfigSchema(
+        record.origin,
+        channelId,
+        channelConfig.schema,
+      );
       byChannelId.set(channelId, {
         id: channelId,
         label: channelConfig.label ?? rootLabel ?? current?.label,
         description: channelConfig.description ?? rootDescription ?? current?.description,
-        // Installed plugin schemas can lag core; bundled schemas share its release and identity.
-        configSchema:
-          record.origin === "bundled" || channelConfig.schema === undefined
-            ? channelConfig.schema
-            : normalizeCoreOwnedChannelSchema(channelConfig.schema),
+        configSchema,
         configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
-        schemaPluginId: channelConfig.schema === undefined ? undefined : record.id,
-        schemaPluginOrigin: channelConfig.schema === undefined ? undefined : record.origin,
+        schemaPluginId: configSchema === undefined ? undefined : record.id,
+        schemaPluginOrigin: record.origin,
         originRank,
       });
     }
@@ -217,10 +262,11 @@ export function collectChannelSchemaMetadataWithOwnership(
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */
-export function collectChannelSchemaMetadata(
+export function collectChannelSchemaMetadataCore(
   registry: PluginManifestRegistry,
+  selectedPluginIds?: ReadonlySet<string>,
 ): ChannelUiMetadata[] {
-  return collectChannelSchemaMetadataWithOwnership(registry).map(
+  return collectChannelSchemaMetadataWithOwnership(registry, selectedPluginIds).map(
     ({ schemaPluginId: _schemaPluginId, schemaPluginOrigin: _schemaPluginOrigin, ...entry }) =>
       entry,
   );

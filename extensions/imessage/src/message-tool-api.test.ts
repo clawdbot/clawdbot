@@ -107,6 +107,7 @@ describe("iMessage message-tool artifact", () => {
           },
         },
       } as never,
+      chatType: "group",
       currentChannelId: "chat_id:1",
     });
 
@@ -122,6 +123,31 @@ describe("iMessage message-tool artifact", () => {
       "leaveGroup",
       "upload-file",
     ]);
+  });
+
+  it("keeps group-only actions hidden for a direct numeric current chat", () => {
+    setCachedIMessagePrivateApiStatus("imsg", {
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      rpcMethods: [],
+    });
+
+    const discovery = describeMessageTool({
+      cfg: { channels: { imessage: { cliPath: "imsg" } } } as never,
+      chatType: "direct",
+      currentChannelId: "chat_id:1",
+    });
+
+    expect(discovery?.actions).not.toEqual(
+      expect.arrayContaining([
+        "renameGroup",
+        "setGroupIcon",
+        "addParticipant",
+        "removeParticipant",
+        "leaveGroup",
+      ]),
+    );
   });
 
   it("offers poll but hides poll-vote on imsg builds without the poll.vote rpc", () => {

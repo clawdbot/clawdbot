@@ -3,6 +3,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { Type, type TSchema } from "typebox";
 import { parseCronPacingBounds } from "../../cron/pacing.js";
 import type { CronPacing } from "../../cron/types.js";
+import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
 import { isRecord } from "../../utils.js";
 import {
   optionalFiniteNumberSchema,
@@ -35,10 +36,28 @@ const CRON_ACTIONS = [
 ] as const;
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream"] as const;
+// When cron.triggers.enabled is explicitly false, the scheduler rejects
+// stream schedules, script payloads, and condition triggers, so the
+// model-facing schema must not advertise them.
+const CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
+const CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED = ["systemEvent", "agentTurn"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
+
+type CronToolSchemaOptions = {
+  agentSessionKey?: string;
+  management?: "only" | "also";
+  /**
+   * Whether cron.triggers.enabled is on for this deployment. When false, the
+   * trigger-gated surfaces (job trigger, script payloads, stream
+   * schedules) are omitted from the advertised schema so models cannot be
+   * tempted into calls the scheduler always rejects. Defaults to true so
+   * config-less callers keep the full surface.
+   */
+  triggersEnabled?: boolean;
+};
 
 function nullableStringSchema(description: string) {
   return Type.Optional(Type.Union([Type.String(), Type.Null()], { description }));
@@ -51,11 +70,22 @@ function deliveryStringSchema(description: string) {
   return nullableStringSchema(`${description}, or null to clear`);
 }
 
-function createCronScheduleSchema(): TSchema {
+function createCronScheduleSchema(params: {
+  triggersEnabled: boolean;
+  management: boolean;
+}): TSchema {
   return Type.Optional(
     Type.Object(
       {
-        kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule kind" }),
+        kind: optionalStringEnum(
+          [
+            ...(params.triggersEnabled
+              ? CRON_SCHEDULE_KINDS
+              : CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED),
+            ...(params.management ? ["on-exit"] : []),
+          ],
+          { description: "Schedule kind" },
+        ),
         at: Type.Optional(Type.String({ description: "ISO-8601 time (kind=at)" })),
         everyMs: optionalPositiveIntegerSchema({
           description: "Interval ms (kind=every)",
@@ -81,17 +111,29 @@ function createCronScheduleSchema(): TSchema {
           description: "Jitter ms (kind=cron)",
           maximum: MAX_DATE_TIMESTAMP_MS,
         }),
-        command: Type.Optional(
-          Type.Array(Type.String({ minLength: 1 }), {
-            minItems: 1,
-            description: "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
-          }),
-        ),
-        cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),
-        mode: optionalStringEnum(["line", "match"] as const),
-        match: Type.Optional(Type.String({ description: "Regex source (stream match mode)" })),
-        batchMs: optionalNonNegativeIntegerSchema(),
-        maxBatchBytes: optionalNonNegativeIntegerSchema(),
+        ...(params.triggersEnabled || params.management
+          ? {
+              command: Type.Optional(
+                Type.Union(
+                  [
+                    Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
+                    ...(params.management ? [Type.String()] : []),
+                  ],
+                  {
+                    description:
+                      "Supervised source argv (kind=stream; disabled when cron.triggers.enabled=false)",
+                  },
+                ),
+              ),
+              cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),
+              mode: optionalStringEnum(["line", "match"] as const),
+              match: Type.Optional(
+                Type.String({ description: "Regex source (stream match mode)" }),
+              ),
+              batchMs: optionalNonNegativeIntegerSchema(),
+              maxBatchBytes: optionalNonNegativeIntegerSchema(),
+            }
+          : {}),
       },
       { additionalProperties: true },
     ),
@@ -122,18 +164,44 @@ export function assertCronPacingInput(value: unknown): void {
   parseCronPacingBounds(value as CronPacing);
 }
 
-function createCronPayloadSchema(): TSchema {
+function createCronPayloadSchema(params: {
+  triggersEnabled: boolean;
+  management: boolean;
+}): TSchema {
   return Type.Optional(
     Type.Object(
       {
-        kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
+        kind: optionalStringEnum(
+          [
+            ...(params.triggersEnabled ? CRON_PAYLOAD_KINDS : CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED),
+            ...(params.management ? ["command"] : []),
+          ],
+          { description: "Payload kind" },
+        ),
         text: Type.Optional(Type.String({ description: "systemEvent text" })),
         message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
-        script: Type.Optional(Type.String({ description: "Headless code-mode script" })),
+        ...(params.management
+          ? {
+              argv: Type.Optional(
+                Type.Array(Type.String(), { description: "Existing command job argv" }),
+              ),
+            }
+          : {}),
+        ...(params.triggersEnabled
+          ? {
+              script: Type.Optional(Type.String({ description: "Headless code-mode script" })),
+            }
+          : {}),
         model: nullableStringSchema("Model override, or null to clear"),
         thinking: Type.Optional(Type.String({ description: "Thinking override" })),
         timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
-        toolBudget: optionalPositiveIntegerSchema({ description: "Maximum script tool calls" }),
+        ...(params.triggersEnabled
+          ? {
+              toolBudget: optionalPositiveIntegerSchema({
+                description: "Maximum script tool calls",
+              }),
+            }
+          : {}),
         lightContext: Type.Optional(
           Type.Boolean({
             description: "Lightweight bootstrap context (skip full workspace context)",
@@ -195,11 +263,17 @@ function createCronDeliverySchema(): TSchema {
             description: "Thread/topic id",
           }),
         ),
-        bestEffort: Type.Optional(Type.Boolean()),
+        bestEffort: Type.Optional(
+          Type.Boolean({
+            description:
+              "Omitted/false requires requested delivery for successful completion; true lets successful execution complete and delete a one-shot despite failed/unknown delivery. Intentional silence succeeds in either mode.",
+          }),
+        ),
         accountId: deliveryStringSchema("Delivery account"),
         failureDestination: Type.Optional(
           Type.Union([failureDestinationObject, Type.Null()], {
-            description: "Failure destination; null clears.",
+            description:
+              "Failure-alert route override; required-delivery failures bypass after but share the execution-alert cooldown; null clears.",
           }),
         ),
         completionDestination: Type.Optional(
@@ -213,8 +287,8 @@ function createCronDeliverySchema(): TSchema {
   );
 }
 
-// Omitting `failureAlert` means "leave defaults/unchanged"; `false` explicitly disables alerts.
-// Runtime handles `failureAlert === false` in cron/service/timer.ts.
+// Omitting `failureAlert` means "leave defaults/unchanged"; `false` disables regular alerts.
+// Runtime handles `failureAlert === false` in cron/service/failure-alerts.ts.
 // The schema declares `type: "object"` to stay compatible with providers that
 // enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot).  The
 // description tells the LLM that `false` is also accepted.
@@ -223,7 +297,10 @@ function createCronFailureAlertSchema(): TSchema {
     Type.Unsafe<Record<string, unknown> | false>({
       type: "object",
       properties: {
-        after: optionalPositiveIntegerSchema({ description: "Failures before alert" }),
+        after: optionalPositiveIntegerSchema({
+          description:
+            "Consecutive execution failures before alert; delivery failures bypass this threshold",
+        }),
         channel: Type.Optional(Type.String({ description: "Alert channel" })),
         to: Type.Optional(Type.String({ description: "Alert target" })),
         cooldownMs: optionalNonNegativeIntegerSchema({ description: "Alert cooldown ms" }),
@@ -232,13 +309,18 @@ function createCronFailureAlertSchema(): TSchema {
         accountId: Type.Optional(Type.String()),
       },
       additionalProperties: true,
-      description: "Failure alert; false disables.",
+      description:
+        "Failure alert policy/route override. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
     }),
   );
 }
 
-function createCronJobObjectSchema(): TSchema {
-  return Type.Optional(
+// Flattened schema: runtime validates per-action requirements.
+export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
+  const triggersEnabled = options?.triggersEnabled !== false;
+  const management = Boolean(options?.management);
+  const managementOnly = options?.management === "only";
+  const job = Type.Optional(
     Type.Object(
       {
         name: Type.Optional(Type.String({ description: "Job name" })),
@@ -263,38 +345,45 @@ function createCronJobObjectSchema(): TSchema {
             { additionalProperties: false },
           ),
         ),
-        schedule: createCronScheduleSchema(),
+        schedule: createCronScheduleSchema({ triggersEnabled, management }),
         pacing: createCronPacingSchema(),
-        trigger: createCronTriggerSchema(),
+        ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
         sessionTarget: Type.Optional(
           Type.String({
             description: "main | isolated | current (agentTurn default) | session:<id>",
           }),
         ),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
-        payload: createCronPayloadSchema(),
+        payload: createCronPayloadSchema({ triggersEnabled, management }),
         delivery: createCronDeliverySchema(),
-        agentId: nullableStringSchema("Agent id, or null to clear it"),
+        // Session-scoped updates reject retargeting; do not advertise it to the model.
+        ...(management || !options?.agentSessionKey?.trim()
+          ? { agentId: nullableStringSchema("Agent id, or null to clear it") }
+          : {}),
         description: Type.Optional(Type.String({ description: "Human description" })),
         enabled: Type.Optional(Type.Boolean()),
-        deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first run" })),
+        deleteAfterRun: Type.Optional(
+          Type.Boolean({
+            description:
+              "Delete one-shot after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.",
+          }),
+        ),
         sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
         failureAlert: createCronFailureAlertSchema(),
       },
       {
         additionalProperties: true,
-        description:
-          'Job fields. action="add": full job. action="update": partial patch — only supplied fields change; null clears.',
+        description: managementOnly
+          ? "Partial update: only supplied fields change; null clears."
+          : 'Job fields. action="add": full job. action="update": partial patch — only supplied fields change; null clears.',
       },
     ),
   );
-}
-
-// Flattened schema: runtime validates per-action requirements.
-export function createCronToolSchema(): TSchema {
-  return Type.Object(
+  const schema = Type.Object(
     {
-      action: stringEnum(CRON_ACTIONS),
+      action: stringEnum(
+        managementOnly ? CRON_MANAGEMENT_METHODS.map((method) => method.slice(5)) : CRON_ACTIONS,
+      ),
       ...gatewayCallOptionSchemaProperties(),
       includeDisabled: Type.Optional(Type.Boolean()),
       limit: optionalPositiveIntegerSchema({
@@ -304,7 +393,7 @@ export function createCronToolSchema(): TSchema {
       offset: optionalNonNegativeIntegerSchema({
         description: 'Job offset for action="list"; use nextOffset to load the next page',
       }),
-      job: createCronJobObjectSchema(),
+      job: managementOnly ? Type.Optional(Type.Omit(job, ["declarationKey", "owner"])) : job,
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
       in: Type.Optional(
@@ -325,8 +414,9 @@ export function createCronToolSchema(): TSchema {
       ),
       agentId: Type.Optional(
         Type.String({
-          description:
-            'List filter for `action: "list"`; wake target override for `action: "wake"` (defaults to the calling agent when omitted on wake)',
+          description: managementOnly
+            ? 'Agent filter for action="list".'
+            : 'List filter for `action: "list"`; wake target override for `action: "wake"` (defaults to the calling agent when omitted on wake)',
         }),
       ),
       sessionKey: Type.Optional(
@@ -338,4 +428,7 @@ export function createCronToolSchema(): TSchema {
     },
     { additionalProperties: true },
   );
+  return managementOnly
+    ? Type.Omit(schema, ["in", "text", "mode", "contextMessages", "sessionKey"])
+    : schema;
 }

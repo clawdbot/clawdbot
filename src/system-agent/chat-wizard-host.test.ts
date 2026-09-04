@@ -1,3 +1,4 @@
+import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   fakeOverviewLoader,
@@ -343,7 +344,7 @@ describe("SystemAgentChatEngine wizard", () => {
     const laterApproval = await engine.handle("yes");
 
     expect(cancelled.text).toContain("cancelled");
-    expect(engine.hasPendingProposal()).toBe(false);
+    expect(engine.getPendingOperatorProposal()).toBeNull();
     expect(runConfigSet).not.toHaveBeenCalled();
     expect(runAgentTurn.mock.calls.at(-1)?.[0]?.approvalArmed).toBe(false);
     expect(laterApproval.text).toContain("No pending change");

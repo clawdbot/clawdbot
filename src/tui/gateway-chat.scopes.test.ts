@@ -147,16 +147,10 @@ describe("GatewayChatClient operator scopes", () => {
           role: "operator",
           scopes: requestedScopes,
           device: { id: deviceIdentity.deviceId, nonce },
-          auth: token
-            ? { token }
-            : {
-                token: cachedDeviceAuth.token,
-                deviceToken: cachedDeviceAuth.token,
-              },
         });
-        if (token) {
-          expect(connect.params?.auth?.deviceToken).toBeUndefined();
-        }
+        expect(connect.params?.auth).toEqual(
+          token ? { token } : { deviceToken: cachedDeviceAuth.token },
+        );
         expect(connect.params?.device?.signature).toEqual(expect.any(String));
         return { client, socket, connect };
       };

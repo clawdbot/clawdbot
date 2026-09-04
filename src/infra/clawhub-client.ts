@@ -2,11 +2,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictNonNegativeInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retryClawHubRead } from "./clawhub-retry.js";
+import { isTruthyEnvValue } from "./env.js";
+import { isErrno } from "./errno.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
-import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
@@ -111,6 +115,12 @@ function extractTokenFromClawHubConfig(value: unknown): string | undefined {
   );
 }
 
+function resolveClawHubConfigPathsIn(configHome: string): string[] {
+  return ["clawhub", "clawdhub"].map((directory) =>
+    path.join(configHome, directory, "config.json"),
+  );
+}
+
 function resolveClawHubConfigPaths(): string[] {
   const explicit =
     normalizeOptionalString(process.env.CLAWHUB_CONFIG_PATH) ||
@@ -122,16 +132,21 @@ function resolveClawHubConfigPaths(): string[] {
   const xdgConfigHome = normalizeOptionalString(process.env.XDG_CONFIG_HOME);
   const configHome =
     xdgConfigHome && xdgConfigHome.length > 0 ? xdgConfigHome : path.join(os.homedir(), ".config");
-  const xdgPath = path.join(configHome, "clawhub", "config.json");
+  const configPaths = resolveClawHubConfigPathsIn(configHome);
 
   if (process.platform === "darwin") {
     return [
-      path.join(os.homedir(), "Library", "Application Support", "clawhub", "config.json"),
-      xdgPath,
+      ...resolveClawHubConfigPathsIn(path.join(os.homedir(), "Library", "Application Support")),
+      ...configPaths,
     ];
   }
 
-  return [xdgPath];
+  const appData = normalizeOptionalString(process.env.APPDATA);
+  if (process.platform === "win32" && !xdgConfigHome && appData) {
+    return [...resolveClawHubConfigPathsIn(appData), ...configPaths];
+  }
+
+  return configPaths;
 }
 
 export async function resolveClawHubAuthToken(): Promise<string | undefined> {
@@ -145,12 +160,11 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
   for (const configPath of resolveClawHubConfigPaths()) {
     try {
       const raw = await fs.readFile(configPath, "utf8");
-      const token = extractTokenFromClawHubConfig(JSON.parse(raw));
-      if (token) {
-        return token;
+      return extractTokenFromClawHubConfig(JSON.parse(raw));
+    } catch (error) {
+      if (!isErrno(error) || error.code !== "ENOENT") {
+        return undefined;
       }
-    } catch {
-      // Try the next candidate path.
     }
   }
   return undefined;
@@ -464,5 +478,5 @@ export function isClawHubTelemetryDisabled(): boolean {
   if (!raw) {
     return false;
   }
-  return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
+  return isTruthyEnvValue(raw);
 }

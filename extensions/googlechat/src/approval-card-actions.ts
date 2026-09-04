@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -15,7 +16,7 @@ type GoogleChatApprovalCardBinding = {
   token: string;
   accountId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   decision: ExecApprovalDecision;
   allowedDecisions: readonly ExecApprovalDecision[];
   spaceName: string;
@@ -43,7 +44,7 @@ type GoogleChatManualApprovalSuppressionPayload = {
 
 type GoogleChatManualApprovalFollowupSuppression = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalDecision[];
   expiresAtMs: number;
 };

@@ -31,7 +31,7 @@ import {
   type SecretAssignment,
 } from "./runtime-shared.js";
 import {
-  getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotState,
   hasSameSecretProviderDefinition,
 } from "./runtime-state.js";
 
@@ -49,7 +49,7 @@ export function classifySecretOwnerDegradationState(params: {
   if (params.refs.some((ref) => params.forceColdRefKeys?.has(secretRefKey(ref)))) {
     return "cold";
   }
-  const active = getActiveSecretsRuntimeSnapshot();
+  const active = getActiveSecretsRuntimeSnapshotState();
   if (
     !active ||
     active.degradedOwners?.some(
@@ -277,7 +277,7 @@ function associateAssignmentFailureOwners(params: {
     owners.map((owner) => `${owner.source}\0${owner.ownerKind}\0${owner.ownerId}`),
   );
   const collectedOwnerKeys = new Set(params.assignments.map(assignmentOwnerKey));
-  const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+  const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
   const activeAuthOwnerIds = new Set(
     (activeSnapshot?.authStores ?? []).flatMap(({ agentDir, store }) =>
       Object.keys(store.profiles).map((profileId) =>
@@ -542,7 +542,7 @@ export async function resolveAndApplySecretAssignments(params: {
         });
         const activeOwner =
           degradationState === "stale"
-            ? getActiveSecretsRuntimeSnapshot()?.secretOwners?.find(
+            ? getActiveSecretsRuntimeSnapshotState()?.secretOwners?.find(
                 (entry) => entry.ownerKind === owner.ownerKind && entry.ownerId === owner.ownerId,
               )
             : undefined;

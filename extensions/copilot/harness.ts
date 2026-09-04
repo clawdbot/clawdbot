@@ -17,6 +17,8 @@ import {
   type AgentHarnessResetParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { AttemptParamsLike, ModelRefInputObject } from "./src/attempt-types.js";
 import type { CopilotSessionConfig } from "./src/attempt.js";
 import { createCopilotByokAuth, resolveCopilotAuth, tokenFingerprint } from "./src/auth-bridge.js";
 import { createCopilotByokProxy } from "./src/byok-proxy.js";
@@ -33,7 +35,7 @@ import type {
   PoolKey,
 } from "./src/runtime.js";
 
-type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletion"]>;
+type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
 type CopilotSettledTurnFinalizationAttemptParams = Parameters<
@@ -351,7 +353,15 @@ async function compactTrackedSdkSession(params: {
 // the token (see `tokenFingerprint` in `src/auth-bridge.ts`), so
 // rotating the token under the same profile id still invalidates
 // the compat key without ever serializing the raw credential.
-type CopilotSessionCompatParams = CopilotHarnessAttemptParams | AgentHarnessCompactParams;
+type CopilotCompactParamsLike = Omit<AgentHarnessCompactParams, "model"> &
+  Pick<AttemptParamsLike, "auth" | "copilotHome" | "profileVersion"> & {
+    model?: string | ModelRefInputObject;
+    modelId?: string;
+  };
+
+type CopilotSessionCompatInput =
+  | { kind: "attempt"; params: AttemptParamsLike }
+  | { kind: "compact"; params: CopilotCompactParamsLike };
 
 function readAgentIdFromSessionKey(sessionKey: unknown): string | undefined {
   if (typeof sessionKey !== "string") {
@@ -362,102 +372,35 @@ function readAgentIdFromSessionKey(sessionKey: unknown): string | undefined {
 }
 
 function computeSessionKey(
-  params: CopilotSessionCompatParams,
+  input: CopilotSessionCompatInput,
   options: { includeApi: boolean; includeAuth: boolean },
 ): string {
-  const p = params as CopilotSessionCompatParams & {
-    auth?: {
-      gitHubToken?: string;
-      profileId?: string;
-      profileVersion?: string;
-      useLoggedInUser?: boolean;
-    };
-    agentId?: string;
-    agentDir?: string;
-    authProfileId?: string;
-    copilotHome?: string;
-    cwd?: string;
-    modelId?: string;
-    model?:
-      | {
-          api?: string;
-          id?: string;
-          provider?: string;
-          baseUrl?: string;
-          azureApiVersion?: string;
-          headers?: Record<string, string | null | undefined>;
-          authHeader?: boolean;
-          params?: Record<string, unknown>;
-          request?: {
-            auth?: { mode?: unknown };
-            proxy?: unknown;
-            tls?: unknown;
-            allowPrivateNetwork?: unknown;
-          };
-          contextTokens?: number;
-          contextWindow?: number;
-          maxTokens?: number;
-        }
-      | string;
-    runtimeModel?: {
-      api?: string;
-      id?: string;
-      provider?: string;
-      baseUrl?: string;
-      azureApiVersion?: string;
-      headers?: Record<string, string | null | undefined>;
-      authHeader?: boolean;
-      params?: Record<string, unknown>;
-      request?: {
-        auth?: { mode?: unknown };
-        proxy?: unknown;
-        tls?: unknown;
-        allowPrivateNetwork?: unknown;
-      };
-      contextTokens?: number;
-      contextWindow?: number;
-      maxTokens?: number;
-    };
-    profileVersion?: string;
-    resolvedApiKey?: string;
-    sessionKey?: string;
-    workspaceDir?: string;
-  };
-  const modelObj: {
-    api?: string;
-    id?: string;
-    provider?: string;
-    baseUrl?: string;
-    azureApiVersion?: string;
-    headers?: Record<string, string | null | undefined>;
-    authHeader?: boolean;
-    params?: Record<string, unknown>;
-    request?: {
-      auth?: { mode?: unknown };
-      proxy?: unknown;
-      tls?: unknown;
-      allowPrivateNetwork?: unknown;
-    };
-    contextTokens?: number;
-    contextWindow?: number;
-    maxTokens?: number;
-  } =
-    p.model && typeof p.model === "object"
-      ? p.model
-      : p.runtimeModel && typeof p.runtimeModel === "object"
-        ? p.runtimeModel
-        : { id: typeof p.model === "string" ? p.model : undefined };
-  const provider = modelObj.provider ?? (typeof p.provider === "string" ? p.provider : "");
+  const attempt = input.kind === "attempt" ? input.params : undefined;
+  const compact = input.kind === "compact" ? input.params : undefined;
+  const attemptModel = attempt?.model;
+  const compactModel = compact?.model;
+  const rawModel: string | ModelRefInputObject | undefined = attemptModel ?? compactModel;
+  const modelObj: ModelRefInputObject =
+    rawModel && typeof rawModel === "object"
+      ? rawModel
+      : (compact?.runtimeModel ?? {
+          id: typeof rawModel === "string" ? rawModel : undefined,
+        });
+  const provider =
+    normalizeOptionalString(modelObj.provider) ?? attempt?.provider ?? compact?.provider ?? "";
   const modelId =
-    modelObj.id ??
-    (typeof p.modelId === "string" ? p.modelId : undefined) ??
-    (typeof p.model === "string" ? p.model : "");
+    normalizeOptionalString(modelObj.id) ??
+    attempt?.modelId ??
+    compact?.modelId ??
+    (typeof compactModel === "string" ? compactModel : "");
   const requestTransport =
-    p.model && typeof p.model === "object" ? getModelProviderRequestTransport(p.model) : undefined;
-  const requestAuthMode = readSessionString(
+    rawModel && typeof rawModel === "object"
+      ? getModelProviderRequestTransport(rawModel)
+      : undefined;
+  const requestAuthMode = normalizeOptionalString(
     requestTransport?.auth?.mode ?? modelObj.request?.auth?.mode,
   );
-  const azureApiVersion = readSessionString(
+  const azureApiVersion = normalizeOptionalString(
     modelObj.azureApiVersion ?? modelObj.params?.azureApiVersion,
   );
   // resolveCopilotAuth can throw when an explicit `auth.gitHubToken`
@@ -474,20 +417,19 @@ function computeSessionKey(
   try {
     const resolved = !options.includeAuth
       ? resolveCopilotAuth({
-          agentId:
-            typeof p.agentId === "string" ? p.agentId : readAgentIdFromSessionKey(p.sessionKey),
-          agentDir: typeof p.agentDir === "string" ? p.agentDir : undefined,
-          workspaceDir: typeof p.workspaceDir === "string" ? p.workspaceDir : undefined,
-          copilotHome: typeof p.copilotHome === "string" ? p.copilotHome : undefined,
+          agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
+          agentDir: input.params.agentDir,
+          workspaceDir: input.params.workspaceDir,
+          copilotHome: input.params.copilotHome,
           auth: { useLoggedInUser: true },
         })
       : (() => {
           const modelProvider = resolveCopilotProvider({
             model: {
-              api: modelObj.api,
+              api: normalizeOptionalString(modelObj.api),
               id: modelId,
               provider,
-              baseUrl: modelObj.baseUrl,
+              baseUrl: normalizeOptionalString(modelObj.baseUrl),
               azureApiVersion,
               headers: modelObj.headers,
               authHeader: modelObj.authHeader,
@@ -500,33 +442,27 @@ function computeSessionKey(
               contextWindow: modelObj.contextWindow,
               maxTokens: modelObj.maxTokens,
             },
-            resolvedApiKey: typeof p.resolvedApiKey === "string" ? p.resolvedApiKey : undefined,
-            authProfileId: typeof p.authProfileId === "string" ? p.authProfileId : undefined,
+            resolvedApiKey: input.params.resolvedApiKey,
+            authProfileId: input.params.authProfileId,
           });
           return modelProvider.mode === "byok"
             ? createCopilotByokAuth({
-                agentId:
-                  typeof p.agentId === "string"
-                    ? p.agentId
-                    : readAgentIdFromSessionKey(p.sessionKey),
-                agentDir: typeof p.agentDir === "string" ? p.agentDir : undefined,
-                workspaceDir: typeof p.workspaceDir === "string" ? p.workspaceDir : undefined,
-                copilotHome: typeof p.copilotHome === "string" ? p.copilotHome : undefined,
+                agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
+                agentDir: input.params.agentDir,
+                workspaceDir: input.params.workspaceDir,
+                copilotHome: input.params.copilotHome,
                 authProfileId: modelProvider.authProfileId,
                 authProfileVersion: modelProvider.authProfileVersion,
               })
             : resolveCopilotAuth({
-                agentId:
-                  typeof p.agentId === "string"
-                    ? p.agentId
-                    : readAgentIdFromSessionKey(p.sessionKey),
-                agentDir: typeof p.agentDir === "string" ? p.agentDir : undefined,
-                workspaceDir: typeof p.workspaceDir === "string" ? p.workspaceDir : undefined,
-                copilotHome: typeof p.copilotHome === "string" ? p.copilotHome : undefined,
-                auth: p.auth,
-                resolvedApiKey: typeof p.resolvedApiKey === "string" ? p.resolvedApiKey : undefined,
-                authProfileId: typeof p.authProfileId === "string" ? p.authProfileId : undefined,
-                profileVersion: typeof p.profileVersion === "string" ? p.profileVersion : undefined,
+                agentId: input.params.agentId ?? readAgentIdFromSessionKey(input.params.sessionKey),
+                agentDir: input.params.agentDir,
+                workspaceDir: input.params.workspaceDir,
+                copilotHome: input.params.copilotHome,
+                auth: input.params.auth,
+                resolvedApiKey: input.params.resolvedApiKey,
+                authProfileId: input.params.authProfileId,
+                profileVersion: input.params.profileVersion,
               });
         })();
     resolvedAgentId = resolved.agentId;
@@ -545,34 +481,34 @@ function computeSessionKey(
   const parts = [
     `provider=${provider}`,
     `model=${modelId}`,
-    ...(options.includeApi ? [`api=${modelObj.api ?? ""}`] : []),
+    ...(options.includeApi ? [`api=${normalizeOptionalString(modelObj.api) ?? ""}`] : []),
     ...(options.includeApi
       ? [`baseUrlFingerprint=${fingerprintSessionValue(modelObj.baseUrl)}`]
       : []),
-    `cwd=${p.cwd ?? p.workspaceDir ?? ""}`,
+    `cwd=${input.params.cwd ?? input.params.workspaceDir ?? ""}`,
     `agentId=${resolvedAgentId}`,
-    `agentDir=${p.agentDir ?? ""}`,
-    `copilotHome=${p.copilotHome ?? ""}`,
+    `agentDir=${input.params.agentDir ?? ""}`,
+    `copilotHome=${input.params.copilotHome ?? ""}`,
     `resolvedCopilotHome=${resolvedCopilotHome}`,
     ...(options.includeAuth ? authParts : []),
   ];
   return parts.join("|");
 }
 
-function readSessionString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function fingerprintSessionValue(value: unknown): string {
   return typeof value === "string" && value ? tokenFingerprint(value) : "";
 }
 
-function computeSessionCompatKey(params: CopilotSessionCompatParams): string {
-  return computeSessionKey(params, { includeApi: true, includeAuth: true });
+function computeSessionCompatKey(params: AttemptParamsLike): string {
+  return computeSessionKey({ kind: "attempt", params }, { includeApi: true, includeAuth: true });
 }
 
-function computeSessionCompactKey(params: CopilotSessionCompatParams): string {
-  return computeSessionKey(params, { includeApi: false, includeAuth: false });
+function computeAttemptCompactKey(params: AttemptParamsLike): string {
+  return computeSessionKey({ kind: "attempt", params }, { includeApi: false, includeAuth: false });
+}
+
+function computeCompactRequestKey(params: CopilotCompactParamsLike): string {
+  return computeSessionKey({ kind: "compact", params }, { includeApi: false, includeAuth: false });
 }
 
 function buildCopilotCompactionHookContext(params: AgentHarnessCompactParams) {
@@ -715,7 +651,7 @@ export function createCopilotAgentHarness(
       // Compatibility covers provider/model/cwd/auth; incompatible state starts
       // a fresh ordinary attempt but cannot be used for settled finalization.
       const currentCompatKey = computeSessionCompatKey(params);
-      const currentCompactKey = computeSessionCompactKey(params);
+      const currentCompactKey = computeAttemptCompactKey(params);
       const compactionCleanupPending =
         openclawSessionId !== undefined && hasPendingDeferredCompactionCleanup(openclawSessionId);
       const replayBlocked =
@@ -899,7 +835,7 @@ export function createCopilotAgentHarness(
     }
   }
 
-  async function runIsolatedCompletion(
+  async function runIsolatedCompletionV2(
     params: AgentHarnessIsolatedCompletionParams,
   ): Promise<AgentHarnessIsolatedCompletionResult> {
     const completionPromise = (async () => {
@@ -977,7 +913,7 @@ export function createCopilotAgentHarness(
 
     runAttempt: (params) => runHarnessAttempt(params, "attempt"),
 
-    runIsolatedCompletion,
+    runIsolatedCompletionV2,
 
     finalizeSettledTurn: async ({ attempt }) => {
       const result = await runHarnessAttempt(attempt, "settled-tool-finalization");
@@ -1047,7 +983,7 @@ export function createCopilotAgentHarness(
         };
       }
       const tracked = trackedSessions.get(openclawSessionId);
-      const currentCompactKey = computeSessionCompactKey(params);
+      const currentCompactKey = computeCompactRequestKey(params);
       const { resolvePoolAcquire } = await import("./src/attempt.js");
       let resolvedPoolAcquire: ReturnType<typeof resolvePoolAcquire> | undefined;
       let currentAuth: CopilotSessionAuth | undefined;

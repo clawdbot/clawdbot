@@ -14,6 +14,7 @@ type MemorySearchManagerParams = {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemorySearchManagerPurpose;
+  inspectSources?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
@@ -70,7 +71,6 @@ export async function closeMemorySearchManager(params: {
   }
   const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
   await closeMemoryIndexManagersForAgent({
-    cfg: params.cfg,
     agentId: normalizeAgentId(params.agentId),
   });
 }

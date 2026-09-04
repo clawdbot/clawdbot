@@ -169,6 +169,57 @@ describe("Reef doctor contract", () => {
     });
   });
 
+  it("moves stray plugin-entry config into channels.reef and clears the entry", () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          reef: { enabled: true, config: { handle: "owner", requestPolicy: "code-only" } },
+        },
+      },
+    } as never;
+    expect(
+      legacyConfigRules[1]?.match?.({ handle: "owner", requestPolicy: "code-only" }, cfg),
+    ).toBe(true);
+    expect(legacyConfigRules[1]?.match?.({}, cfg)).toBe(false);
+
+    const result = normalizeCompatibilityConfig({ cfg });
+
+    expect(result.changes).toEqual([
+      "Moved plugins.entries.reef.config.handle to channels.reef.handle.",
+      "Moved plugins.entries.reef.config.requestPolicy to channels.reef.requestPolicy.",
+    ]);
+    expect(result.config.channels?.reef).toEqual({ handle: "owner", requestPolicy: "code-only" });
+    expect(result.config.plugins?.entries?.reef).toEqual({ enabled: true });
+  });
+
+  it("keeps channels.reef authoritative over conflicting stray entry config", () => {
+    const cfg = {
+      channels: { reef: { handle: "canonical" } },
+      plugins: { entries: { reef: { config: { handle: "stray", email: "o@example.com" } } } },
+    } as never;
+
+    const result = normalizeCompatibilityConfig({ cfg });
+
+    expect(result.changes).toEqual([
+      "Moved plugins.entries.reef.config.email to channels.reef.email.",
+      "Removed plugins.entries.reef.config.handle; channels.reef.handle is authoritative.",
+    ]);
+    expect(result.config.channels?.reef).toEqual({ handle: "canonical", email: "o@example.com" });
+    expect(result.config.plugins?.entries?.reef).toEqual({});
+  });
+
+  it("leaves unmergeable stray entry config in place instead of corrupting channels.reef", () => {
+    const cfg = {
+      plugins: { entries: { reef: { config: { unknownKey: true } } } },
+    } as never;
+
+    const result = normalizeCompatibilityConfig({ cfg });
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.channels?.reef).toBeUndefined();
+    expect(result.config.plugins?.entries?.reef).toEqual({ config: { unknownKey: true } });
+  });
+
   it("imports identity keys into SQLite before archiving keys.json", async () => {
     const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
     const filePath = path.join(legacyDir, "keys.json");

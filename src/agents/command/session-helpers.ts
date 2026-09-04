@@ -115,30 +115,6 @@ export async function prepareCurrentRunDelivery(params: {
   return context ? { context, targetMode } : undefined;
 }
 
-export function createAgentCommandSessionWorkingCopy(params: {
-  sessionKey?: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-}): {
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-} {
-  const result: {
-    sessionEntry?: SessionEntry;
-    sessionStore?: Record<string, SessionEntry>;
-  } = {};
-  if (params.sessionEntry) {
-    result.sessionEntry = { ...params.sessionEntry };
-  }
-  if (params.sessionStore || params.sessionKey) {
-    result.sessionStore = {};
-  }
-  if (params.sessionKey && result.sessionEntry && result.sessionStore) {
-    result.sessionStore[params.sessionKey] = result.sessionEntry;
-  }
-  return result;
-}
-
 export function resolveInternalSessionEffectsSource(params: {
   agentId: string;
   sessionId: string;

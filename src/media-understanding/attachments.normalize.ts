@@ -1,15 +1,10 @@
 // Attachment normalization converts message context media fields into typed
 // attachment records and classifies media kind from MIME or filename.
 import type { MediaKind } from "@openclaw/media-core/constants";
-import { kindFromMime, mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
-import {
-  isGenericBinaryMediaContentType,
-  isImageMediaFact,
-  normalizeMediaFacts,
-} from "../media/media-facts.js";
+import { normalizeMediaFacts, resolveMediaFactKind } from "../media/media-facts.js";
 import type { MediaAttachment } from "./types.js";
 
 /** Normalizes a local attachment path while rejecting remote file URLs and Windows UNC paths. */
@@ -44,8 +39,13 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
         index,
         alreadyTranscribed: fact.transcribed === true,
       };
-      if (fact.kind) {
-        attachment.kind = fact.kind;
+      const kind = fact.fileName ? (resolveMediaFactKind(fact) ?? fact.kind) : fact.kind;
+      if (kind) {
+        attachment.kind = kind;
+      }
+      const fileName = normalizeOptionalString(fact.fileName);
+      if (fileName) {
+        attachment.fileName = fileName;
       }
       if (fact.workspaceDir) {
         attachment.workspaceDir = fact.workspaceDir;
@@ -57,33 +57,13 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
 
 /** Classifies an attachment by authoritative kind, MIME, then canonical filename metadata. */
 export function resolveAttachmentKind(attachment: MediaAttachment): Exclude<MediaKind, "sticker"> {
-  if (
-    isImageMediaFact({
-      path: attachment.path,
-      url: attachment.url,
-      contentType: attachment.mime,
-      kind: attachment.kind,
-    })
-  ) {
-    return "image";
-  }
-  if (attachment.kind === "audio" || attachment.kind === "video") {
-    return attachment.kind;
-  }
-  if (attachment.kind === "document") {
-    return "unknown";
-  }
-  const mime = normalizeMimeType(attachment.mime);
-  const kind = kindFromMime(mime);
-  if (kind === "audio" || kind === "video") {
-    return kind;
-  }
-  if (mime && !isGenericBinaryMediaContentType(mime)) {
-    return "unknown";
-  }
-
-  const inferredKind = kindFromMime(mimeTypeFromFilePath(attachment.path ?? attachment.url));
-  return inferredKind === "audio" || inferredKind === "video" ? inferredKind : "unknown";
+  const kind = resolveMediaFactKind({
+    path: attachment.path,
+    url: attachment.url,
+    contentType: attachment.mime,
+    kind: attachment.kind,
+  });
+  return kind === "sticker" ? "image" : kind === "document" ? "unknown" : (kind ?? "unknown");
 }
 
 /** Returns true when the attachment is classified as video media. */

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
@@ -7,8 +7,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawnSync: spawnSyncMock };
 });
 
-import { teamsMeetingsConfig } from "./config.js";
-import { handleTeamsMeetingsNodeHostCommand } from "./node-host.js";
+let teamsMeetingsConfig: (typeof import("./config.js"))["teamsMeetingsConfig"];
+let handleTeamsMeetingsNodeHostCommand: (typeof import("./node-host.js"))["handleTeamsMeetingsNodeHostCommand"];
 
 const successfulProbe = {
   pid: 123,
@@ -29,10 +29,25 @@ function setupParams() {
 }
 
 describe("Teams meeting node-host prerequisite deadline", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    try {
+      ({ teamsMeetingsConfig } = await import("./config.js"));
+      ({ handleTeamsMeetingsNodeHostCommand } = await import("./node-host.js"));
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   beforeEach(() => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    spawnSyncMock.mockReset();
-    spawnSyncMock.mockReturnValue(successfulProbe);
+    spawnSyncMock.mockReset().mockReturnValue(successfulProbe);
+  });
+
+  afterAll(() => {
+    vi.doUnmock("node:child_process");
+    vi.resetModules();
   });
 
   afterEach(() => {

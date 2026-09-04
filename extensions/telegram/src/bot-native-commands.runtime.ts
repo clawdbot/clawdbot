@@ -1,8 +1,5 @@
 // Telegram plugin module implements bot native commands behavior.
-export {
-  ensureConfiguredBindingRouteReady,
-  recordInboundSessionMetaSafe,
-} from "openclaw/plugin-sdk/conversation-runtime";
+export { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 export {
   finalizeInboundContext,

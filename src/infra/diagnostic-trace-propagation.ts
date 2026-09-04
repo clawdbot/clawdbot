@@ -69,7 +69,11 @@ function getDiagnosticTracePropagationState(): DiagnosticTracePropagationState {
 function activeDiagnosticTracePropagationBridge():
   | RegisteredDiagnosticTracePropagationBridge
   | undefined {
-  return Array.from(getDiagnosticTracePropagationState().bridges).at(-1);
+  let active: RegisteredDiagnosticTracePropagationBridge | undefined;
+  for (const bridge of getDiagnosticTracePropagationState().bridges) {
+    active = bridge;
+  }
+  return active;
 }
 
 export function registerDiagnosticTracePropagationBridge(

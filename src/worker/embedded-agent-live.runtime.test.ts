@@ -4,12 +4,14 @@ import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 
 describe("createWorkerLiveRuntime", () => {
-  it("redacts media payloads from tool diagnostics before cloud egress", async () => {
+  it("redacts media payloads from tool diagnostics before cloud egress", () => {
     const emitted: WorkerLiveEvent[] = [];
     const runtime = createWorkerLiveRuntime({
-      emit: async (event) => {
+      enqueuePreview: (event) => {
         emitted.push(event);
+        return true;
       },
+      emitTerminal: async (event) => void emitted.push(event),
     });
     const events: AgentSessionEvent[] = [
       {
@@ -37,16 +39,44 @@ describe("createWorkerLiveRuntime", () => {
     for (const event of events) {
       runtime.handleSessionEvent(event);
     }
-    await runtime.flush();
-
     expect(JSON.stringify(emitted)).not.toContain("QUJDRA==");
     expect(JSON.stringify(emitted)).not.toMatch(/"[0-9]+":(?:[0-9]+|\{)/u);
     expect(emitted).toHaveLength(3);
   });
 
+  it("stops preparing previews after the client degrades", () => {
+    let previewCalls = 0;
+    const runtime = createWorkerLiveRuntime({
+      enqueuePreview: () => {
+        previewCalls += 1;
+        return false;
+      },
+      emitTerminal: async () => {},
+    });
+
+    runtime.handleSessionEvent({
+      type: "tool_execution_start",
+      toolCallId: "tool-1",
+      toolName: "read",
+      args: {},
+    });
+    runtime.handleSessionEvent({
+      type: "tool_execution_end",
+      toolCallId: "tool-1",
+      toolName: "read",
+      result: "ignored",
+      isError: false,
+    });
+
+    expect(previewCalls).toBe(1);
+  });
+
   it("redacts lifecycle errors before terminal cloud egress", async () => {
     const emitted: WorkerLiveEvent[] = [];
-    const runtime = createWorkerLiveRuntime({ emit: async (event) => void emitted.push(event) });
+    const runtime = createWorkerLiveRuntime({
+      enqueuePreview: () => false,
+      emitTerminal: async (event) => void emitted.push(event),
+    });
 
     runtime.enqueueRunFailure({
       aborted: false,

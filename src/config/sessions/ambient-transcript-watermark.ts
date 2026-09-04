@@ -51,7 +51,7 @@ function isAmbientTranscriptWatermarkAfter(
   return next.messageId !== current.messageId;
 }
 
-export function readAmbientTranscriptWatermark(
+export function readAmbientTranscriptWatermarkFromEntry(
   entry: Pick<SessionEntry, "ambientTranscriptWatermarks" | "sessionId"> | undefined,
   key: string,
 ): AmbientTranscriptWatermark | undefined {
@@ -85,7 +85,7 @@ export async function updateAmbientTranscriptWatermark(params: {
       if (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) {
         return null;
       }
-      const current = readAmbientTranscriptWatermark(entry, params.key);
+      const current = readAmbientTranscriptWatermarkFromEntry(entry, params.key);
       if (
         !isAmbientTranscriptWatermarkAfter(
           { messageId: params.messageId, timestampMs: params.timestampMs },

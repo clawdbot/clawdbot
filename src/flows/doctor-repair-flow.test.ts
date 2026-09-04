@@ -3,8 +3,12 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
-import type { RunnableHealthCheck, SplitHealthCheckInput } from "./health-check-runner-types.js";
-import type { HealthCheck, HealthFinding, HealthRepairContext } from "./health-checks.js";
+import type {
+  RegisteredHealthCheck,
+  RunnableHealthCheck,
+  SplitHealthCheckInput,
+} from "./health-check-runner-types.js";
+import type { HealthFinding, HealthRepairContext } from "./health-checks.js";
 
 function ctx(cfg: OpenClawConfig): HealthRepairContext {
   return {
@@ -27,8 +31,9 @@ function warningFinding(checkId: string): HealthFinding {
   };
 }
 
-function successfullyRepairedCheck(): HealthCheck {
+function successfullyRepairedCheck(): RegisteredHealthCheck {
   return normalizeHealthCheck({
+    sourceContract: "split",
     id: "test/repaired-first",
     kind: "core",
     description: "repairs before the unresolved check",
@@ -51,6 +56,7 @@ describe("runDoctorHealthRepairs", () => {
     const runModes: string[] = [];
     const scopes: unknown[] = [];
     const runnable: RunnableHealthCheck = {
+      sourceContract: "run",
       id: "test/run-repairable",
       kind: "core",
       description: "run repairable",
@@ -80,7 +86,7 @@ describe("runDoctorHealthRepairs", () => {
         };
       },
     };
-    const checks: HealthCheck[] = [normalizeHealthCheck(runnable)];
+    const checks: RegisteredHealthCheck[] = [normalizeHealthCheck(runnable)];
 
     const result = await runDoctorHealthRepairs(ctx({}), { checks });
 
@@ -95,8 +101,9 @@ describe("runDoctorHealthRepairs", () => {
 
   it("repairs modern checks and threads updated config", async () => {
     const scopes: unknown[] = [];
-    const checks: HealthCheck[] = [
+    const checks: RegisteredHealthCheck[] = [
       normalizeHealthCheck({
+        sourceContract: "split",
         id: "test/repairable",
         kind: "core",
         description: "repairable",
@@ -143,8 +150,9 @@ describe("runDoctorHealthRepairs", () => {
   });
 
   it("retains non-repairable findings for the legacy doctor owner", async () => {
-    const checks: HealthCheck[] = [
+    const checks: RegisteredHealthCheck[] = [
       normalizeHealthCheck({
+        sourceContract: "split",
         id: "test/legacy-only",
         kind: "core",
         description: "legacy only",
@@ -171,8 +179,9 @@ describe("runDoctorHealthRepairs", () => {
   });
 
   it("keeps split check findings when repair throws", async () => {
-    const checks: HealthCheck[] = [
+    const checks: RegisteredHealthCheck[] = [
       normalizeHealthCheck({
+        sourceContract: "split",
         id: "test/repair-throws",
         kind: "core",
         description: "repair throws",
@@ -207,8 +216,9 @@ describe("runDoctorHealthRepairs", () => {
   });
 
   it("reports repair validation findings that remain after repair", async () => {
-    const checks: HealthCheck[] = [
+    const checks: RegisteredHealthCheck[] = [
       normalizeHealthCheck({
+        sourceContract: "split",
         id: "test/not-fixed",
         kind: "core",
         description: "not fixed",
@@ -245,8 +255,9 @@ describe("runDoctorHealthRepairs", () => {
 
   it("validates successful repairs by default", async () => {
     let detectCalls = 0;
-    const checks: HealthCheck[] = [
+    const checks: RegisteredHealthCheck[] = [
       normalizeHealthCheck({
+        sourceContract: "split",
         id: "test/no-default-validation",
         kind: "core",
         description: "no default validation",
@@ -284,8 +295,9 @@ describe("runDoctorHealthRepairs", () => {
 
   it("does not validate skipped or failed repair results", async () => {
     let validationCalls = 0;
-    const checks: HealthCheck[] = [
+    const checks: RegisteredHealthCheck[] = [
       normalizeHealthCheck({
+        sourceContract: "split",
         id: "test/skipped",
         kind: "core",
         description: "skipped",
@@ -324,6 +336,7 @@ describe("runDoctorHealthRepairs", () => {
     async (outcome) => {
       const unresolvedId = `test/split-${outcome}`;
       const unresolvedCheck = normalizeHealthCheck({
+        sourceContract: "split",
         id: unresolvedId,
         kind: "core",
         description: "unresolved split check",
@@ -369,6 +382,7 @@ describe("runDoctorHealthRepairs", () => {
     async (outcome) => {
       const unresolvedId = `test/runnable-${outcome}`;
       const runnable: RunnableHealthCheck = {
+        sourceContract: "run",
         id: unresolvedId,
         kind: "core",
         description: "unresolved runnable check",
@@ -401,8 +415,9 @@ describe("runDoctorHealthRepairs", () => {
   it("supports dry-run repairs without applying returned config or validating", async () => {
     const repairContexts: HealthRepairContext[] = [];
     let detectCalls = 0;
-    const checks: HealthCheck[] = [
+    const checks: RegisteredHealthCheck[] = [
       normalizeHealthCheck({
+        sourceContract: "split",
         id: "test/dry-run",
         kind: "core",
         description: "dry run",
@@ -463,8 +478,9 @@ describe("runDoctorHealthRepairs", () => {
 
   it("passes diff false and true through the repair API", async () => {
     const repairContexts: HealthRepairContext[] = [];
-    const checks: HealthCheck[] = [
+    const checks: RegisteredHealthCheck[] = [
       normalizeHealthCheck({
+        sourceContract: "split",
         id: "test/diff-preview",
         kind: "core",
         description: "diff preview",

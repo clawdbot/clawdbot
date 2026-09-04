@@ -9,7 +9,7 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   startTestGatewayServer,
   testState,
@@ -90,7 +90,7 @@ describe("Gateway direct tool invoke product proof", () => {
     "enforces public auth, invocation, approval, and call-id contracts",
     { timeout: 60_000 },
     async () => {
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       const configPath = createConfigIO().configPath;
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(

@@ -1,7 +1,8 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -9,23 +10,26 @@ import {
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
-const proofDir = process.env.OPENCLAW_MEDIA_PROOF_DIR?.trim() || null;
+const proofDirParent = process.env.OPENCLAW_MEDIA_PROOF_DIR?.trim() || null;
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = proofDirParent
+    ? createControlUiE2eArtifactDir("managed-media-base-path", proofDirParent)
+    : undefined;
+});
 
 let server: ControlUiE2eServer;
 
 describe("Control UI managed media under a UI base path", () => {
   beforeAll(async () => {
     server = await startControlUiE2eServer();
-    if (proofDir) {
-      await mkdir(proofDir, { recursive: true });
-    }
   });
 
   afterAll(async () => {
     await server?.close();
   });
 
-  it("keeps origin-root managed-media APIs outside the UI base path", async () => {
+  it("loads managed-media APIs beneath the configured UI base path", async () => {
     const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
     const browser = await chromium.launch({ executablePath });
     const context = await browser.newContext({
@@ -36,13 +40,13 @@ describe("Control UI managed media under a UI base path", () => {
     const page = await context.newPage();
     const sourcePath =
       "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full";
-    const previewPath = sourcePath.replace(/\/full$/u, "/thumbnail");
+    const previewPath = `/rosita${sourcePath.replace(/\/full$/u, "/thumbnail")}`;
     const imageBytes = await readFile(
       path.join(process.cwd(), "docs/assets/openclaw-banner-dark.png"),
     );
     const requests: Array<{ contentType: string; path: string }> = [];
 
-    await page.route("**/api/chat/media/outgoing/**", async (route) => {
+    await page.route("**/rosita/api/chat/media/outgoing/**", async (route) => {
       const requestPath = new URL(route.request().url()).pathname;
       if (requestPath === previewPath) {
         requests.push({ contentType: "image/png", path: requestPath });
@@ -77,9 +81,7 @@ describe("Control UI managed media under a UI base path", () => {
     });
 
     try {
-      // The Vite harness mounts at `/`; bootstrap models the reverse proxy
-      // prefix that Gateway strips before serving the Control UI.
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${server.baseUrl}rosita/chat`);
       await gateway.waitForRequest("chat.startup");
       const image = page.getByAltText("Managed proof image");
       await image.waitFor({ state: "attached", timeout: 10_000 });

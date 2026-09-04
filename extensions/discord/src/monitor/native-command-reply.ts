@@ -1,3 +1,4 @@
+import type { APIEmbed } from "discord-api-types/v10";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Discord plugin module implements native command reply behavior.
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
@@ -9,12 +10,13 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { chunkDiscordTextWithMode } from "../chunk.js";
-import type {
-  ButtonInteraction,
-  CommandInteraction,
-  MessagePayloadFile,
-  StringSelectMenuInteraction,
-  TopLevelComponents,
+import {
+  hasDiscordV2Components,
+  type ButtonInteraction,
+  type CommandInteraction,
+  type MessagePayloadFile,
+  type StringSelectMenuInteraction,
+  type TopLevelComponents,
 } from "../internal/discord.js";
 
 export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
@@ -41,17 +43,20 @@ function isDiscordUnknownInteraction(error: unknown): boolean {
   return false;
 }
 
-export function hasRenderableReplyPayload(payload: ReplyPayload): boolean {
-  if (resolveSendableOutboundReplyParts(payload).hasContent) {
-    return true;
-  }
+function resolveDiscordInteractionMessageParts(payload: ReplyPayload) {
   const discordData = payload.channelData?.discord as
-    | { components?: TopLevelComponents[] }
+    | { components?: TopLevelComponents[]; embeds?: APIEmbed[] }
     | undefined;
-  if (Array.isArray(discordData?.components) && discordData.components.length > 0) {
-    return true;
-  }
-  return false;
+  const { components, embeds } = discordData ?? {};
+  return {
+    components: Array.isArray(components) && components.length > 0 ? components : undefined,
+    embeds: Array.isArray(embeds) && embeds.length > 0 ? embeds : undefined,
+  };
+}
+
+export function hasRenderableReplyPayload(payload: ReplyPayload): boolean {
+  const { components, embeds } = resolveDiscordInteractionMessageParts(payload);
+  return resolveSendableOutboundReplyParts(payload).hasContent || Boolean(components || embeds);
 }
 
 export async function safeDiscordInteractionCall<T>(
@@ -94,13 +99,8 @@ export async function deliverDiscordInteractionReply(params: {
 }): Promise<boolean> {
   const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
   const reply = resolveSendableOutboundReplyParts(payload);
-  const discordData = payload.channelData?.discord as
-    | { components?: TopLevelComponents[] }
-    | undefined;
-  let firstMessageComponents =
-    Array.isArray(discordData?.components) && discordData.components.length > 0
-      ? discordData.components
-      : undefined;
+  let { components: firstMessageComponents, embeds: firstMessageEmbeds } =
+    resolveDiscordInteractionMessageParts(payload);
 
   // Interaction acknowledgement/defer state is not delivery for this payload. Only a
   // successful native send in this invocation can make a later expiry partial.
@@ -109,37 +109,27 @@ export async function deliverDiscordInteractionReply(params: {
     content: string,
     files?: MessagePayloadFile[],
     components?: TopLevelComponents[],
+    embeds?: APIEmbed[],
   ) => {
-    const contentPayload = content ? { content } : {};
-    const payloadLocal =
-      files && files.length > 0
-        ? {
-            ...contentPayload,
-            ...(components ? { components } : {}),
-            ...(params.responseEphemeral !== undefined
-              ? { ephemeral: params.responseEphemeral }
-              : {}),
-            files,
-          }
-        : {
-            ...contentPayload,
-            ...(components ? { components } : {}),
-            ...(params.responseEphemeral !== undefined
-              ? { ephemeral: params.responseEphemeral }
-              : {}),
-          };
+    const hasV2 = hasDiscordV2Components(components);
+    const payloadLocal = {
+      ...(content && !hasV2 ? { content } : {}),
+      ...(components ? { components } : {}),
+      ...(embeds && !hasV2 ? { embeds } : {}),
+      ...(params.responseEphemeral !== undefined ? { ephemeral: params.responseEphemeral } : {}),
+      ...(files?.length ? { files } : {}),
+    };
     let result: void | null;
     try {
       result = await safeDiscordInteractionCall("interaction send", async () => {
         if (!preferFollowUp && !payloadDelivered) {
           await interaction.reply(payloadLocal);
-          payloadDelivered = true;
-          firstMessageComponents = undefined;
-          return;
+        } else {
+          await interaction.followUp(payloadLocal);
         }
-        await interaction.followUp(payloadLocal);
         payloadDelivered = true;
         firstMessageComponents = undefined;
+        firstMessageEmbeds = undefined;
       });
     } catch (error) {
       if (!payloadDelivered) {
@@ -182,7 +172,7 @@ export async function deliverDiscordInteractionReply(params: {
       }),
     );
     const caption = chunks[0] ?? "";
-    await sendMessage(caption, media, firstMessageComponents);
+    await sendMessage(caption, media, firstMessageComponents, firstMessageEmbeds);
     for (const chunk of chunks.slice(1)) {
       if (!chunk.trim()) {
         continue;
@@ -192,28 +182,25 @@ export async function deliverDiscordInteractionReply(params: {
     return payloadDelivered;
   }
 
-  if (!reply.hasText && !firstMessageComponents) {
+  if (!reply.hasText && !firstMessageComponents && !firstMessageEmbeds) {
     return false;
   }
-  let chunks =
-    reply.text || firstMessageComponents
-      ? resolveTextChunksWithFallback(
-          reply.text,
-          chunkDiscordTextWithMode(reply.text, {
-            maxChars: textLimit,
-            maxLines: maxLinesPerMessage,
-            chunkMode,
-          }),
-        )
-      : [];
-  if (chunks.length === 0 && firstMessageComponents) {
-    chunks = [""];
+  const chunks = resolveTextChunksWithFallback(
+    reply.text,
+    chunkDiscordTextWithMode(reply.text, {
+      maxChars: textLimit,
+      maxLines: maxLinesPerMessage,
+      chunkMode,
+    }),
+  );
+  if (chunks.length === 0) {
+    chunks.push("");
   }
   for (const chunk of chunks) {
-    if (!chunk.trim() && !firstMessageComponents) {
+    if (!chunk.trim() && !firstMessageComponents && !firstMessageEmbeds) {
       continue;
     }
-    await sendMessage(chunk, undefined, firstMessageComponents);
+    await sendMessage(chunk, undefined, firstMessageComponents, firstMessageEmbeds);
   }
   return payloadDelivered;
 }

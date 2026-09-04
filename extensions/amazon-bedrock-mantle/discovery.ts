@@ -8,11 +8,11 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -242,13 +242,6 @@ export async function resolveMantleRuntimeBearerToken(params: {
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
-/** Clear the IAM token cache for tests. */
-export function resetIamTokenCacheForTest(): void {
-  iamTokenCache.clear();
-  iamTokenFailureDetailByRegion.clear();
-  iamTokenSuccessEpochByRegion.clear();
-}
-
 // ---------------------------------------------------------------------------
 // OpenAI-format model list response
 // ---------------------------------------------------------------------------
@@ -285,18 +278,14 @@ function inferReasoningSupport(modelId: string): boolean {
 }
 
 async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIModelsResponse> {
-  const bytes = await readResponseWithLimit(response, MANTLE_DISCOVERY_RESPONSE_MAX_BYTES, {
+  const body = await readProviderJsonResponse<unknown>(response, "Mantle model discovery", {
+    maxBytes: MANTLE_DISCOVERY_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: MANTLE_DISCOVERY_TIMEOUT_MS,
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(
-        `Mantle model discovery response exceeded ${maxBytes} bytes (${size} bytes received)`,
-      ),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(
         `Mantle model discovery response stalled: no data received for ${chunkTimeoutMs}ms`,
       ),
   });
-  const body = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return {};
   }
@@ -317,11 +306,6 @@ type MantleDiscoveryConfig = {
 };
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
-
-/** Clear the Mantle discovery cache for tests. */
-export function resetMantleDiscoveryCacheForTest(): void {
-  discoveryCache.clear();
-}
 
 // ---------------------------------------------------------------------------
 // Model discovery

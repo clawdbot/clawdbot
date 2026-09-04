@@ -4,6 +4,7 @@
  * Converts loosely typed route bodies into the closed BrowserActRequest union
  * used by Playwright and Chrome MCP action executors.
  */
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
@@ -12,15 +13,10 @@ import {
   ACT_MAX_WAIT_TIME_MS,
   normalizeActBoundedNonNegativeMs,
 } from "../act-policy.js";
-import type { BrowserActRequest, BrowserFormField } from "../client-actions.types.js";
-import { normalizeBrowserFormField } from "../form-fields.js";
+import type { BrowserActRequest } from "../client-actions.types.js";
+import { normalizeBrowserFormFields } from "../form-fields.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
-import {
-  type ActKind,
-  isActKind,
-  parseClickButton,
-  parseClickModifiers,
-} from "./agent.act.shared.js";
+import { isActKind, parseClickButton, parseClickModifiers } from "./agent.act.shared.js";
 import {
   readRouteFiniteNumber,
   readRouteInteger,
@@ -29,13 +25,13 @@ import {
 } from "./route-numeric.js";
 import { toBoolean, toStringArray, toStringOrEmpty } from "./utils.js";
 
-function normalizeActKind(raw: unknown): ActKind {
-  const kind = toStringOrEmpty(raw);
-  if (!isActKind(kind)) {
-    throw new Error("kind is required");
-  }
-  return kind;
-}
+const KEY_ALIASES = new Map([
+  ["esc", "Escape"],
+  ["return", "Enter"],
+  ["del", "Delete"],
+  ["ctrl", "Control"],
+  ["cmd", "Meta"],
+]);
 
 function countBatchActions(actions: BrowserActRequest[]): number {
   let count = 0;
@@ -76,16 +72,8 @@ export function canonicalizeActTargetIds(
   return null;
 }
 
-function normalizeFields(rawFields: unknown): BrowserFormField[] {
-  const entries = Array.isArray(rawFields) ? rawFields : [];
-  return entries
-    .map((field) => {
-      if (!field || typeof field !== "object") {
-        return null;
-      }
-      return normalizeBrowserFormField(field as Record<string, unknown>);
-    })
-    .filter((field): field is BrowserFormField => field !== null);
+function normalizeFields(rawFields: unknown) {
+  return normalizeBrowserFormFields(Array.isArray(rawFields) ? rawFields : []);
 }
 
 function normalizeBatchAction(value: unknown, depth: number): BrowserActRequest {
@@ -136,7 +124,10 @@ export function normalizeActRequest(
 ): BrowserActRequest {
   const source = options?.source ?? "request";
   const depth = options?.depth ?? 0;
-  const kind = normalizeActKind(body.kind);
+  const kind = toStringOrEmpty(body.kind);
+  if (!isActKind(kind)) {
+    throw new Error("kind is required");
+  }
 
   switch (kind) {
     case "click": {
@@ -233,7 +224,11 @@ export function normalizeActRequest(
       };
     }
     case "press": {
-      const key = toStringOrEmpty(body.key);
+      // Empty chord segments represent a literal plus key and must survive normalization.
+      const key = toStringOrEmpty(body.key)
+        .split("+")
+        .map((part) => KEY_ALIASES.get(part.toLowerCase()) ?? part)
+        .join("+");
       if (!key) {
         throw new Error("press requires key");
       }
@@ -289,8 +284,9 @@ export function normalizeActRequest(
     case "select": {
       const ref = toStringOrEmpty(body.ref) || undefined;
       const selector = toStringOrEmpty(body.selector) || undefined;
-      const values = toStringArray(body.values);
-      if ((!ref && !selector) || !values?.length) {
+      // Option values are content: empty strings and surrounding whitespace can identify a choice.
+      const values = filterStringEntries(body.values);
+      if ((!ref && !selector) || !values.length) {
         throw new Error("select requires ref/selector and values");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;

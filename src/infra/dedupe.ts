@@ -29,15 +29,6 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
   const maxSize = resolveNonNegativeIntegerOption(options.maxSize, 0);
   const cache = new Map<string, { ownerToken?: object; recordedAt: number }>();
 
-  const record = (key: string, recordedAt: number, ownerToken?: object) => {
-    cache.delete(key);
-    cache.set(key, { recordedAt, ...(ownerToken ? { ownerToken } : {}) });
-  };
-
-  const touch = (key: string, now: number) => {
-    record(key, now, cache.get(key)?.ownerToken);
-  };
-
   const prune = (now: number) => {
     const cutoff = ttlMs > 0 ? now - ttlMs : undefined;
     if (cutoff !== undefined) {
@@ -64,8 +55,10 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
       return false;
     }
     if (touchOnRead) {
-      // check() refreshes recency so active duplicate bursts keep their key near the LRU tail.
-      touch(key, now);
+      // Keep the original claim owner while refreshing TTL and LRU recency.
+      existing.recordedAt = now;
+      cache.delete(key);
+      cache.set(key, existing);
     }
     return true;
   };
@@ -79,7 +72,7 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
       if (hasUnexpired(key, checkedAt, true)) {
         return true;
       }
-      record(key, checkedAt, ownerToken);
+      cache.set(key, { recordedAt: checkedAt, ...(ownerToken ? { ownerToken } : {}) });
       prune(checkedAt);
       return false;
     },

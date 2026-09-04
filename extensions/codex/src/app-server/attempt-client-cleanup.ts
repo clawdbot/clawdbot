@@ -138,86 +138,69 @@ export async function interruptCodexTurnAndWaitBestEffort(
   }
 }
 
+/** Stops native terminals on the cancelled thread without retiring peer threads. */
+export async function terminateCodexBackgroundTerminals(
+  client: CodexAppServerClient,
+  threadId: string,
+): Promise<void> {
+  const options = {
+    timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+    signal: AbortSignal.timeout(CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS),
+  };
+  try {
+    // Codex returns the complete inventory when limit is omitted. Its process
+    // IDs are thread-owned handles, not host PIDs or process-group authority.
+    const { data } = await client.request("thread/backgroundTerminals/list", { threadId }, options);
+    for (const { processId } of data) {
+      // False also means it exited between listing and termination. The final
+      // inventory distinguishes that benign race from a failed termination.
+      await client.request(
+        "thread/backgroundTerminals/terminate",
+        { threadId, processId },
+        options,
+      );
+    }
+    if (data.length > 0) {
+      const remaining = await client.request(
+        "thread/backgroundTerminals/list",
+        { threadId, limit: 1 },
+        options,
+      );
+      if (remaining.data.length > 0) {
+        throw new Error("native background terminals remain running");
+      }
+    }
+  } catch (cause) {
+    throw new Error(
+      "Codex background-terminal cleanup failed; inspect the thread's running terminals before starting more work.",
+      { cause },
+    );
+  }
+}
+
 /** Unsubscribes from a thread while swallowing cleanup-only failures. */
 export async function unsubscribeCodexThreadBestEffort(
   client: CodexAppServerClient,
   params: {
     threadId: string;
     timeoutMs: number;
+    assertCurrent?: () => void;
   },
 ): Promise<boolean> {
   try {
-    await unsubscribeCodexAppServerLiveThread(client, params.threadId, params.timeoutMs);
+    await unsubscribeCodexAppServerLiveThread(
+      client,
+      params.threadId,
+      params.timeoutMs,
+      params.assertCurrent,
+    );
     return true;
   } catch (error) {
+    params.assertCurrent?.();
     embeddedAgentLog.debug("codex app-server thread unsubscribe cleanup failed", {
       threadId: params.threadId,
       error,
     });
     return false;
   }
-}
-
-/**
- * Retires the shared client after a timed-out turn so later runs do not reuse a
- * potentially wedged app-server connection.
- */
-export async function retireCodexAppServerClientAfterTimedOutTurn(
-  client: CodexAppServerClient,
-  params: {
-    threadId: string;
-    turnId: string;
-    reason: string;
-    /**
-     * Only the terminal-idle watch proves the physical client is dead (zero
-     * notifications for the whole window). Completion/assistant/budget
-     * timeouts are per-turn conditions on a possibly healthy shared process —
-     * failing co-leases for those would abort innocent sibling turns.
-     */
-    suspectPhysicalClient: boolean;
-  },
-): Promise<void> {
-  const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client, {
-    failActiveLeases: params.suspectPhysicalClient,
-  });
-  const detachedSharedClient = Boolean(retiredSharedClient);
-  const clientAlreadyClosed =
-    params.suspectPhysicalClient && (retiredSharedClient?.closed ?? false);
-  // Best-effort interrupt/unsubscribe only make sense while the transport is
-  // still open; a suspect client was just closed (child gets SIGKILLed).
-  if (!clientAlreadyClosed) {
-    await interruptCodexTurnAndWaitBestEffort(client, {
-      threadId: params.threadId,
-      turnId: params.turnId,
-      timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-    });
-    await unsubscribeCodexThreadBestEffort(client, {
-      threadId: params.threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-    });
-  }
-  let closedClient = retiredSharedClient?.closed ?? false;
-  if (!detachedSharedClient) {
-    const close = (client as { close?: () => void }).close;
-    if (typeof close === "function") {
-      try {
-        close.call(client);
-        closedClient = true;
-      } catch (error) {
-        embeddedAgentLog.debug("codex app-server client close failed during timeout cleanup", {
-          threadId: params.threadId,
-          turnId: params.turnId,
-          error,
-        });
-      }
-    }
-  }
-  embeddedAgentLog.warn("codex app-server client retired after timed-out turn", {
-    threadId: params.threadId,
-    turnId: params.turnId,
-    reason: params.reason,
-    detachedSharedClient,
-    closedClient,
-    activeSharedClientLeases: retiredSharedClient?.activeLeases ?? 0,
-  });
 }

@@ -11,6 +11,7 @@ import { createBrowserTool } from "./browser-tool.js";
 import type { AnyAgentTool } from "./browser-tool.runtime.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./browser/bridge-server.js";
 import { resolveBrowserConfig } from "./browser/config.js";
+import { closePlaywrightBrowserConnection } from "./browser/pw-session.js";
 import { writeExternalFileWithinRoot } from "./sdk-security-runtime.js";
 
 const ATTACHED_PROFILE_NAME = "worker";
@@ -104,7 +105,6 @@ export async function createAttachedBrowserToolRuntime(
   };
   resolved.extensionRelayPorts = {};
   resolved.extensionRelayInternalTokens = {};
-  delete resolved.extensionRelayToken;
 
   const bridge = await startBrowserBridgeServer({
     resolved,
@@ -113,6 +113,13 @@ export async function createAttachedBrowserToolRuntime(
     authToken: randomBytes(32).toString("base64url"),
     onEnsureAttachTarget: async () => await params.ensureAttachTarget(),
   });
+  const dispose = async () => {
+    try {
+      await stopBrowserBridgeServer(bridge.server);
+    } finally {
+      await closePlaywrightBrowserConnection({ cdpUrl });
+    }
+  };
   try {
     const tool = createBrowserTool({
       sandboxBridgeUrl: bridge.baseUrl,
@@ -132,10 +139,10 @@ export async function createAttachedBrowserToolRuntime(
     });
     return {
       tool,
-      dispose: async () => await stopBrowserBridgeServer(bridge.server),
+      dispose,
     };
   } catch (error) {
-    await stopBrowserBridgeServer(bridge.server);
+    await dispose();
     throw error;
   }
 }

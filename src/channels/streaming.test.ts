@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inferToolMetaFromArgs } from "../agents/embedded-agent-utils.js";
+import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import {
   buildChannelProgressDraftLine,
@@ -20,7 +20,8 @@ import {
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
-  it("suppresses update_plan from generic work-tool progress", () => {
+  it("suppresses status tools from generic work-tool progress", () => {
+    expect(isChannelProgressDraftWorkToolName("progress_card")).toBe(false);
     expect(isChannelProgressDraftWorkToolName("update_plan")).toBe(false);
   });
 
@@ -187,7 +188,7 @@ describe("backend tool-name casing", () => {
       },
       { commandText: "raw" },
     );
-    const meta = inferToolMetaFromArgs(name, args, { detailMode: "explain" });
+    const meta = inferToolMetaFromArgsCore(name, args, { detailMode: "explain" });
     const summaryText = formatToolAggregate(name, meta ? [meta] : undefined, { markdown: true });
 
     const merged = mergeChannelProgressDraftLine(
@@ -338,6 +339,19 @@ describe("streaming config resolution", () => {
 });
 
 describe("progress narration", () => {
+  it("preserves the shipped plain checklist option", () => {
+    expect(
+      formatPlanChecklistLines(
+        [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+          { step: "Verify", status: "pending" },
+        ],
+        { maxLines: 3, maxLineChars: 80, plain: true },
+      ),
+    ).toEqual(["Completed: Inspect", "In progress: Patch", "Pending: Verify"]);
+  });
+
   it("renders plan markers and keeps the checklist under narration", () => {
     const plan = [
       { step: "Inspect", status: "completed" as const },

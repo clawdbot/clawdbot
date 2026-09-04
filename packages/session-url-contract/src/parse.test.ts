@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildControlUiSessionPath } from "./index.js";
-import { parseControlUiSessionPath, type ControlUiSessionPathTarget } from "./parse.js";
+import {
+  matchControlUiCatalogSharePath,
+  parseControlUiSessionPath,
+  type ControlUiSessionPathTarget,
+} from "./parse.js";
 
 type ParseCase = {
   name: string;
@@ -29,7 +33,13 @@ describe("parseControlUiSessionPath", () => {
     {
       name: "short ref",
       pathname: "/dashboard/main/12345678",
-      expected: { namespace: "dashboard", kind: "short", agentId: "main", shortId: "12345678" },
+      expected: {
+        namespace: "dashboard",
+        kind: "short",
+        agentId: "main",
+        shortId: "12345678",
+        literalSessionKey: "agent:main:12345678",
+      },
     },
     {
       name: "slugged short ref",
@@ -39,6 +49,7 @@ describe("parseControlUiSessionPath", () => {
         kind: "short",
         agentId: "wrong",
         shortId: "1234567890ab",
+        literalSessionKey: "agent:wrong:wrong-slug-1234567890AB",
         slugHint: "wrong-slug",
       },
     },
@@ -164,6 +175,7 @@ describe("parseControlUiSessionPath", () => {
           kind: "short",
           agentId: "main",
           shortId: "12345678",
+          literalSessionKey: "agent:main:deploy-monitor-12345678",
           slugHint: "deploy-monitor",
         },
       ],
@@ -176,4 +188,158 @@ describe("parseControlUiSessionPath", () => {
       );
     }
   });
+
+  it.each([
+    ["agent:main:main", "/chat/main", "main"],
+    ["agent:main:standup", "/chat/main/standup", "literal"],
+    ["agent:main:sessions", "/chat/main/~key/sessions", "literal"],
+    ["agent:main:12345678", "/chat/main/~key/12345678", "literal"],
+    [
+      "agent:main:12345678-90ab-cdef-1234-567890abcdef",
+      "/chat/main/~key/12345678-90ab-cdef-1234-567890abcdef",
+      "literal",
+    ],
+    [
+      "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+      "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
+      "literal",
+    ],
+  ] as const)("round-trips exact key %s", (sessionKey, expectedPath, expectedKind) => {
+    const path = buildControlUiSessionPath({ namespace: "chat", sessionKey, exactKey: true });
+
+    expect(path).toBe(expectedPath);
+    const parsed = parseControlUiSessionPath(path ?? "");
+    expect(parsed?.kind).toBe(expectedKind);
+    if (parsed?.kind === "literal") {
+      expect(parsed.sessionKey).toBe(sessionKey);
+    }
+  });
+
+  it.each([
+    {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      expected: { namespace: "chat", kind: "main", agentId: "main" },
+    },
+    {
+      sessionKey: "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6",
+      agentId: "roboclaw",
+      expected: {
+        namespace: "chat",
+        kind: "literal",
+        agentId: "roboclaw",
+        sessionKey: "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6",
+      },
+    },
+    {
+      sessionKey: "agent:x:telegram:group:12345",
+      agentId: "x",
+      expected: {
+        namespace: "chat",
+        kind: "literal",
+        agentId: "x",
+        sessionKey: "agent:x:telegram:group:12345",
+      },
+    },
+    {
+      sessionKey: "agent:x:discord:direct:9",
+      agentId: "x",
+      expected: {
+        namespace: "chat",
+        kind: "literal",
+        agentId: "x",
+        sessionKey: "agent:x:discord:direct:9",
+      },
+    },
+    {
+      sessionKey: "agent:x:standup",
+      agentId: "x",
+      expected: {
+        namespace: "chat",
+        kind: "literal",
+        agentId: "x",
+        sessionKey: "agent:x:standup",
+      },
+    },
+    {
+      sessionKey: "agent:main:2139bddb-3211-4641-b993-10f619f124e6",
+      agentId: "main",
+      expected: {
+        namespace: "chat",
+        kind: "literal",
+        agentId: "main",
+        sessionKey: "agent:main:2139bddb-3211-4641-b993-10f619f124e6",
+      },
+    },
+  ] satisfies ReadonlyArray<{
+    sessionKey: string;
+    agentId: string;
+    expected: ControlUiSessionPathTarget;
+  }>)("parses the tool-composed URL for $sessionKey", ({ sessionKey, agentId, expected }) => {
+    const base = "https://gateway.example/control";
+    const url =
+      sessionKey === "agent:main:main"
+        ? `${base}/chat/main`
+        : `${base}/chat/${agentId}/~key/${sessionKey
+            .slice(`agent:${agentId}:`.length)
+            .replaceAll(":", "/")}`;
+
+    expect(parseControlUiSessionPath(new URL(url).pathname, "/control")).toEqual(expected);
+  });
+});
+
+describe("matchControlUiCatalogSharePath", () => {
+  it.each([
+    ["/beam/0123456789ab", undefined, "0123456789ab"],
+    ["/beam/fix-upload-flow-0123456789ab", undefined, "0123456789ab"],
+    ["/beam/old-title-0123456789ab", undefined, "0123456789ab"],
+    [
+      "/openclaw/beam/fix-upload-flow-0123456789abcdef0123456789abcdef",
+      "/openclaw",
+      "0123456789abcdef0123456789abcdef",
+    ],
+    [
+      "/openclaw/beam/0123456789abcdef0123456789abcdef",
+      "/openclaw",
+      "0123456789abcdef0123456789abcdef",
+    ],
+  ] as const)("parses %s", (pathname, basePath, shortId) => {
+    expect(matchControlUiCatalogSharePath({ pathname, basePath })).toEqual({
+      routeSegment: "beam",
+      shortId,
+    });
+  });
+
+  it.each(["/beam/0123456789AB", "/beam/0123456789abcdef0123456789abcdef0", "/beam/nothexvaluezz"])(
+    "parses the route owner before descriptor validation for %s",
+    (pathname) => {
+      expect(matchControlUiCatalogSharePath({ pathname })).toEqual({
+        routeSegment: "beam",
+        shortId: pathname.slice("/beam/".length),
+      });
+    },
+  );
+
+  it.each([
+    "/chat/0123456789ab",
+    "/focus/0123456789ab",
+    "/plugin/0123456789ab",
+    "/settings/0123456789ab",
+    "/ui/chat",
+    "/ui/config",
+    "/concepts/agent-workspace",
+    "/control/avatar/main",
+    "/beam/0123456789a",
+    "/beam/not-hex-value",
+    "/beam/0123456789ab/extra",
+  ])("rejects ordinary, resource, and implausible share paths for %s", (pathname) => {
+    expect(matchControlUiCatalogSharePath({ pathname })).toBeNull();
+  });
+
+  it.each(["/other/0123456789ab", "/beam/0123456789ab", "/wrong/openclaw/beam/0123456789ab"])(
+    "ignores unrelated or outside-base path %s",
+    (pathname) => {
+      expect(matchControlUiCatalogSharePath({ pathname, basePath: "/openclaw" })).toBeNull();
+    },
+  );
 });

@@ -1,6 +1,7 @@
 // OpenClaw SDK module implements client behavior.
 import { randomUUID } from "node:crypto";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
@@ -130,10 +131,6 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
     return "accepted";
   }
   return "failed";
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function readOptionalTimestamp(value: unknown): RunTimestamp | undefined {

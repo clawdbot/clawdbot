@@ -1,8 +1,10 @@
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listConfiguredSessionStoreAgentIds,
-  resolveStorePath,
+  resolveSessionStorePathCore,
   type InternalSessionEntry as SessionEntry,
   resolveAllAgentSessionStoreTargetsSync,
 } from "../../config/sessions.js";
@@ -14,7 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
 
-export const log = createSubsystemLogger("main-session-restart-recovery");
+export const mainSessionRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
 export const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 export const MAX_RECOVERY_RETRIES = 3;
 export const RETRY_BACKOFF_MULTIPLIER = 2;
@@ -53,6 +55,14 @@ export function buildRestartRecoveryExpectedState(
   };
 }
 
+export function resolveRestartRecoveryTerminalClientRunId(
+  entry: Pick<SessionEntry, "restartRecoveryDeliverySourceRunId" | "restartRecoverySourceIngress">,
+): string | undefined {
+  return entry.restartRecoverySourceIngress === "control-ui"
+    ? normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
+    : undefined;
+}
+
 export function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
   const normalized = new Set<string>();
   for (const value of values ?? []) {
@@ -64,9 +74,7 @@ export function normalizeStringSet(values: Iterable<string> | undefined): Set<st
   return normalized;
 }
 
-export function normalizeFiniteTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
+export const normalizeFiniteTimestamp = asFiniteNumber;
 
 export function hasCurrentProcessOwner(params: {
   activeSessionIds: Set<string>;
@@ -80,7 +88,7 @@ export function hasCurrentProcessOwner(params: {
   return params.activeSessionIds.size === 0 && params.activeSessionKeys.has(params.sessionKey);
 }
 
-export async function resolveRestartRecoveryStorePaths(params: {
+export async function discoverRestartRecoveryStorePaths(params: {
   cfg?: OpenClawConfig;
   stateDir?: string;
 }): Promise<string[]> {
@@ -94,7 +102,7 @@ export async function resolveRestartRecoveryStorePaths(params: {
     const configuredAgentIds = listConfiguredSessionStoreAgentIds(params.cfg);
     const configuredStorePaths = new Set(
       configuredAgentIds.map((agentId) =>
-        path.resolve(resolveStorePath(params.cfg?.session?.store, { agentId, env })),
+        path.resolve(resolveSessionStorePathCore(params.cfg?.session?.store, { agentId, env })),
       ),
     );
     const configuredAgentIdSet = new Set(configuredAgentIds);
@@ -113,9 +121,17 @@ export async function resolveRestartRecoveryStorePaths(params: {
       storePaths.add(path.join(sessionsDir, "sessions.json"));
     }
   }
-  // Agent databases also hold auth and model-catalog state. Enter the writer
-  // lane only when the session owner proves that a running row may need repair.
-  return [...storePaths]
-    .filter((storePath) => hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]))
-    .toSorted((a, b) => a.localeCompare(b));
+  return [...storePaths].toSorted((a, b) => a.localeCompare(b));
+}
+
+export async function resolveRestartRecoveryStorePaths(
+  params: Parameters<typeof discoverRestartRecoveryStorePaths>[0],
+): Promise<string[]> {
+  const stateDir = params.stateDir ?? resolveStateDir(process.env);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  // Startup recovery needs running rows; shutdown must also mark queued turns
+  // whose session still carries a prior terminal status.
+  return (await discoverRestartRecoveryStorePaths(params)).filter((storePath) =>
+    hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]),
+  );
 }

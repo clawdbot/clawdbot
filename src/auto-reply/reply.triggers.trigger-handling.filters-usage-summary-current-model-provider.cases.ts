@@ -8,7 +8,7 @@ import {
   requireSessionStorePath,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 
@@ -135,7 +135,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         );
         expect(replyText(r3)).toContain("Usage footer: tokens");
 
-        const finalEntries = listSessionEntries({ storePath: usageStorePath });
+        const finalEntries = listSessionEntriesCore({ storePath: usageStorePath });
         expect(finalEntries[0]?.entry.responseUsage).toBe("tokens");
         expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       });

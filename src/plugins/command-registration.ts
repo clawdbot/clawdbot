@@ -30,6 +30,11 @@ import {
 let reservedCommands: Set<string> | undefined;
 let agentPromptSurfaces: Set<string> | undefined;
 
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
+
 function getReservedCommands(): Set<string> {
   reservedCommands ??= new Set([
     "help",
@@ -161,6 +166,26 @@ function validatePluginCommandDefinition(
       return typeof unknownScope === "string"
         ? `Command requiredScopes contains unknown operator scope: ${unknownScope}`
         : "Command requiredScopes contains unknown operator scope";
+    }
+  }
+  if (command.clientPresentation !== undefined) {
+    if (!isRecord(command.clientPresentation)) {
+      return "Command clientPresentation must be an object";
+    }
+    if (!hasExactKeys(command.clientPresentation, ["when", "action"])) {
+      return "Command clientPresentation must contain only when and action";
+    }
+    if (command.clientPresentation.when !== "no-arguments") {
+      return 'Command clientPresentation when must be "no-arguments"';
+    }
+    if (!isRecord(command.clientPresentation.action)) {
+      return "Command clientPresentation action must be an object";
+    }
+    if (!hasExactKeys(command.clientPresentation.action, ["kind"])) {
+      return "Command clientPresentation action must contain only kind";
+    }
+    if (command.clientPresentation.action.kind !== "device-pairing") {
+      return "Command clientPresentation action kind is not supported";
     }
   }
   if (
@@ -354,6 +379,14 @@ export function registerPluginCommandInRegistry(
       : {}),
     ...(command.agentPromptGuidance
       ? { agentPromptGuidance: normalizeAgentPromptGuidance(command.agentPromptGuidance) }
+      : {}),
+    ...(command.clientPresentation
+      ? {
+          clientPresentation: {
+            when: "no-arguments" as const,
+            action: { kind: "device-pairing" as const },
+          },
+        }
       : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);

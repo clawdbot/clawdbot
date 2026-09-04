@@ -40,6 +40,8 @@
     <string></string>
     <key>OpenClawGitCommit</key>
     <string></string>
+    <key>PeekabooSourceCommit</key>
+    <string></string>
     <key>OpenClawPortGuardianStorageVersion</key>
     <integer>2</integer>
 

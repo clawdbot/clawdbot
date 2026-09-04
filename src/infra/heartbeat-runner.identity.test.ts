@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveStorePath } from "../config/sessions.js";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIsolatedHeartbeatSessionKey } from "./heartbeat-runner-session.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
@@ -66,8 +66,10 @@ describe("runHeartbeatOnce identity", () => {
           },
           session: { scope: "global", dmScope: "per-channel-peer", store: storeTemplate },
         };
-        const mainStorePath = resolveStorePath(storeTemplate, { agentId: "main" });
-        const historianStorePath = resolveStorePath(storeTemplate, { agentId: "historian2" });
+        const mainStorePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main" });
+        const historianStorePath = resolveSessionStorePathCore(storeTemplate, {
+          agentId: "historian2",
+        });
         await seedSessionStore(mainStorePath, "global", {
           lastChannel: "slack",
           lastProvider: "slack",
@@ -122,7 +124,7 @@ describe("runHeartbeatOnce identity", () => {
         },
         session: { scope: "global", store: storeTemplate },
       };
-      const hooksStorePath = resolveStorePath(storeTemplate, { agentId: "hooks" });
+      const hooksStorePath = resolveSessionStorePathCore(storeTemplate, { agentId: "hooks" });
       await seedSessionStore(hooksStorePath, "global", {});
       enqueueSystemEvent("Mapped hook wake", { sessionKey: "global" });
       expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
@@ -164,8 +166,16 @@ describe("runHeartbeatOnce identity", () => {
         },
         session: { scope: "global", store: storeTemplate },
       };
-      await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "alpha" }), "global", {});
-      await seedSessionStore(resolveStorePath(storeTemplate, { agentId: "beta" }), "global", {});
+      await seedSessionStore(
+        resolveSessionStorePathCore(storeTemplate, { agentId: "alpha" }),
+        "global",
+        {},
+      );
+      await seedSessionStore(
+        resolveSessionStorePathCore(storeTemplate, { agentId: "beta" }),
+        "global",
+        {},
+      );
       // Two hook agents complete before the coalesced wakes fire; both events
       // land in the shared `global` queue with per-agent ownership.
       enqueueSystemEvent(

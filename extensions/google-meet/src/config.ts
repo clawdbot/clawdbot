@@ -9,10 +9,12 @@ import {
   type RealtimeVoiceAgentConsultToolPolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
+  asBoolean,
   asRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
+  parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GoogleMeetTransport = "chrome" | "chrome-node" | "twilio";
@@ -251,7 +253,7 @@ const GOOGLE_MEET_PREVIEW_ACK_KEYS = [
 ] as const;
 
 function resolveBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
+  return asBoolean(value) ?? fallback;
 }
 
 function resolveNumber(value: unknown, fallback: number): number {
@@ -289,17 +291,7 @@ function normalizeStringAllowEmpty(value: unknown): string | undefined {
 }
 
 function readEnvBoolean(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean | undefined {
-  const normalized = normalizeOptionalLowercaseString(readEnvString(env, keys));
-  if (!normalized) {
-    return undefined;
-  }
-  if (["1", "true", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  if (["0", "false", "no", "off"].includes(normalized)) {
-    return false;
-  }
-  return undefined;
+  return parseBooleanValue(readEnvString(env, keys));
 }
 
 function readEnvNumber(env: NodeJS.ProcessEnv, keys: readonly string[]): number | undefined {

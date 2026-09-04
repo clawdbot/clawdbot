@@ -4,7 +4,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import type { RawData, WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
-import { agentCommand, installGatewayTestHooks, onceMessage } from "./test-helpers.js";
+import {
+  agentCommandMock,
+  installGatewayTestHooks,
+  onceMessage,
+  prepareGatewayReplyRuntimeForTest,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -32,8 +37,9 @@ beforeAll(async () => {
   harness = await startGatewayServerHarness();
 });
 
-beforeEach(() => {
-  vi.mocked(agentCommand).mockReset();
+beforeEach(async () => {
+  vi.mocked(agentCommandMock).mockReset();
+  await prepareGatewayReplyRuntimeForTest();
 });
 
 afterAll(async () => {
@@ -65,7 +71,7 @@ function sendAgentRequest(params: {
 describe("gateway agent RPC contracts", () => {
   test("preserves requested delivery status across ordered final response and replay", async () => {
     const runCompletion = createDeferred();
-    vi.mocked(agentCommand).mockImplementationOnce(async () => {
+    vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
       await runCompletion.promise;
       return {
         payloads: [{ text: "assistant reply" }],
@@ -115,8 +121,8 @@ describe("gateway agent RPC contracts", () => {
     });
 
     await acceptedPromise;
-    await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(agentCommand).mock.calls[0]?.[0]).toMatchObject({
+    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(agentCommandMock).mock.calls[0]?.[0]).toMatchObject({
       runId: idempotencyKey,
       channel: "webchat",
       messageChannel: "webchat",
@@ -182,7 +188,7 @@ describe("gateway agent RPC contracts", () => {
         attempted: false,
         reason: "channel_resolved_to_internal",
       });
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       second.ws.close();
     }

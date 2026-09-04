@@ -23,7 +23,6 @@ import {
   SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
   SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
 } from "./subagent-registry-suspended-delivery.js";
-export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import {
   reconcileDurableSubagentKillIntent,
   reconcileProvisionalSubagentKill,
@@ -41,6 +40,7 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentSessionStoreCache,
 } from "./subagent-session-reconciliation.js";
+export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 
 const SESSION_RUN_TTL_MS = 5 * 60_000;
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
@@ -106,6 +106,7 @@ export function createSubagentRegistrySweeper(params: {
   getRunsForCollectorGroup: (
     requesterSessionKey: string,
     groupId: string,
+    requesterAgentId?: string,
   ) => Iterable<[string, SubagentRunRecord]>;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
@@ -152,7 +153,7 @@ export function createSubagentRegistrySweeper(params: {
       return;
     }
     try {
-      await runWithGatewayIndependentRootWorkAdmission(sweepOnce);
+      await runWithGatewayIndependentRootWorkAdmission(sweepOnce, "subagents:sweeper");
     } catch (error) {
       params.warn(
         `subagent run sweep failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -188,9 +189,9 @@ export function createSubagentRegistrySweeper(params: {
   });
 
   function runCleanupTail(runId: string, label: string, run: () => Promise<unknown>) {
-    void runWithGatewayIndependentRootWorkAdmission(run).catch((error: unknown) => {
-      params.warn(`subagent sweep ${label} failed`, { runId, error });
-    });
+    void runWithGatewayIndependentRootWorkAdmission(run, "subagents:sweeper-cleanup").catch(
+      (error: unknown) => params.warn(`subagent sweep ${label} failed`, { runId, error }),
+    );
   }
 
   type FrozenSessionIdentity = {
@@ -243,11 +244,10 @@ export function createSubagentRegistrySweeper(params: {
     try {
       const now = Date.now();
       const storeCache: SubagentSessionStoreCache = new Map();
-      let mutated = false;
       const mutatedRunIds = new Set<string>();
       const collectorArchiveCandidates = new Map<
         string,
-        { requesterSessionKey: string; groupId: string }
+        { requesterSessionKey: string; groupId: string; requesterAgentId?: string }
       >();
       const phase = ([runId, entry]: [string, SubagentRunRecord]) =>
         entry.requesterSettleWake
@@ -313,7 +313,6 @@ export function createSubagentRegistrySweeper(params: {
               emitSubagentEndedHookForRun: params.emitSubagentEndedHookForRun,
               warn: params.warn,
             });
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           continue;
@@ -331,7 +330,6 @@ export function createSubagentRegistrySweeper(params: {
               warn: params.warn,
             })
           ) {
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           continue;
@@ -350,7 +348,6 @@ export function createSubagentRegistrySweeper(params: {
             warn: params.warn,
           });
           if (reconciled) {
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           continue;
@@ -364,9 +361,10 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (typeof entry.execution.endedAt !== "number") {
-          const hasLiveRunContext = Boolean(getAgentRunContext(runId));
+          // Queued collectors have no run context until FIFO dispatch; the scheduler owns them.
+          const notStale = entry.execution.status === "queued" || getAgentRunContext(runId);
           const activeAgeMs = now - (entry.execution.startedAt ?? entry.createdAt);
-          if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
+          if (!notStale && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
             const orphanReason = resolveSubagentRunOrphanReason({ entry });
             if (orphanReason) {
               if (
@@ -379,7 +377,6 @@ export function createSubagentRegistrySweeper(params: {
                   resumedRuns,
                 })
               ) {
-                mutated = true;
                 mutatedRunIds.add(runId);
               }
               continue;
@@ -478,19 +475,19 @@ export function createSubagentRegistrySweeper(params: {
             }
             entry.collectorLaunchCleanupPending = false;
             entry.cleanupCompletedAt = now;
-            mutated = true;
             mutatedRunIds.add(runId);
           }
           const groupId = entry.groupId?.trim();
           const swarmRequesterSessionKey =
             entry.swarmRequesterSessionKey ?? entry.requesterSessionKey;
           const groupKey = groupId
-            ? JSON.stringify([swarmRequesterSessionKey, groupId])
+            ? JSON.stringify([entry.requesterAgentId, swarmRequesterSessionKey, groupId])
             : undefined;
           if (groupKey && groupId) {
             collectorArchiveCandidates.set(groupKey, {
               requesterSessionKey: swarmRequesterSessionKey,
               groupId,
+              requesterAgentId: entry.requesterAgentId,
             });
           }
           continue;
@@ -521,7 +518,6 @@ export function createSubagentRegistrySweeper(params: {
               });
             }
             runs.delete(runId);
-            mutated = true;
             mutatedRunIds.add(runId);
             if (!entry.retainAttachmentsOnKeep) {
               await safeRemoveAttachmentsDir(entry);
@@ -557,7 +553,6 @@ export function createSubagentRegistrySweeper(params: {
           }
         }
         runs.delete(runId);
-        mutated = true;
         mutatedRunIds.add(runId);
         await safeRemoveAttachmentsDir(entry);
         if (!suppressSessionEffects && !sessionOwnershipChanged) {
@@ -566,8 +561,15 @@ export function createSubagentRegistrySweeper(params: {
           });
         }
       }
-      for (const { requesterSessionKey, groupId } of collectorArchiveCandidates.values()) {
-        const groupEntries = [...params.getRunsForCollectorGroup(requesterSessionKey, groupId)];
+      for (const {
+        requesterSessionKey,
+        groupId,
+        requesterAgentId,
+      } of collectorArchiveCandidates.values()) {
+        const readGroup = () => [
+          ...params.getRunsForCollectorGroup(requesterSessionKey, groupId, requesterAgentId),
+        ];
+        const groupEntries = readGroup();
         if (
           groupEntries.some(
             ([, candidate]) =>
@@ -666,7 +668,7 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         const expectedGroupEntries = new Map(groupEntries);
-        const liveGroupEntries = [...params.getRunsForCollectorGroup(requesterSessionKey, groupId)];
+        const liveGroupEntries = readGroup();
         if (
           liveGroupEntries.length !== groupEntries.length ||
           liveGroupEntries.some(
@@ -685,11 +687,10 @@ export function createSubagentRegistrySweeper(params: {
           runs.delete(candidateRunId);
           mutatedRunIds.add(candidateRunId);
         }
-        mutated = true;
       }
       params.sweepPendingLifecycle(now);
 
-      if (mutated) {
+      if (mutatedRunIds.size > 0) {
         params.persist(...mutatedRunIds);
       }
       if (runs.size === 0) {

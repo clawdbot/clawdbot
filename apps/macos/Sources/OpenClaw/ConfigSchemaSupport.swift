@@ -226,8 +226,8 @@ func humanizeConfigKey(_ key: String) -> String {
 func pathKey(_ path: ConfigPath) -> String {
     path.compactMap { segment -> String? in
         switch segment {
-        case let .key(key): return key
-        case .index: return nil
+        case let .key(key): key
+        case .index: nil
         }
     }
     .joined(separator: ".")

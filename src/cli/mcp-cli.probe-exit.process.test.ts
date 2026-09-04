@@ -16,52 +16,6 @@ async function writeConfig(home: string, servers: Record<string, unknown>): Prom
   return configPath;
 }
 
-async function writeProbeServer(filePath: string): Promise<void> {
-  await fs.writeFile(
-    filePath,
-    `let buffer = "";
-function send(message) {
-  process.stdout.write(JSON.stringify(message) + "\\n");
-}
-function handle(message) {
-  if (message.method === "initialize") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-        capabilities: { tools: {} },
-        serverInfo: { name: "probe-process-test", version: "1.0.0" },
-      },
-    });
-    return;
-  }
-  if (message.method === "tools/list") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: { tools: [{ name: "ping", inputSchema: { type: "object" } }] },
-    });
-  }
-}
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  while (true) {
-    const newline = buffer.indexOf("\\n");
-    if (newline < 0) return;
-    const line = buffer.slice(0, newline).replace(/\\r$/, "");
-    buffer = buffer.slice(newline + 1);
-    if (line.trim()) handle(JSON.parse(line));
-  }
-});
-process.stdin.on("end", () => process.exit(0));
-process.on("SIGTERM", () => process.exit(0));
-`,
-    "utf8",
-  );
-}
-
 function runProbe(home: string, args: string[]) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -117,53 +71,5 @@ describe("mcp probe process exit", () => {
     expect(output.servers).toEqual({});
     expect(output.diagnostics).toEqual([expect.objectContaining({ serverName: "broken" })]);
     expect(result.stderr).toContain(`MCP probe failed for "broken" in ${configPath}:`);
-  });
-
-  it("preserves mixed partial text output before exiting nonzero", async () => {
-    const home = await createTempHome();
-    const serverPath = path.join(home, "probe-server.mjs");
-    await writeProbeServer(serverPath);
-    await writeConfig(home, {
-      healthy: { command: process.execPath, args: [serverPath] },
-      broken: { command: path.join(home, "missing-mcp-server") },
-    });
-
-    const result = runProbe(home, ["mcp", "probe"]);
-
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("- healthy: 1 tools");
-    expect(result.stdout).toContain("! broken:");
-  });
-
-  it("fails when an enabled server is omitted without a diagnostic", async () => {
-    const home = await createTempHome();
-    await writeConfig(home, { incomplete: {} });
-
-    const result = runProbe(home, ["mcp", "probe", "incomplete", "--json"]);
-
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(1);
-    expect(JSON.parse(result.stdout)).toMatchObject({ servers: {}, diagnostics: [] });
-    expect(result.stderr).toContain('MCP probe did not connect to "incomplete"');
-  });
-
-  it("keeps healthy output successful and ignores disabled entries", async () => {
-    const home = await createTempHome();
-    const serverPath = path.join(home, "probe-server.mjs");
-    await writeProbeServer(serverPath);
-    await writeConfig(home, {
-      healthy: { command: process.execPath, args: [serverPath] },
-      disabled: { enabled: false },
-    });
-
-    const result = runProbe(home, ["mcp", "probe", "--json"]);
-
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      diagnostics: [],
-      servers: { healthy: { tools: 1 } },
-    });
   });
 });

@@ -9,11 +9,12 @@ import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { cancelChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
-  enqueuePendingSendMessage,
+  createPendingSendMessage,
+  publishPendingSendMessage,
   reconnectSafeQueuedSendState,
   setChatError,
 } from "./chat-send-queue-state.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./steer-lifecycle.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 
 type DeliverChatQueueItem = (
   host: ChatHost,
@@ -25,7 +26,7 @@ export function createResetSlashCommandSender(
   deliverChatQueueItem: DeliverChatQueueItem,
 ): ChatOutboxDrainDependencies["sendResetSlashCommand"] {
   return async (host: ChatHost, message: string, options: ChatCommandResetOptions) => {
-    const item = enqueuePendingSendMessage(
+    const pending = createPendingSendMessage(
       host,
       message,
       undefined,
@@ -33,14 +34,18 @@ export function createResetSlashCommandSender(
       undefined,
       reconnectSafeQueuedSendState(host),
     );
-    if (!item || !admitQueuedMessageForSession(host, host.sessionKey, item)) {
+    const item = pending?.item;
+    if (item) {
+      publishPendingSendMessage(host, item);
+    }
+    if (!pending || !admitQueuedMessageForSession(host, pending.admission, pending.item)) {
       if (item) {
         cancelChatDelivery(host, item, { previousDraft: options.previousDraft });
       }
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return;
     }
-    await deliverChatQueueItem(host, item, {
+    await deliverChatQueueItem(host, pending.item, {
       previousDraft: options.previousDraft,
       restoreDraft: options.restoreDraft,
       routingSessionKey: host.sessionKey,

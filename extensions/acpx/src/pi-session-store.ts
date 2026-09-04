@@ -1,8 +1,13 @@
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type { SessionCatalogSession } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as readBoundedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { piAcpSessionStoreRoot, piSessionStore } from "./pi-session-paths.js";
 import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
@@ -85,14 +90,6 @@ function cacheSummary(file: string, value: CachedSummary): void {
   }
 }
 
-function readBoundedString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
-
 async function discoverPiSessionFiles(
   env: NodeJS.ProcessEnv,
 ): Promise<{ root: string; files: string[] }> {
@@ -145,44 +142,30 @@ async function realpathOrResolve(value: string): Promise<string> {
   }
 }
 
-async function mapConcurrent<T, R>(
-  values: T[],
-  limit: number,
-  mapper: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = values.length;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(limit, values.length) }, async () => {
-    while (nextIndex < values.length) {
-      const index = nextIndex++;
-      results[index] = await mapper(values[index]!);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
 async function scanPiFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate[]> {
   const { root, files } = await discoverPiSessionFiles(env);
   const configuredAcpRoot = piAcpSessionStoreRoot(env);
   const acpRoot = configuredAcpRoot ? await realpathOrResolve(configuredAcpRoot) : undefined;
-  const candidates = await mapConcurrent(files, IO_CONCURRENCY, async (file) => {
-    try {
-      const stats = await fs.stat(file);
-      return stats.isFile()
-        ? {
-            file,
-            storeRoot: root,
-            identity: `${String(stats.dev)}:${String(stats.ino)}:${String(stats.birthtimeMs)}`,
-            mtimeMs: stats.mtimeMs,
-            size: stats.size,
-            resumable: acpRoot ? pathIsWithin(acpRoot, file) : false,
-          }
-        : undefined;
-    } catch {
-      return undefined;
-    }
+  const { results: candidates } = await runTasksWithConcurrency({
+    tasks: files.map((file) => async () => {
+      try {
+        const stats = await fs.stat(file);
+        return stats.isFile()
+          ? {
+              file,
+              storeRoot: root,
+              identity: `${String(stats.dev)}:${String(stats.ino)}:${String(stats.birthtimeMs)}`,
+              mtimeMs: stats.mtimeMs,
+              size: stats.size,
+              resumable: acpRoot ? isPathStrictlyInside(acpRoot, file) : false,
+            }
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    }),
+    limit: IO_CONCURRENCY,
+    throwOnError: true,
   });
   return candidates
     .filter((candidate): candidate is PiFileCandidate => candidate !== undefined)
@@ -219,16 +202,6 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
     }
     throw error;
   }
-}
-
-function pathIsWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
 }
 
 function parsePiJsonLines(content: string): Record<string, unknown>[] {
@@ -474,7 +447,11 @@ export async function listPiSummaryPage(
     index += SUMMARY_SCAN_BATCH_SIZE
   ) {
     const batch = candidates.slice(index, index + SUMMARY_SCAN_BATCH_SIZE);
-    const summaries = await mapConcurrent(batch, IO_CONCURRENCY, readPiSessionSummary);
+    const { results: summaries } = await runTasksWithConcurrency({
+      tasks: batch.map((candidate) => () => readPiSessionSummary(candidate)),
+      limit: IO_CONCURRENCY,
+      throwOnError: true,
+    });
     for (const summary of summaries) {
       if (summary && summaryMatches(summary, needle)) {
         matches.push(summary);
@@ -496,11 +473,13 @@ async function findPiSummary(
 ): Promise<PiSessionSummary | undefined> {
   const candidates = await piFileCandidates(env);
   for (let index = 0; index < candidates.length; index += SUMMARY_SCAN_BATCH_SIZE) {
-    const summaries = await mapConcurrent(
-      candidates.slice(index, index + SUMMARY_SCAN_BATCH_SIZE),
-      IO_CONCURRENCY,
-      readPiSessionSummary,
-    );
+    const { results: summaries } = await runTasksWithConcurrency({
+      tasks: candidates
+        .slice(index, index + SUMMARY_SCAN_BATCH_SIZE)
+        .map((candidate) => () => readPiSessionSummary(candidate)),
+      limit: IO_CONCURRENCY,
+      throwOnError: true,
+    });
     const match = summaries.find((summary) => summary?.threadId === threadId);
     if (match) {
       return match;

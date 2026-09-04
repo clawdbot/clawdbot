@@ -1,8 +1,6 @@
 import {
   type AgentPlanStep,
-  buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftCompositor,
-  formatChannelProgressDraftLine,
   formatChannelProgressDraftText,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
@@ -38,7 +36,8 @@ export async function createMatrixDraftController(params: {
     client,
     logVerboseMessage,
   } = params;
-  let draftConsumed = false;
+  type DraftDisposition = "active" | "retained" | "consumed";
+  let draftDisposition: DraftDisposition = "active";
 
   const draftStreamingEnabled = streaming !== "off";
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
@@ -96,10 +95,6 @@ export async function createMatrixDraftController(params: {
     active: Boolean(draftStream),
     seed: progressSeed,
     formatLine: formatMatrixToolProgressMarkdownCode,
-    buildProgressEventLine: (input, options) =>
-      input.event === "approval"
-        ? formatChannelProgressDraftLine(input, options)
-        : buildChannelProgressDraftLineForEntry(progressConfigEntry, input, options),
     update: async (text, options) => {
       const previewText =
         !progressDraftStreaming && (previewPlan || previewPlanExplanation)
@@ -128,14 +123,8 @@ export async function createMatrixDraftController(params: {
     if (!shouldSuppressDefaultToolProgressMessages) {
       return {};
     }
-    const options: Partial<GetReplyOptions> = {
-      suppressDefaultToolProgressMessages: true,
-    };
-    if (!shouldStreamPreviewToolProgress) {
-      return options;
-    }
     return {
-      ...options,
+      suppressDefaultToolProgressMessages: true,
       onToolStart: async (payload) => {
         return await progressDraft.pushToolEvent(payload);
       },
@@ -238,7 +227,7 @@ export async function createMatrixDraftController(params: {
   const resetDraftDeliveryState = async () => {
     await draftStream?.discardPending();
     draftStream?.reset();
-    draftConsumed = false;
+    draftDisposition = "active";
     currentDraftMessageGeneration = 0;
     currentDraftBlockOffset = 0;
     latestDraftFullText = "";
@@ -259,12 +248,15 @@ export async function createMatrixDraftController(params: {
     resetPreviewToolProgress,
     resetDraftDeliveryState,
     updateDraftFromLatestFullText,
-    isDraftConsumed: () => draftConsumed,
-    markDraftConsumed: () => {
-      draftConsumed = true;
+    draftDisposition: () => draftDisposition,
+    beginDraftGeneration: () => {
+      draftDisposition = "active";
     },
-    clearDraftConsumed: () => {
-      draftConsumed = false;
+    markDraftConsumed: () => {
+      draftDisposition = "consumed";
+    },
+    markDraftRetained: () => {
+      draftDisposition = "retained";
     },
     currentReplyToId: () => currentDraftReplyToId,
     setCurrentReplyToId: (replyToId: string | undefined) => {

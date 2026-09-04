@@ -4,12 +4,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 import { runMessageAction } from "./message-action-runner.js";
 import {
   forumTestPlugin,
   workspaceConfig,
   workspaceTestPlugin,
-} from "./message-action-test-fixtures.js";
+} from "./message-action-runner.test-support.js";
 
 const emptyConfig = {} as OpenClawConfig;
 describe("runMessageAction send validation", () => {
@@ -140,6 +141,39 @@ describe("runMessageAction send validation", () => {
   });
 
   it("requires source address context before inferring non-webchat source sinks", async () => {
+    const failure = runMessageAction({
+      cfg: emptyConfig,
+      action: "send",
+      params: {
+        message: "telegram reply",
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+      },
+      sessionKey: "agent:main:telegram:direct:123456789",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
+    await expect(failure).rejects.toMatchObject({
+      reasonCode: "message_target_missing",
+      policyRef: "message-target:required",
+    });
+  });
+
+  it("types disabled broadcast as an outcome-owning policy denial", async () => {
+    const failure = runMessageAction({
+      cfg: { tools: { message: { broadcast: { enabled: false } } } } as OpenClawConfig,
+      action: "broadcast",
+      params: { targets: ["qa-channel:direct:one"], message: "hello" },
+    });
+    await expect(failure).rejects.toBeInstanceOf(MessageActionDeniedError);
+    await expect(failure).rejects.toMatchObject({
+      reasonCode: "message_broadcast_disabled",
+      policyRef: "message-broadcast:enabled",
+    });
+  });
+
+  it("preserves the missing-target user-facing error", async () => {
     await expect(
       runMessageAction({
         cfg: emptyConfig,

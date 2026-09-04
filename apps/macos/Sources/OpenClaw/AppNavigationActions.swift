@@ -20,26 +20,7 @@ enum AppNavigationActions {
 
     static func openChat(sessionKey: String? = nil, agentID: String? = nil, draft: String? = nil) {
         NSApp.activate(ignoringOtherApps: true)
-        Task { @MainActor in
-            let resolvedSessionKey = if let sessionKey {
-                sessionKey
-            } else {
-                await WebChatManager.shared.preferredSessionKey()
-            }
-            WebChatManager.shared.show(sessionKey: resolvedSessionKey, agentID: agentID, draft: draft)
-        }
-    }
-
-    static func toggleCanvas() {
-        NSApp.activate(ignoringOtherApps: true)
-        Task { @MainActor in
-            if AppStateStore.shared.canvasPanelVisible {
-                CanvasManager.shared.hideAll()
-            } else {
-                let sessionKey = await GatewayConnection.shared.mainSessionKey()
-                _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
-            }
-        }
+        WebChatManager.shared.show(sessionKey: sessionKey, agentID: agentID, draft: draft)
     }
 
     static func openSettings(tab: SettingsTab = .general) {

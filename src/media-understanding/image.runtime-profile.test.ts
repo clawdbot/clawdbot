@@ -1,6 +1,7 @@
 // Image runtime tests cover model-backed image routing, auth/profile handling,
 // provider payload transforms, and MiniMax/Copilot special paths.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -28,7 +29,7 @@ const hoisted = vi.hoisted(() => ({
       mode: "oauth",
     }),
   ),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
+  resolveApiKeyForProviderCoreMock: vi.fn(async () => ({
     [API_KEY_FIELD]: "test-token",
     source: "test",
     mode: "oauth",
@@ -51,7 +52,7 @@ const {
   completeMock,
   ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
-  resolveApiKeyForProviderMock,
+  resolveApiKeyForProviderCoreMock,
   requireApiKeyMock,
   setRuntimeApiKeyMock,
   discoverModelsMock,
@@ -80,27 +81,6 @@ type AuthRequestCall = {
   store?: unknown;
 };
 
-function requireMockCallAt<const Calls extends readonly unknown[][]>(
-  mock: { mock: { calls: Calls } },
-  index: number,
-  label: string,
-): Calls[number] {
-  // Tests inspect exact dependency calls because image runtime behavior is
-  // mostly provider/auth orchestration.
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${index}`);
-  }
-  return call as Calls[number];
-}
-
-function requireFirstMockCall<const Calls extends readonly unknown[][]>(
-  mock: { mock: { calls: Calls } },
-  label: string,
-): Calls[number] {
-  return requireMockCallAt(mock, 0, label);
-}
-
 vi.mock("../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
   return {
@@ -118,8 +98,8 @@ vi.mock("../agents/models-config.js", async () => ({
 
 vi.mock("../agents/model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
-  getApiKeyForModel: getApiKeyForModelMock,
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  getApiKeyForModelCore: getApiKeyForModelMock,
+  resolveApiKeyForProviderCore: resolveApiKeyForProviderCoreMock,
   [REQUIRE_API_KEY_FIELD]: requireApiKeyMock,
 }));
 
@@ -273,7 +253,7 @@ describe("describeImageWithModelCore", () => {
   function getApiKeyForModelCall(index = 0): AuthRequestCall {
     const call = (getApiKeyForModelMock.mock.calls as unknown[][]).at(index);
     if (!call) {
-      throw new Error(`Expected getApiKeyForModel call ${index}`);
+      throw new Error(`Expected getApiKeyForModelCore call ${index}`);
     }
     return call[0] as AuthRequestCall;
   }
@@ -396,7 +376,6 @@ describe("describeImageWithModelCore", () => {
     };
     resolveModelAsyncMock
       .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
-      .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
       .mockResolvedValueOnce({ model: authoritativeModel, authStorage, modelRegistry });
     getApiKeyForModelMock.mockResolvedValueOnce({
       [API_KEY_FIELD]: "test-token",
@@ -428,15 +407,15 @@ describe("describeImageWithModelCore", () => {
       timeoutMs: 1000,
     });
 
-    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(3);
-    expect(resolveModelAsyncMock.mock.calls[2]?.[4]).toEqual(
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(2);
+    expect(resolveModelAsyncMock.mock.calls[1]?.[4]).toEqual(
       expect.objectContaining({
         authStorage,
         modelRegistry,
         authProfileId: "github-copilot:backup",
       }),
     );
-    const [completionModel] = requireFirstMockCall(completeMock, "complete");
+    const [completionModel] = expectDefined(completeMock.mock.calls[0], "complete call 0");
     expect(completionModel).toEqual(
       expect.objectContaining({
         contextWindow: 1_050_000,
@@ -688,7 +667,7 @@ describe("describeImageWithModelCore", () => {
       timeoutMs: 1000,
     });
 
-    const options = requireFirstMockCall(completeMock, "image completion")[2];
+    const options = expectDefined(completeMock.mock.calls[0], "image completion call 0")[2];
     expect(options.maxTokens).toBe(4096);
   });
 
@@ -725,7 +704,7 @@ describe("describeImageWithModelCore", () => {
       timeoutMs: 1000,
     });
 
-    const options = requireFirstMockCall(completeMock, "image completion")[2];
+    const options = expectDefined(completeMock.mock.calls[0], "image completion call 0")[2];
     expect(options.maxTokens).toBe(1024);
   });
 
@@ -773,7 +752,14 @@ describe("describeImageWithModelCore", () => {
     });
 
     expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-workspace" }),
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [
+          { provider: "google", modelId: "gemini-2.5-flash", agentId: "vision-agent" },
+        ],
+      }),
+      { catalogMode: "static" },
     );
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
       "google",

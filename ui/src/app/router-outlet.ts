@@ -1,8 +1,8 @@
 import type { RouteMatch, Router } from "@openclaw/uirouter";
-import { html, nothing } from "lit";
+import { nothing } from "lit";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
-import { icon } from "../components/icons.ts";
+import { renderLazyViewError } from "../components/lazy-view-error.ts";
 import { renderLoadingState } from "../components/loading-state.ts";
 import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { t } from "../i18n/index.ts";
@@ -21,7 +21,7 @@ import {
 export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
-  render: (data: TData | undefined) => unknown;
+  render: (data: TData | undefined, loaderPending: boolean) => unknown;
   renderOwnerKey?: (
     match: Pick<RouteMatch<string, unknown, TData>, "data" | "location">,
     settled: Pick<RouteMatch<string, unknown, TData>, "data" | "location"> | undefined,
@@ -77,7 +77,6 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
   routeId: TRouteId,
   render?: () => unknown,
 ) {
-  const routeError = error instanceof Error ? error.message : String(error);
   const staleChunk = isStaleChunkImportError(error);
   if (staleChunk) {
     // The chunk this document references was replaced by a newer build;
@@ -113,31 +112,7 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
   };
   // Stale-chunk failures are routine after a gateway update, so present them
   // as an update prompt instead of a generic failure.
-  const errorClasses = [
-    "lazy-view-error",
-    render ? "lazy-view-error--inline" : "",
-    staleChunk ? "lazy-view-error--stale" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return html`
-    ${render?.() ?? nothing}
-    <div class=${errorClasses} role="alert">
-      <div class="lazy-view-error__icon" aria-hidden="true">
-        ${icon(staleChunk ? "refresh" : "alertTriangle")}
-      </div>
-      <div class="lazy-view-error__title">
-        ${staleChunk ? t("lazyView.staleTitle") : t("lazyView.errorTitle")}
-      </div>
-      <div class="lazy-view-error__subtitle">
-        ${staleChunk ? t("lazyView.staleSubtitle") : t("lazyView.genericSubtitle")}
-      </div>
-      <button class="btn lazy-view-error__action" @click=${handleRetry}>
-        ${staleChunk ? t("common.reload") : t("lazyView.retry")}
-      </button>
-      <code class="lazy-view-error__detail">${routeError}</code>
-    </div>
-  `;
+  return renderLazyViewError({ error, onRetry: handleRetry, render, stale: staleChunk });
 }
 
 function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
@@ -181,7 +156,9 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
       : null;
   }
   const renderedPage = () =>
-    measureRoutedRender(routeId, () => routeModule.render(renderedMatch.data));
+    measureRoutedRender(routeId, () =>
+      routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader"),
+    );
   return renderedMatch.error
     ? renderError<TRouteId, TLoadContext, TModule, TData>(
         router,
@@ -251,14 +228,12 @@ class OpenClawRouterOutlet<
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   override render() {
-    if (!this.router) {
+    const router = this.router;
+    if (!router) {
       return nothing;
     }
     const snapshot = this.outlet.snapshot;
     const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
-    const rendered = renderRouterOutlet(this.router, snapshot, renderedMatch, {
-      retryContext: this.retryContext,
-    });
     const routeKey = renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty";
     const routeModule = renderedMatch?.module;
     const declaredOwnerKey =
@@ -270,9 +245,15 @@ class OpenClawRouterOutlet<
       explicitOwnerKey !== undefined &&
       renderedMatch?.status === "pending" &&
       renderedMatch.data === undefined;
-    return this.mcpAppUnmountGate.render(explicitOwnerKey ?? routeKey, rendered, () => [this], {
-      retainRenderedValue: retainCurrent,
-    });
+    return this.mcpAppUnmountGate.render(
+      explicitOwnerKey ?? routeKey,
+      () =>
+        renderRouterOutlet(router, snapshot, renderedMatch, {
+          retryContext: this.retryContext,
+        }),
+      () => [this],
+      { retainRenderedValue: retainCurrent },
+    );
   }
 }
 

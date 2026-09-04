@@ -35,7 +35,7 @@ test("tools.effective rejects a mismatched configured agent for a non-global ses
     expect(res.ok).toBe(false);
     expect(res.error).toEqual({
       code: ErrorCodes.INVALID_REQUEST,
-      message: 'agent id "work" does not match session agent "main"',
+      message: 'agent "work" does not match session key agent "main"',
     });
   } finally {
     ws.close();

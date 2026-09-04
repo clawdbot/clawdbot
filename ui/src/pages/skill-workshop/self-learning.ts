@@ -3,10 +3,8 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import {
-  resolveEditableSnapshotConfig,
-  type RuntimeConfigCapability,
-} from "../../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 
 export type SkillWorkshopSelfLearning = {
   enabled: boolean;
@@ -119,9 +117,11 @@ export function renderSelfLearningPitch(
         ?disabled=${selfLearning.busy || !selfLearning.canUpdate}
         @click=${() => onToggle(true)}
       >
-        ${selfLearning.busy
-          ? t("skillWorkshop.selfLearning.enabling")
-          : t("skillWorkshop.selfLearning.enable")}
+        ${
+          selfLearning.busy
+            ? t("skillWorkshop.selfLearning.enabling")
+            : t("skillWorkshop.selfLearning.enable")
+        }
       </button>
     </div>
   `;

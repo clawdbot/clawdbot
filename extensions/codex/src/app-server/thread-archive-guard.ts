@@ -1,3 +1,4 @@
+import { normalizeBoundedOptionalString as readBoundedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type CodexThreadListParams } from "./protocol.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 
@@ -5,14 +6,6 @@ const DESCENDANT_PAGE_LIMIT = 100;
 const MAX_DESCENDANT_PAGES = 100;
 const MAX_THREAD_ID_LENGTH = 256;
 const MAX_CURSOR_LENGTH = 4096;
-
-function readBoundedId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized && normalized.length <= MAX_THREAD_ID_LENGTH ? normalized : undefined;
-}
 
 function readNextCursor(value: unknown): string | undefined {
   if (value === undefined || value === null) {
@@ -34,7 +27,7 @@ export async function assertCodexArchiveDescendantsUnowned(params: {
   listPage: (request: CodexThreadListParams) => Promise<unknown>;
   assertDescendantIdle: (threadId: string) => Promise<void>;
 }): Promise<void> {
-  const ancestorThreadId = readBoundedId(params.threadId);
+  const ancestorThreadId = readBoundedId(params.threadId, MAX_THREAD_ID_LENGTH);
   if (!ancestorThreadId) {
     throw new Error("cannot verify Codex archive descendants for an invalid thread id");
   }
@@ -64,7 +57,7 @@ export async function assertCodexArchiveDescendantsUnowned(params: {
       if (!isJsonObject(value)) {
         throw new Error("Codex app-server returned an invalid descendant thread");
       }
-      const descendantThreadId = readBoundedId(value.id);
+      const descendantThreadId = readBoundedId(value.id, MAX_THREAD_ID_LENGTH);
       if (!descendantThreadId) {
         throw new Error("Codex app-server returned a descendant without a valid thread id");
       }

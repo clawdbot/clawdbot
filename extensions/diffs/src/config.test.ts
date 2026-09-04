@@ -418,7 +418,28 @@ describe("diffs viewer URL helpers", () => {
     ).toBe("http://127.0.0.1:24444/plugins/diffs/view/id/token");
   });
 
-  it("uses custom bind host when provided", () => {
+  it("resolves explicit, plugin, public, then bind-aware viewer bases", () => {
+    expect(
+      buildViewerUrl({
+        config: { gateway: { publicOrigin: "https://public.example.com" } },
+        baseUrl: "https://explicit.example.com/review",
+        viewerBaseUrl: "https://plugin.example.com/viewer",
+        viewerPath: "/plugins/diffs/view/id/token",
+      }),
+    ).toBe("https://explicit.example.com/review/plugins/diffs/view/id/token");
+    expect(
+      buildViewerUrl({
+        config: { gateway: { publicOrigin: "https://public.example.com" } },
+        viewerBaseUrl: "https://plugin.example.com/viewer",
+        viewerPath: "/plugins/diffs/view/id/token",
+      }),
+    ).toBe("https://plugin.example.com/viewer/plugins/diffs/view/id/token");
+    expect(
+      buildViewerUrl({
+        config: { gateway: { publicOrigin: "https://public.example.com" } },
+        viewerPath: "/plugins/diffs/view/id/token",
+      }),
+    ).toBe("https://public.example.com/plugins/diffs/view/id/token");
     expect(
       buildViewerUrl({
         config: {

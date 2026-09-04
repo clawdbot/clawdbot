@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
@@ -71,122 +72,13 @@ async function captureDatabaseVerifyWorkerSendFailure(failure: unknown): Promise
 }
 
 describe("database verification error coercion", () => {
-  it("preserves existing Error identity without invoking custom toString", async () => {
-    class ThrowingToStringError extends Error {
-      override toString(): string {
-        throw new Error("unexpected stringification");
-      }
-    }
-    const cause = { code: "SQLITE_IOERR" };
-    const failure = new ThrowingToStringError("database failed", { cause });
-    failure.name = "DatabaseFailure";
-    const originalStack = failure.stack;
+  it("preserves structured send failures across the database-worker boundary", async () => {
+    const failure = { code: "SQLITE_IOERR", database: "state" };
 
     const error = await captureDatabaseVerifyWorkerSendFailure(failure);
 
-    expect(error).toBe(failure);
-    expect(error).toMatchObject({
-      cause,
-      message: "database failed",
-      name: "DatabaseFailure",
-      stack: originalStack,
-    });
-  });
-
-  it("skips structured fields whose getters throw", async () => {
-    const failure = {
-      get details(): never {
-        throw new Error("unexpected structured field read");
-      },
-      code: "SQLITE_IOERR",
-    };
-
-    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
-
-    expect(error).toMatchObject({ code: "SQLITE_IOERR" });
-    expect(error).not.toHaveProperty("details");
-  });
-
-  it("preserves the base Error when structured enumeration traps throw", async () => {
-    const handlers: ProxyHandler<{ code: string; status: number }>[] = [
-      {
-        ownKeys() {
-          throw new Error("unexpected ownKeys call");
-        },
-      },
-      {
-        ownKeys() {
-          return ["code", "status"];
-        },
-        getOwnPropertyDescriptor(target, key) {
-          if (key === "status") {
-            throw new Error("unexpected descriptor read");
-          }
-          return Reflect.getOwnPropertyDescriptor(target, key);
-        },
-      },
-    ];
-
-    for (const handler of handlers) {
-      const failure = new Proxy({ code: "SQLITE_IOERR", status: 10 }, handler);
-      const error = await captureDatabaseVerifyWorkerSendFailure(failure);
-
-      expect(error).toMatchObject({ name: "Error", message: "[object Object]" });
-      expect(error.cause).toBe(failure);
-      expect(error).not.toHaveProperty("code");
-      expect(error).not.toHaveProperty("status");
-    }
-  });
-
-  it("preserves adapter-owned Error fields when structured failure fields collide", async () => {
-    const detailKey = Symbol("detail");
-    let reservedReads = 0;
-    const failure = {
-      get name() {
-        reservedReads += 1;
-        return "SpoofedError";
-      },
-      get message() {
-        reservedReads += 1;
-        return "spoofed message";
-      },
-      get cause() {
-        reservedReads += 1;
-        return "spoofed cause";
-      },
-      get stack() {
-        reservedReads += 1;
-        return "spoofed stack";
-      },
-      code: "SQLITE_IOERR",
-      details: { database: "state" },
-      [detailKey]: "symbol detail",
-    };
-
-    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
-
-    expect(reservedReads).toBe(0);
-    expect(error.message).toBe("[object Object]");
+    expect(error).toMatchObject({ message: "[object Object]", code: "SQLITE_IOERR" });
     expect(error.cause).toBe(failure);
-    expect(error.name).toBe("Error");
-    expect(error.stack).toContain("Error: [object Object]");
-    expect(error).toMatchObject({ code: "SQLITE_IOERR", details: { database: "state" } });
-    expect(Reflect.get(error, detailKey)).toBe("symbol detail");
-  });
-
-  it("rejects prototype-mutating structured failure fields", async () => {
-    const failure = { constructor: { polluted: true }, prototype: { polluted: true } };
-    Object.defineProperty(failure, "__proto__", {
-      value: { polluted: true },
-      enumerable: true,
-    });
-
-    const error = await captureDatabaseVerifyWorkerSendFailure(failure);
-
-    expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
-    expect(Object.hasOwn(error, "__proto__")).toBe(false);
-    expect(Object.hasOwn(error, "constructor")).toBe(false);
-    expect(Object.hasOwn(error, "prototype")).toBe(false);
   });
 });
 
@@ -265,19 +157,36 @@ function preparedVerificationResults(
   return targets.map((target) => terminalVerificationResult(target.path));
 }
 
-function readLinuxPosixLocksForPath(pathname: string): string[] {
-  if (process.platform !== "linux") {
-    return [];
-  }
-  const inode = fs.statSync(pathname, { bigint: true }).ino;
-  const lockInode = new RegExp(`\\b[0-9a-f]+:[0-9a-f]+:${inode}\\b`, "u");
-  return fs
-    .readFileSync("/proc/locks", "utf8")
-    .split("\n")
-    .filter((line) => line.includes(" POSIX ") && lockInode.test(line));
-}
-
 describe("OpenClaw database integrity verifier", () => {
+  it.each(["absent", "installed"])(
+    "verifies the %s additive transcript eligibility projection",
+    async (shape) => {
+      const stateDir = tempDirs.make("openclaw-database-verify-eligibility-");
+      const agent = openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      if (shape === "absent") {
+        agent.db.exec(
+          "DROP INDEX idx_agent_transcript_context_pending; ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;",
+        );
+      }
+      const targets: OpenClawDatabaseVerifyTarget[] = [
+        { kind: "agent", label: "transcript eligibility", path: agent.path },
+      ];
+      await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
+        { path: agent.path, ok: true },
+      ]);
+      expect(
+        agent.db
+          .prepare(
+            "SELECT name FROM pragma_table_info('session_transcript_active_events') WHERE name = 'context_eligible'",
+          )
+          .get(),
+      ).toEqual(shape === "absent" ? undefined : { name: "context_eligible" });
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "preserves live WAL ownership while snapshotting an open database",
     async () => {
@@ -291,9 +200,12 @@ describe("OpenClaw database integrity verifier", () => {
         .run("verifier-lock-owner", JSON.stringify({ preserved: true }), 1);
       const walBefore = fs.statSync(`${agent.path}-wal`);
       const shmBefore = fs.statSync(`${agent.path}-shm`);
-      const baseLocksBefore = readLinuxPosixLocksForPath(agent.path);
+      const baseLocksBefore =
+        process.platform === "linux" ? readMainDatabasePosixLocks(agent.path) : [];
       if (process.platform === "linux") {
-        expect(baseLocksBefore.length).toBeGreaterThan(0);
+        expect(baseLocksBefore).toEqual([
+          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+        ]);
       }
       const targets: OpenClawDatabaseVerifyTarget[] = [
         { kind: "agent", label: "OpenClaw agent database worker-1", path: agent.path },
@@ -305,7 +217,7 @@ describe("OpenClaw database integrity verifier", () => {
       if (process.platform === "linux") {
         // SQLite 3.51 can preserve visible WAL files after a lock is lost, so
         // assert the kernel lock itself rather than relying on that symptom.
-        expect(readLinuxPosixLocksForPath(agent.path).length).toBeGreaterThan(0);
+        expect(readMainDatabasePosixLocks(agent.path)).toEqual(baseLocksBefore);
       }
       const reader = spawnSync(
         process.execPath,

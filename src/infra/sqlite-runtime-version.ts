@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core";
+
 type SqliteVersion = {
   major: number;
   minor: number;
@@ -10,6 +12,23 @@ const SQLITE_WAL_RESET_BACKPORTS: readonly SqliteVersion[] = [
   { major: 3, minor: 50, patch: 7 },
 ];
 const SQLITE_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/u;
+
+/** Query the SQLite library loaded by the current runtime without opening persisted state. */
+export function detectCurrentRuntimeSqliteVersion(): string | null {
+  const sqlite = process.getBuiltinModule?.("node:sqlite");
+  if (!sqlite?.DatabaseSync) {
+    return null;
+  }
+  // This in-memory bootstrap probe intentionally stays in the lightweight runtime-version owner;
+  // importing the persisted-state SQLite owner would pull logger packages into CLI startup.
+  const database = new sqlite.DatabaseSync(":memory:");
+  try {
+    const row: unknown = database.prepare("SELECT sqlite_version() AS version").get();
+    return isRecord(row) && typeof row.version === "string" ? row.version : null;
+  } finally {
+    database.close();
+  }
+}
 
 function parseSqliteVersion(value: string): SqliteVersion | null {
   const match = SQLITE_VERSION_PATTERN.exec(value.trim());

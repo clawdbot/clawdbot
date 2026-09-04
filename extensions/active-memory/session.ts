@@ -33,20 +33,10 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
       agentId: params.agentId,
       readOnly: true,
     })) {
-      if (!entry || typeof entry !== "object") {
+      if (!entry || normalizeOptionalString(entry.sessionId) !== sessionId) {
         continue;
       }
-      const candidateSessionId =
-        typeof (entry as { sessionId?: unknown }).sessionId === "string"
-          ? (entry as { sessionId?: string }).sessionId?.trim()
-          : "";
-      if (!candidateSessionId || candidateSessionId !== sessionId) {
-        continue;
-      }
-      const updatedAt =
-        typeof (entry as { updatedAt?: unknown }).updatedAt === "number"
-          ? ((entry as { updatedAt?: number }).updatedAt ?? 0)
-          : 0;
+      const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : 0;
       if (!bestMatch || updatedAt > bestMatch.updatedAt) {
         bestMatch = { sessionKey, updatedAt };
       }
@@ -72,10 +62,8 @@ function resolveRecallRunChannelContext(params: {
     !channel.includes(":") && !channel.includes("/");
   const explicitChannel = normalizeOptionalString(params.channelId);
   const explicitProvider = normalizeOptionalString(params.messageProvider);
-  // A channelId that contains ":" is a scoped conversation id (e.g. Telegram
-  // forum-topic "-100123:topic:77") or "/" (e.g. Google Chat "spaces/...") is
-  // not a runnable channel name. Using it as the embedded recall run's channel
-  // causes bundled-plugin dirName validation to throw (#76704, #78918).
+  // Scoped conversation IDs are not runnable channel names; passing one to
+  // the embedded runner fails plugin directory validation.
   const runnableExplicitChannel =
     explicitChannel && isRunnableChannelName(explicitChannel) ? explicitChannel : undefined;
   // Non-webchat providers often pass a raw conversation id as channelId.
@@ -86,27 +74,6 @@ function resolveRecallRunChannelContext(params: {
     (!explicitProvider || explicitProvider === "webchat")
       ? runnableExplicitChannel
       : undefined;
-  const resolveReturnValue = (paramsLocal: {
-    resolvedChannel?: string;
-    resolvedChannelStrength?: "strong" | "weak";
-  }) => {
-    const trustedResolvedChannel =
-      paramsLocal.resolvedChannelStrength === "strong" ? paramsLocal.resolvedChannel : undefined;
-    return {
-      messageChannel:
-        trustedExplicitChannel ??
-        trustedResolvedChannel ??
-        explicitProvider ??
-        runnableExplicitChannel ??
-        paramsLocal.resolvedChannel,
-      messageProvider:
-        trustedExplicitChannel ??
-        trustedResolvedChannel ??
-        explicitProvider ??
-        runnableExplicitChannel ??
-        paramsLocal.resolvedChannel,
-    };
-  };
   const resolvedSessionKey =
     normalizeOptionalString(params.sessionKey) ??
     resolveCanonicalSessionKeyFromSessionId({
@@ -114,38 +81,28 @@ function resolveRecallRunChannelContext(params: {
       agentId: params.agentId,
       sessionId: params.sessionId,
     });
-  if (!resolvedSessionKey) {
-    return resolveReturnValue({});
+  let strongEntryChannel: string | undefined;
+  let weakEntryChannel: string | undefined;
+  if (resolvedSessionKey) {
+    try {
+      const sessionEntry = params.api.runtime.agent.session.getSessionEntry({
+        agentId: params.agentId,
+        sessionKey: resolvedSessionKey,
+      });
+      const channel = normalizeOptionalString(deliveryContextFromSession(sessionEntry)?.channel);
+      strongEntryChannel = channel && isRunnableChannelName(channel) ? channel : undefined;
+      weakEntryChannel = normalizeOptionalString(sessionDeliveryOrigin(sessionEntry)?.provider);
+    } catch {
+      // Explicit hints still identify the channel if session lookup is unavailable.
+    }
   }
-
-  try {
-    const sessionEntry = params.api.runtime.agent.session.getSessionEntry({
-      agentId: params.agentId,
-      sessionKey: resolvedSessionKey,
-    });
-    const rawStrongEntryChannel = normalizeOptionalString(
-      deliveryContextFromSession(sessionEntry)?.channel,
-    );
-    // Channel IDs containing ":" or "/" are scoped conversation IDs, not
-    // runnable channel names. The same guard that
-    // applies to explicit channelId (#76704) must also apply to channels
-    // read from the session store (#77396).
-    const strongEntryChannel =
-      rawStrongEntryChannel && isRunnableChannelName(rawStrongEntryChannel)
-        ? rawStrongEntryChannel
-        : undefined;
-    const weakEntryChannel = normalizeOptionalString(sessionDeliveryOrigin(sessionEntry)?.provider);
-    return resolveReturnValue({
-      resolvedChannel: strongEntryChannel ?? weakEntryChannel,
-      resolvedChannelStrength: strongEntryChannel
-        ? "strong"
-        : weakEntryChannel
-          ? "weak"
-          : undefined,
-    });
-  } catch {
-    return resolveReturnValue({});
-  }
+  const channel =
+    trustedExplicitChannel ??
+    strongEntryChannel ??
+    explicitProvider ??
+    runnableExplicitChannel ??
+    weakEntryChannel;
+  return { messageChannel: channel, messageProvider: channel };
 }
 
 function resolveStatusUpdateAgentId(ctx: { agentId?: string; sessionKey?: string }): string {
@@ -204,21 +161,11 @@ function buildPluginDebugLine(params: {
   const action = sanitizeDebugText(params.searchDebug?.action ?? "");
   const error = sanitizeDebugText(params.searchDebug?.error ?? "");
   const debugParts: string[] = [];
-  const backend = sanitizeDebugText(params.searchDebug?.backend ?? "");
-  if (backend) {
-    debugParts.push(`backend=${backend}`);
-  }
-  const configuredMode = sanitizeDebugText(params.searchDebug?.configuredMode ?? "");
-  if (configuredMode) {
-    debugParts.push(`configuredMode=${configuredMode}`);
-  }
-  const effectiveMode = sanitizeDebugText(params.searchDebug?.effectiveMode ?? "");
-  if (effectiveMode) {
-    debugParts.push(`effectiveMode=${effectiveMode}`);
-  }
-  const fallback = sanitizeDebugText(params.searchDebug?.fallback ?? "");
-  if (fallback) {
-    debugParts.push(`fallback=${fallback}`);
+  for (const key of ["backend", "configuredMode", "effectiveMode", "fallback"] as const) {
+    const value = sanitizeDebugText(params.searchDebug?.[key] ?? "");
+    if (value) {
+      debugParts.push(`${key}=${value}`);
+    }
   }
   if (
     typeof params.searchDebug?.searchMs === "number" &&
@@ -239,26 +186,8 @@ function buildPluginDebugLine(params: {
   const messages = uniqueStrings(
     [warningAction, cleaned].filter((value): value is string => Boolean(value)),
   ).join(" | ");
-  const trailing = messages;
-  if (prefix && trailing) {
-    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix} | ${trailing}`;
-  }
-  if (prefix) {
-    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix}`;
-  }
-  if (messages) {
-    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${messages}`;
-  }
-  if (warning) {
-    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${warning}`;
-  }
-  if (cleaned) {
-    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${cleaned}`;
-  }
-  if (error) {
-    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${error}`;
-  }
-  return null;
+  const body = [prefix, messages].filter(Boolean).join(" | ") || error;
+  return body ? `${ACTIVE_MEMORY_DEBUG_PREFIX} ${body}` : null;
 }
 
 function sanitizeDebugText(text: string): string {

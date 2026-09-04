@@ -4,17 +4,12 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../../../context-engine/registry.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { callGateway } from "../../../gateway/call.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
-import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared/lazy-promise.js";
 import { importRuntimeModule } from "../../../shared/runtime-import.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
-  getSubagentRunsSnapshotForChildSession,
-  getSubagentRunsSnapshotForController,
-  getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow,
   restoreSubagentRunsFromDisk,
@@ -35,12 +30,8 @@ type BrowserCleanupModule = Pick<
 
 export type SubagentRegistryDeps = {
   callGateway: typeof callGateway;
-  getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
   captureSubagentCompletionReply: SubagentAnnounceModule["captureSubagentCompletionReply"];
   cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
-  getSubagentRunsSnapshotForChildSession: typeof getSubagentRunsSnapshotForChildSession;
-  getSubagentRunsSnapshotForController: typeof getSubagentRunsSnapshotForController;
-  getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
   getRuntimeConfig: typeof getRuntimeConfig;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
   persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
@@ -80,14 +71,10 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
 
 const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   callGateway,
-  getGatewayRecoveryRuntime,
   captureSubagentCompletionReply: async (sessionKey, options) =>
     (await loadSubagentAnnounceModule()).captureSubagentCompletionReply(sessionKey, options),
   cleanupBrowserSessionsForLifecycleEnd: async (params) =>
     (await loadCleanupBrowserSessionsForLifecycleEnd())(params),
-  getSubagentRunsSnapshotForChildSession,
-  getSubagentRunsSnapshotForController,
-  getSubagentRunsSnapshotForRead,
   getRuntimeConfig,
   onAgentEvent,
   persistSubagentRunsToDisk,

@@ -5,6 +5,7 @@ import type {
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildAssistantMessage,
   hasOwnKeys,
@@ -967,10 +968,6 @@ function splitPlanText(text: string | undefined): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^[-*]\s+/, ""))
     .filter((line) => line.length > 0);
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function registerListener<K extends SessionEventType>(

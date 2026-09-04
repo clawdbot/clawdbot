@@ -2,30 +2,20 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   buildNativeHookRelayCommand,
   registerNativeHookRelay,
   testing as nativeHookRelayTesting,
 } from "../agents/harness/native-hook-relay.js";
-import {
-  buildMinimalGatewayHelloOkPayload,
-  closeMinimalGatewayServer,
-  parseMinimalGatewayRequestFrame,
-  sendMinimalGatewayConnectChallenge,
-  sendMinimalGatewayResponse,
-} from "../gateway/minimal-gateway.test-helpers.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getFreePort } from "../test-utils/ports.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
-const activeServers = new Set<WebSocketServer>();
 // Process startup includes TS transforms and plugin discovery, both of which can
 // stall behind neighboring CI shards. Bound observable milestones, not runner speed.
 const outputTimeoutMs = 45_000;
@@ -35,40 +25,7 @@ const exitOnlyTimeoutMs = 60_000;
 afterEach(async () => {
   nativeHookRelayTesting.clearNativeHookRelaysForTests();
   await Promise.all(Array.from(activeChildren, terminateChild));
-  await Promise.all(Array.from(activeServers, closeMinimalGatewayServer));
-  activeServers.clear();
 });
-
-async function startHooksStatusGateway(report: object, token: string): Promise<string> {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  activeServers.add(server);
-  server.on("connection", (socket) => {
-    sendMinimalGatewayConnectChallenge(socket);
-    socket.on("message", (data) => {
-      const frame = parseMinimalGatewayRequestFrame(data);
-      if (frame.type !== "req" || !frame.id) {
-        return;
-      }
-      if (frame.method === "connect") {
-        expect(frame.params?.auth?.token).toBe(token);
-        sendMinimalGatewayResponse(
-          socket,
-          frame.id,
-          buildMinimalGatewayHelloOkPayload({
-            methods: ["hooks.status"],
-            auth: { role: "operator", scopes: ["operator.read"] },
-          }),
-        );
-        return;
-      }
-      if (frame.method === "hooks.status") {
-        sendMinimalGatewayResponse(socket, frame.id, report);
-      }
-    });
-  });
-  await once(server, "listening");
-  return `ws://127.0.0.1:${(server.address() as AddressInfo).port}`;
-}
 
 async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
@@ -290,35 +247,6 @@ async function runHooksCli(params: {
   });
 }
 
-async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; stdin: string }) {
-  const fixture = await createLingeringPreloadFixture();
-  const result = await runHooksCli({
-    args: [
-      "hooks",
-      "relay",
-      "--provider",
-      "codex",
-      "--relay-id",
-      "missing-relay",
-      "--event",
-      params.event,
-      "--timeout",
-      "50",
-    ],
-    completion: params.event === "post_tool_use" ? "exit" : "output-then-exit",
-    label: `hooks relay ${params.event}`,
-    env: {
-      LINGER_MARKER: fixture.markerPath,
-      NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: fixture.stateDir,
-    },
-    stdin: params.stdin,
-  });
-  await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
-  return result;
-}
-
 describe("hooks CLI process lifecycle", () => {
   it.runIf(process.platform !== "win32")(
     "keeps the relay on the timeout-owned shell PID",
@@ -389,7 +317,7 @@ describe("hooks CLI process lifecycle", () => {
     60_000,
   );
 
-  it("uses the explicit relay database when the child has a different state directory", async () => {
+  it("uses the explicit relay database and exits despite a lingering handle", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       relayId: "process-explicit-state-db",
@@ -401,8 +329,7 @@ describe("hooks CLI process lifecycle", () => {
       .poll(() => nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId))
       .toBeDefined();
 
-    const childStateDir = path.join(tempDirs.make("openclaw-hooks-relay-other-state-"), "state");
-    await fs.mkdir(childStateDir, { recursive: true });
+    const fixture = await createLingeringPreloadFixture();
     const result = await runHooksCli({
       args: [
         "hooks",
@@ -423,8 +350,10 @@ describe("hooks CLI process lifecycle", () => {
       completion: "exit",
       label: "hooks relay explicit state database",
       env: {
+        LINGER_MARKER: fixture.markerPath,
+        NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: childStateDir,
+        OPENCLAW_STATE_DIR: fixture.stateDir,
       },
       stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),
     });
@@ -432,14 +361,13 @@ describe("hooks CLI process lifecycle", () => {
     expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe("");
+    await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
   }, 90_000);
 
-  it("exits after one-shot outputs when plugins leave ref'd handles", async () => {
+  it("exits after hooks list output when plugin registration leaves a ref'd handle", async () => {
     const fixture = await createLingeringPluginFixture();
     const unavailableGatewayPort = await getFreePort();
 
-    // Both command families need real process coverage. Keep their expensive CLI
-    // bootstraps sequential so low-core shards test lifecycle, not startup contention.
     const listResult = await runHooksCli({
       args: ["hooks", "list", "--json"],
       completion: "output-then-exit",
@@ -452,7 +380,6 @@ describe("hooks CLI process lifecycle", () => {
         OPENCLAW_STATE_DIR: fixture.stateDir,
       },
     });
-    const relayResult = await runHooksRelay({ event: "pre_tool_use", stdin: "{}" });
 
     expect(listResult, listResult.stderr).toMatchObject({ code: 0, signal: null });
     expect(listResult.stderr).not.toContain("Error:");
@@ -460,71 +387,5 @@ describe("hooks CLI process lifecycle", () => {
       hooks: expect.arrayContaining([expect.objectContaining({ name: "fixture-hook" })]),
     });
     await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\n");
-    expect(relayResult, relayResult.stderr).toMatchObject({ code: 0, signal: null });
-    expect(JSON.parse(relayResult.stdout)).toMatchObject({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: expect.any(String),
-      },
-    });
   }, 150_000);
-
-  it("uses the gateway hook report without registering local plugins", async () => {
-    const fixture = await createLingeringPluginFixture();
-    const token = "hooks-status-token";
-    const report = {
-      workspaceDir: "/gateway/workspace",
-      managedHooksDir: "/gateway/hooks",
-      hooks: [
-        {
-          name: "gateway-only-hook",
-          description: "Returned by hooks.status",
-          source: "openclaw-plugin",
-          pluginId: "gateway-hooks",
-          filePath: "/gateway/plugins/hooks.js",
-          baseDir: "/gateway/plugins",
-          handlerPath: "/gateway/plugins/hooks.js",
-          hookKey: "gateway-only-hook",
-          events: ["command:new"],
-          unknownEvents: [],
-          always: false,
-          enabledByConfig: true,
-          requirementsSatisfied: true,
-          loadable: true,
-          managedByPlugin: true,
-          requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
-          missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
-          configChecks: [],
-          install: [],
-        },
-      ],
-    };
-    const gatewayUrl = await startHooksStatusGateway(report, token);
-    const config = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    config.gateway = { mode: "remote", remote: { url: gatewayUrl, token } };
-    await fs.writeFile(fixture.configPath, JSON.stringify(config));
-
-    const result = await runHooksCli({
-      args: ["hooks", "list", "--json"],
-      completion: "output-then-exit",
-      label: "gateway hooks list",
-      env: {
-        LINGER_MARKER: fixture.markerPath,
-        OPENCLAW_CONFIG_PATH: fixture.configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: fixture.stateDir,
-      },
-    });
-
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      workspaceDir: "/gateway/workspace",
-      hooks: [expect.objectContaining({ name: "gateway-only-hook" })],
-    });
-    await expect(fs.readFile(fixture.markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-  }, 90_000);
 });

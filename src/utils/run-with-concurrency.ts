@@ -11,6 +11,8 @@ export type RunTasksWithConcurrencyOptions<T> = {
   limit: number;
   /** `stop` prevents new work after the first failure; in-flight workers still settle. */
   errorMode?: ConcurrencyErrorMode;
+  /** Reject immediately on a task failure instead of returning aggregate error state. */
+  throwOnError?: boolean;
   /** Called once per failed task with the original task index. */
   onTaskError?: (error: unknown, index: number) => void;
 };
@@ -29,7 +31,7 @@ export type RunTasksWithConcurrencyResult<T> = {
 export async function runTasksWithConcurrency<T>(
   params: RunTasksWithConcurrencyOptions<T>,
 ): Promise<RunTasksWithConcurrencyResult<T>> {
-  const { tasks, limit, onTaskError } = params;
+  const { tasks, limit, onTaskError, throwOnError = false } = params;
   const errorMode = params.errorMode ?? "continue";
   if (tasks.length === 0) {
     return { results: [], firstError: undefined, hasError: false };
@@ -56,10 +58,17 @@ export async function runTasksWithConcurrency<T>(
           hasError = true;
         }
         onTaskError?.(error, index);
+        if (throwOnError) {
+          throw error;
+        }
       }
     }),
   );
 
-  await Promise.allSettled(runs);
+  if (throwOnError) {
+    await Promise.all(runs);
+  } else {
+    await Promise.allSettled(runs);
+  }
   return { results, firstError, hasError };
 }

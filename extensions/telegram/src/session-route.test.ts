@@ -131,6 +131,38 @@ describe("telegram session route", () => {
     expect(route?.recipientSessionExact).toBe(true);
   });
 
+  it("keeps direct-message and forum topics with the same id in distinct group routes", async () => {
+    const direct = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target: "-100:direct-topic:99",
+    });
+    const forum = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target: "-100:topic:99",
+    });
+
+    expect(direct?.sessionKey).toBe("agent:main:telegram:group:-100:direct-topic:99");
+    expect(direct?.from).toBe("telegram:group:-100:direct-topic:99");
+    expect(direct?.to).toBe("telegram:-100:direct-topic:99");
+    expect(direct?.threadId).toBe(99);
+    expect(forum?.sessionKey).toBe("agent:main:telegram:group:-100:topic:99");
+  });
+
+  it("skips unusable command candidates and preserves a later direct topic", () => {
+    expect(
+      telegramPlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        originatingTo: "telegram:-100123",
+        commandTo: "telegram:-100123:direct-topic:77",
+      }),
+    ).toEqual({
+      conversationId: "-100123:direct-topic:77",
+      parentConversationId: "-100123",
+    });
+  });
+
   it("does not treat directory-resolved usernames as canonical session ids", async () => {
     const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: {},

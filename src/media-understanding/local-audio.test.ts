@@ -43,6 +43,47 @@ describe("local audio selection", () => {
     });
   });
 
+  it("discovers installed whisper models and prefers non-tiny over the tiny fixture", async () => {
+    const tempDir = tempDirs.make("openclaw-local-audio-");
+    const commandPath = path.join(tempDir, "whisper-cli");
+    await fs.writeFile(commandPath, "#!/bin/sh\n");
+    await fs.chmod(commandPath, 0o755);
+
+    const selection = await inspectLocalAudioSelection({
+      env: { PATH: tempDir },
+      platform: process.platform,
+      arch: process.arch,
+      inspectLinkedLibraries: async () => null,
+      listDirectory: async (dirPath) =>
+        dirPath === "/opt/homebrew/share/whisper-cpp"
+          ? ["for-tests-ggml-tiny.bin", "ggml-tiny.bin", "ggml-base.en.bin", "notes.txt"]
+          : [],
+    });
+
+    const whisper = selection.candidates.find((candidate) => candidate.id === "whisper-cli");
+    expect(whisper?.ready).toBe(true);
+    expect(whisper?.entry?.args).toContain("/opt/homebrew/share/whisper-cpp/ggml-base.en.bin");
+  });
+
+  it("reports whisper as not ready when no ggml model is installed", async () => {
+    const tempDir = tempDirs.make("openclaw-local-audio-");
+    const commandPath = path.join(tempDir, "whisper-cli");
+    await fs.writeFile(commandPath, "#!/bin/sh\n");
+    await fs.chmod(commandPath, 0o755);
+
+    const selection = await inspectLocalAudioSelection({
+      env: { PATH: tempDir },
+      platform: process.platform,
+      arch: process.arch,
+      inspectLinkedLibraries: async () => null,
+      listDirectory: async () => [],
+    });
+
+    const whisper = selection.candidates.find((candidate) => candidate.id === "whisper-cli");
+    expect(whisper?.ready).toBe(false);
+    expect(whisper?.reason).toBe("model file not found");
+  });
+
   it("does not resolve auto-detected commands from empty PATH entries", async () => {
     const tempDir = tempDirs.make("openclaw-local-audio-");
     const modelPath = path.join(tempDir, "whisper.bin");
@@ -68,6 +109,30 @@ describe("local audio selection", () => {
       available: false,
       ready: false,
     });
+  });
+
+  it("discovers Windows commands through case-insensitive PATH and PATHEXT values", async () => {
+    const availableDirectory = "/virtual/audio-tools";
+    const commandPath = path.join(availableDirectory, "whisper.AUDIO");
+    const inspect = (env: NodeJS.ProcessEnv) =>
+      inspectLocalAudioSelection({
+        env,
+        platform: "win32",
+        arch: "x64",
+        checkExecutable: async (filePath) => filePath === commandPath,
+        listDirectory: async () => [],
+      });
+
+    for (const env of [
+      { Path: "/virtual/missing-tools", pAtHeXt: ".AUDIO" },
+      { Path: availableDirectory, pAtHeXt: ".MISSING" },
+    ]) {
+      expect((await inspect(env)).selected).toBeUndefined();
+    }
+
+    expect((await inspect({ Path: availableDirectory, pAtHeXt: ".AUDIO" })).selected).toMatchObject(
+      { id: "whisper", resolvedCommand: commandPath },
+    );
   });
 
   it("retries binary inspection after a transient failure", async () => {

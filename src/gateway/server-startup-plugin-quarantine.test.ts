@@ -3,14 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runPluginPayloadSmokeCheck } from "../cli/update-cli/plugin-payload-validation.js";
+import { runPluginPayloadSmokeCheck } from "../plugins/payload-verification.js";
 import {
   buildDegradedPluginsFromVerificationFailures,
   listActiveDegradedPlugins,
   setActiveDegradedPlugins,
 } from "../plugins/runtime-degraded-state.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   setTestPluginRegistry,
   startTestGatewayServer,
@@ -157,7 +157,7 @@ describe("Gateway startup plugin quarantine", () => {
       plugins: pluginConfig,
     });
 
-    const port = await getFreePort();
+    const port = await getGatewayTestPort();
     server = await startTestGatewayServer(port, { auth: { mode: "none" } });
     const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 

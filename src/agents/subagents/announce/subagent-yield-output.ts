@@ -3,7 +3,7 @@
  *
  * Accepts provider-specific tool-call and tool-result shapes used by transcript repair and announce capture.
  */
-import { safeParseJson } from "@openclaw/normalization-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readTrimmedStringAlias } from "../../../utils/string-readers.js";
 
@@ -56,21 +56,13 @@ export function assistantCallsSessionsYield(message: unknown): boolean {
   );
 }
 
-function parseJsonObject(text: string): Record<string, unknown> | undefined {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("{")) {
-    return undefined;
-  }
-  return asOptionalRecord(safeParseJson(trimmed));
-}
-
 function readStructuredToolPayload(content: unknown): Record<string, unknown> | undefined {
   const record = asOptionalRecord(content);
   if (record) {
     return record;
   }
   if (typeof content === "string") {
-    return parseJsonObject(content);
+    return safeParseJsonRecord(content.trim());
   }
   if (!Array.isArray(content)) {
     return undefined;
@@ -84,7 +76,7 @@ function readStructuredToolPayload(content: unknown): Record<string, unknown> | 
     if (typeof text !== "string") {
       continue;
     }
-    const parsed = parseJsonObject(text);
+    const parsed = safeParseJsonRecord(text.trim());
     if (parsed) {
       return parsed;
     }

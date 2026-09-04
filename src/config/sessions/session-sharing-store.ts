@@ -3,9 +3,9 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
@@ -27,25 +27,37 @@ function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabas
   return toDatabaseOptions(resolveSqliteScope(scope));
 }
 
-function getSessionMemberKysely(database: OpenClawAgentDatabase) {
+function getSessionMemberKysely(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<SessionMemberDatabase>(database.db);
 }
 
+function readSessionMembers<T>(
+  scope: SessionAccessScope,
+  fallback: T,
+  operation: (database: Pick<OpenClawAgentDatabase, "db">) => T,
+): T {
+  const result = withOpenClawAgentDatabaseReadOnly(operation, resolveDatabaseOptions(scope), {
+    throwOnMissingTable: true,
+  });
+  return result.found ? result.value : fallback;
+}
+
 export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
-  const db = getSessionMemberKysely(database);
-  return executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_members")
-      .select(["identity_id", "added_by", "added_at"])
-      .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
-      .orderBy("identity_id"),
-  ).rows.map((row) => ({
-    identityId: row.identity_id,
-    addedBy: row.added_by,
-    addedAt: row.added_at,
-  }));
+  return readSessionMembers(scope, [], (database) => {
+    const db = getSessionMemberKysely(database);
+    return executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("session_members")
+        .select(["identity_id", "added_by", "added_at"])
+        .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
+        .orderBy("identity_id"),
+    ).rows.map((row) => ({
+      identityId: row.identity_id,
+      addedBy: row.added_by,
+      addedAt: row.added_at,
+    }));
+  });
 }
 
 export function listSessionMembershipKeys(
@@ -58,28 +70,32 @@ export function listSessionMembershipKeys(
   if (!normalizedIdentityId || normalizedSessionKeys.length === 0) {
     return new Set();
   }
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
-  const db = getSessionMemberKysely(database);
-  const memberships = new Set<string>();
-  for (
-    let offset = 0;
-    offset < normalizedSessionKeys.length;
-    offset += SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE
-  ) {
-    const chunk = normalizedSessionKeys.slice(offset, offset + SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE);
-    const rows = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_members")
-        .select("session_key")
-        .where("identity_id", "=", normalizedIdentityId)
-        .where("session_key", "in", chunk),
-    ).rows;
-    for (const row of rows) {
-      memberships.add(row.session_key);
+  return readSessionMembers(scope, new Set<string>(), (database) => {
+    const db = getSessionMemberKysely(database);
+    const memberships = new Set<string>();
+    for (
+      let offset = 0;
+      offset < normalizedSessionKeys.length;
+      offset += SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE
+    ) {
+      const chunk = normalizedSessionKeys.slice(
+        offset,
+        offset + SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE,
+      );
+      const rows = executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_members")
+          .select("session_key")
+          .where("identity_id", "=", normalizedIdentityId)
+          .where("session_key", "in", chunk),
+      ).rows;
+      for (const row of rows) {
+        memberships.add(row.session_key);
+      }
     }
-  }
-  return memberships;
+    return memberships;
+  });
 }
 
 export function isSessionMember(scope: SessionAccessScope, identityId: string): boolean {
@@ -87,18 +103,19 @@ export function isSessionMember(scope: SessionAccessScope, identityId: string): 
   if (!normalizedIdentityId) {
     return false;
   }
-  const database = openOpenClawAgentDatabase(resolveDatabaseOptions(scope));
-  const db = getSessionMemberKysely(database);
-  return Boolean(
-    executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("session_members")
-        .select("identity_id")
-        .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
-        .where("identity_id", "=", normalizedIdentityId),
-    ),
-  );
+  return readSessionMembers(scope, false, (database) => {
+    const db = getSessionMemberKysely(database);
+    return Boolean(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_members")
+          .select("identity_id")
+          .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
+          .where("identity_id", "=", normalizedIdentityId),
+      ),
+    );
+  });
 }
 
 // Membership is bound to a live session entry, never a transcript placeholder.

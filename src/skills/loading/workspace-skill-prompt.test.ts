@@ -14,7 +14,7 @@ import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
 import {
   formatSkillsCompactForPrompt as formatSkillsCompact,
-  formatSkillsForPrompt,
+  formatSkillsForPromptCore,
   type Skill,
 } from "./skill-contract.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
@@ -118,7 +118,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 
   it("tier 2: compact when full exceeds budget but compact fits", () => {
     const skills = Array.from({ length: 20 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
-    const fullLen = formatSkillsForPrompt(skills).length;
+    const fullLen = formatSkillsForPromptCore(skills).length;
     const compactLen = formatSkillsCompact(skills).length;
     const budget = `${COMPACT_SHORTENED_NOTICE}\n${formatSkillsCompact(skills)}`.length;
     expect(fullLen).toBeGreaterThan(budget);
@@ -146,7 +146,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     const skills = Array.from({ length: 50 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const identityCatalog = formatSkillsCompact(skills, { descriptionMaxChars: 0 });
     const budget = `${COMPACT_OMITTED_NOTICE}\n${identityCatalog}`.length;
-    expect(formatSkillsForPrompt(skills).length).toBeGreaterThan(budget);
+    expect(formatSkillsForPromptCore(skills).length).toBeGreaterThan(budget);
 
     const prompt = buildPrompt(skills, { maxChars: budget });
 
@@ -176,7 +176,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // 30 skills but maxCount=10, and full format of 10 exceeds budget
     const skills = Array.from({ length: 30 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(800)));
     const tenSkills = skills.slice(0, 10);
-    const fullLen = formatSkillsForPrompt(tenSkills).length;
+    const fullLen = formatSkillsForPromptCore(tenSkills).length;
     const truncatedNotice =
       "⚠️ Skills truncated: included 10 of 30 (compact format, descriptions shortened). Run `openclaw skills check` to audit.";
     const budget = `${truncatedNotice}\n${formatSkillsCompact(tenSkills)}`.length;
@@ -194,7 +194,6 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // Budget so small that even one compact skill can't fit
     const prompt = buildPrompt(skills, { maxChars: 10 });
     expect(prompt).toBe("");
-    expect(prompt.length).toBeLessThanOrEqual(10);
   });
 
   it.each([0, 1, 10, 64])("never exceeds a tiny configured prompt budget of %i", (maxChars) => {
@@ -206,7 +205,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 
   it("drops an oversized optional remote note before discarding a complete fitting skill catalog", () => {
     const skill = makeSkill("weather", "Get weather data");
-    const maxChars = formatSkillsForPrompt([skill]).length;
+    const maxChars = formatSkillsForPromptCore([skill]).length;
     const remoteNote = `REMOTE_NOTE_${"x".repeat(maxChars + 512)}`;
     const prompt = buildWorkspaceSkillsPrompt("/fake", {
       entries: [makeEntry(skill)],
@@ -231,21 +230,41 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).not.toContain("REMOTE_NOTE_");
   });
 
-  it("budgets the final rendered prompt including versions and limit notices", () => {
-    const skills = Array.from({ length: 24 }, (_, i) => ({
-      ...makeSkill(`skill-${i}`, "A".repeat(160)),
-      promptVersion: `sha256:${String(i).padStart(16, "0")}`,
-    }));
+  it("preserves the exact full-catalog bytes when a remote note fits", () => {
+    const skill = makeSkill("weather", "Get weather data");
+    const remoteNote = "Remote node skills are available.";
+    const catalog = formatSkillsForPromptCore([skill]);
+    const expected = [remoteNote, catalog].join("\n");
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(skill)],
+      config: {
+        skills: { limits: { maxSkillsPromptChars: expected.length } },
+      } satisfies OpenClawConfig,
+      eligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note: remoteNote,
+        },
+      },
+    });
+
+    expect(prompt).toBe(expected);
+    expect(prompt.length).toBeLessThanOrEqual(expected.length);
+  });
+
+  it("budgets the final rendered prompt including limit notices", () => {
+    const skills = Array.from({ length: 24 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(160)));
     const budget = 2_200;
 
     const prompt = buildPrompt(skills, { maxChars: budget });
 
     expect(prompt.length).toBeLessThanOrEqual(budget);
-    expect(prompt).toContain("<version>sha256:");
     expect(prompt).toContain("included");
   });
 
-  it("keeps no-skill catalogs empty instead of emitting version guidance", () => {
+  it("keeps no-skill catalogs empty", () => {
     const prompt = buildWorkspaceSkillsPrompt("/fake", {
       entries: [],
     });
@@ -380,6 +399,23 @@ describe("compactSkillPaths", () => {
     expect(prompt).toContain("~/");
     expect(prompt).toContain("test-skill");
     expect(prompt).toContain("A test skill for path compaction");
+  });
+
+  it("refreshes home prefixes for each prompt catalog", () => {
+    const root = path.parse(os.homedir()).root;
+    for (const name of ["first-home", "second-home"]) {
+      const home = path.join(root, "openclaw-compact-test", name);
+      const prompt = withEnv({ HOME: home, OPENCLAW_HOME: undefined }, () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: home,
+          skillDir: path.join(home, "skills", "dynamic-home"),
+          name: "dynamic-home",
+          description: "Per-catalog home resolution",
+        }),
+      );
+      expect(prompt).toContain("<location>~/skills/dynamic-home/SKILL.md</location>");
+      expect(prompt).not.toContain(home);
+    }
   });
 
   it("does not compact explicit state-root managed skill paths to OS-home tilde paths", () => {

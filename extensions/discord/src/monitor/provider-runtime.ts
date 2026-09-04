@@ -13,14 +13,14 @@ import { probeDiscordApplicationId } from "../probe.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 
-type DiscordVoiceRuntimeModule = typeof import("../voice/manager.runtime.js");
+type DiscordVoiceRuntimeModule = typeof import("../voice/voice-runtime.js");
 type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.runtime.js");
 
 let discordVoiceRuntimePromise: Promise<DiscordVoiceRuntimeModule> | undefined;
 let discordProviderSessionRuntimePromise: Promise<DiscordProviderSessionRuntimeModule> | undefined;
 
 async function loadDiscordVoiceRuntime(): Promise<DiscordVoiceRuntimeModule> {
-  const promise = discordVoiceRuntimePromise ?? import("../voice/manager.runtime.js");
+  const promise = discordVoiceRuntimePromise ?? import("../voice/voice-runtime.js");
   discordVoiceRuntimePromise = promise;
   try {
     return await promise;

@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   projectInferenceRoute,
@@ -16,22 +16,22 @@ import {
   sameDefaultInferenceRoute,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
-import { redactSetupInferenceError } from "./setup-inference-activate.js";
 import {
   type ActivateSetupInferenceDeps,
   type BoundVerifySetupInferenceResult,
   type CompleteSetupInferenceResult,
   type VerifySetupInferenceResult,
   invalidSetupConfigError,
+  redactSetupInferenceError,
 } from "./setup-inference-core.js";
 import { revalidateStableSetupInferenceOwner } from "./setup-inference-owner.js";
 import {
   cleanupSetupInferenceTempDir,
   persistManualAuthProfiles,
-  runSetupInferenceTest,
 } from "./setup-inference-persist.js";
 import type { SetupInferenceTestPlan } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
   hasCurrentSystemAgentOwnerPluginArtifacts,
@@ -214,6 +214,8 @@ export async function resolvePersistentApplyInference(params: {
 /** Live-test a staged default-agent route before any caller persists it. */
 export async function verifySetupInferenceConfig(params: {
   config: OpenClawConfig;
+  /** Interactive candidate activation verifies managed tool-capable models before persistence. */
+  verifyAgentTools?: boolean;
   /** Candidate profiles staged in the isolated probe store, never the real agent store. */
   authProfiles?: ProviderAuthResult["profiles"];
   agentId?: string;
@@ -235,7 +237,7 @@ export async function verifySetupInferenceConfig(params: {
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
   };
   const cfg = params.config;
-  const routeAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(cfg));
+  const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
   if (!resolveAgentEffectiveModelPrimary(cfg, routeAgentId)) {
     return {
       ok: false,
@@ -321,7 +323,7 @@ export async function verifySetupInferenceConfig(params: {
         if (!credential) {
           throw new Error("staged profile missing after verification");
         }
-        return { profileId: profile.profileId, credential };
+        return { ...profile, credential };
       });
     };
     const retainStagedAuthProfiles = () => {
@@ -377,6 +379,7 @@ export async function verifySetupInferenceConfig(params: {
       deps,
       authProfileStateMode: "read-only",
       requireExecutionOwner: requiresExecutionOwner,
+      verifyAgentTools: params.verifyAgentTools,
     });
     let retained = retainStagedAuthProfiles();
     if (!retained.ok) {
@@ -403,6 +406,7 @@ export async function verifySetupInferenceConfig(params: {
           deps,
           authProfileStateMode: "read-only",
           requireExecutionOwner: true,
+          verifyAgentTools: params.verifyAgentTools,
         });
         retained = retainStagedAuthProfiles();
         if (!retained.ok) {
@@ -464,6 +468,7 @@ export async function verifySetupInferenceConfig(params: {
 /** Run one tool-free completion through the configured setup inference route. */
 export async function completeSetupInference(params: {
   prompt: string;
+  agentId?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -481,6 +486,7 @@ export async function completeSetupInference(params: {
   return await completeSetupInferenceConfig({
     config: snapshot.runtimeConfig ?? snapshot.config,
     prompt: params.prompt,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     runtime: params.runtime,
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     ...(params.deps ? { deps: params.deps } : {}),
@@ -491,6 +497,7 @@ export async function completeSetupInference(params: {
 export async function completeSetupInferenceConfig(params: {
   config: OpenClawConfig;
   prompt: string;
+  agentId?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -499,7 +506,7 @@ export async function completeSetupInferenceConfig(params: {
     ...params.deps,
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
   };
-  const routeAgentId = normalizeAgentId(resolveDefaultAgentId(params.config));
+  const routeAgentId = resolveAmbientOwnerAgentId(params.config, params.agentId);
   if (!resolveAgentEffectiveModelPrimary(params.config, routeAgentId)) {
     return { ok: false, status: "unavailable", error: "No agent model is configured." };
   }

@@ -13,23 +13,35 @@ import {
   prepareEmbeddedAttemptPromptAssembly,
   prepareEmbeddedAttemptPromptContext,
 } from "./attempt-prompt-build.js";
-import { dispatchEmbeddedAttemptPrompt } from "./attempt-prompt-dispatch.js";
-import { handleEmbeddedAttemptMidTurnPrecheck } from "./attempt-prompt-preflight.js";
-import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-submit.js";
-import { applyPromptBuildToolsAllow } from "./attempt-prompt-support.js";
+import {
+  handleEmbeddedAttemptMidTurnPrecheck,
+  prepareEmbeddedAttemptPromptPreflight,
+} from "./attempt-prompt-preflight.js";
+import {
+  handleEmbeddedAttemptPromptError,
+  submitEmbeddedAttemptPrompt,
+} from "./attempt-prompt-submit.js";
+import {
+  type createPromptBuildToolPolicy,
+  observeEmbeddedAttemptPrompt,
+} from "./attempt-prompt-support.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
 type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
 type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
 type PromptContextInput = Parameters<typeof prepareEmbeddedAttemptPromptContext>[0];
 type PromptContextResult = ReturnType<typeof prepareEmbeddedAttemptPromptContext>;
-type PromptDispatchInput = Parameters<typeof dispatchEmbeddedAttemptPrompt>[0];
 type PromptErrorInput = Parameters<typeof handleEmbeddedAttemptPromptError>[0];
+type PromptExecutionInput = Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0];
+type PromptObservationInput = Parameters<typeof observeEmbeddedAttemptPrompt>[0];
+type PromptPreflightInput = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0];
+type PromptSubmissionInput = Parameters<typeof submitEmbeddedAttemptPrompt>[0];
 type BeforeAgentRunOutcome = NonNullable<
   Awaited<ReturnType<typeof runEmbeddedAttemptBeforeAgentRun>>
 >;
-type PromptPhaseState = Omit<PromptDispatchInput["state"], "skipPromptSubmission">;
+type PromptPhaseState = Omit<PromptPreflightInput["state"], "skipPromptSubmission">;
 
 type PromptAssemblyPhaseInput = Omit<
   PromptAssemblyInput,
@@ -43,14 +55,44 @@ type PromptContextPhaseInput = Omit<
   PromptContextInput,
   "attempt" | "messages" | "prompt" | "replaceSessionMessages"
 >;
-type PromptExecutionPhaseInput = PromptDispatchInput["execution"];
-type PromptObservationPhaseInput = Omit<PromptDispatchInput["observation"], "transcriptLeafId">;
-type PromptToolSurface = ReturnType<typeof applyPromptBuildToolsAllow>;
-type PromptPreflightPhaseInput = PromptDispatchInput["preflight"] & {
-  activeContextEngine?: PromptDispatchInput["activeContextEngine"];
+type PromptExecutionPhaseInput = Omit<
+  PromptExecutionInput,
+  "attempt" | "prompt" | "skipPromptSubmission"
+>;
+type PromptObservationPhaseInput = Omit<
+  PromptObservationInput,
+  | "attempt"
+  | "contextTokenBudget"
+  | "effectivePrompt"
+  | "hookMessagesForCurrentPrompt"
+  | "imageCount"
+  | "llmBoundaryPromptForPrecheck"
+  | "promptForModel"
+  | "promptSubmissionRuntimeOnly"
+  | "reserveTokens"
+  | "sessionMessages"
+  | "skipPromptSubmission"
+  | "systemPromptForHook"
+  | "transcriptLeafId"
+>;
+type PromptPreflightPhaseInput = Omit<
+  PromptPreflightInput,
+  | "attempt"
+  | "activeContextEngine"
+  | "contextTokenBudget"
+  | "hookMessagesForCurrentPrompt"
+  | "promptForPrecheck"
+  | "reserveTokens"
+  | "sessionMessageCount"
+  | "state"
+  | "systemPrompt"
+  | "toolResultMaxChars"
+> & {
+  activeContextEngine?: PromptPreflightInput["activeContextEngine"];
 };
 type PromptSubmissionPhaseInput = Pick<
-  PromptDispatchInput["submission"],
+  PromptSubmissionInput,
+  | "appendOnlyRuntimeContext"
   | "promptActiveSession"
   | "sessionPromptState"
   | "toolResultPromptProjectionState"
@@ -73,15 +115,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     signal: AbortSignal;
   };
   observation: PromptObservationPhaseInput;
-  toolPolicy: {
-    baseline: Parameters<typeof applyPromptBuildToolsAllow>[0]["baseline"];
-    effectiveTools: Array<{ name: string }>;
-    uncompactedEffectiveTools: Array<{ name: string }>;
-    tools: Array<{ name: string }>;
-    toolSearchCatalogRef?: Parameters<typeof applyPromptBuildToolsAllow>[0]["catalogRef"];
-    codeModeControlsEnabled: boolean;
-    forceToolNames?: readonly string[];
-  };
+  toolPolicy: ReturnType<typeof createPromptBuildToolPolicy>;
   preflight: PromptPreflightPhaseInput;
   submission: PromptSubmissionPhaseInput;
   lifecycle: {
@@ -98,6 +132,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     setFinalPromptText: (prompt: string) => void;
     markBeforeAgentRunBlocked: (outcome: BeforeAgentRunOutcome) => void;
     markYieldAborted: () => void;
+    isRunBudgetTimeoutAbort: (error: unknown) => boolean;
     readYieldState: () => Pick<
       PromptErrorInput,
       "yieldAbortSettled" | "yieldDetected" | "yieldMessage"
@@ -113,7 +148,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
   const patchState = (patch: Partial<PromptPhaseState>) => {
     input.lifecycle.writeState({ ...input.lifecycle.readState(), ...patch });
   };
-  const publishDispatchState = (state: PromptDispatchInput["state"]) => {
+  const publishDispatchState = (state: PromptPreflightInput["state"]) => {
     const { skipPromptSubmission: nextSkipPromptSubmission, ...phaseState } = state;
     skipPromptSubmission = nextSkipPromptSubmission;
     input.lifecycle.writeState(phaseState);
@@ -135,6 +170,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       request,
       sessionAgentId: input.context.sessionAgentId,
       sessionManager,
+      toolResultPromptProjectionState: input.context.toolResultPromptProjectionState,
       prePromptMessageCount: input.lifecycle.getPrePromptMessageCount(),
       replaceSessionMessages: (messages) => {
         activeSession.agent.state.messages = messages;
@@ -149,6 +185,19 @@ export async function runEmbeddedAttemptPromptPhase(input: {
   };
 
   const promptStartedAt = Date.now();
+
+  const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
+    attempt,
+    activeSession,
+    sessionManager,
+    ...input.assembly,
+    applyPromptBuildToolsAllow: (toolsAllow) => {
+      return input.toolPolicy.apply(toolsAllow).activeToolNames;
+    },
+    setLeasedSteering: (lease) => {
+      leasedSteering = lease;
+    },
+  });
   if (input.emptyExplicitToolAllowlistError) {
     patchState({
       promptError: input.emptyExplicitToolAllowlistError,
@@ -157,39 +206,16 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     skipPromptSubmission = true;
     log.warn(`[tools] ${input.emptyExplicitToolAllowlistError.message}`);
   }
-
-  let promptToolSurface: PromptToolSurface | undefined;
-  const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
-    attempt,
-    activeSession,
-    sessionManager,
-    ...input.assembly,
-    applyPromptBuildToolsAllow: (toolsAllow) => {
-      promptToolSurface = applyPromptBuildToolsAllow({
-        session: activeSession,
-        toolsAllow,
-        baseline: input.toolPolicy.baseline,
-        effectiveTools: input.toolPolicy.effectiveTools,
-        uncompactedEffectiveTools: input.toolPolicy.uncompactedEffectiveTools,
-        tools: input.toolPolicy.tools,
-        catalogRef: input.toolPolicy.toolSearchCatalogRef,
-        codeModeControlsEnabled: input.toolPolicy.codeModeControlsEnabled,
-        forceToolNames: input.toolPolicy.forceToolNames,
-      });
-      return promptToolSurface.activeToolNames;
-    },
-    setLeasedSteering: (lease) => {
-      leasedSteering = lease;
-    },
-  });
   const { hookCtx, promptBuildPrependContext, promptBuildAppendContext, transcriptLeafId } =
     promptAssembly;
   leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
   input.lifecycle.setPromptCacheChangesForTurn(promptAssembly.promptCacheChangesForTurn);
 
   try {
+    const canClaimHeartbeatOutcome =
+      attempt.trigger === "user" && attempt.sessionPersistence !== "detached";
     const heartbeatOutcomeContext =
-      attempt.trigger === "user" && attempt.sessionKey
+      canClaimHeartbeatOutcome && attempt.sessionKey
         ? buildHeartbeatOutcomeContext(
             claimHeartbeatOutcomeForRun({
               agentId: input.context.sessionAgentId,
@@ -264,45 +290,83 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       }
     }
 
+    const imageResult = await prepareEmbeddedAttemptPromptExecution({
+      ...input.execution,
+      attempt,
+      prompt: promptContext.promptSubmission.prompt,
+      skipPromptSubmission,
+    });
+    const reserveTokens = input.getCompactionReserveTokens();
+    let state: PromptPreflightInput["state"] = {
+      ...input.lifecycle.readState(),
+      skipPromptSubmission: observeEmbeddedAttemptPrompt({
+        ...input.observation,
+        effectiveTools: input.toolPolicy.current.effectiveTools,
+        tools: input.toolPolicy.current.tools,
+        uncompactedEffectiveTools: input.toolPolicy.current.uncompactedEffectiveTools,
+        attempt,
+        contextTokenBudget: promptContext.contextTokenBudget,
+        effectivePrompt: promptContext.effectivePrompt,
+        hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
+        imageCount: imageResult.images.length,
+        llmBoundaryPromptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
+        promptForModel: promptContext.promptForModel,
+        promptSubmissionRuntimeOnly: promptContext.promptSubmission.runtimeOnly,
+        reserveTokens,
+        sessionMessages: activeSession.messages,
+        skipPromptSubmission,
+        systemPromptForHook: promptContext.systemPromptForHook,
+        transcriptLeafId,
+      }).skipPromptSubmission,
+    };
+    // Publish each admission transition before the next fallible phase so outer cleanup sees it.
+    publishDispatchState(state);
+
     const { activeContextEngine, ...preflight } = input.preflight;
-    const dispatchState = await dispatchEmbeddedAttemptPrompt({
+    state = await prepareEmbeddedAttemptPromptPreflight({
+      ...preflight,
       attempt,
       ...(activeContextEngine ? { activeContextEngine } : {}),
-      activeSession,
-      promptContext,
-      getCompactionReserveTokens: input.getCompactionReserveTokens,
-      publishState: publishDispatchState,
-      releaseLeasedSteering,
-      state: {
-        ...input.lifecycle.readState(),
-        skipPromptSubmission,
-      },
-      execution: input.execution,
-      observation: {
-        ...input.observation,
-        ...(promptToolSurface
-          ? {
-              effectiveTools: promptToolSurface.effectiveTools,
-              tools: promptToolSurface.tools,
-              uncompactedEffectiveTools: promptToolSurface.uncompactedEffectiveTools,
-            }
-          : {}),
-        transcriptLeafId,
-      },
-      preflight,
-      submission: {
+      contextTokenBudget: promptContext.contextTokenBudget,
+      hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
+      promptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
+      reserveTokens,
+      sessionMessageCount: activeSession.messages.length,
+      state,
+      systemPrompt: promptContext.systemPromptForHook,
+      toolResultMaxChars: promptContext.promptToolResultMaxChars,
+    });
+    publishDispatchState(state);
+
+    if (!state.skipPromptSubmission) {
+      await submitEmbeddedAttemptPrompt({
         ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
+        attempt,
+        activeSession,
+        contextTokenBudget: promptContext.contextTokenBudget,
+        images: imageResult.images,
         ...(leasedSteering ? { leasedSteering } : {}),
+        modelPrompt: promptContext.promptForModel,
         onFinalPromptText: input.lifecycle.setFinalPromptText,
         onSteeringAcknowledged: () => {
           leasedSteering = undefined;
         },
         ...(promptBuildPrependContext ? { prependContext: promptBuildPrependContext } : {}),
+        ...(promptContext.runtimeContextMessageForCurrentTurn
+          ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }
+          : {}),
+        runtimeOnly: promptContext.promptSubmission.runtimeOnly === true,
+        systemPrompt: promptContext.systemPromptForHook,
+        toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
+        toolResultMaxChars: promptContext.promptToolResultMaxChars,
         transcriptLeafId,
+        transcriptPrompt: promptContext.promptForSession,
         ...input.submission,
-      },
-    });
-    publishDispatchState(dispatchState);
+      });
+    } else {
+      releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
+    }
+    publishDispatchState(state);
   } catch (error) {
     const promptErrorOutcome = await handleEmbeddedAttemptPromptError({
       activeSession,
@@ -314,7 +378,12 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       withOwnedTranscriptWrite: input.withOwnedTranscriptWrite,
       ...input.lifecycle.readYieldState(),
     });
-    if (promptErrorOutcome.promptFailure) {
+    // The timeout owner records its terminal before aborting the prompt. That
+    // abort is not a provider failure and must leave timeout salvage eligible.
+    if (
+      promptErrorOutcome.promptFailure &&
+      !input.lifecycle.isRunBudgetTimeoutAbort(promptErrorOutcome.promptFailure.error)
+    ) {
       patchState({
         promptError: promptErrorOutcome.promptFailure.error,
         promptErrorSource: promptErrorOutcome.promptFailure.source,

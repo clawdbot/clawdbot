@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { runCommandWithTimeout } from "../process/exec.js";
 import { installPluginFromPath, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
-import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 import {
   createBundleInstallFixtureFactory,
   createDualFormatInstallFixtureFactory,
@@ -15,7 +15,7 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
-const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-path");
+const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install-path");
 const setupBundleInstallFixture = createBundleInstallFixtureFactory(
   suiteTempRootTracker.makeTempDir,
 );
@@ -98,6 +98,42 @@ beforeEach(() => {
 });
 
 describe("installPluginFromPath", () => {
+  it.each(["native plugin", "bundle"] as const)(
+    "does not publish an archived %s after authority closes during artifact review",
+    async (kind) => {
+      const { pluginDir, extensionsDir } =
+        kind === "native plugin"
+          ? setupNativePluginInstallFixture()
+          : setupBundleInstallFixture({ bundleFormat: "claude", name: "Guarded Bundle" });
+      const pluginId = kind === "native plugin" ? "symlink-plugin" : "guarded-bundle";
+      const archivePath = await packToArchive({
+        pkgDir: pluginDir,
+        outDir: suiteTempRootTracker.makeTempDir(),
+        outName: "guarded-plugin.tgz",
+      });
+      let authorityActive = true;
+      const result = await installPluginFromPath({
+        path: archivePath,
+        extensionsDir,
+        onBeforePluginArtifactCommit: async () => {
+          authorityActive = false;
+        },
+        beforePersistentApply: () => {
+          if (!authorityActive) {
+            throw new Error("plugin installation authority closed");
+          }
+        },
+      });
+
+      expect(authorityActive).toBe(false);
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("plugin installation authority closed"),
+      });
+      expect(fs.existsSync(path.join(extensionsDir, pluginId))).toBe(false);
+    },
+  );
+
   it("rejects managed plain file plugin installs through path install", async () => {
     const baseDir = suiteTempRootTracker.makeTempDir();
     const extensionsDir = path.join(baseDir, "extensions");

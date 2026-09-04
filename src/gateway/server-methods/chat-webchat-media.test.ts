@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDefaultLocalRoots } from "../../media/local-media-access.js";
+import { getDefaultLocalRootsCore } from "../../media/local-media-access.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
 async function buildWebchatAudioBlocks(
@@ -159,34 +159,43 @@ describe("webchat audio blocks through assistant messages", () => {
     expect(blocks).toHaveLength(1);
   });
 
-  it("embeds file:// URLs pointing at a local file within localRoots", async () => {
-    const { audioPath, localRoot } = writeAudioFixture([0x01]);
+  it.each(["file://", "FILE://", "FiLe://", "file:", "FILE:"])(
+    "embeds %s URLs pointing at a local file within localRoots",
+    async (scheme) => {
+      const { audioPath, localRoot } = writeAudioFixture([0x01]);
 
-    const fileUrl = pathToFileURL(audioPath).href;
-    const blocks = await buildWebchatAudioBlocks([{ mediaUrl: fileUrl, trustedLocalMedia: true }], {
-      localRoots: [localRoot],
-    });
+      const fileUrl = pathToFileURL(audioPath).href.replace(/^file:\/\/\//, `${scheme}/`);
+      const blocks = await buildWebchatAudioBlocks(
+        [{ mediaUrl: fileUrl, trustedLocalMedia: true }],
+        {
+          localRoots: [localRoot],
+        },
+      );
 
-    expect(blocks).toHaveLength(1);
-    expect((blocks[0] as { type?: string }).type).toBe("attachment");
-  });
+      expect(blocks).toHaveLength(1);
+      expect((blocks[0] as { type?: string }).type).toBe("attachment");
+    },
+  );
 
-  it("drops tool-result file:// URLs with remote hosts before touching the filesystem", async () => {
-    const openSpy = vi.spyOn(fsPromises, "open");
+  it.each(["file://attacker/share/probe.mp3", "FILE://attacker/share/probe.mp3"])(
+    "drops tool-result %s URLs with remote hosts before touching the filesystem",
+    async (source) => {
+      const openSpy = vi.spyOn(fsPromises, "open");
 
-    const blocks = await buildWebchatAudioBlocks([
-      {
-        text: "MEDIA:file://attacker/share/probe.mp3",
-        mediaUrl: "file://attacker/share/probe.mp3",
-        trustedLocalMedia: true,
-      },
-    ]);
+      const blocks = await buildWebchatAudioBlocks([
+        {
+          text: `MEDIA:${source}`,
+          mediaUrl: source,
+          trustedLocalMedia: true,
+        },
+      ]);
 
-    expect(blocks).toHaveLength(0);
-    expect(openSpy).not.toHaveBeenCalled();
+      expect(blocks).toHaveLength(0);
+      expect(openSpy).not.toHaveBeenCalled();
 
-    openSpy.mockRestore();
-  });
+      openSpy.mockRestore();
+    },
+  );
 
   it("rejects a local audio file outside configured localRoots", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
@@ -211,7 +220,7 @@ describe("webchat audio blocks through assistant messages", () => {
   });
 
   it("falls back to default localRoots when explicit roots are omitted", async () => {
-    const [defaultRoot] = getDefaultLocalRoots();
+    const [defaultRoot] = getDefaultLocalRootsCore();
     if (defaultRoot === undefined) {
       throw new Error("expected default local media root");
     }

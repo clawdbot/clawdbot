@@ -1,10 +1,14 @@
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
-// Settles run-bound approvals when their active agent run is aborted.
+// Settles run-bound approvals when a run stops or its tool permissions change.
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.js";
-import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
+import {
+  sameWorkerSessionTurnClaim,
+  type WorkerSessionTurnClaim,
+} from "../worker-environments/placement-record.js";
 
 function cancelMatchingApprovals<TPayload>(params: {
+  reason?: "run-aborted" | "permission-change" | "approval-scope-closed";
   manager: ExecApprovalManager<TPayload>;
   matches: (record: ExecApprovalRecord<TPayload>) => boolean;
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
@@ -14,11 +18,17 @@ function cancelMatchingApprovals<TPayload>(params: {
     if (!params.matches(pending)) {
       continue;
     }
+    // Revoke the issuing execution, not necessarily the outer agent loop.
+    // Keep the shipped cancellation reason; record the specific system resolver.
+    const resolverId = params.reason && params.reason !== "run-aborted" ? params.reason : null;
     const result = params.manager.forceDenyDetailed(
       pending.id,
       "run-aborted",
-      { kind: "system", id: null },
+      { kind: "system", id: resolverId },
       "cancelled",
+      undefined,
+      false,
+      resolverId,
     );
     if (result.outcome === "denied" && result.liveRecord) {
       cancelled += 1;
@@ -30,10 +40,12 @@ function cancelMatchingApprovals<TPayload>(params: {
 
 export function cancelAgentRuntimeBoundApprovals<TPayload>(params: {
   authority: AgentRunDelegatedAuthority;
+  reason?: "run-aborted" | "permission-change" | "approval-scope-closed";
   manager: ExecApprovalManager<TPayload>;
   publish: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
 }): number {
   return cancelMatchingApprovals({
+    reason: params.reason,
     manager: params.manager,
     publish: params.publish,
     matches: (pending) => {
@@ -49,19 +61,6 @@ export function cancelAgentRuntimeBoundApprovals<TPayload>(params: {
   });
 }
 
-function sameWorkerTurnClaim(left: WorkerSessionTurnClaim, right: WorkerSessionTurnClaim): boolean {
-  return (
-    left.sessionId === right.sessionId &&
-    left.claimId === right.claimId &&
-    left.runId === right.runId &&
-    left.placementGeneration === right.placementGeneration &&
-    left.owner.kind === "worker" &&
-    right.owner.kind === "worker" &&
-    left.owner.environmentId === right.owner.environmentId &&
-    left.owner.ownerEpoch === right.owner.ownerEpoch
-  );
-}
-
 /** Settles approvals whose authoritative worker turn claim has been fenced. */
 export function cancelWorkerTurnClaimBoundApprovals<TPayload>(params: {
   claim: WorkerSessionTurnClaim;
@@ -73,7 +72,11 @@ export function cancelWorkerTurnClaimBoundApprovals<TPayload>(params: {
     publish: params.publish,
     matches: (pending) => {
       const authority = pending.agentRuntimeDelegatedAuthority;
-      return authority?.kind === "worker" && sameWorkerTurnClaim(authority.turnClaim, params.claim);
+      return (
+        authority?.kind === "worker" &&
+        params.claim.owner.kind === "worker" &&
+        sameWorkerSessionTurnClaim(authority.turnClaim, params.claim)
+      );
     },
   });
 }

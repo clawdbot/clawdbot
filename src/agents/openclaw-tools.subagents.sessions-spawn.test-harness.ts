@@ -1,4 +1,6 @@
 // Shared sessions_spawn test harness for gateway, registry, and lifecycle mocks.
+import os from "node:os";
+import path from "node:path";
 import { vi, type Mock } from "vitest";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
@@ -142,6 +144,10 @@ const hoisted = vi.hoisted(() => {
 let cachedCreateSessionsSpawnTool: CreateSessionsSpawnTool | null = null;
 let cachedSubagentRegistryTesting: SubagentRegistryTesting | null = null;
 let cachedSubagentSpawnTesting: SubagentSpawnTesting | null = null;
+const sessionStorePath = path.join(
+  os.tmpdir(),
+  `openclaw-sessions-spawn-test-store-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}.json`,
+);
 
 export function getCallGatewayMock(): Mock {
   return hoisted.callGatewayMock;
@@ -393,7 +399,7 @@ vi.mock("../config/sessions.js", () => ({
     agentId: string;
   }) => `agent:${params.agentId}:${params.cfg?.session?.mainKey ?? "main"}`,
   resolveExistingAgentSessionStoreTargetsSync: () => [],
-  resolveStorePath: () => "/tmp/openclaw-sessions-spawn-test-store.json",
+  resolveSessionStorePathCore: () => sessionStorePath,
   updateSessionStore: async (
     _storePath: string,
     mutator: (store: typeof hoisted.sessionStore) => void | Promise<void>,
@@ -404,7 +410,8 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("../tasks/detached-task-runtime.js", () => ({
   completeTaskRunByRunId: vi.fn(),
-  createRunningTaskRun: vi.fn(),
+  createQueuedTaskRun: vi.fn(() => ({})),
+  createRunningTaskRun: vi.fn(() => ({})),
   failTaskRunByRunId: vi.fn(),
   findDetachedTaskRun: vi.fn(() => ({ lookup: "available" as const })),
   setDetachedTaskDeliveryStatusByRunId: vi.fn(),

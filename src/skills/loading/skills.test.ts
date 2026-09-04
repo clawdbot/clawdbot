@@ -12,11 +12,12 @@ import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-st
 import { captureEnv, withPathResolutionEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import { listReservedChatSlashCommandNames } from "../discovery/chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
-  getActiveSkillEnvKeys,
+  getActiveSkillEnvKeysCore,
 } from "../runtime/env-overrides.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
@@ -29,7 +30,7 @@ import { shouldIncludeSkill } from "./config.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
 vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
+  resolvePluginSkillRoots: () => [],
 }));
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
@@ -184,6 +185,24 @@ afterEach(() => {
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
+  it("moves a colliding dashboard skill to the documented generated alias", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "dashboard"),
+      name: "dashboard",
+      description: "Custom dashboard skill",
+    });
+
+    const [command] = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        reservedNames: listReservedChatSlashCommandNames(),
+      }),
+    );
+
+    expect(command).toMatchObject({ name: "dashboard_2", skillName: "dashboard" });
+  });
+
   it("sanitizes and de-duplicates command names", async () => {
     const workspaceDir = await makeWorkspace();
     await writeSkill({
@@ -233,6 +252,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       dir: path.join(workspaceDir, "skills", "short-desc"),
       name: "short-desc",
       description: "Short description",
+      body: "# Short Description\n",
     });
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "tool-dispatch"),
@@ -251,6 +271,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
 
     expect(longCmd?.description).toBe(longDescription);
+    expect(shortCmd?.displayName).toBe("Short Description");
     expect(shortCmd?.description).toBe("Short description");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
     expect(cmd?.skillSource).toBe("workspace");
@@ -645,11 +666,11 @@ describe("applySkillEnvOverrides", () => {
 
       try {
         expect(process.env.ENV_KEY).toBe("injected");
-        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+        expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(true);
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBeUndefined();
-        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(false);
+        expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(false);
       }
     });
   });
@@ -667,15 +688,15 @@ describe("applySkillEnvOverrides", () => {
 
       try {
         expect(process.env.ENV_KEY).toBe("injected");
-        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+        expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(true);
 
         restoreFirst();
         expect(process.env.ENV_KEY).toBe("injected");
-        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+        expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(true);
       } finally {
         restoreSecond();
         expect(process.env.ENV_KEY).toBeUndefined();
-        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(false);
+        expect(getActiveSkillEnvKeysCore().has("ENV_KEY")).toBe(false);
       }
     });
   });

@@ -23,15 +23,10 @@ type PluginWidgetKindContribution = {
  * props, and use the standard gateway client for RPCs owned by their plugin.
  */
 const PLUGIN_WIDGET_KIND_CONTRIBUTIONS: Record<string, PluginWidgetKindContribution> = {
-  "workboard:card": {
-    kind: "workboard:card",
-    label: t("workboard.widget.cardLabel"),
-    loader: async () => (await import("./workboard-card.ts")).renderWorkboardCardWidget,
-  },
-  "workboard:mini": {
-    kind: "workboard:mini",
-    label: t("workboard.widget.summaryLabel"),
-    loader: async () => (await import("./workboard-mini.ts")).renderWorkboardMiniWidget,
+  "session:progress": {
+    kind: "session:progress",
+    label: t("sessionProgressCard.widgetLabel"),
+    loader: async () => (await import("./session-progress.ts")).renderSessionProgressWidget,
   },
 };
 

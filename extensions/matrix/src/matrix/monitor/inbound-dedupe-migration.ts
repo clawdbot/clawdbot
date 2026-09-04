@@ -19,7 +19,7 @@ import type { DatabaseSync } from "node:sqlite";
 // plugin-state-store/kysely graph, so the value import stays lazy below.
 import type { PersistentDedupeEntry } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { isRecord } from "../../record-shared.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeMatrixStorageMetadata } from "../client/storage.js";
 
 const LEGACY_SQLITE_NAMESPACE = "inbound-dedupe";

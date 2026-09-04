@@ -6,10 +6,7 @@ import {
   type TranscriptTurnBoundary,
 } from "../../config/sessions/session-accessor.js";
 import type { TranscriptTurnAdmission } from "../../config/sessions/transcript-entry-anchor.js";
-import type {
-  ContextEngine,
-  ContextEngineTurnAdvancementIdempotency,
-} from "../../context-engine/types.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -40,16 +37,13 @@ type AcceptedContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
   isHeartbeat: boolean;
   state: "accepted";
-  turnAdvancementIdempotency?: ContextEngineTurnAdvancementIdempotency;
 }>;
 
 type ReadyContextEngineTurnOutboxPayload = Readonly<{
   boundary: TranscriptTurnBoundary;
   isHeartbeat: boolean;
   messages: AgentMessage[];
-  prePromptMessageCount?: number;
   state: "ready";
-  turnAdvancementIdempotency?: ContextEngineTurnAdvancementIdempotency;
 }>;
 
 type ContextEngineTurnReadFailureKind = Exclude<
@@ -79,6 +73,12 @@ function outboxEnqueueSequence() {
 
 function oldestOutboxEnqueueSequence() {
   return /* kysely-allow-raw: Aggregate the closed implicit-rowid expression used for enqueue order. */ sql<number>`MIN(context_engine_turn_outbox.rowid)`;
+}
+
+function outboxPayloadRequiresAdvancement() {
+  // Blocked rows are terminal audit evidence, not retryable work. Keep them
+  // inspectable without letting them hold later same-session turns behind them.
+  return /* kysely-allow-raw: Payload state is owned by the closed outbox union above. */ sql<boolean>`json_extract(context_engine_turn_outbox.payload_json, '$.state') IS NOT 'blocked'`;
 }
 
 export function isRetryableContextEngineTurnReadFailure(
@@ -201,7 +201,6 @@ export function acceptContextEngineTurnIntent(params: {
   engineId: string;
   isHeartbeat: boolean;
   ownerPluginId?: string;
-  turnAdvancementIdempotency: ContextEngineTurnAdvancementIdempotency;
 }): void {
   writeContextEngineTurnOutboxPayload({
     ...params,
@@ -209,7 +208,6 @@ export function acceptContextEngineTurnIntent(params: {
       boundary: params.boundary,
       isHeartbeat: params.isHeartbeat,
       state: "accepted",
-      turnAdvancementIdempotency: params.turnAdvancementIdempotency,
     },
   });
 }
@@ -306,10 +304,6 @@ export function recoverContextEngineTurnOutbox(params: {
       boundary: payload.boundary,
       maxEvents: RECOVERED_TURN_MAX_EVENTS,
       maxBytes: RECOVERED_TURN_MAX_BYTES,
-      messageRange:
-        payload.turnAdvancementIdempotency === "atomic-idempotent-turn-local-v1"
-          ? "turn-local-v1"
-          : "full-transcript-v1",
     });
     if (closedTurn.kind !== "ok") {
       if (isRetryableContextEngineTurnReadFailure(closedTurn.kind)) {
@@ -339,11 +333,6 @@ export function recoverContextEngineTurnOutbox(params: {
         boundary: payload.boundary,
         isHeartbeat: payload.isHeartbeat,
         messages: closedTurn.messages,
-        prePromptMessageCount:
-          payload.turnAdvancementIdempotency === "atomic-idempotent-turn-local-v1"
-            ? undefined
-            : closedTurn.prePromptMessageCount,
-        turnAdvancementIdempotency: payload.turnAdvancementIdempotency,
       },
     });
   }
@@ -358,10 +347,7 @@ export async function drainContextEngineTurnOutbox(params: {
   limit?: number;
   warn: (message: string) => void;
 }): Promise<{ pending: boolean }> {
-  if (
-    typeof params.engine.commitTurn !== "function" &&
-    typeof params.engine.commitTurnLocal !== "function"
-  ) {
+  if (typeof params.engine.commitTurn !== "function") {
     return { pending: false };
   }
   let remaining = Math.max(0, params.limit ?? 16);
@@ -376,7 +362,8 @@ export async function drainContextEngineTurnOutbox(params: {
     // Use it instead of wall-clock timestamps, which can collide.
     .select(oldestOutboxEnqueueSequence().as("oldest_enqueue_sequence"))
     .where("engine_id", "=", params.engineId)
-    .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null);
+    .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
+    .where(outboxPayloadRequiresAdvancement());
   if (params.sessionId) {
     pendingSessionsQuery = pendingSessionsQuery.where("session_id", "=", params.sessionId);
   }
@@ -402,6 +389,7 @@ export async function drainContextEngineTurnOutbox(params: {
           .where("engine_id", "=", params.engineId)
           .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
           .where("session_id", "=", sessionId)
+          .where(outboxPayloadRequiresAdvancement())
           .orderBy(outboxEnqueueSequence(), "asc")
           .limit(1),
       );
@@ -429,7 +417,8 @@ function hasPendingContextEngineTurn(
     .selectFrom("context_engine_turn_outbox")
     .select("advancement_key")
     .where("engine_id", "=", params.engineId)
-    .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null);
+    .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
+    .where(outboxPayloadRequiresAdvancement());
   if (params.sessionId) {
     query = query.where("session_id", "=", params.sessionId);
   }
@@ -463,17 +452,9 @@ async function commitPendingContextEngineTurn(
       },
       isHeartbeat: payload.isHeartbeat,
     };
-    const turnLocal = payload.turnAdvancementIdempotency === "atomic-idempotent-turn-local-v1";
-    const result = turnLocal
-      ? await params.engine.commitTurnLocal?.(commonParams)
-      : await params.engine.commitTurn?.({
-          ...commonParams,
-          prePromptMessageCount: payload.prePromptMessageCount ?? 0,
-        });
+    const result = await params.engine.commitTurn?.(commonParams);
     if (!result) {
-      throw new Error(
-        `context engine does not implement ${turnLocal ? "commitTurnLocal" : "commitTurn"}`,
-      );
+      throw new Error("context engine does not implement commitTurn");
     }
     if (result.status !== "committed" && result.status !== "duplicate") {
       throw new Error(`invalid commitTurn result status: ${String(result.status)}`);

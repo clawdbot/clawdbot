@@ -36,7 +36,7 @@ export {
   normalizeSpeechProviderId,
 } from "../tts/provider-registry.js";
 export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
-// SDK compatibility: preserve the public `asObject` export name.
+// Public compatibility: preserve the established `asObject` export name.
 export { asOptionalRecord as asObject } from "@openclaw/normalization-core/record-coerce";
 export {
   asBoolean,

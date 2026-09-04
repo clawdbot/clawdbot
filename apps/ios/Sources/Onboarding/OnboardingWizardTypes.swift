@@ -92,3 +92,31 @@ struct GatewaySetupLinkStaging {
         return true
     }
 }
+
+enum OnboardingQRCodeDestination: Equatable {
+    case mainUI
+    case successScreen
+}
+
+struct OnboardingQRCodeCompletion {
+    private var targetStableID: String?
+
+    mutating func stage(_ link: GatewayConnectDeepLink) {
+        self.targetStableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
+            host: link.host,
+            port: link.port,
+            contextPath: link.contextPath)
+    }
+
+    mutating func cancel() {
+        self.targetStableID = nil
+    }
+
+    mutating func destination(connectedStableID: String?) -> OnboardingQRCodeDestination {
+        guard let targetStableID else { return .successScreen }
+        self.targetStableID = nil
+        return GatewayStableIdentifier.matches(targetStableID, connectedStableID)
+            ? .mainUI
+            : .successScreen
+    }
+}

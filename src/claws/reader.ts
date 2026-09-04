@@ -597,7 +597,19 @@ async function resolveSource(
   };
 }
 
-export async function readClawManifestFile(path: string): Promise<ClawReadResult> {
+export async function readClawManifestFile(
+  path: string,
+  options: {
+    allowLegacyDynamicToolProfile?: boolean;
+    authorizeLegacyDynamicToolProfile?: (params: {
+      manifest: ClawManifest;
+      source: Pick<
+        ClawSourceIdentity,
+        "kind" | "name" | "version" | "packageRoot" | "manifestPath"
+      >;
+    }) => boolean | Promise<boolean>;
+  } = {},
+): Promise<ClawReadResult> {
   const sourceResult = await resolveSource(path);
   if (!sourceResult.ok) {
     return sourceResult;
@@ -628,9 +640,24 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
       ],
     };
   }
+  const allowLegacyDynamicToolProfile =
+    options.allowLegacyDynamicToolProfile === true ||
+    (options.authorizeLegacyDynamicToolProfile
+      ? await options.authorizeLegacyDynamicToolProfile({
+          manifest: parsed.manifest,
+          source: {
+            kind: sourceResult.source.kind,
+            name: sourceResult.source.name,
+            version: sourceResult.source.version,
+            packageRoot: sourceResult.source.packageRoot,
+            manifestPath: sourceResult.source.manifestPath,
+          },
+        })
+      : false);
   const profile = await readClawOpenClawProfile({
     packageRoot: sourceResult.source.packageRoot,
     metadata: parsed.manifest.metadata,
+    ...(allowLegacyDynamicToolProfile ? { allowLegacyDynamicToolProfile: true } : {}),
   });
   if (!profile.ok) {
     return profile;
@@ -663,6 +690,7 @@ export async function readClawManifestFile(path: string): Promise<ClawReadResult
     ...(hasMarkdownBody ? { clawMarkdownBody: manifestResult.body } : {}),
     ...(snapshot.packageBootstrap ? { packageBootstrap: snapshot.packageBootstrap } : {}),
     ...(profile.profile ? { openClawProfile: profile.profile } : {}),
+    ...(profile.legacyProfile ? { legacyOpenClawProfile: profile.legacyProfile } : {}),
     source,
     snapshot: {
       manifest: snapshot.manifest,

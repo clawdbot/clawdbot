@@ -5,6 +5,54 @@
 // operator has not opened.
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 
+/** What the dialog needs to narrate an install it cannot observe directly. */
+export type UpdateProgress = {
+  /** The install is accepted and unfinished, across the restart. */
+  busy: boolean;
+  connected: boolean;
+  /** Set once the update produced a definitive failure. */
+  failure: string | null;
+};
+
+// Keep the lazy confirmation entry independent of the application context.
+type UpdateProgressSources = {
+  gateway: {
+    snapshot: { phase: string };
+    subscribe: (listener: () => void) => () => void;
+  };
+  overlays: {
+    snapshot: {
+      updateRunning: boolean;
+      updateReconciliationPending: boolean;
+      updateStatusBanner: { tone: string; text: string } | null;
+    };
+    subscribe: (listener: () => void) => () => void;
+  };
+};
+
+export function createUpdateProgressWatcher(
+  context: UpdateProgressSources,
+): (listener: (progress: UpdateProgress) => void) => () => void {
+  return (listener) => {
+    const emit = () => {
+      const update = context.overlays.snapshot;
+      const banner = update.updateStatusBanner;
+      listener({
+        busy: update.updateRunning || update.updateReconciliationPending,
+        connected: context.gateway.snapshot.phase === "connected",
+        failure: banner && banner.tone !== "info" ? banner.text : null,
+      });
+    };
+    const stopOverlays = context.overlays.subscribe(emit);
+    const stopGateway = context.gateway.subscribe(emit);
+    emit();
+    return () => {
+      stopOverlays();
+      stopGateway();
+    };
+  };
+}
+
 export type ConfirmAndStartUpdateParams = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
@@ -15,6 +63,12 @@ export type ConfirmAndStartUpdateParams = {
    */
   viaNativeApp: boolean;
   startGatewayUpdate: () => void;
+  /**
+   * Streams the update lifecycle so the dialog can stay open and report it.
+   * A surface that cannot supply one closes on confirm instead of holding a
+   * dialog it can never update; the ambient surfaces narrate from there.
+   */
+  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
 };
 
 export async function confirmAndStartUpdate(params: ConfirmAndStartUpdateParams): Promise<void> {

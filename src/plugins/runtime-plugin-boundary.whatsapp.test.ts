@@ -4,7 +4,7 @@ import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
-import type { PluginModuleLoaderCache } from "./plugin-module-loader-cache.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginBoundaryModule } from "./runtime/runtime-plugin-boundary.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -124,18 +124,15 @@ function createExternalTypeScriptRuntimePackageFixture() {
 }
 
 function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
-  const loaders: PluginModuleLoaderCache = new Map();
   return {
     light: loadPluginBoundaryModule<LightModule>(
       path.join(runtimePluginDir, "light-runtime-api.js"),
-      loaders,
-      { origin: "bundled" },
+      { origin: "bundled", rootDir: runtimePluginDir },
     ),
-    heavy: loadPluginBoundaryModule<HeavyModule>(
-      path.join(runtimePluginDir, "runtime-api.js"),
-      loaders,
-      { origin: "bundled" },
-    ),
+    heavy: loadPluginBoundaryModule<HeavyModule>(path.join(runtimePluginDir, "runtime-api.js"), {
+      origin: "bundled",
+      rootDir: runtimePluginDir,
+    }),
   };
 }
 
@@ -155,6 +152,7 @@ function expectSharedWhatsAppListenerState(runtimePluginDir: string, accountId: 
 }
 
 afterEach(() => {
+  clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -167,23 +165,17 @@ describe("runtime plugin boundary whatsapp seam", () => {
     const rootDir = makeTrackedTempDir("openclaw-bundled-boundary-ts", tempDirs);
     const modulePath = path.join(rootDir, "runtime-api.ts");
     writeRuntimeFixtureText(rootDir, "runtime-api.ts", "export const ok = true;\n");
-    const loaders: PluginModuleLoaderCache = new Map();
-
     expect(() =>
-      loadPluginBoundaryModule<{ ok: boolean }>(modulePath, loaders, { origin: "bundled" }),
+      loadPluginBoundaryModule<{ ok: boolean }>(modulePath, { origin: "bundled", rootDir }),
     ).toThrow(/must be built JavaScript/u);
-    expect(loaders.size).toBe(0);
   });
 
   it("keeps the TypeScript source package fallback available for non-bundled plugins", () => {
     const modulePath = createExternalTypeScriptRuntimePackageFixture();
-    const loaders: PluginModuleLoaderCache = new Map();
-
     expect(
-      loadPluginBoundaryModule<{ ok: boolean; loadedVia: string }>(modulePath, loaders, {
+      loadPluginBoundaryModule<{ ok: boolean; loadedVia: string }>(modulePath, {
         origin: "workspace",
       }),
     ).toEqual({ ok: true, loadedVia: "jiti-source-package" });
-    expect(loaders.size).toBe(1);
   });
 });

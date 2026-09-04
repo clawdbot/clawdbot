@@ -1,8 +1,10 @@
 // Spawn utility tests cover child process setup and stream handling helpers.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnWithFallback } from "./spawn-utils.js";
 
 function createStubChild() {
@@ -35,6 +37,29 @@ function spawnOptionsAt(
 }
 
 describe("spawnWithFallback", () => {
+  it("does not retry a failed spawn after its caller authority expires", async () => {
+    const child = new EventEmitter() as ChildProcess;
+    const spawnMock = vi.fn(() => child);
+    let current = true;
+    const pending = spawnWithFallback({
+      argv: ["agent-cli"],
+      options: {},
+      fallbacks: [{ label: "no-detach", options: { detached: false } }],
+      spawnImpl: spawnMock,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("Completion authority expired");
+        }
+      },
+    });
+    const rejected = expect(pending).rejects.toThrow("Completion authority expired");
+    current = false;
+    child.emit("error", Object.assign(new Error("spawn EBADF"), { code: "EBADF" }));
+
+    await rejected;
+    expect(spawnMock).toHaveBeenCalledOnce();
+  });
+
   it("retries on EBADF using fallback options", async () => {
     const spawnMock = vi
       .fn()
@@ -75,5 +100,50 @@ describe("spawnWithFallback", () => {
       }),
     ).rejects.toThrow(/ENOENT/);
     expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spawn a fallback after request authority retires during startup", async () => {
+    let current = true;
+    const retired = Object.assign(new Error("request authority retired"), { code: "EBADF" });
+    const firstChild = createStubChild();
+    Object.defineProperty(firstChild, "pid", { value: undefined });
+    const spawnMock = vi
+      .fn()
+      .mockReturnValueOnce(firstChild)
+      .mockImplementation(() => createStubChild());
+    const onFallback = vi.fn();
+    const run = spawnWithFallback({
+      argv: ["agent-cli"],
+      options: {},
+      fallbacks: [
+        { label: "no-detach", options: { detached: false } },
+        { label: "ignore-stdin", options: { stdio: "ignore" } },
+      ],
+      spawnImpl: spawnMock,
+      onFallback,
+      assertCurrent: () => {
+        if (!current) {
+          throw retired;
+        }
+      },
+    });
+    const outcome = Promise.allSettled([run]);
+    current = false;
+    firstChild.emit("error", Object.assign(new Error("spawn EBADF"), { code: "EBADF" }));
+
+    expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
+    expect(spawnMock).toHaveBeenCalledOnce();
+    expect(onFallback).toHaveBeenCalledOnce();
+  });
+
+  it("rejects ENOENT from a real missing executable", async () => {
+    await withTempDir("openclaw-spawn-missing-", async (dir) => {
+      await expect(
+        spawnWithFallback({
+          argv: [path.join(dir, "missing-executable")],
+          options: { stdio: "ignore" },
+        }),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 });

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createChatChannelPlugin } from "../plugin-sdk/channel-core.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
@@ -40,6 +41,27 @@ function createChannelPlugin(id: string, label: string): ChannelPlugin {
 }
 
 describe("plugin registry channel guard", () => {
+  it.each([undefined, { chatTypes: [] }, { chatTypes: ["forum"] }, { chatTypes: [1] }])(
+    "rejects incomplete or invalid channel plugins at the registrar boundary",
+    (capabilities) => {
+      const pluginRegistry = createTestRegistry();
+      const record = createPluginRecord({ id: "incomplete-channel-owner", origin: "global" });
+      const plugin = createChannelPlugin("incomplete-channel", "Incomplete Channel");
+      plugin.capabilities = capabilities as never;
+
+      pluginRegistry.registry.plugins.push(record);
+      pluginRegistry
+        .createApi(record, { config: {} as OpenClawConfig, registrationMode: "full" })
+        .registerChannel({ plugin });
+
+      expect(pluginRegistry.registry.channelSetups).toHaveLength(0);
+      expect(pluginRegistry.registry.channels).toHaveLength(0);
+      expect(pluginRegistry.registry.diagnostics.map((diag) => diag.message)).toContain(
+        'channel "incomplete-channel" registration missing or invalid required capabilities.chatTypes',
+      );
+    },
+  );
+
   it("rejects channel registration from disabled workspace plugins", () => {
     const pluginRegistry = createTestRegistry();
     const config = {} as OpenClawConfig;
@@ -119,13 +141,18 @@ describe("plugin registry channel guard", () => {
       origin: "workspace",
       enabled: true,
     });
+    const plugin = createChannelPlugin("telegram", "Trusted Workspace Telegram");
+    plugin.capabilities = undefined as never;
 
     pluginRegistry.registry.plugins.push(record);
     pluginRegistry.createApi(record, { config, registrationMode: "setup-only" }).registerChannel({
-      plugin: createChannelPlugin("telegram", "Trusted Workspace Telegram"),
+      plugin: createChatChannelPlugin({ base: plugin }),
     });
 
     expect(pluginRegistry.registry.channelSetups).toHaveLength(1);
+    expect(pluginRegistry.registry.channelSetups[0]?.plugin.capabilities.chatTypes).toEqual([
+      "direct",
+    ]);
     expect(pluginRegistry.registry.channelSetups[0]).toMatchObject({
       pluginId: "trusted-workspace-shadow",
       enabled: true,

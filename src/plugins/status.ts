@@ -1,6 +1,4 @@
 // Builds plugin status snapshots for CLI and diagnostics.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
@@ -12,39 +10,49 @@ import {
   inspectNativePluginMcpRuntimeSupport,
 } from "./bundle-mcp.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
-import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import {
+  appendPluginControlPlaneWorkspaceDiagnostic,
+  resolvePluginControlPlaneWorkspace,
+} from "./control-plane-workspace.js";
 import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
 import {
   buildPluginShapeSummary,
   type PluginCapabilityEntry,
   type PluginInspectShape,
 } from "./inspect-shape.js";
-import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
-import {
-  buildPluginRuntimeLoadOptions,
-  resolvePluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
+import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
+import {
+  formatPluginCompatibilityNotice,
+  type PluginCompatibilityNotice,
+} from "./status-compatibility.js";
 import {
   buildPluginDependencyStatus,
   projectPluginDependencyHealth,
 } from "./status-dependencies-core.js";
+import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
   workspaceDir?: string;
+  workspaceScope: "selected" | "omitted";
 };
+
+type PluginStatusReportLike = PluginRegistry & { workspaceDir?: string };
 
 export {
   buildPluginRegistrySnapshotReport,
@@ -52,21 +60,14 @@ export {
 } from "./status-snapshot.js";
 export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.js";
 
-export type PluginCompatibilityNotice = {
-  pluginId: string;
-  code:
-    | "hook-only"
-    | "deprecated-memory-embedding-provider-api"
-    | "removed-session-transcript-file-api";
-  compatCode: PluginCompatCode;
-  severity: "warn" | "info";
-  message: string;
-};
-
-export type PluginCompatibilitySummary = {
-  noticeCount: number;
-  pluginCount: number;
-};
+export {
+  formatPluginCompatibilityNotice,
+  summarizePluginCompatibility,
+} from "./status-compatibility.js";
+export type {
+  PluginCompatibilityNotice,
+  PluginCompatibilitySummary,
+} from "./status-compatibility.js";
 
 export type PluginInspectReport = {
   workspaceDir?: string;
@@ -119,7 +120,6 @@ export type PluginInspectReport = {
 function buildCompatibilityNoticesForInspect(
   inspect: Pick<PluginInspectReport, "plugin" | "shape"> & {
     diagnostics: readonly PluginDiagnostic[];
-    hasRuntimeMemoryEmbeddingProviderRegistration: boolean;
   },
 ): PluginCompatibilityNotice[] {
   const warnings: PluginCompatibilityNotice[] = [];
@@ -131,20 +131,6 @@ function buildCompatibilityNoticesForInspect(
       severity: "info",
       message:
         "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
-    });
-  }
-  const usesMemoryEmbeddingProviderApi =
-    inspect.plugin.memoryEmbeddingProviderIds.length > 0 ||
-    (inspect.plugin.contracts?.memoryEmbeddingProviders?.length ?? 0) > 0 ||
-    inspect.hasRuntimeMemoryEmbeddingProviderRegistration;
-  if (usesMemoryEmbeddingProviderApi && inspect.plugin.origin !== "bundled") {
-    warnings.push({
-      pluginId: inspect.plugin.id,
-      code: "deprecated-memory-embedding-provider-api",
-      compatCode: "deprecated-memory-embedding-provider-api",
-      severity: "warn",
-      message:
-        "uses deprecated memory-specific embedding provider API; use api.registerEmbeddingProvider and contracts.embeddingProviders for new embedding providers.",
     });
   }
   if (usesRemovedSessionTranscriptFileApi(inspect)) {
@@ -204,6 +190,8 @@ type PluginReportParams = {
   config?: OpenClawConfig;
   effectiveOnly?: boolean;
   onlyPluginIds?: readonly string[];
+  /** Capture full registrations without starting channel runtime sidecars. */
+  runtimeInspection?: boolean;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -216,9 +204,12 @@ function buildPluginReport(
   loadModules: boolean,
 ): PluginStatusReport {
   const rawConfig = params?.config ?? getRuntimeConfig();
-  const initialWorkspaceDir =
-    params?.workspaceDir ??
-    resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig), params?.env);
+  const workspace = resolvePluginControlPlaneWorkspace({
+    config: rawConfig,
+    env: params?.env,
+    workspaceDir: params?.workspaceDir,
+  });
+  const initialWorkspaceDir = workspace.workspaceDir;
   const metadataSnapshot =
     params?.metadataSnapshot ??
     loadPluginMetadataSnapshot({
@@ -227,19 +218,15 @@ function buildPluginReport(
       workspaceDir: initialWorkspaceDir,
       ...(params?.onlyPluginIds !== undefined ? { pluginIds: params.onlyPluginIds } : {}),
     });
-  const baseContext = {
-    ...resolvePluginRuntimeLoadContext({
-      config: rawConfig,
-      env: params?.env,
-      logger: params?.logger,
-      workspaceDir: initialWorkspaceDir,
-      onlyPluginIds: params?.onlyPluginIds,
-      manifestRegistry: metadataSnapshot.manifestRegistry,
-    }),
-    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
-  };
-  const workspaceDir =
-    baseContext.workspaceDir ?? initialWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
+  const baseContext = resolvePluginRuntimeLoadContext({
+    config: rawConfig,
+    env: params?.env,
+    logger: params?.logger,
+    workspaceDir: initialWorkspaceDir,
+    onlyPluginIds: params?.onlyPluginIds,
+    metadataSnapshot,
+  });
+  const workspaceDir = baseContext.workspaceDir ?? initialWorkspaceDir;
   const context =
     workspaceDir === baseContext.workspaceDir
       ? baseContext
@@ -248,6 +235,10 @@ function buildPluginReport(
           workspaceDir,
         };
   const manifestByPluginId = metadataSnapshot.byPluginId;
+  // Runtime records drop package build metadata; the installed index still owns it.
+  const packageBuildByPluginId = new Map(
+    metadataSnapshot.index.plugins.map((plugin) => [plugin.pluginId, plugin.packageBuild]),
+  );
   const config = context.config;
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
@@ -261,6 +252,8 @@ function buildPluginReport(
   const runtimeCompatConfig = withBundledPluginEnablementCompat({
     config,
     pluginIds: bundledProviderIds,
+    ...(params?.env ? { env: params.env } : {}),
+    activation: "defaults",
   });
   const onlyPluginIds =
     params?.effectiveOnly === true
@@ -287,6 +280,7 @@ function buildPluginReport(
               loadModules,
               cache: false,
               onlyPluginIds,
+              toolDiscovery: params?.runtimeInspection,
             }),
           ),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },
@@ -319,21 +313,37 @@ function buildPluginReport(
 
   return projectPluginDependencyHealth({
     workspaceDir,
+    workspaceScope: workspace.workspaceScope,
     ...registry,
+    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
+      [
+        ...registry.diagnostics,
+        ...collectPluginCapabilityConsentDiagnostics({
+          index: metadataSnapshot.index,
+          manifests: manifestByPluginId,
+        }),
+      ],
+      workspace,
+    ),
     plugins: registry.plugins.map((plugin) =>
       Object.assign({}, plugin, {
         imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
         version: resolveReportedPluginVersion(plugin, params?.env),
         dependencyStatus:
           plugin.dependencyStatus ??
-          (plugin.origin === "bundled"
-            ? undefined
-            : buildPluginDependencyStatus({
+          (tracksPluginDependencyStatus({
+            origin: plugin.origin,
+            pluginId: plugin.id,
+            packageName: plugin.packageName ?? manifestByPluginId.get(plugin.id)?.packageName,
+            packageBuild: packageBuildByPluginId.get(plugin.id),
+          })
+            ? buildPluginDependencyStatus({
                 rootDir: plugin.rootDir,
                 dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
                 optionalDependencies: manifestByPluginId.get(plugin.id)
                   ?.packageOptionalDependencies,
-              })),
+              })
+            : undefined),
       }),
     ),
   });
@@ -347,37 +357,38 @@ export function buildPluginDiagnosticsReport(params?: PluginReportParams): Plugi
   return buildPluginReport(params, true);
 }
 
-export function buildPluginInspectReport(params: {
-  id: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: PluginLogger;
-  report?: PluginStatusReport;
-  resolvedConfig?: OpenClawConfig;
-}): PluginInspectReport | null {
-  const rawConfig = params.config ?? getRuntimeConfig();
-  const config =
-    params.resolvedConfig ??
-    resolvePluginRuntimeLoadContext({
-      config: rawConfig,
-      env: params.env,
-      logger: params.logger,
-      workspaceDir: params.workspaceDir,
-    }).config;
-  const report =
-    params.report ??
-    buildPluginDiagnosticsReport({
-      config: rawConfig,
-      logger: params.logger,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    });
-  const plugin = report.plugins.find((entry) => entry.id === params.id || entry.name === params.id);
-  if (!plugin) {
-    return null;
-  }
+type PluginInspectParams = Pick<
+  PluginReportParams,
+  "config" | "workspaceDir" | "env" | "logger"
+> & {
+  report?: PluginStatusReportLike;
+};
 
+function resolvePluginInspectContext({ report, ...params }: PluginInspectParams) {
+  const { rawConfig, config } = resolvePluginRuntimeLoadContext(params);
+  return {
+    report: report ?? buildPluginDiagnosticsReport({ ...params, config: rawConfig }),
+    entries: normalizePluginsConfig(config.plugins).entries,
+  };
+}
+
+export function buildPluginInspectReport({
+  id,
+  ...params
+}: PluginInspectParams & {
+  id: string;
+}): PluginInspectReport | null {
+  const context = resolvePluginInspectContext(params);
+  const plugin =
+    context.report.plugins.find((entry) => entry.id === id) ??
+    context.report.plugins.find((entry) => entry.name === id);
+  return plugin ? buildPluginInspectRecord(plugin, context) : null;
+}
+
+function buildPluginInspectRecord(
+  plugin: PluginRegistry["plugins"][number],
+  { report, entries }: ReturnType<typeof resolvePluginInspectContext>,
+): PluginInspectReport {
   const typedHooks = report.typedHooks
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
@@ -399,7 +410,7 @@ export function buildPluginInspectReport(params: {
       optional: entry.optional,
     }));
   const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
-  const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
+  const policyEntry = entries[normalizePluginPolicyId(plugin.id)];
   const shapeSummary = buildPluginShapeSummary({ plugin, report });
   const shape = shapeSummary.shape;
   const gatewayMethods = (report.gatewayMethodDescriptors ?? [])
@@ -460,14 +471,10 @@ export function buildPluginInspectReport(params: {
     ];
   }
 
-  const hasRuntimeMemoryEmbeddingProviderRegistration = report.memoryEmbeddingProviders.some(
-    (entry) => entry.pluginId === plugin.id,
-  );
   const compatibility = buildCompatibilityNoticesForInspect({
     plugin,
     shape,
     diagnostics,
-    hasRuntimeMemoryEmbeddingProviderRegistration,
   });
   return {
     workspaceDir: report.workspaceDir,
@@ -502,61 +509,20 @@ export function buildPluginInspectReport(params: {
   };
 }
 
-export function buildAllPluginInspectReports(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: PluginLogger;
-  report?: PluginStatusReport;
-}): PluginInspectReport[] {
-  const rawConfig = params?.config ?? getRuntimeConfig();
-  const config = resolvePluginRuntimeLoadContext({
-    config: rawConfig,
-    env: params?.env,
-    logger: params?.logger,
-    workspaceDir: params?.workspaceDir,
-  }).config;
-  const report =
-    params?.report ??
-    buildPluginDiagnosticsReport({
-      config: rawConfig,
-      logger: params?.logger,
-      workspaceDir: params?.workspaceDir,
-      env: params?.env,
-    });
-
-  return report.plugins
-    .map((plugin) =>
-      buildPluginInspectReport({
-        id: plugin.id,
-        config: rawConfig,
-        logger: params?.logger,
-        workspaceDir: params?.workspaceDir,
-        env: params?.env,
-        resolvedConfig: config,
-        report,
-      }),
-    )
-    .filter((entry): entry is PluginInspectReport => entry !== null);
+export function buildAllPluginInspectReports(
+  params: PluginInspectParams = {},
+): PluginInspectReport[] {
+  const context = resolvePluginInspectContext(params);
+  return context.report.plugins.map((plugin) => buildPluginInspectRecord(plugin, context));
 }
 
-export function buildPluginCompatibilityWarnings(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: PluginLogger;
-  report?: PluginStatusReport;
-}): string[] {
+export function buildPluginCompatibilityWarnings(params?: PluginInspectParams): string[] {
   return buildPluginCompatibilityNotices(params).map(formatPluginCompatibilityNotice);
 }
 
-export function buildPluginCompatibilityNotices(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  logger?: PluginLogger;
-  report?: PluginStatusReport;
-}): PluginCompatibilityNotice[] {
+export function buildPluginCompatibilityNotices(
+  params?: PluginInspectParams,
+): PluginCompatibilityNotice[] {
   return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
 }
 
@@ -589,17 +555,4 @@ export function buildPluginCompatibilitySnapshotNotices(params?: {
     ...params,
     report: registrationReport,
   });
-}
-
-export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {
-  return `${notice.pluginId} ${notice.message}`;
-}
-
-export function summarizePluginCompatibility(
-  notices: PluginCompatibilityNotice[],
-): PluginCompatibilitySummary {
-  return {
-    noticeCount: notices.length,
-    pluginCount: new Set(notices.map((notice) => notice.pluginId)).size,
-  };
 }

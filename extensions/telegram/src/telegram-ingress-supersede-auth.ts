@@ -112,6 +112,7 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
   const dmPolicy = accountCfg.dmPolicy ?? "pairing";
   const allowFrom = accountCfg.allowFrom;
   const groupAllowFrom = accountCfg.groupAllowFrom ?? accountCfg.allowFrom;
+  const threadSpec = resolveTelegramMessageThreadSpec(facts.message);
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     cfg: auth.cfg,
     chatId: facts.chatId,
@@ -120,7 +121,7 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
     allowFrom,
     senderId: facts.senderId,
     isGroup: facts.isGroup,
-    threadSpec: resolveTelegramMessageThreadSpec(facts.message),
+    threadSpec,
     groupAllowFrom,
     resolveTelegramGroupConfig: (chatId, messageThreadId, cfg) => {
       const telegramCfg = mergeTelegramAccountConfig(cfg, auth.accountId);
@@ -146,7 +147,7 @@ export async function isTelegramSpooledUpdateSenderAuthorized(
     accountId: auth.accountId,
     chatId: facts.chatId,
     isGroup: facts.isGroup,
-    ...(resolvedThreadId !== undefined ? { resolvedThreadId } : {}),
+    threadSpec,
     senderId: facts.senderId,
     ...(facts.senderUsername !== undefined ? { senderUsername: facts.senderUsername } : {}),
   });

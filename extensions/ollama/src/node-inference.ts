@@ -11,14 +11,13 @@ import type {
   AnyAgentTool,
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumber, asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   DEFAULT_INFERENCE_TIMEOUT_MS,
@@ -31,8 +30,6 @@ import {
   OLLAMA_CHAT_COMMAND,
   OLLAMA_MODELS_COMMAND,
   OLLAMA_NODE_INFERENCE_CAPABILITY,
-  OLLAMA_NODE_INFERENCE_COMMANDS,
-  OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS,
   ollamaNodeInferenceToolDefinition,
 } from "./node-inference-contract.js";
 import {
@@ -41,7 +38,7 @@ import {
   enrichOllamaModelsWithContext,
   fetchLoadedOllamaModelNames,
   fetchOllamaModels,
-  isOllamaCloudModel,
+  isOllamaRemoteModel,
   resolveOllamaApiBase,
   throwIfOllamaRequestAborted,
 } from "./provider-models.js";
@@ -99,10 +96,6 @@ function durationMs(value: unknown): number | undefined {
     return undefined;
   }
   return Math.round((value / 1_000_000) * 100) / 100;
-}
-
-function optionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 async function requestOllamaJson<T>(params: {
@@ -163,9 +156,7 @@ async function discoverOllamaNodeModels(
   if (!discovered.reachable) {
     throw new Error(`Ollama is not running at ${apiBase}`);
   }
-  const localModels = discovered.models.filter(
-    (model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
-  );
+  const localModels = discovered.models.filter((model) => !isOllamaRemoteModel(model));
   const loaded = await fetchLoadedOllamaModelNames(apiBase, signal ? { signal } : undefined);
   // Model discovery still works against Ollama versions without /api/ps.
   const loadedNames = new Set(loaded.models);
@@ -244,8 +235,7 @@ async function runOllamaNodeChat(params: {
     ...(params.signal ? { signal: params.signal } : {}),
   });
   const localModel = discovered.models.find(
-    (model) =>
-      model.name === params.model && !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
+    (model) => model.name === params.model && !isOllamaRemoteModel(model),
   );
   const [model] = localModel
     ? await enrichOllamaModelsWithContext(apiBase, [localModel], {
@@ -300,8 +290,8 @@ async function runOllamaNodeChat(params: {
       `Ollama stopped after reaching maxTokens (${params.maxTokens}); retry with a larger maxTokens value`,
     );
   }
-  const promptTokens = optionalNumber(data.prompt_eval_count);
-  const completionTokens = optionalNumber(data.eval_count);
+  const promptTokens = asFiniteNumber(data.prompt_eval_count);
+  const completionTokens = asFiniteNumber(data.eval_count);
   const loadMs = durationMs(data.load_duration);
   const totalMs = durationMs(data.total_duration);
   return {
@@ -370,14 +360,6 @@ export function createOllamaNodeHostCommands(options?: {
       },
     },
   ];
-}
-
-export function createOllamaNodeInvokePolicy(): OpenClawPluginNodeInvokePolicy {
-  return {
-    commands: [...OLLAMA_NODE_INFERENCE_COMMANDS],
-    defaultPlatforms: [...OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS],
-    handle: async (ctx) => await ctx.invokeNode(),
-  };
 }
 
 function findNode(nodes: NodeSummary[], query: string): NodeSummary {

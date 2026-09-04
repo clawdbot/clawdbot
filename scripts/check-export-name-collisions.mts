@@ -1,14 +1,11 @@
 #!/usr/bin/env node
 
-import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
-import { z } from "zod";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import {
-  collectTypeScriptFilesFromRoots,
   isTestLikeTypeScriptFile,
-  resolveSourceRoots,
   runAsScript,
   toLine,
   unwrapExpression,
@@ -57,17 +54,6 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const exportNameCollisionSchema = z
-  .object({
-    name: z.string(),
-    files: z.array(z.string()),
-    sdk: z.literal(true).optional(),
-  })
-  .strict();
-const exportNameCollisionBaselineSchema = z.array(exportNameCollisionSchema);
-
-const baselineRelativePath = "scripts/lib/export-name-collision-baseline.json";
-const baselineRegenCommand = "pnpm lint:tmp:export-name-collisions:gen";
 const failurePrefix = "check-export-name-collisions";
 const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
 
@@ -206,8 +192,8 @@ function isAwaitedZeroArgumentCall(expression: ts.Expression) {
   return ts.isCallExpression(awaited) && awaited.arguments.length === 0;
 }
 
-function returnCall(statement: ts.Statement) {
-  if (!ts.isReturnStatement(statement) || !statement.expression) {
+function returnCall(statement: ts.Statement | undefined) {
+  if (!statement || !ts.isReturnStatement(statement) || !statement.expression) {
     return null;
   }
   const expression = unwrapExpression(statement.expression);
@@ -252,59 +238,40 @@ function isForwardingOnlyFunction(
   if (!body) {
     return false;
   }
-
+  let call: ts.CallExpression | null;
+  let moduleObjectName: string | undefined;
   if (!ts.isBlock(body)) {
     const expression = unwrapExpression(body);
-    return (
-      ts.isCallExpression(expression) &&
-      parametersAreForwarded(declaration.parameters, expression.arguments) &&
-      (isStaticImportForwarder(expression, functionName, importedNamesByLocalName) ||
-        isLazyModuleForwarderCall(expression, functionName))
-    );
-  }
-
-  if (body.statements.length === 1) {
-    const statement = body.statements[0];
-    if (!statement) {
-      return false;
+    call = ts.isCallExpression(expression) ? expression : null;
+  } else if (body.statements.length === 1 || body.statements.length === 2) {
+    if (body.statements.length === 2) {
+      const loadStatement = body.statements[0];
+      if (!loadStatement || !ts.isVariableStatement(loadStatement)) {
+        return false;
+      }
+      const { declarations, flags } = loadStatement.declarationList;
+      const [loaded] = declarations;
+      if (
+        !(flags & ts.NodeFlags.Const) ||
+        declarations.length !== 1 ||
+        !loaded ||
+        !ts.isIdentifier(loaded.name) ||
+        !loaded.initializer ||
+        !isAwaitedZeroArgumentCall(loaded.initializer)
+      ) {
+        return false;
+      }
+      moduleObjectName = loaded.name.text;
     }
-    const call = returnCall(statement);
-    return Boolean(
-      call &&
-      parametersAreForwarded(declaration.parameters, call.arguments) &&
-      (isStaticImportForwarder(call, functionName, importedNamesByLocalName) ||
-        isLazyModuleForwarderCall(call, functionName)),
-    );
-  }
-
-  if (body.statements.length !== 2) {
+    call = returnCall(body.statements.at(-1));
+  } else {
     return false;
   }
-  const loadStatement = body.statements[0];
-  const returnStatement = body.statements[1];
-  if (
-    !loadStatement ||
-    !returnStatement ||
-    !ts.isVariableStatement(loadStatement) ||
-    !(loadStatement.declarationList.flags & ts.NodeFlags.Const) ||
-    loadStatement.declarationList.declarations.length !== 1
-  ) {
-    return false;
-  }
-  const declarationItem = loadStatement.declarationList.declarations[0];
-  if (
-    !declarationItem ||
-    !ts.isIdentifier(declarationItem.name) ||
-    !declarationItem.initializer ||
-    !isAwaitedZeroArgumentCall(declarationItem.initializer)
-  ) {
-    return false;
-  }
-  const call = returnCall(returnStatement);
   return Boolean(
     call &&
     parametersAreForwarded(declaration.parameters, call.arguments) &&
-    isLazyModuleForwarderCall(call, functionName, declarationItem.name.text),
+    ((!moduleObjectName && isStaticImportForwarder(call, functionName, importedNamesByLocalName)) ||
+      isLazyModuleForwarderCall(call, functionName, moduleObjectName)),
   );
 }
 
@@ -312,6 +279,7 @@ function isForwardingOnlyConst(
   declaration: ts.VariableDeclaration,
   exportName: string,
   importedNamesByLocalName: ReadonlyMap<string, string>,
+  lazyRuntimeMethods: ReadonlyMap<string, number>,
 ) {
   if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
     return false;
@@ -319,6 +287,31 @@ function isForwardingOnlyConst(
   const initializer = unwrapExpression(declaration.initializer);
   if (ts.isIdentifier(initializer)) {
     return importedNamesByLocalName.get(initializer.text) === exportName;
+  }
+  if (ts.isCallExpression(initializer) && ts.isIdentifier(initializer.expression)) {
+    const arity = lazyRuntimeMethods.get(initializer.expression.text);
+    const selector = initializer.arguments.at(-1);
+    if (
+      arity !== initializer.arguments.length ||
+      !selector ||
+      !ts.isArrowFunction(selector) ||
+      ts.isBlock(selector.body)
+    ) {
+      return false;
+    }
+    const [parameter] = selector.parameters;
+    const member = unwrapExpression(selector.body);
+    return (
+      selector.parameters.length === 1 &&
+      parameter !== undefined &&
+      !parameter.initializer &&
+      !parameter.dotDotDotToken &&
+      ts.isIdentifier(parameter.name) &&
+      ts.isPropertyAccessExpression(member) &&
+      ts.isIdentifier(member.expression) &&
+      member.expression.text === parameter.name.text &&
+      member.name.text === exportName
+    );
   }
   return (
     ts.isArrowFunction(initializer) &&
@@ -484,6 +477,47 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
     }
   }
 
+  // Only the shared helpers guarantee transparent argument forwarding; a same-named
+  // factory from another module or a selector that adds behavior remains a definition.
+  const lazyRuntimeMethods = new Map<string, number>();
+  for (const reference of importedSymbolsByLocalName.values()) {
+    const source = reference.moduleSpecifier.startsWith(".")
+      ? path.posix.normalize(
+          path.posix.join(path.posix.dirname(fileName), reference.moduleSpecifier),
+        )
+      : reference.moduleSpecifier;
+    if (
+      ![
+        "src/shared/lazy-runtime.js",
+        "src/plugin-sdk/lazy-runtime.js",
+        "openclaw/plugin-sdk/lazy-runtime",
+        "@openclaw/plugin-sdk/lazy-runtime",
+      ].includes(source)
+    ) {
+      continue;
+    }
+    if (reference.importedName === "createLazyRuntimeMethod") {
+      lazyRuntimeMethods.set(reference.localName, 2);
+    } else if (reference.importedName === "createLazyRuntimeMethodBinder") {
+      for (const [name, declarations] of localConstDeclarations) {
+        const [declaration] = declarations;
+        const initializer = declaration?.initializer;
+        if (
+          declarations.length === 1 &&
+          declaration &&
+          ts.isIdentifier(declaration.name) &&
+          initializer &&
+          ts.isCallExpression(initializer) &&
+          ts.isIdentifier(initializer.expression) &&
+          initializer.expression.text === reference.localName &&
+          initializer.arguments.length === 1
+        ) {
+          lazyRuntimeMethods.set(name, 1);
+        }
+      }
+    }
+  }
+
   const definitions = new Set<string>();
   const valueDefinitions = new Map<string, ExportedValueDefinition>();
   for (const name of new Set([...directlyExportedNames, ...locallyExportedNames])) {
@@ -521,7 +555,7 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       if (
         constDeclarations.length === 1 &&
         constDeclaration &&
-        isForwardingOnlyConst(constDeclaration, name, importedNamesByLocalName)
+        isForwardingOnlyConst(constDeclaration, name, importedNamesByLocalName, lazyRuntimeMethods)
       ) {
         continue;
       }
@@ -695,85 +729,42 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
   return analyzeExportNames(modules).collisions;
 }
 
-type CollisionChange = {
-  baseline?: ExportNameCollision;
-  current?: ExportNameCollision;
-};
-
-/** Compares every collision cluster so additions fail and removals ratchet debt down. */
-export function compareExportNameCollisionDebt(
-  current: ExportNameCollision[],
-  baseline: ExportNameCollision[],
-) {
-  const currentByName = new Map(current.map((collision) => [collision.name, collision]));
-  const baselineByName = new Map(baseline.map((collision) => [collision.name, collision]));
-  const regressions: CollisionChange[] = [];
-  const improvements: CollisionChange[] = [];
-  const names = [...new Set([...currentByName.keys(), ...baselineByName.keys()])].toSorted();
-
-  for (const name of names) {
-    const currentCollision = currentByName.get(name);
-    const baselineCollision = baselineByName.get(name);
-    if (!baselineCollision) {
-      regressions.push({ current: currentCollision });
-      continue;
-    }
-    if (!currentCollision) {
-      improvements.push({ baseline: baselineCollision });
-      continue;
-    }
-    const baselineFiles = new Set(baselineCollision.files);
-    const currentFiles = new Set(currentCollision.files);
-    const hasAddedFile = currentCollision.files.some((file) => !baselineFiles.has(file));
-    const hasRemovedFile = baselineCollision.files.some((file) => !currentFiles.has(file));
-    if (hasAddedFile || (currentCollision.sdk === true && baselineCollision.sdk !== true)) {
-      regressions.push({ baseline: baselineCollision, current: currentCollision });
-    }
-    if (hasRemovedFile || (baselineCollision.sdk === true && currentCollision.sdk !== true)) {
-      improvements.push({ baseline: baselineCollision, current: currentCollision });
-    }
-  }
-  return { regressions, improvements };
-}
-
-function resolveBaselinePath(repoRoot: string) {
-  return path.join(repoRoot, ...baselineRelativePath.split("/"));
-}
-
 async function collectRepositoryModules(repoRoot: string) {
-  const sourceCollectOptions = {
-    fileExtensions: [".ts", ".mts", ".js", ".mjs"],
-    includeTests: true,
-    skipDirectories: ["test", "__fixtures__"],
-  };
-  const supportCollectOptions = {
-    ...sourceCollectOptions,
-    fileExtensions: [".ts", ".mts"],
-  };
+  const ignoredDirNames = new Set(["node_modules", "test", "__fixtures__"]);
   const [collectedFiles, collectedSupportFiles] = await Promise.all([
-    collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), sourceCollectOptions),
+    collectSourceFileContents({
+      repoRoot,
+      scanRoots: ["src"],
+      scanExtensions: new Set([".ts", ".mts", ".js", ".mjs"]),
+      ignoredDirNames,
+    }),
     // Package modules are resolution-only: Plugin SDK barrels can export their
     // names, but the collision rule itself remains scoped to src/ definitions.
-    collectTypeScriptFilesFromRoots(
-      resolveSourceRoots(repoRoot, ["packages"]),
-      supportCollectOptions,
-    ),
+    collectSourceFileContents({
+      repoRoot,
+      scanRoots: ["packages"],
+      scanExtensions: new Set([".ts", ".mts"]),
+      ignoredDirNames,
+    }),
   ]);
-  const files = collectedFiles.filter((filePath) => !isExcludedExportCollisionSource(filePath));
+  const files = collectedFiles.filter(
+    ({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile),
+  );
   const supportFiles = collectedSupportFiles.filter(
-    (filePath) => !isExcludedExportCollisionSource(filePath),
+    ({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile),
   );
-  const modules = await Promise.all(
-    [
-      ...files.map((filePath) => ({ filePath, includeDefinitions: true })),
-      ...supportFiles.map((filePath) => ({ filePath, includeDefinitions: false })),
-    ].map(async ({ filePath, includeDefinitions }) => ({
-      content: await fs.readFile(filePath, "utf8"),
-      includeDefinitions,
-      path: normalizeRelativePath(path.relative(repoRoot, filePath)),
+  return [
+    ...files.map(({ content, relativeFile }) => ({
+      content,
+      includeDefinitions: true,
+      path: relativeFile,
     })),
-  );
-  return modules;
+    ...supportFiles.map(({ content, relativeFile }) => ({
+      content,
+      includeDefinitions: false,
+      path: relativeFile,
+    })),
+  ];
 }
 
 async function collectRepositoryExportAnalysis(repoRoot: string) {
@@ -782,28 +773,6 @@ async function collectRepositoryExportAnalysis(repoRoot: string) {
 
 export async function collectRepositoryCollisions(repoRoot: string) {
   return (await collectRepositoryExportAnalysis(repoRoot)).collisions;
-}
-
-async function readBaseline(repoRoot: string) {
-  try {
-    return exportNameCollisionBaselineSchema.parse(
-      JSON.parse(await fs.readFile(resolveBaselinePath(repoRoot), "utf8")),
-    );
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
-
-async function writeBaseline(repoRoot: string, collisions: ExportNameCollision[]) {
-  await fs.writeFile(resolveBaselinePath(repoRoot), `${JSON.stringify(collisions, null, 2)}\n`);
-  return collisions.length;
-}
-
-function formatCollision(collision: ExportNameCollision | undefined) {
-  return JSON.stringify(collision);
 }
 
 function printAliasingReExports(reExports: AliasingReExport[]) {
@@ -818,51 +787,27 @@ function printAliasingReExports(reExports: AliasingReExport[]) {
   }
 }
 
-export async function main() {
-  const repoRoot = resolveRepoRoot(import.meta.url);
-  if (process.argv.includes("--update-debt-baseline")) {
-    const analysis = await collectRepositoryExportAnalysis(repoRoot);
-    const count = await writeBaseline(repoRoot, analysis.collisions);
-    console.log(`Wrote ${baselineRelativePath} (${count} entries)`);
-    printAliasingReExports(analysis.aliasingReExports);
-    return 0;
+export async function main(
+  repoRoot = resolveRepoRoot(import.meta.url),
+  argv = process.argv.slice(2),
+) {
+  if (argv.length > 0) {
+    console.error(`Unknown argument(s): ${argv.join(", ")}`);
+    return 2;
   }
 
-  const baseline = await readBaseline(repoRoot);
-  if (!baseline) {
-    console.error(
-      `Missing ${baselineRelativePath}; run \`${baselineRegenCommand}\` and commit it.`,
-    );
-    return 1;
-  }
   const analysis = await collectRepositoryExportAnalysis(repoRoot);
-  const debt = compareExportNameCollisionDebt(analysis.collisions, baseline);
   printAliasingReExports(analysis.aliasingReExports);
-  if (debt.regressions.length === 0 && debt.improvements.length === 0) {
+  if (analysis.collisions.length === 0) {
     console.log("export name collision guard passed.");
     return 0;
   }
 
-  if (debt.regressions.length > 0) {
-    console.error(
-      `Found new exported function/const name collisions beyond ${baselineRelativePath}:`,
-    );
-    for (const regression of debt.regressions) {
-      console.error(`- ${formatCollision(regression.current)}`);
-    }
-    console.error(
-      `Give each behavior one exported spelling. If the debt increase is intentional, run \`${baselineRegenCommand}\` and commit the generated baseline.`,
-    );
+  console.error("Found exported function/const name collisions:");
+  for (const collision of analysis.collisions) {
+    console.error(`- ${JSON.stringify(collision)}`);
   }
-  if (debt.improvements.length > 0) {
-    console.error(`Export name collision debt dropped below ${baselineRelativePath}:`);
-    for (const improvement of debt.improvements) {
-      console.error(
-        `- ${improvement.baseline?.name}: ${formatCollision(improvement.baseline)} -> ${formatCollision(improvement.current)}`,
-      );
-    }
-    console.error(`Run \`${baselineRegenCommand}\` to ratchet the baseline down and commit it.`);
-  }
+  console.error("Give each behavior one exported spelling.");
   return 1;
 }
 

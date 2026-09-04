@@ -9,7 +9,7 @@ import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
+  resolvePluginSkillRoots: () => [],
 }));
 
 let tempRoot = "";

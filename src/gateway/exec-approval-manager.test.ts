@@ -4,10 +4,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
@@ -1123,10 +1123,10 @@ describe("ExecApprovalManager", () => {
     void manager.register(record, 60_000);
 
     delete record.executionIdentityToken;
-    expect(manager.forceDenyIfDelegatedAuthorityClosed(record.id)).toBeNull();
+    expect(manager.forceDenyIfRuntimeAuthorityClosed(record.id)).toBeNull();
     expect(manager.getSnapshot(record.id)?.resolvedAtMs).toBeUndefined();
     active = false;
-    expect(manager.forceDenyIfDelegatedAuthorityClosed(record.id)).toMatchObject({
+    expect(manager.forceDenyIfRuntimeAuthorityClosed(record.id)).toMatchObject({
       outcome: "denied",
     });
   });

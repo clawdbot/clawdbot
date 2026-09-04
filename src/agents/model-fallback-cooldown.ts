@@ -139,7 +139,7 @@ export const probeThrottleInternals = {
 type CooldownDecision =
   | { type: "skip"; reason: FailoverReason; error: string }
   | { type: "attempt"; reason: FailoverReason; markProbe: boolean }
-  | { type: "suspend_lanes"; reason: FailoverReason; leaderCandidate?: ModelCandidate };
+  | { type: "suspend_session"; reason: FailoverReason; leaderCandidate?: ModelCandidate };
 
 export function resolveCooldownDecision(params: {
   candidate: ModelCandidate;
@@ -188,7 +188,7 @@ export function resolveCooldownDecision(params: {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
-      type: "suspend_lanes",
+      type: "suspend_session",
       reason: inferredReason,
       leaderCandidate: params.candidate,
     };
@@ -199,7 +199,7 @@ export function resolveCooldownDecision(params: {
     (!params.isPrimary && shouldUseTransientCooldownProbeSlot(inferredReason));
   if (!shouldAttemptDespiteCooldown) {
     return {
-      type: "suspend_lanes",
+      type: "suspend_session",
       reason: inferredReason,
       leaderCandidate: params.candidate,
     };

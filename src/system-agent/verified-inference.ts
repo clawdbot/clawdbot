@@ -17,12 +17,14 @@ import {
   type OpaqueRuntimeOwnerKind,
 } from "../agents/execution-auth-binding.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
-import type { AgentHarnessRuntimeArtifactBinding } from "../agents/harness/runtime-artifact.types.js";
-import type { ExpectedAgentHarnessRuntimeArtifact } from "../agents/harness/runtime-artifact.types.js";
+import type {
+  AgentHarnessRuntimeArtifactBinding,
+  ExpectedAgentHarnessRuntimeArtifact,
+} from "../agents/harness/runtime-artifact.types.js";
 import { resolveAgentHarnessOwnerPluginIds } from "../agents/harness/runtime-plugin.js";
 import type { AgentHarnessAuthBindingFingerprintParams } from "../agents/harness/types.js";
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
@@ -140,7 +142,7 @@ export type SystemAgentVerifiedInferenceDeps = SystemAgentConfiguredRouteDeps & 
   resolveCliAuthBindingFingerprint?: typeof resolveCliAuthBindingFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof resolveCliRuntimeOwnerFingerprint;
   resolveCliRuntimeArtifactFingerprint?: typeof resolveCliRuntimeArtifactFingerprint;
-  resolveApiKeyForProvider?: typeof resolveApiKeyForProvider;
+  resolveApiKeyForProvider?: typeof resolveApiKeyForProviderCore;
   validateAgentHarnessRuntimeArtifact?: (params: {
     harnessId: string;
     artifact: AgentHarnessRuntimeArtifactBinding;
@@ -285,7 +287,7 @@ async function resolveCurrentRuntimeOwnerFingerprint(params: {
   if (params.kind !== "aws-sdk") {
     return undefined;
   }
-  const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProvider;
+  const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
   const auth = await resolveAuth({
     provider: params.route.provider,
     cfg: params.route.runConfig,
@@ -525,7 +527,7 @@ async function resolveCurrentAuthFingerprint(params: {
         (authCredential?.type === "api_key" && !authCredential.key) ||
         (authCredential?.type === "token" && !authCredential.token);
       if (needsMaterializedSecret) {
-        const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProvider;
+        const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
         resolvedAuth = await resolveAuth({
           provider: params.route.provider,
           cfg: params.route.runConfig,
@@ -597,7 +599,7 @@ async function resolveCurrentAuthFingerprint(params: {
       if (!params.modelId || !params.modelApi) {
         return undefined;
       }
-      const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProvider;
+      const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
       const auth = await resolveAuth({
         provider: params.route.provider,
         cfg: params.route.runConfig,
@@ -628,7 +630,7 @@ async function resolveCurrentAuthFingerprint(params: {
   if (!params.modelId || !params.modelApi) {
     return undefined;
   }
-  const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProvider;
+  const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
   const auth = await resolveAuth({
     provider: params.route.provider,
     cfg: params.route.runConfig,

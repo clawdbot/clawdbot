@@ -76,6 +76,29 @@ describe("authorizeSlackDirectMessage", () => {
     });
   });
 
+  it("allows bare user ids for workspace-install DMs", async () => {
+    const params = makeParams("allowlist");
+    params.ctx.installationIdentity = { kind: "workspace", teamId: "T11111111" };
+    params.eventScope = { teamId: "T11111111", client: {} as never };
+    params.allowFromLower = ["u123"];
+
+    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(true);
+
+    expect(params.onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it("allows bare org user ids for Enterprise DMs", async () => {
+    const params = makeParams("allowlist");
+    params.ctx.installationIdentity = { kind: "enterprise", enterpriseId: "E11111111" };
+    params.eventScope = { teamId: "T11111111", client: {} as never };
+    params.senderId = "W01234567";
+    params.allowFromLower = ["w01234567"];
+
+    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(true);
+
+    expect(params.onUnauthorized).not.toHaveBeenCalled();
+  });
+
   it("creates independent pairing requests for the same user in two Grid workspaces", async () => {
     const pendingCodes = new Map<string, string>();
     upsertChannelPairingRequestMock.mockImplementation(

@@ -5,12 +5,13 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
@@ -58,7 +59,7 @@ describe("main session recovery store", () => {
 
   function readStore(): Record<string, SessionEntry> {
     return Object.fromEntries(
-      listSessionEntries({ storePath }).map(({ sessionKey: key, entry }) => [key, entry]),
+      listSessionEntriesCore({ storePath }).map(({ sessionKey: key, entry }) => [key, entry]),
     );
   }
 
@@ -403,10 +404,10 @@ describe("main session recovery store", () => {
         },
       );
 
-      const onDeferredSuccess = vi.fn();
-      const immediateRelease = releaseMainSessionRecoveryOwner(claim.lease, {
-        onDeferredSuccess,
-      });
+      const schedulePending = vi
+        .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
+        .mockImplementation(() => {});
+      const immediateRelease = releaseMainSessionRecoveryOwner(claim.lease);
       const immediateReleaseRejected = expect(immediateRelease).rejects.toThrow(
         "transient session-store failure",
       );
@@ -418,11 +419,13 @@ describe("main session recovery store", () => {
       await vi.waitFor(() => {
         expect(read().mainRestartRecovery?.foregroundClaims).toBeUndefined();
       });
-      expect(onDeferredSuccess).toHaveBeenCalledWith({
-        sessionId: "session-1",
-        sessionKey,
-        storePath,
-      });
+      await vi.waitFor(() =>
+        expect(schedulePending).toHaveBeenCalledWith({
+          sessionId: "session-1",
+          sessionKey,
+          storePath,
+        }),
+      );
     } finally {
       vi.useRealTimers();
     }

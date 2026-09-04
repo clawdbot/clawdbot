@@ -3,6 +3,7 @@
 
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type GatewayCallOptions = {
   gatewayUrl?: string;
@@ -23,8 +24,7 @@ export function readGatewayCallOptions(params: Record<string, unknown>): Gateway
 }
 
 export function readTrimmedString(params: Record<string, unknown>, key: string): string {
-  const value = params[key];
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(params[key]) ?? "";
 }
 
 export function readClampedInt(params: {

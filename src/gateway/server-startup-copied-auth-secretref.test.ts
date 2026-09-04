@@ -12,7 +12,11 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { getFreePort, installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
+import {
+  getGatewayTestPort,
+  installGatewayTestHooks,
+  startTestGatewayServer,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -56,7 +60,7 @@ describe("Gateway startup copied auth SecretRef isolation", () => {
     });
     await writeConfigFile(config);
 
-    const port = await getFreePort();
+    const port = await getGatewayTestPort();
     server = await startTestGatewayServer(port, { auth: { mode: "none" } });
     const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 

@@ -1,15 +1,38 @@
-import { asFiniteNumber, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  normalizeOptionalString,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type CodexThreadItem, type JsonObject, type JsonValue } from "./protocol.js";
 
-export function normalizeNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
+const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX =
+  "This content was flagged for possible biological risk.";
+
+export type CodexProviderRefusal = {
+  category: "bio" | "cyber";
+  message: string;
+};
+
+/** Project only Codex's explicit refusal contracts; other policy errors retain their own paths. */
+export function readCodexProviderRefusal(
+  message: string | undefined,
+  codexErrorInfo: JsonValue | null | undefined,
+): CodexProviderRefusal | undefined {
+  if (!message) {
     return undefined;
   }
-  return value.trim() || undefined;
+  if (codexErrorInfo === "cyberPolicy") {
+    return { category: "cyber", message };
+  }
+  return message.startsWith(BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX)
+    ? { category: "bio", message }
+    : undefined;
 }
 
+export { normalizeOptionalString as normalizeNonEmptyString };
+
 export function readNonEmptyString(record: JsonObject, key: string): string | undefined {
-  return normalizeNonEmptyString(record[key]);
+  return normalizeOptionalString(record[key]);
 }
 
 export function readNonEmptyStringArray(record: JsonObject, key: string): string[] {
@@ -19,7 +42,7 @@ export function readNonEmptyStringArray(record: JsonObject, key: string): string
   }
   const entries: string[] = [];
   for (const entry of value) {
-    const normalized = normalizeNonEmptyString(entry);
+    const normalized = normalizeOptionalString(entry);
     if (normalized) {
       entries.push(normalized);
     }

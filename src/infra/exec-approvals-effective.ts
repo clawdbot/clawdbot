@@ -1,6 +1,9 @@
 // Resolves effective exec approval policy from config and policy files.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
@@ -302,7 +305,7 @@ export function collectExecPolicyScopeSnapshots(params: {
   hostDefaults?: ExecPolicyHostDefaults;
   hostDefaultSource?: string;
 }): ExecPolicyScopeSnapshot[] {
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
   const snapshots = [
     resolveExecPolicyScopeSnapshot({
       approvals: params.approvals,

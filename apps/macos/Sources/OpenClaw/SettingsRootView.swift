@@ -17,7 +17,7 @@ struct SettingsRootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
-    private let isPreview = ProcessInfo.processInfo.isPreview
+    private let isPreview = ProcessInfo.processInfo.isPreview || ProcessInfo.processInfo.isRunningTests
     private let isNixMode = ProcessInfo.processInfo.isNixMode
 
     init(
@@ -57,7 +57,6 @@ struct SettingsRootView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .defaultAppStorage(AppDefaults.standard)
-        .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
@@ -184,8 +183,8 @@ struct SettingsRootView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Config: \(configPath)")
-                Text("State:  \(stateDir)")
+                Text(String(format: String(localized: "Config: %@"), configPath))
+                Text(String(format: String(localized: "State:  %@"), stateDir))
             }
             .font(.caption.monospaced())
             .foregroundStyle(.secondary)
@@ -204,6 +203,10 @@ struct SettingsRootView: View {
             ForEach(self.cachedDetailTabs) { tab in
                 self.detailView(for: tab)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // Keep inactive native scroll views mounted but zero-area; full-size overlaps steal wheel events.
+                    .frame(
+                        width: tab == self.selectedTab ? nil : 0,
+                        height: tab == self.selectedTab ? nil : 0)
                     .opacity(tab == self.selectedTab ? 1 : 0)
                     .allowsHitTesting(tab == self.selectedTab)
                     .disabled(tab != self.selectedTab)
@@ -262,7 +265,7 @@ struct SettingsRootView: View {
         case .instances:
             AnyView(InstancesSettings(isActive: self.selectedTab == tab))
         case .config:
-            AnyView(ConfigSettings())
+            AnyView(ConfigSettings(isActive: self.selectedTab == tab))
         case .debug:
             AnyView(DebugSettings(state: self.state))
         case .about:

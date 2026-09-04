@@ -23,34 +23,41 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
     ).toBeUndefined();
   });
 
-  it("summarizes active child state for the current requester", () => {
-    const run = {
-      runId: "run-active-context",
-      childSessionKey: "agent:main:subagent:active-context",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "inspect subagent state",
-      taskName: "inspect_state",
-      label: "State worker",
-      cleanup: "keep",
-      createdAt: Date.now(),
-      execution: { status: "running", startedAt: Date.now() },
-    } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+  it.each([false, true])(
+    "summarizes active child state without promising collector events: collect=%s",
+    (collect) => {
+      const run = {
+        runId: "run-active-context",
+        childSessionKey: "agent:main:subagent:active-context",
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "inspect subagent state",
+        taskName: "inspect_state",
+        label: "State worker",
+        collect,
+        expectsCompletionMessage: !collect,
+        cleanup: "keep",
+        createdAt: Date.now(),
+        execution: { status: "running", startedAt: Date.now() },
+      } satisfies SubagentRunRecord;
+      addSubagentRunForTests(run);
 
-    const prompt = buildActiveSubagentSystemPromptAddition({
-      cfg: {} as OpenClawConfig,
-      controllerSessionKey: "agent:main:main",
-      hasSessionsYield: true,
-    });
+      const prompt = buildActiveSubagentSystemPromptAddition({
+        cfg: {} as OpenClawConfig,
+        controllerSessionKey: "agent:main:main",
+        hasSessionsYield: true,
+      });
 
-    expect(prompt).toContain("## Active Subagents");
-    expect(prompt).toContain("taskName=inspect_state");
-    expect(prompt).toContain("session=agent:main:subagent:active-context");
-    expect(prompt).toContain("sessions_yield");
-    expect(prompt).toContain("reports/evidence");
-  });
+      expect(prompt).toContain("## Active Subagents");
+      expect(prompt).toContain("taskName=inspect_state");
+      expect(prompt).toContain("session=agent:main:subagent:active-context");
+      expect(prompt).toContain("For announcing children, call `sessions_yield`");
+      expect(prompt).toContain("collectors need explicit result collection, not completion events");
+      expect(prompt).not.toMatch(/`subagents`|`sessions_list`/);
+      expect(prompt).toContain("reports/evidence");
+    },
+  );
 
   it("normalizes public main aliases before looking up active children", () => {
     const run = {

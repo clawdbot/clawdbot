@@ -25,11 +25,8 @@ struct ChatSubagentActivity: Identifiable, Equatable, Sendable {
     let status: ChatSubagentActivityStatus
     let snippet: String?
     let diffStat: ChatToolDiffStat?
-    let startedAt: Double
     let updatedAt: Double
-    let endedAt: Double?
     let terminalObservedAt: Double?
-    let childSessionKey: String?
     let terminalSummary: String?
 }
 
@@ -50,12 +47,15 @@ struct ChatSubagentActivityState: Equatable, Sendable {
         else { return }
         let previous = self.activitiesByID[task.id]
         let fallbackSnippet = Self.firstNonBlank(task.lastactivity, task.progresssummary, task.lasttoolname)
-        let snippet = if !status.isWorking, previous != nil, Self.nonBlank(task.lastactivity) == nil {
+        let snippet = if !status.isWorking,
+                         previous != nil,
+                         ChatPayloadDecoding.trimmedNonEmptyString(task.lastactivity) == nil
+        {
             previous?.snippet
         } else {
             fallbackSnippet ?? previous?.snippet
         }
-        let endedAt = Self.timestampMilliseconds(task.endedat) ?? previous?.endedAt
+        let endedAt = Self.timestampMilliseconds(task.endedat)
         let updatedAt = Self.timestampMilliseconds(task.updatedat)
             ?? previous?.updatedAt
             ?? endedAt
@@ -72,15 +72,10 @@ struct ChatSubagentActivityState: Equatable, Sendable {
             status: status,
             snippet: snippet,
             diffStat: Self.diffStat(task.diffstat) ?? previous?.diffStat,
-            startedAt: Self.timestampMilliseconds(task.startedat)
-                ?? previous?.startedAt
-                ?? Self.timestampMilliseconds(task.createdat)
-                ?? nowMilliseconds,
             updatedAt: updatedAt,
-            endedAt: endedAt,
             terminalObservedAt: terminalObservedAt,
-            childSessionKey: Self.nonBlank(task.childsessionkey) ?? previous?.childSessionKey,
-            terminalSummary: Self.nonBlank(task.terminalsummary) ?? previous?.terminalSummary)
+            terminalSummary: ChatPayloadDecoding.trimmedNonEmptyString(task.terminalsummary)
+                ?? previous?.terminalSummary)
     }
 
     mutating func remove(taskID: String) {
@@ -153,12 +148,7 @@ struct ChatSubagentActivityState: Equatable, Sendable {
     }
 
     private static func firstNonBlank(_ values: String?...) -> String? {
-        values.lazy.compactMap(self.nonBlank).first
-    }
-
-    private static func nonBlank(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
+        values.lazy.compactMap(ChatPayloadDecoding.trimmedNonEmptyString).first
     }
 }
 

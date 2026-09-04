@@ -1,4 +1,5 @@
 // Slack plugin module owns Assistant thread context metadata and caching.
+import type { WebClient } from "@slack/web-api";
 import type { SlackEventScope } from "./event-scope.js";
 
 export type SlackAssistantThreadContext = {
@@ -34,7 +35,7 @@ export function buildSlackAssistantThreadMetadata(
   };
 }
 
-export function parseSlackAssistantThreadMetadata(value: unknown) {
+function parseSlackAssistantThreadMetadata(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -48,10 +49,36 @@ export function parseSlackAssistantThreadMetadata(value: unknown) {
   }
   const record = payload as Record<string, unknown>;
   return {
-    channelId: readStringField(record, "channel_id"),
-    teamId: readStringField(record, "team_id"),
-    enterpriseId: readStringField(record, "enterprise_id"),
+    channelId: readNonBlankStringField(record, "channel_id"),
+    teamId: readNonBlankStringField(record, "team_id"),
+    enterpriseId: readNonBlankStringField(record, "enterprise_id"),
   };
+}
+
+export async function readSlackAssistantThreadContext(params: {
+  client: WebClient;
+  channelId: string;
+  threadTs: string;
+  userId?: string;
+}): Promise<Omit<SlackAssistantThreadContext, "updatedAt"> | undefined> {
+  const response = await params.client.conversations.replies({
+    channel: params.channelId,
+    ts: params.threadTs,
+    include_all_metadata: true,
+    limit: 4,
+  });
+  for (const message of response.messages ?? []) {
+    const context = parseSlackAssistantThreadMetadata(message.metadata);
+    if (context) {
+      return {
+        assistantChannelId: params.channelId,
+        threadTs: params.threadTs,
+        userId: params.userId,
+        ...context,
+      };
+    }
+  }
+  return undefined;
 }
 
 export function createSlackAssistantThreadContextStore(params: { accountId: string }) {
@@ -101,7 +128,7 @@ export function createSlackAssistantThreadContextStore(params: { accountId: stri
   return { get, save };
 }
 
-function readStringField(record: Record<string, unknown>, key: string) {
+function readNonBlankStringField(record: Record<string, unknown>, key: string) {
   const raw = record[key];
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }

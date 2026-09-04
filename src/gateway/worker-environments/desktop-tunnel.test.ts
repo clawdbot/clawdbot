@@ -1,3 +1,5 @@
+import { access, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
@@ -130,6 +132,44 @@ async function waitForStarts(starts: unknown[], count: number) {
 afterEach(() => vi.useRealTimers());
 
 describe("worker desktop tunnels", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps the socket and credentials in one short private directory despite a long temp root",
+    async ({ onTestFinished }) => {
+      const root = await mkdtemp("/tmp/oc-desktop-test-");
+      const ambient = path.join(root, "long-temporary-root-" + "x".repeat(120));
+      const fake = fakeRunner();
+      const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+      onTestFinished(async () => {
+        await manager.stopAll();
+        vi.unstubAllEnvs();
+        await rm(root, { recursive: true, force: true });
+      });
+      await mkdir(ambient);
+      vi.stubEnv("TMPDIR", ambient);
+      const starting = manager.acquire({
+        environmentId: "worker:long-path",
+        ownerEpoch: 1,
+        ssh: SSH,
+        desktop: { protocol: "rfb", port: 5900 },
+        resolveIdentity: async () => ({ kind: "material", contents: "synthetic-identity" }),
+      });
+      await waitForStarts(fake.starts, 1);
+      fake.starts[0]!.process.becomeReady();
+      const { attachment } = await starting;
+      if (attachment.kind !== "unix-socket") {
+        throw new Error("expected an SSH desktop socket");
+      }
+      expect(Buffer.byteLength(attachment.socketPath)).toBeLessThanOrEqual(103);
+      const directory = path.dirname(attachment.socketPath);
+      expect((await stat(directory)).mode & 0o777).toBe(0o700);
+      for (const name of ["identity", "known_hosts"]) {
+        expect((await stat(path.join(directory, name))).mode & 0o777).toBe(0o600);
+      }
+      await manager.stopAll();
+      await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("creates one pinned local forward per epoch and caches the password", async () => {
     const fake = fakeRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner });
@@ -154,6 +194,32 @@ describe("worker desktop tunnels", () => {
     expect(fake.starts).toHaveLength(1);
     expect(fake.runs).toHaveLength(1);
     await manager.stopAll();
+  });
+
+  it("expires an unattached acquisition and disposes its SSH identity directory", async ({
+    onTestFinished,
+  }) => {
+    vi.useFakeTimers();
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner, lingerMs: 50 });
+    onTestFinished(() => manager.stopAll());
+    const starting = acquire(manager);
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]!.process.becomeReady();
+    const result = await starting;
+    if (result.attachment.kind !== "unix-socket") {
+      throw new Error("expected an SSH desktop socket");
+    }
+    const identityDirectory = path.dirname(result.attachment.socketPath);
+    await access(identityDirectory);
+    await vi.advanceTimersByTimeAsync(49);
+    await expect(acquire(manager)).resolves.toEqual(result);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(fake.starts[0]!.process.stopCount).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.starts[0]!.process.stopCount).toBe(1);
+    await manager.stopAll();
+    await expect(access(identityDirectory)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fences an older epoch before starting its replacement", async () => {
@@ -253,6 +319,7 @@ describe("worker desktop tunnels", () => {
     fake.starts[0]?.process.exit();
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed"));
     replacement?.release();
+    await manager.stopAll();
   });
 
   it("refuses observer tokens minted against a replaced owner epoch", async () => {
@@ -395,5 +462,28 @@ describe("worker desktop tunnels", () => {
     });
     await expect(launchApp(failed)).rejects.toThrow("launcher failed");
     await failed.stopAll();
+  });
+
+  it("keeps a same-epoch desktop session alive when an app launch fences replaced owners", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    // The launcher claims the epoch first, so its fencing pass runs after the
+    // observer session for that same epoch already exists. Fencing must only
+    // retire strictly older owners; equal epochs share the session.
+    const launching = launchApp(manager, "browser", 1);
+    const starting = acquire(manager, 1);
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    await starting;
+    await launching;
+
+    const observer = manager.attachObserver("worker:one", {
+      control: false,
+      ownerEpoch: 1,
+      close: vi.fn(),
+    });
+    expect(observer).toBeDefined();
+    observer?.release();
+    await manager.stopAll();
   });
 });

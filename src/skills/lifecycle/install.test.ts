@@ -9,10 +9,14 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
+import { buildWorkspaceSkillStatus } from "../discovery/status.js";
+import {
+  resolveSkillInvocationPolicy,
+  resolveSkillManifestMetadata,
+} from "../loading/frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "../loading/local-loader.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
-import type { SkillEntry } from "../types.js";
+import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { installSkill } from "./install.js";
 import { skillsInstallTesting } from "./install.test-support.js";
 
@@ -21,10 +25,18 @@ vi.mock("../../process/exec.js", () => ({
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
+  resolvePluginSkillRoots: () => [],
 }));
 
-async function writeInstallableSkill(workspaceDir: string, name: string): Promise<string> {
+async function writeInstallableSkill(
+  workspaceDir: string,
+  name: string,
+  installSpec: SkillInstallSpec | SkillInstallSpec[] = {
+    id: "deps",
+    kind: "node",
+    package: "example-package",
+  },
+): Promise<string> {
   const skillDir = path.join(workspaceDir, "skills", name);
   await fs.mkdir(skillDir, { recursive: true });
   await fs.writeFile(
@@ -32,7 +44,7 @@ async function writeInstallableSkill(workspaceDir: string, name: string): Promis
     `---
 name: ${name}
 description: test skill
-metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-package"}]}}
+metadata: ${JSON.stringify({ openclaw: { install: Array.isArray(installSpec) ? installSpec : [installSpec] } })}
 ---
 
 # ${name}
@@ -68,7 +80,7 @@ function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
     return {
       skill,
       frontmatter,
-      metadata: resolveOpenClawMetadata(frontmatter),
+      metadata: resolveSkillManifestMetadata(frontmatter),
       invocation,
       exposure: {
         includeInRuntimeRegistry: true,
@@ -155,6 +167,60 @@ describe("installSkill before_install hooks", () => {
       expect(stat.isDirectory()).toBe(true);
     });
   });
+
+  it.each([
+    { kind: "node", explicitId: false },
+    { kind: "download", explicitId: false },
+    { kind: "node", explicitId: true },
+    { kind: "download", explicitId: true },
+  ] as const)(
+    "installs the advertised $kind recipe after OS filtering (explicit ID: $explicitId)",
+    async ({ kind, explicitId }) => {
+      const handler = vi.fn().mockReturnValue({ block: true, blockReason: "Recipe observed" });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_install", handler }]),
+      );
+
+      await withWorkspaceCase(async ({ workspaceDir }) => {
+        const foreignOs = process.platform === "darwin" ? "linux" : "darwin";
+        const specs = [foreignOs, process.platform, undefined].map((os, index) => {
+          const spec: SkillInstallSpec =
+            kind === "node"
+              ? { kind, package: `example-package-${index}` }
+              : { kind, url: `https://example.invalid/recipe-${index}.tar.gz` };
+          if (explicitId) {
+            spec.id = `recipe-${index}`;
+          }
+          if (os) {
+            spec.os = [os];
+          }
+          return spec;
+        });
+        await writeInstallableSkill(workspaceDir, "platform-recipes", specs);
+        const report = buildWorkspaceSkillStatus(workspaceDir, {
+          entries: loadTestWorkspaceSkillEntries(workspaceDir),
+        });
+        const options = report.skills[0]!.install;
+        expect(options).toHaveLength(kind === "download" ? 2 : 1);
+
+        for (const [index, option] of options.entries()) {
+          const sourceIndex = index + 1;
+          const result = await installSkill({
+            workspaceDir,
+            skillName: "platform-recipes",
+            installId: option.id,
+          });
+
+          expect(result.message).toBe("Recipe observed");
+          expect(handler.mock.calls.at(-1)?.[0]).toMatchObject({
+            skill: { installSpec: specs[sourceIndex] },
+          });
+          expect(option.id).toBe(explicitId ? `recipe-${sourceIndex}` : `${kind}-${sourceIndex}`);
+        }
+        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("keeps the default npm prefix out of env-overridden state paths", () => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
@@ -272,6 +338,7 @@ describe("installSkill before_install hooks", () => {
   });
 
   it("blocks install when before_install rejects the skill", async () => {
+    const sha256 = "A1B2C3D4".repeat(8);
     const handler = vi.fn().mockReturnValue({
       block: true,
       blockReason: "Blocked by plugin lifecycle hook",
@@ -279,7 +346,12 @@ describe("installSkill before_install hooks", () => {
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
 
     await withWorkspaceCase(async ({ workspaceDir }) => {
-      await writeInstallableSkill(workspaceDir, "blocked-skill");
+      await writeInstallableSkill(workspaceDir, "blocked-skill", {
+        id: "deps",
+        kind: "download",
+        url: "https://example.com/runtime.tar.gz",
+        sha256: ` ${sha256} `,
+      });
 
       const result = await installSkill({
         workspaceDir,
@@ -289,6 +361,16 @@ describe("installSkill before_install hooks", () => {
 
       expect(result.ok).toBe(false);
       expect(result.message).toBe("Blocked by plugin lifecycle hook");
+      expect(handler.mock.calls[0]?.[0]).toMatchObject({
+        skill: {
+          installId: "deps",
+          installSpec: {
+            kind: "download",
+            url: "https://example.com/runtime.tar.gz",
+            sha256: sha256.toLowerCase(),
+          },
+        },
+      });
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });

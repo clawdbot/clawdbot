@@ -3,9 +3,13 @@ import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
 
-export type GatewayCronCreatorAuthorityAdmission = Readonly<{ runId: string }>;
+export type GatewayCronCreatorAuthorityAdmission = Readonly<{
+  runId: string;
+  callerOrigin: { kind: "local" } | { kind: "unknown" };
+  controlUiAdmin?: true;
+}>;
 
-type DirectLocalOperatorAuthorityParams = {
+type DirectOperatorAuthorityParams = {
   runId: string;
   resolvedSessionKey?: string;
   spawnedBy?: string;
@@ -14,15 +18,15 @@ type DirectLocalOperatorAuthorityParams = {
   disallowed: boolean;
 };
 
-function resolveDirectLocalOperatorAuthority(
-  params: DirectLocalOperatorAuthorityParams,
+function resolveDirectOperatorAuthority(
+  params: DirectOperatorAuthorityParams,
 ): GatewayCronCreatorAuthorityAdmission | undefined {
   const internal = params.client?.internal;
   const runId = params.runId.trim();
-  const isDirectLocalOperator =
+  const isDirectOperator =
     runId.length > 0 &&
     clientHasAdminScope(params.client ?? null) &&
-    internal?.isLocalClient === true &&
+    (internal?.isLocalClient === true || internal?.controlUiAdmin === true) &&
     Boolean(params.resolvedSessionKey?.trim()) &&
     !params.spawnedBy?.trim() &&
     params.inputProvenance === undefined &&
@@ -37,10 +41,20 @@ function resolveDirectLocalOperatorAuthority(
     internal.pluginSubagentRequester === undefined &&
     internal.runtimePluginToolGrant === undefined &&
     internal.delegatedToolPolicyHandoffId === undefined;
-  return isDirectLocalOperator ? Object.freeze({ runId }) : undefined;
+  return isDirectOperator
+    ? Object.freeze({
+        runId,
+        // Remote management admission does not confer the direct-local creator/operator capability.
+        callerOrigin:
+          internal?.isLocalClient === true
+            ? { kind: "local" as const }
+            : { kind: "unknown" as const },
+        ...(internal?.controlUiAdmin === true ? { controlUiAdmin: true as const } : {}),
+      })
+    : undefined;
 }
 
-/** Mints fresh cron authority only for an admitted direct local agent RPC turn. */
+/** Mints cron authority for an admitted local operator or authenticated Control UI admin turn. */
 export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   runId: string;
   resolvedSessionKey?: string;
@@ -53,7 +67,7 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   isRestartRecoveryResumeRun: boolean;
 }): GatewayCronCreatorAuthorityAdmission | undefined {
   const request = params.request;
-  return resolveDirectLocalOperatorAuthority({
+  return resolveDirectOperatorAuthority({
     runId: params.runId,
     resolvedSessionKey: params.resolvedSessionKey,
     spawnedBy: params.spawnedBy,
@@ -77,7 +91,7 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   });
 }
 
-/** Mints the same authority for an admitted ordinary local chat.send turn. */
+/** Mints the same authority for an admitted ordinary operator chat.send turn. */
 export function resolveGatewayChatCronCreatorAuthorityAdmission(params: {
   runId: string;
   resolvedSessionKey?: string;
@@ -92,7 +106,7 @@ export function resolveGatewayChatCronCreatorAuthorityAdmission(params: {
   turnKind: "btw" | "main";
   isDirectExternalUser: boolean;
 }): GatewayCronCreatorAuthorityAdmission | undefined {
-  return resolveDirectLocalOperatorAuthority({
+  return resolveDirectOperatorAuthority({
     runId: params.runId,
     resolvedSessionKey: params.resolvedSessionKey,
     spawnedBy: params.spawnedBy,

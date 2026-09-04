@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../src/agents/sessions/session-manager.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -50,6 +51,7 @@ describe("Gateway OpenAI Responses compaction replay", () => {
         env: {
           OPENCLAW_DEBUG_MODEL_TRANSPORT: "1",
           OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
       });
       instances.push(instance);
@@ -63,7 +65,9 @@ describe("Gateway OpenAI Responses compaction replay", () => {
       });
       try {
         await runAgentTurn(client, "capture compaction state");
-        expect(modelServer.requests).toHaveLength(1);
+        // The provider can terminate after emitting only a compaction item. The
+        // runner must retain that checkpoint through another invisible retry.
+        expect(modelServer.requests).toHaveLength(3);
 
         const session = await client.request<{
           sessions?: Array<{ key?: string; sessionId?: string }>;
@@ -78,28 +82,41 @@ describe("Gateway OpenAI Responses compaction replay", () => {
           sessionKey: SESSION_KEY,
           storePath: path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
         });
-        const persistedReplay = manager
-          .buildSessionContext()
-          .messages.find((message) => message.role === "assistant")?.providerReplay;
+        const contextMessages = manager.buildSessionContext().messages;
+        const persistedReplay = contextMessages.find(
+          (message) => message.role === "assistant",
+        )?.providerReplay;
         expect(persistedReplay).toMatchObject({
+          v: 1,
           type: "openai-responses-compaction",
           id: COMPACTION_ID,
           data: COMPACTION_DATA,
           provider: "replay-proof",
           api: "openai-responses",
           model: "replay-proof",
+          baseUrlHash: expect.any(String),
           sessionHash: expect.any(String),
         });
         expect(persistedReplay).not.toHaveProperty("authProfileHash");
+        const continuationInput = modelServer.requests[1]?.body.input ?? [];
+        expectCompactionReplay(continuationInput);
+        const encodedContinuationInput = JSON.stringify(continuationInput);
+        expect(encodedContinuationInput).toContain("Continue from the compacted transcript");
+        expect(encodedContinuationInput).not.toContain("capture compaction state");
+
+        const reasoningContinuationInput = modelServer.requests[2]?.body.input ?? [];
+        expectCompactionReplay(reasoningContinuationInput);
+        const encodedReasoningContinuationInput = JSON.stringify(reasoningContinuationInput);
+        expectTextOnce(encodedReasoningContinuationInput, "Continue from the compacted transcript");
+        expectTextOnce(
+          encodedReasoningContinuationInput,
+          "recorded reasoning but did not produce a user-visible answer",
+        );
 
         await runAgentTurn(client, "replay compaction state");
-        expect(modelServer.requests).toHaveLength(2);
-        const replayInput = modelServer.requests[1]?.body.input ?? [];
-        expect(replayInput).toContainEqual({
-          type: "compaction",
-          id: COMPACTION_ID,
-          encrypted_content: COMPACTION_DATA,
-        });
+        expect(modelServer.requests).toHaveLength(4);
+        const replayInput = modelServer.requests[3]?.body.input ?? [];
+        expectCompactionReplay(replayInput);
         const compactionIndex = replayInput.findIndex(
           (item) =>
             typeof item === "object" &&
@@ -120,7 +137,7 @@ describe("Gateway OpenAI Responses compaction replay", () => {
         ).toBe(true);
         const encodedReplayInput = JSON.stringify(replayInput);
         expect(encodedReplayInput).not.toContain("capture compaction state");
-        expect(encodedReplayInput).toContain("gateway replay response 1");
+        expect(encodedReplayInput).toContain("gateway replay response 3");
         expect(encodedReplayInput).toContain("replay compaction state");
       } finally {
         await disconnectGatewayClient(client);
@@ -188,6 +205,18 @@ async function runAgentTurn(
   return runId;
 }
 
+function expectCompactionReplay(input: unknown[]): void {
+  expect(input).toContainEqual({
+    type: "compaction",
+    id: COMPACTION_ID,
+    encrypted_content: COMPACTION_DATA,
+  });
+}
+
+function expectTextOnce(encodedInput: string, text: string): void {
+  expect(encodedInput.split(text)).toHaveLength(2);
+}
+
 async function startMockModelServer(): Promise<MockModelServer> {
   const requests: CapturedRequest[] = [];
   const server = createServer((request, response) => {
@@ -241,6 +270,54 @@ async function handleRequest(
 }
 
 function writeModelResponse(response: ServerResponse, sequence: number): void {
+  if (sequence === 1) {
+    const compaction = {
+      type: "compaction",
+      id: COMPACTION_ID,
+      encrypted_content: COMPACTION_DATA,
+    };
+    writeOpenAiResponsesSse(response, [
+      { type: "response.output_item.added", output_index: 0, item: compaction },
+      { type: "response.output_item.done", output_index: 0, item: compaction },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "resp_gateway_replay_1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [compaction],
+          usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+        },
+      },
+    ]);
+    return;
+  }
+  if (sequence === 2) {
+    const reasoning = {
+      type: "reasoning",
+      id: "rs_gateway_replay_2",
+      encrypted_content: "opaque-gateway-reasoning",
+      summary: [{ type: "summary_text", text: "Working from the compacted transcript." }],
+    };
+    writeOpenAiResponsesSse(response, [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { type: "reasoning", id: reasoning.id },
+      },
+      { type: "response.output_item.done", output_index: 0, item: reasoning },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_gateway_replay_2",
+          status: "completed",
+          output: [reasoning],
+          usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        },
+      },
+    ]);
+    return;
+  }
   const text = `gateway replay response ${sequence}`;
   const message = {
     type: "message",
@@ -249,10 +326,7 @@ function writeModelResponse(response: ServerResponse, sequence: number): void {
     status: "completed",
     content: [{ type: "output_text", text, annotations: [] }],
   };
-  const output =
-    sequence === 1
-      ? [{ type: "compaction", id: COMPACTION_ID, encrypted_content: COMPACTION_DATA }, message]
-      : [message];
+  const output = [message];
   const events: MockSseEvent[] = output.flatMap((item, outputIndex) => [
     {
       type: "response.output_item.added",
@@ -270,12 +344,5 @@ function writeModelResponse(response: ServerResponse, sequence: number): void {
       usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
     },
   });
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(response, events);
 }

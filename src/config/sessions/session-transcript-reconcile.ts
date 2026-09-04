@@ -1,12 +1,15 @@
 // Transcript projection reconciliation owner. Gateway startup awaits it;
 // request paths may only schedule it and return a bounded retryable response.
 import { randomInt } from "node:crypto";
-import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { isPathInside } from "../../infra/path-guards.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  borrowOpenClawAgentDatabase,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
@@ -67,21 +70,6 @@ function reconcileKey(params: OpenClawAgentDatabaseOptions): string {
   return resolveOpenClawAgentSqlitePath(params);
 }
 
-function resolveSessionTranscriptReconcileWorkerUrl(currentModuleUrl = import.meta.url): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(
-      path.join(distRoot, "config", "sessions", "session-transcript-reconcile.worker.js"),
-    );
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./session-transcript-reconcile.worker${extension}`, currentModuleUrl);
-}
-
 function yieldToGateway(): Promise<void> {
   return new Promise((resolve) => {
     setImmediate(resolve);
@@ -90,10 +78,6 @@ function yieldToGateway(): Promise<void> {
 
 function nextProjectionClaimId(): number {
   return -randomInt(1, 2 ** 47);
-}
-
-function normalizeReconcileError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 // Node Worker messages take a transfer list, unlike Window.postMessage.
@@ -215,131 +199,134 @@ export async function reconcileSessionTranscriptIndexes(
     ...(params.env ? { env: params.env } : {}),
     path: databasePath,
   };
-  // The SQLite owner can cheaply prove a clean projection before paying for a
-  // Worker. Keep the post-worker sweep too, because request-time writers may race.
-  const needsWorker = await runProjectionWrite(
-    databaseOptions,
-    "sessions.transcript-index.preflight",
-    (database) => {
-      deleteOrphanedTranscriptIndexRowsInTransaction(database.db);
-      return listSessionsNeedingTranscriptIndexReconcile(database.db).length > 0;
-    },
-  );
-  if (!needsWorker) {
-    return { reconciledSessions: 0 };
-  }
-  const workerUrl = resolveSessionTranscriptReconcileWorkerUrl();
-  const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
-  const input: SessionTranscriptReconcileWorkerInput = {
-    agentId: params.agentId,
-    path: databasePath,
-    ...(params.preferredSessionId ? { preferredSessionId: params.preferredSessionId } : {}),
-  };
-  let worker: Worker;
+  let releaseDatabase: (() => void) | undefined;
   try {
-    worker = (params.createWorker ?? ((filename, options) => new Worker(filename, options)))(
-      workerUrl,
-      { workerData: input, execArgv: sourceWorkerExecArgv },
-    );
-  } catch (error) {
-    throw normalizeReconcileError(error);
-  }
-
-  return new Promise<SessionTranscriptReconcileResult>((resolve, reject) => {
-    let active: ActivePreparedProjection | undefined;
-    let doneReceived = false;
-    let reconciledSessions = 0;
-    let settled = false;
-    const settle = (finish: () => void, terminate: boolean) => {
-      if (settled) {
-        return;
+    // The SQLite owner can cheaply prove a clean projection before paying for a
+    // Worker. Keep the post-worker sweep too, because request-time writers may race.
+    await runProjectionWrite(databaseOptions, "sessions.transcript-index.preflight", (database) => {
+      deleteOrphanedTranscriptIndexRowsInTransaction(database.db);
+      if (listSessionsNeedingTranscriptIndexReconcile(database.db).length > 0) {
+        // Retain this verified handle across worker awaits; explicit disposal still revokes it.
+        releaseDatabase = borrowOpenClawAgentDatabase(databaseOptions).release;
       }
-      settled = true;
-      worker.removeAllListeners();
-      if (terminate) {
-        void worker.terminate();
-      }
-      finish();
+    });
+    if (!releaseDatabase) {
+      return { reconciledSessions: 0 };
+    }
+    const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile);
+    const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts")
+      ? ["--import", "tsx"]
+      : undefined;
+    const input: SessionTranscriptReconcileWorkerInput = {
+      agentId: params.agentId,
+      path: databasePath,
+      ...(params.preferredSessionId ? { preferredSessionId: params.preferredSessionId } : {}),
     };
-    const handleMessage = async (message: SessionTranscriptReconcileWorkerMessage) => {
-      if (message.type === "failed") {
-        settle(() => reject(new Error(message.error)), false);
-        return;
-      }
-      if (message.type === "done") {
-        doneReceived = true;
-        if (active) {
-          settle(
-            () => reject(new Error("session transcript reconcile worker ended mid-plan")),
-            true,
-          );
+    let worker: Worker;
+    try {
+      worker = (params.createWorker ?? ((filename, options) => new Worker(filename, options)))(
+        workerUrl,
+        { workerData: input, execArgv: sourceWorkerExecArgv },
+      );
+    } catch (error) {
+      throw toStringifiedError(error);
+    }
+
+    return await new Promise<SessionTranscriptReconcileResult>((resolve, reject) => {
+      let active: ActivePreparedProjection | undefined;
+      let doneReceived = false;
+      let reconciledSessions = 0;
+      let settled = false;
+      let handlingMessage: Promise<void> | undefined;
+      const settle = (finish: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        worker.removeAllListeners();
+        // Waiters may delete the database next. Join the thread and its accepted
+        // parent write; native exit can overtake a handler awaiting the writer queue.
+        // Do not await here: that handler can itself request settlement.
+        void Promise.allSettled([worker.terminate(), handlingMessage]).then(finish);
+      };
+      const handleMessage = async (message: SessionTranscriptReconcileWorkerMessage) => {
+        if (message.type === "failed") {
+          settle(() => reject(new Error(message.error)));
+          return;
+        }
+        if (message.type === "done") {
+          doneReceived = true;
+          if (active) {
+            settle(() => reject(new Error("session transcript reconcile worker ended mid-plan")));
+            return;
+          }
+          try {
+            await runProjectionWrite(
+              databaseOptions,
+              "sessions.transcript-index.orphan-sweep",
+              (database) => deleteOrphanedTranscriptIndexRowsInTransaction(database.db),
+            );
+          } catch (error) {
+            settle(() => reject(toStringifiedError(error)));
+            return;
+          }
+          settle(() => resolve({ reconciledSessions }));
           return;
         }
         try {
-          await runProjectionWrite(
+          if (message.type === "plan-start") {
+            if (active) {
+              throw new Error("session transcript reconcile worker started overlapping plans");
+            }
+            active = await claimPreparedSessionTranscriptProjection(databaseOptions, message.plan);
+            continueProjectionWorker(worker, active !== undefined);
+            return;
+          }
+          if (!active || active.plan.sessionId !== message.sessionId) {
+            throw new Error("session transcript reconcile worker sent a chunk for no active plan");
+          }
+          if (message.type === "plan-finish") {
+            const finalized = await finalizePreparedProjection(databaseOptions, active);
+            active = undefined;
+            if (finalized) {
+              reconciledSessions += 1;
+            }
+            continueProjectionWorker(worker, finalized);
+            return;
+          }
+          const owned = await appendPreparedProjectionChunk(
             databaseOptions,
-            "sessions.transcript-index.orphan-sweep",
-            (database) => deleteOrphanedTranscriptIndexRowsInTransaction(database.db),
+            active,
+            message.type === "active-chunk"
+              ? { activeRows: message.rows }
+              : { ftsRows: decodeFtsChunk(message.chunk) },
           );
+          if (!owned) {
+            active = undefined;
+          }
+          continueProjectionWorker(worker, owned);
         } catch (error) {
-          settle(() => reject(normalizeReconcileError(error)), true);
+          settle(() => reject(toStringifiedError(error)));
+        }
+      };
+      worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
+        handlingMessage = handleMessage(message);
+      });
+      worker.once("error", (error) => {
+        settle(() => reject(toStringifiedError(error)));
+      });
+      worker.once("exit", (code) => {
+        if (doneReceived && code === 0) {
           return;
         }
-        settle(() => resolve({ reconciledSessions }), false);
-        return;
-      }
-      try {
-        if (message.type === "plan-start") {
-          if (active) {
-            throw new Error("session transcript reconcile worker started overlapping plans");
-          }
-          active = await claimPreparedSessionTranscriptProjection(databaseOptions, message.plan);
-          continueProjectionWorker(worker, active !== undefined);
-          return;
-        }
-        if (!active || active.plan.sessionId !== message.sessionId) {
-          throw new Error("session transcript reconcile worker sent a chunk for no active plan");
-        }
-        if (message.type === "plan-finish") {
-          const finalized = await finalizePreparedProjection(databaseOptions, active);
-          active = undefined;
-          if (finalized) {
-            reconciledSessions += 1;
-          }
-          continueProjectionWorker(worker, finalized);
-          return;
-        }
-        const owned = await appendPreparedProjectionChunk(
-          databaseOptions,
-          active,
-          message.type === "active-chunk"
-            ? { activeRows: message.rows }
-            : { ftsRows: decodeFtsChunk(message.chunk) },
+        settle(() =>
+          reject(new Error(`session transcript reconcile worker exited with code ${code}`)),
         );
-        if (!owned) {
-          active = undefined;
-        }
-        continueProjectionWorker(worker, owned);
-      } catch (error) {
-        settle(() => reject(normalizeReconcileError(error)), true);
-      }
-    };
-    worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
-      void handleMessage(message);
+      });
     });
-    worker.once("error", (error) => {
-      settle(() => reject(normalizeReconcileError(error)), true);
-    });
-    worker.once("exit", (code) => {
-      if (doneReceived && code === 0) {
-        return;
-      }
-      settle(
-        () => reject(new Error(`session transcript reconcile worker exited with code ${code}`)),
-        false,
-      );
-    });
-  });
+  } finally {
+    releaseDatabase?.();
+  }
 }
 
 /** Starts one deferred reconcile. No transcript rows are read on the caller's stack. */
@@ -417,17 +404,41 @@ export async function waitForSessionTranscriptIndexReconcile(
   await runningReconciles.get(reconcileKey(params))?.promise;
 }
 
+/** Test and maintenance drain for scheduled reconciles owned by one state directory. */
+export async function waitForSessionTranscriptIndexReconcilesInStateDir(
+  stateDir: string,
+): Promise<void> {
+  while (true) {
+    const owners = [...runningReconciles]
+      .filter(([databasePath]) => isPathInside(stateDir, databasePath))
+      .flatMap(([, owner]) => (owner.promise ? [owner.promise] : []));
+    if (owners.length === 0) {
+      return;
+    }
+    // Handoffs and other fixture databases may register owners while this batch settles.
+    await Promise.all(owners);
+  }
+}
+
 /** Waits only until the requested session's scheduled projection rebuild settles. */
 export async function waitForSessionTranscriptProjection(
   scope: SessionTranscriptReadScope,
+  abortSignal?: AbortSignal,
 ): Promise<void> {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
-  const database = openOpenClawAgentDatabase(databaseOptions);
+  // openclaw-agent-db.ts cache rule: LRU eviction closes idle handles across polling awaits.
   while (
     isSessionTranscriptIndexReconcileRunning(databaseOptions) &&
-    sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId)
+    sessionTranscriptIndexNeedsReconcile(
+      openOpenClawAgentDatabase(databaseOptions).db,
+      resolved.sessionId,
+    )
   ) {
-    await delay(PROJECTION_READY_POLL_MS);
+    await delay(
+      PROJECTION_READY_POLL_MS,
+      undefined,
+      abortSignal ? { signal: abortSignal } : undefined,
+    );
   }
 }

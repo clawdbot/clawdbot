@@ -84,9 +84,9 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 
 | Category                | Use when the agent needs to...                                                               | Representative tools                                                                                                | Read next                                                                                                              |
 | ----------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Runtime                 | Run commands, manage processes, or use provider-backed Python analysis                       | `exec`, `process`, `terminal`, `code_execution`                                                                     | [Exec](/tools/exec), [Control UI terminal](/web/control-ui#operator-terminal), [Code execution](/tools/code-execution) |
+| Runtime                 | Run commands, manage processes, use shared operator terminals, or use provider-backed Python | `exec`, `process`, `terminal`, `code_execution`                                                                     | [Exec](/tools/exec), [Control UI terminal](/web/control-ui#operator-terminal), [Code execution](/tools/code-execution) |
 | Files                   | Read and change workspace files                                                              | `read`, `write`, `edit`, `apply_patch`                                                                              | [Apply patch](/tools/apply-patch)                                                                                      |
-| Human input             | Pause for a structured decision owned by the user                                            | `ask_user`                                                                                                          | [Ask user](/tools/ask-user)                                                                                            |
+| Human input             | Pause for a structured decision owned by the user, or obtain a credential without seeing it  | `ask_user`, `secrets`                                                                                               | [Ask user](/tools/ask-user), [Secrets](/tools/secrets)                                                                 |
 | Web                     | Search the web, search X posts, or fetch readable page content                               | `web_search`, `x_search`, `web_fetch`                                                                               | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                                                                 |
 | Browser                 | Operate a browser session                                                                    | `browser`                                                                                                           | [Browser](/tools/browser)                                                                                              |
 | Operator UI             | Arrange connected Control UI panes, panels, and navigation                                   | `screen`                                                                                                            | [Screen](/tools/screen)                                                                                                |
@@ -94,8 +94,14 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Sessions and agents     | Inspect sessions, delegate work, orchestrate collectors, steer another run, or report status | `sessions_*`, `agents_wait`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Swarm](/tools/swarm), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool)     |
 | Automation              | Schedule work or respond to background events                                                | `cron`, `heartbeat_respond`                                                                                         | [Automation](/automation)                                                                                              |
 | Gateway and nodes       | Inspect Gateway state or paired target devices                                               | `gateway`, `nodes`                                                                                                  | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                       |
-| Media                   | Analyze, generate, or speak media                                                            | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                | [Media overview](/tools/media-overview)                                                                                |
+| Media                   | Analyze, generate, or speak media                                                            | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                           | [Media overview](/tools/media-overview)                                                                                |
 | Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search_code`, `tool_search`, `tool_describe`                                                  | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                       |
+
+The `edit` tool supports targeted formatting changes, including removing trailing
+spaces or replacing Unicode quotes, dashes, and spaces. These changes are applied
+even when the old and new text would compare equal after fuzzy normalization.
+Identical replacement requests and edits that produce unchanged content still
+report no changes.
 
 <Note>
 Code Mode and Tool Search are experimental OpenClaw agent surfaces. Codex
@@ -121,8 +127,8 @@ Common plugin-provided tools include:
   output
 - [Tool Search](/tools/tool-search) for discovering and calling large tool
   catalogs without putting every schema in the prompt
-- [Canvas](/plugins/reference/canvas) for node Canvas control and A2UI
-  rendering
+- [Canvas](/plugins/reference/canvas) for the macOS widget-panel presenter and
+  A2UI dashboard content
 
 ## Configure access and approvals
 
@@ -130,6 +136,17 @@ Tool policy is enforced before the model call. If policy removes a tool, the
 model does not receive that tool's schema for the turn. A run can lose tools
 because of global config, per-agent config, channel policy, provider
 restrictions, sandbox rules, channel/runtime policy, or plugin availability.
+
+OpenClaw exposes one semantic image inspection capability named `view_image`.
+When the active harness supplies its own loader, OpenClaw suppresses its
+duplicate. Otherwise, the OpenClaw-provided implementation accepts `path` for
+one local image path or permitted URL, or `paths` for several; `maxImages`
+limits the combined list and defaults to 20. Codex's native implementation
+accepts one local filesystem `path`. Callers must follow the active tool schema.
+
+Existing policy entries named `image` must be migrated to `view_image`; run
+`openclaw doctor --fix` to update supported config policy surfaces and persisted
+automation `toolsAllow` lists.
 
 - [Tools and custom providers](/gateway/config-tools) documents tool profiles,
   allow/deny lists, provider-specific restrictions, loop detection, and
@@ -157,6 +174,10 @@ Choose the extension path by the job you need OpenClaw to do:
   contracts.
 
 ## Troubleshoot missing tools
+
+Configured `tools.exec` and `tools.fs` sections do not grant tool access. The
+profile migration warning suggests `alsoAllow` entries only when other active
+global, agent, and provider policies permit those tools.
 
 If the model cannot see or call a tool, start with the effective policy for
 the current turn:

@@ -1,9 +1,10 @@
-import { isLoopbackHost } from "../gateway/net.js";
-import { type BrowserConfig, type OpenClawConfig, resolveGatewayPort } from "../sdk-config.js";
+import type { BrowserConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveBrowserConfig } from "./config.js";
 import { ensureExtensionRelayToken } from "./extension-relay/relay-auth.js";
 
-/** Gateway route for direct extension-only remote pairing. */
+/** Gateway route for extension pairing that must wake Browser control. */
 const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
 
 type BrowserExtensionPairing = {
@@ -26,8 +27,8 @@ function firstExtensionRelayPort(cfg: PairingConfig): number {
   return resolved.extensionRelayDefaultPort;
 }
 
-/** Resolve a safe direct-Gateway relay URL with the v2-bound route path. */
-function buildDirectGatewayRelayUrl(raw: string): string {
+/** Resolve a safe Gateway relay URL with the v2-bound route path. */
+function buildGatewayExtensionRelayUrl(raw: string): string {
   let url: URL;
   try {
     url = new URL(raw.trim());
@@ -59,13 +60,14 @@ function buildDirectGatewayRelayUrl(raw: string): string {
 export async function buildBrowserExtensionPairing(params: {
   cfg: PairingConfig;
   gatewayUrl?: string;
+  localTransport?: "relay" | "gateway";
   ensureToken?: typeof ensureExtensionRelayToken;
 }): Promise<BrowserExtensionPairing> {
   const relayPort = firstExtensionRelayPort(params.cfg);
   const token = await (params.ensureToken ?? ensureExtensionRelayToken)();
   const gateway = params.gatewayUrl?.trim();
   if (gateway) {
-    const relayUrl = new URL(buildDirectGatewayRelayUrl(gateway));
+    const relayUrl = new URL(buildGatewayExtensionRelayUrl(gateway));
     relayUrl.searchParams.set("gateway", gateway);
     return {
       pairingString: `${relayUrl.toString()}#${token}`,
@@ -80,7 +82,12 @@ export async function buildBrowserExtensionPairing(params: {
     throw new Error("Gateway TLS pairing requires --gateway-url wss://<certificate-host>[:port]");
   }
   const gatewayHint = configuredRemote || `ws://127.0.0.1:${resolveGatewayPort(params.cfg)}`;
-  const relayUrl = new URL(`ws://127.0.0.1:${relayPort}/extension`);
+  // Native local bootstrap needs the Gateway to wake Browser control. Manual
+  // local pairing and browser nodes target an already-running host relay.
+  const relayUrl =
+    !configuredRemote && params.localTransport === "gateway"
+      ? new URL(buildGatewayExtensionRelayUrl(gatewayHint))
+      : new URL(`ws://127.0.0.1:${relayPort}/extension`);
   relayUrl.searchParams.set("gateway", gatewayHint);
   return {
     pairingString: `${relayUrl.toString()}#${token}`,

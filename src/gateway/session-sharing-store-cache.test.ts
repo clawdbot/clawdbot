@@ -1,13 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sessionsConfig from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  listOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
   authorizeResolvedSessionMutation,
   resolveSessionMutationAuthorization,
 } from "./session-sharing.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { canAccessTaskRequesterSession } from "./task-session-access.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -39,10 +46,78 @@ function identifiedClient(userId: string): GatewayClient {
 }
 
 describe("session mutation authorization store caches", () => {
+  it.each(["warm", "cold canonical", "cold main alias"] as const)(
+    "bounds task visibility reads and rereads changed access with %s stores",
+    async (mode) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "agent:main:task-requester";
+        const cfg = rolePolicyConfig();
+        if (mode === "cold main alias") {
+          cfg.session = { mainKey: "task-requester" };
+          setCanonicalSqliteSessionMainKey(
+            openOpenClawAgentDatabase({ agentId: "main" }),
+            "task-requester",
+          );
+        }
+        const requestClient = roleClient("view", "task-viewer");
+        const owner = roleClient("view", "task-owner");
+        const entry = {
+          sessionId: "session-task-requester",
+          updatedAt: 1,
+          visibility: "shared" as const,
+          createdActor: {
+            type: "human" as const,
+            source: "profile" as const,
+            id: owner.authenticatedUserProfile!.profileId,
+          },
+        };
+        await sessionAccessor.upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+        for (let index = 0; index < 24; index += 1) {
+          await sessionAccessor.upsertSessionEntryCore(
+            { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
+            { sessionId: `unrelated-task-access-session-${index}`, updatedAt: 1 },
+          );
+        }
+        if (mode === "warm") {
+          expect(
+            sessionAccessor.loadExactSessionEntryReadOnly({ agentId: "main", sessionKey }),
+          ).toBeDefined();
+        } else {
+          closeOpenClawAgentDatabasesForTest();
+        }
+        const access = {
+          cfg,
+          client: requestClient,
+          task: {
+            requesterAgentId: "main",
+            requesterSessionKey: mode === "cold main alias" ? "main" : sessionKey,
+            ownerKey: sessionKey,
+          },
+        };
+        const parseSpy = vi.spyOn(JSON, "parse");
+        expect(canAccessTaskRequesterSession(access)).toBe(true);
+        expect(canAccessTaskRequesterSession(access)).toBe(true);
+        // A cold handle validates the store once; candidate aliases must share that admission.
+        expect(
+          parseSpy.mock.calls.filter(([value]) => value.includes("unrelated-task-access-session-")),
+        ).toHaveLength(mode === "warm" ? 0 : 48);
+        if (mode !== "warm") {
+          expect(listOpenClawAgentDatabasesForTest()).toHaveLength(0);
+        }
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          { ...entry, visibility: "draft", updatedAt: 2 },
+        );
+        expect(canAccessTaskRequesterSession(access)).toBe(false);
+        expect(canAccessTaskRequesterSession({ ...access, client: owner })).toBe(true);
+      });
+    },
+  );
+
   it("fails a patchMany request when a nested target is incognito", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:incognito-patch-many";
-      await sessionAccessor.upsertSessionEntry(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         { sessionId: "session-incognito", updatedAt: 1, incognito: true },
       );
@@ -63,17 +138,17 @@ describe("session mutation authorization store caches", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sharedKey = "agent:main:batch-shared";
       const draftKey = "agent:main:batch-private";
-      await sessionAccessor.upsertSessionEntry(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey: sharedKey },
         { sessionId: "session-shared", updatedAt: 1, visibility: "shared" },
       );
-      await sessionAccessor.upsertSessionEntry(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey: draftKey },
         {
           sessionId: "session-private",
           updatedAt: 1,
           visibility: "draft",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
 
@@ -95,12 +170,18 @@ describe("session mutation authorization store caches", () => {
     });
   });
 
-  it("fences a replaced patchMany target with padded identity fields", async () => {
+  it("reuses metadata for padded patchMany targets and fences replacements", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:padded-batch-target";
-      await sessionAccessor.upsertSessionEntry(
+      const prompt = "authorization does not need this prompt snapshot".repeat(512);
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey },
-        { sessionId: "session-original", updatedAt: 1, visibility: "shared" },
+        {
+          sessionId: "session-original",
+          updatedAt: 1,
+          visibility: "shared",
+          skillsSnapshot: { prompt, skills: [] },
+        },
       );
       const target = { sessionKey: ` ${sessionKey} `, agentId: " main " };
       const result = resolveSessionMutationAuthorization({
@@ -116,9 +197,12 @@ describe("session mutation authorization store caches", () => {
       expect(result.error).toBeNull();
       expect(result.authorization).toBeDefined();
       const authorization = result.authorization!;
+      const parseSpy = vi.spyOn(JSON, "parse");
       expect(() => authorization.assertTargetCurrent(target)).not.toThrow();
+      expect(parseSpy.mock.calls.some(([serialized]) => serialized.includes(prompt))).toBe(false);
+      parseSpy.mockRestore();
 
-      await sessionAccessor.upsertSessionEntry(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         { sessionId: "session-replacement", updatedAt: 2, visibility: "shared" },
       );
@@ -132,7 +216,7 @@ describe("session mutation authorization store caches", () => {
   it("bounds malformed patchMany target discovery before schema validation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const hiddenKey = "agent:main:dashboard:incognito-over-limit";
-      await sessionAccessor.upsertSessionEntry(
+      await sessionAccessor.upsertSessionEntryCore(
         { agentId: "main", sessionKey: hiddenKey },
         { sessionId: "session-hidden", updatedAt: 1, incognito: true },
       );
@@ -159,15 +243,15 @@ describe("session mutation authorization store caches", () => {
         ["agent:main:cache-one", "session-cache-one"],
         ["agent:main:cache-two", "session-cache-two"],
       ] as const) {
-        await sessionAccessor.upsertSessionEntry(
+        await sessionAccessor.upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           { sessionId, updatedAt: 1, visibility: "shared", category: "Cache Test" },
         );
       }
 
       const materializations = new Map<string, number>();
-      const originalListSessionEntries = sessionAccessor.listSessionEntries;
-      vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation((scope) => {
+      const originalListSessionEntries = sessionAccessor.listSessionEntriesCore;
+      vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation((scope) => {
         const entries = originalListSessionEntries(scope);
         if (scope?.clone === false) {
           const storePath = scope.storePath ?? "default";
@@ -208,7 +292,11 @@ describe("session mutation authorization store caches", () => {
         sessionId: "session-private",
         updatedAt: 1,
         visibility: "draft" as const,
-        createdActor: { type: "human" as const, id: "owner@example.com" },
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "owner@example.com",
+        },
       },
     },
     {
@@ -219,12 +307,16 @@ describe("session mutation authorization store caches", () => {
         updatedAt: 1,
         visibility: "shared" as const,
         incognito: true as const,
-        createdActor: { type: "human" as const, id: "owner@example.com" },
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "owner@example.com",
+        },
       },
     },
   ])("matches uncached $name authorization", async ({ sessionKey, entry }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await sessionAccessor.upsertSessionEntry({ agentId: "main", sessionKey }, entry);
+      await sessionAccessor.upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
       const cfg = {};
       const requestClient = identifiedClient("viewer@example.com");
       const uncachedError = authorizeResolvedSessionMutation({

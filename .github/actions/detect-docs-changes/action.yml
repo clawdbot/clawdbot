@@ -28,8 +28,8 @@ runs:
       run: |
         BASE="$BASE_SHA"
 
-        # Fail-safe: if we can't diff, assume non-docs (run everything)
-        CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")
+        # Keep both rename paths without fetching parent blobs; a failed diff runs everything.
+        CHANGED=$(git diff --no-renames --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")
         if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then
           echo "docs_only=false" >> "$GITHUB_OUTPUT"
           echo "docs_changed=false" >> "$GITHUB_OUTPUT"
@@ -43,7 +43,7 @@ runs:
             test/fixtures/*)
               non_docs=true
               ;;
-            docs/* | *.md | *.mdx)
+            docs/* | *.md | *.mdx | config/markdownlint*.jsonc)
               docs_changed=true
               ;;
             *)

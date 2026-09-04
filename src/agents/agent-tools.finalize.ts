@@ -5,7 +5,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.wrapper.js";
-import { applyDeferredFollowupToolDescriptions } from "./agent-tools.deferred-followup.js";
+import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./before-tool-call-metadata.js";
@@ -52,7 +52,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, abortSignal))
     : withHooks;
   options.recordToolPrepStage?.("abort-wrappers");
-  const finalized = applyDeferredFollowupToolDescriptions(withAbort, {
+  const finalized = applyToolAvailabilityDescriptions(withAbort, {
     agentId: options.agentId,
   });
   options.recordToolPrepStage?.("deferred-followup-descriptions");

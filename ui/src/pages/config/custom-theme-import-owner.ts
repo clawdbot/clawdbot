@@ -1,6 +1,7 @@
 import type { ApplicationThemeServerSelection } from "../../app/context.ts";
 import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
 import type { ThemeName } from "../../app/theme.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 
 type ThemeSettingsSnapshot = {
   theme: ThemeName;
@@ -160,7 +161,7 @@ export class CustomThemeImportOwner {
       this.update({
         message: {
           kind: "error",
-          text: error instanceof Error ? error.message : String(error),
+          text: formatUiError(error),
         },
       });
     } finally {

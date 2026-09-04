@@ -1,3 +1,4 @@
+import { readNonEmptyStringPreservingWhitespace as readOptionalNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type {
   JsonValue,
@@ -66,9 +67,7 @@ export function readNonEmptyString(value: unknown, name: string): string {
   throw new Error(`native hook relay ${name} is required`);
 }
 
-export function readOptionalNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
+export { readOptionalNonEmptyString };
 
 export function readOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;

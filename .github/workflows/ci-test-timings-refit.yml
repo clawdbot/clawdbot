@@ -1,0 +1,107 @@
+name: CI Test Timings Refit
+
+on:
+  schedule:
+    - cron: "43 9 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-test-timings-refit
+  cancel-in-progress: false
+
+jobs:
+  refit:
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify generated PR App permissions
+        uses: ./.github/actions/create-generated-pr-tokens
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Refit measured test timings
+        id: refit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --silent ci:timings:refit > "$RUNNER_TEMP/ci-test-timings-report.md"
+          if ! git diff --quiet -- config/ci-test-timings.json; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            delimiter="$(node -p 'crypto.randomUUID()')"
+            {
+              echo "report<<${delimiter}"
+              cat "$RUNNER_TEMP/ci-test-timings-report.md"
+              echo "${delimiter}"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update standing refit pull request
+        if: steps.refit.outputs.changed == 'true'
+        uses: ./.github/actions/publish-generated-pr
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          base-branch: main
+          head-branch: ci/test-timings-refit
+          commit-message: "ci: refresh measured test timings"
+          pr-title: "ci: refresh measured test timings"
+          generated-paths: config/ci-test-timings.json
+          invalidation-paths: |
+            config/ci-test-timings.json
+            scripts/ci-refit-test-timings.mts
+            scripts/ci-run-timings.mjs
+            scripts/lib/ci-test-timings-refit.mts
+            scripts/lib/ci-test-timings-schema.mts
+            scripts/lib/direct-run.mjs
+            scripts/lib/numeric-options.mjs
+            scripts/lib/plain-gh.mjs
+            scripts/tsx.mjs
+            package.json
+            pnpm-lock.yaml
+            .github/actions/create-generated-pr-tokens/action.yml
+            .github/actions/publish-generated-pr/action.yml
+            .github/workflows/ci-test-timings-refit.yml
+            .github/workflows/ci.yml
+          pr-body: |
+            ## What Problem This Solves
+
+            Refresh stale CI shard weights from successful main-push CI runs.
+
+            ## Why This Change Was Made
+
+            The daily refit uses medians, rejects outliers and single samples, and keeps existing weights when the new median is within 15% of them. Keys absent from every contributing run are removed only when their profile has observations from at least three sampled runs; the table below lists each removal explicitly.
+
+            ## User Impact
+
+            Only shard balance changes; test discovery still determines the complete test inventory. This standing branch is updated automatically and never pushes to main.
+
+            ## Evidence
+
+            Generated with `pnpm ci:timings:refit`:
+
+            ${{ steps.refit.outputs.report }}

@@ -145,7 +145,7 @@ export type PluginRuntimeChannel = {
   };
   session: {
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
-    resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+    resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
     readSessionUpdatedAt: ReadSessionUpdatedAt;
     recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */

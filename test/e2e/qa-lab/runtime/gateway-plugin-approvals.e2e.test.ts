@@ -9,7 +9,7 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   startTestGatewayServer,
 } from "../../../../src/gateway/test-helpers.js";
@@ -77,7 +77,7 @@ describe("gateway plugin approvals QA", () => {
       expect(reviewerIdentity.deviceId).not.toBe(requesterIdentity.deviceId);
 
       markStage("gateway start");
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       const token = "gateway-plugin-approvals-qa-token";
       const url = `ws://127.0.0.1:${port}`;
       const server = await startTestGatewayServer(port, {

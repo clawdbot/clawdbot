@@ -3,9 +3,13 @@
  *
  * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
  */
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import {
+  getAgentRunContext,
+  getAgentRunLifecycleGeneration,
+} from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
@@ -66,18 +70,26 @@ export function buildSubagentRunReadIndex(now = Date.now()): SubagentRunReadInde
 }
 
 /** Lists runs controlled by a session key. */
-export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
+export function listSubagentRunsForController(
+  controllerSessionKey: string,
+  controllerAgentId?: string,
+): SubagentRunRecord[] {
   return listRunsForControllerFromRuns(
     getSubagentRunsSnapshotForController(subagentRuns, controllerSessionKey),
     controllerSessionKey,
+    controllerAgentId,
   );
 }
 
 /** Counts active descendant runs for a requester/session tree. */
-export function countActiveDescendantRuns(rootSessionKey: string): number {
+export function countActiveDescendantRuns(
+  rootSessionKey: string,
+  requesterAgentId?: string,
+): number {
   return countActiveDescendantRunsFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
+    requesterAgentId,
   );
 }
 
@@ -101,17 +113,20 @@ export function countPendingDescendantRuns(rootSessionKey: string): number {
 export function hasDescendantRunAwaitingSettle(
   rootSessionKey: string,
   excludeRunId?: string,
+  requesterAgentId?: string,
 ): boolean {
   return hasDescendantRunAwaitingSettleFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
     excludeRunId,
+    requesterAgentId,
   );
 }
 
 /** Resolves the requester session and normalized origin for a child subagent session. */
 export function resolveRequesterForChildSession(childSessionKey: string): {
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
 } | null {
   const resolved = resolveRequesterForChildSessionFromRuns(
@@ -123,6 +138,7 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
   }
   return {
     requesterSessionKey: resolved.requesterSessionKey,
+    requesterAgentId: resolved.requesterAgentId,
     requesterOrigin: normalizeDeliveryContext(resolved.requesterOrigin),
   };
 }
@@ -144,7 +160,7 @@ export function isSubagentSessionRunActive(childSessionKey: string): boolean {
 /** Lists process-local runs requested by one session key. */
 export function listSubagentRunsForRequester(
   requesterSessionKey: string,
-  options?: { requesterRunId?: string },
+  options?: { requesterRunId?: string; requesterAgentId?: string },
 ): SubagentRunRecord[] {
   // Request-run lifetime scoping must observe the raw live map, including rows not persisted yet.
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
@@ -160,7 +176,20 @@ export function isSubagentRunLive(
   if (!entry || typeof entry.execution.endedAt === "number") {
     return false;
   }
-  return Boolean(getAgentRunContext(entry.runId));
+  const context = getAgentRunContext(entry.runId);
+  return context?.lifecycleGeneration === getAgentRunLifecycleGeneration();
+}
+
+/** Queued admission belongs to the exact current registration and scheduler reservation. */
+export function isSubagentRunQueued(entry: SubagentRunReadRecord | null | undefined): boolean {
+  const current = entry ? subagentRuns.get(entry.runId) : undefined;
+  return Boolean(
+    current &&
+    current === entry &&
+    current.collect &&
+    current.execution.status === "queued" &&
+    ownsSwarmRunReservation(current.schedulerSlotId ?? current.runId, current),
+  );
 }
 
 /** Returns the run to display for a child session, using live memory before snapshot state. */

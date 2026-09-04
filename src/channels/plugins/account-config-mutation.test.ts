@@ -145,6 +145,31 @@ describe("channel account config mutations", () => {
     expect(applyAccountConfig).not.toHaveBeenCalled();
   });
 
+  it("preserves --use-env behavior for contracts without env metadata", async () => {
+    const applyAccountConfig = vi.fn(({ cfg }) => cfg);
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "third-party-chat" }),
+      setupContract: defineChannelSetupContract({
+        fields: {
+          useEnv: {
+            kind: "boolean",
+            cli: { flags: "--use-env", description: "Use plugin environment credentials" },
+          },
+        },
+        adapter: { applyAccountConfig },
+      }),
+    } as ChannelPlugin;
+
+    const prepared = await prepareChannelAccountConfiguration({
+      cfg: {},
+      plugin,
+      resolveInput: () => ({ useEnv: true }),
+      runtime,
+    });
+
+    expect(prepared.ok).toBe(true);
+  });
+
   it("normalizes plugin-resolved account IDs only at the config mutation boundary", async () => {
     const applyAccountConfig = vi.fn(({ cfg }) => cfg);
     const onAccountConfigChanged = vi.fn();

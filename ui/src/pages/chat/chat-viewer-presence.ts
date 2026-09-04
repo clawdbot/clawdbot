@@ -1,6 +1,7 @@
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { sessionViewerPresenceForGateway } from "../../lib/session-viewer-presence.ts";
-import { visiblePanesOf, type ChatSplitLayout } from "./split-layout.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
+import { visiblePanesOf } from "./split-layout.ts";
 
 /** Moves a mounted chat page's viewer declaration between gateway lifecycles. */
 export class ChatViewerPresenceController {

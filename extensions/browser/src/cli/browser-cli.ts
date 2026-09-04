@@ -70,6 +70,15 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
   },
   {
     placeholders: [
+      command("cookie-sync", "Sync allowlisted macOS browser cookies to a managed profile"),
+    ],
+    register: async (args) => {
+      const module = await import("./browser-cli-cookie-sync.js");
+      module.registerBrowserCookieSyncCommand(args.browser, args.parentOpts);
+    },
+  },
+  {
+    placeholders: [
       command("screenshot", "Capture a screenshot (prints the saved path)"),
       command("snapshot", "Capture a snapshot (default: ai; aria is the accessibility tree)"),
     ],
@@ -158,10 +167,6 @@ function buildBrowserCommandGroups(params: {
   }));
 }
 
-function resolveBrowserParentOpts(cmd: Command): BrowserParentOpts {
-  return cmd.optsWithGlobals<BrowserParentOpts>();
-}
-
 function registerLazyBrowserCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -208,7 +213,7 @@ export function registerBrowserCli(
 
   addGatewayClientOptions(browser);
 
-  const parentOpts = resolveBrowserParentOpts;
+  const parentOpts = () => browser.opts<BrowserParentOpts>();
 
   registerLazyBrowserCommands(browser, parentOpts, argv, pluginRoot);
 }

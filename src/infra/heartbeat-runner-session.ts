@@ -1,11 +1,10 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isSubagentSessionKey,
@@ -18,17 +17,17 @@ import type { HeartbeatConfig } from "./heartbeat-runner-config.js";
 
 export function resolveHeartbeatSessionKey(
   cfg: OpenClawConfig,
-  agentId?: string,
+  agentId: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
+  const resolvedAgentId = normalizeAgentId(agentId);
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
-  const storePath = resolveStorePath(sessionCfg?.store, {
+  const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
     // A literal `global` row is global only inside the selected agent's store.
     // Falling back here leaks the default agent's route into secondary heartbeats.
     agentId: resolvedAgentId,
@@ -120,7 +119,7 @@ export function resolveHeartbeatSessionKey(
 
 export function resolveHeartbeatSession(
   cfg: OpenClawConfig,
-  agentId?: string,
+  agentId: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -233,7 +232,7 @@ export async function restoreHeartbeatUpdatedAt(params: {
   if (entry.updatedAt === nextUpdatedAt) {
     return;
   }
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath, sessionKey },
     (nextEntry, context) => {
       if (!context.existingEntry) {

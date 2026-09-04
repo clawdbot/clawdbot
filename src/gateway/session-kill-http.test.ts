@@ -209,6 +209,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
       cfg,
       sessionKey: WORKER_SESSION_KEY,
+      agentId: "main",
     });
   });
 
@@ -264,6 +265,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
       cfg,
       sessionKey: WORKER_SESSION_KEY,
+      agentId: "main",
     });
   });
 

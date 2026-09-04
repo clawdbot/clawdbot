@@ -1,13 +1,26 @@
 export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
 
+export type NativeNotificationTestOutcome =
+  | { state: "pending" }
+  | { state: "sent" }
+  | { state: "error"; message: string };
+
 type NativeNotificationsSnapshot = {
   permission: NativeNotificationsPermission | "unknown";
+  test: NativeNotificationTestOutcome | null;
 };
 
 type NativeNotificationsMessage =
   | { type: "status" }
   | { type: "request-permission" }
-  | { type: "send-test" };
+  | { type: "send-test" }
+  | ({ type: "background-session-completed" } & NativeBackgroundSessionCompletion);
+
+type NativeBackgroundSessionCompletion = {
+  runId: string;
+  path: string;
+  search?: string;
+};
 
 type WebKitNotificationsMessageHandler = {
   postMessage(message: NativeNotificationsMessage): void;
@@ -30,6 +43,7 @@ export type NativeNotificationsCapability = {
   subscribe(listener: (snapshot: NativeNotificationsSnapshot) => void): () => void;
   requestPermission(): void;
   sendTest(): void;
+  backgroundSessionCompleted(completion: NativeBackgroundSessionCompletion): void;
   dispose(): void;
 };
 
@@ -41,9 +55,26 @@ function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
   if (typeof value !== "object" || value === null || !("permission" in value)) {
     return null;
   }
-  return isNativeNotificationsPermission(value.permission)
-    ? { permission: value.permission }
-    : null;
+  if (!isNativeNotificationsPermission(value.permission)) {
+    return null;
+  }
+  if (!("test" in value)) {
+    return { permission: value.permission, test: null };
+  }
+  const test = value.test;
+  if (test === null) {
+    return { permission: value.permission, test: null };
+  }
+  if (typeof test !== "object" || test === null || !("state" in test)) {
+    return null;
+  }
+  if (test.state === "pending" || test.state === "sent") {
+    return { permission: value.permission, test: { state: test.state } };
+  }
+  if (test.state === "error" && "message" in test && typeof test.message === "string") {
+    return { permission: value.permission, test: { state: "error", message: test.message } };
+  }
+  return null;
 }
 
 function getNativeNotificationsPoster():
@@ -66,6 +97,7 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
   const nativeWindow = window as NativeNotificationsWindow;
   let snapshot = snapshotFrom(nativeWindow["__OPENCLAW_NATIVE_NOTIFICATIONS__"]) ?? {
     permission: "unknown" as const,
+    test: null,
   };
   const listeners = new Set<(snapshot: NativeNotificationsSnapshot) => void>();
 
@@ -100,7 +132,14 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
       postMessage({ type: "request-permission" });
     },
     sendTest() {
+      if (snapshot.test?.state === "pending") {
+        return;
+      }
+      publish({ ...snapshot, test: { state: "pending" } });
       postMessage({ type: "send-test" });
+    },
+    backgroundSessionCompleted(completion) {
+      postMessage({ type: "background-session-completed", ...completion });
     },
     dispose() {
       window.removeEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);

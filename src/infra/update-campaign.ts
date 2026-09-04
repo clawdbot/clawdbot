@@ -5,6 +5,7 @@ import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
+import type { TrackedDevUpdateTarget } from "./update-dev-target.js";
 
 const CAMPAIGN_FORCE_DELAY_MS = 15 * 60_000;
 const CAMPAIGN_COUNTDOWN_MS = 60_000;
@@ -14,10 +15,11 @@ const CAMPAIGN_POLL_MS = 5_000;
 type UpdateCampaignState = NonNullable<UpdateScheduleState["campaign"]>;
 type UpdateCampaignTarget = NonNullable<UpdateScheduleState["target"]>;
 
-type UpdateCampaignAdoption = {
-  campaignId: string;
-  target: UpdateCampaignTarget;
-};
+type UpdateCampaignAdoptionResult =
+  | { status: "absent" }
+  | { status: "applying" }
+  | { status: "mismatch" }
+  | { status: "adopted"; campaignId: string; target: UpdateCampaignTarget };
 
 type UpdateCampaignAnnouncement = {
   target: UpdateCampaignTarget;
@@ -70,7 +72,20 @@ export class UpdateCampaignController {
     return this.campaign;
   }
 
+  reconcileTarget(target: UpdateCampaignTarget): boolean {
+    if (this.campaign?.state === "applying") {
+      return false;
+    }
+    if (this.target && !sameTarget(this.target, target)) {
+      this.clear();
+    }
+    return true;
+  }
+
   announce(announcement: UpdateCampaignAnnouncement): void {
+    if (!this.reconcileTarget(announcement.target)) {
+      return;
+    }
     if (this.target && this.campaign && sameTarget(this.target, announcement.target)) {
       this.announcement = announcement;
       this.reconcile();
@@ -102,14 +117,25 @@ export class UpdateCampaignController {
     }
   }
 
-  adopt(): UpdateCampaignAdoption | undefined {
+  adopt(expectedTarget?: TrackedDevUpdateTarget): UpdateCampaignAdoptionResult {
     const campaign = this.campaign;
     const target = this.target;
-    if (!campaign || !target || campaign.state === "applying") {
-      return undefined;
+    if (!campaign || !target) {
+      return { status: "absent" };
+    }
+    if (campaign.state === "applying") {
+      return { status: "applying" };
+    }
+    if (
+      expectedTarget &&
+      (target.kind !== "git" ||
+        target.upstreamRef !== expectedTarget.upstreamRef ||
+        target.upstreamSha !== expectedTarget.upstreamSha)
+    ) {
+      return { status: "mismatch" };
     }
     this.beginApplying(false, false);
-    return { campaignId: campaign.id, target: { ...target } };
+    return { status: "adopted", campaignId: campaign.id, target: { ...target } };
   }
 
   hold(durationMs = CAMPAIGN_HOLD_MS): boolean {
@@ -166,7 +192,9 @@ export class UpdateCampaignController {
     if (campaign.state === "waiting-for-idle") {
       let idle = false;
       try {
-        idle = createGatewayActiveWorkSnapshot(announcement.inspect).idle;
+        idle = createGatewayActiveWorkSnapshot(announcement.inspect, {
+          ignoreTerminalSessions: true,
+        }).idle;
       } catch {
         // Inspection failure must not erase the hard deadline or force an unsafe early apply.
       }

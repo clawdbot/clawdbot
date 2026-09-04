@@ -21,6 +21,7 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -84,6 +85,7 @@ const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
     "dmPolicy",
     "allowFrom",
     "textChunkLimit",
+    "mediaMaxMb",
   ],
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) =>
@@ -105,11 +107,18 @@ const collectSmsSecurityWarnings = createConditionalWarningCollector<ResolvedSms
   (account) =>
     account.dangerouslyDisableSignatureValidation &&
     "- SMS: Twilio signature validation is disabled. Only use this for local testing.",
-  (account) =>
-    account.dmPolicy === "open" &&
-    account.allowFrom.includes("*") &&
-    '- SMS: dmPolicy="open" allows any phone number to message the bot.',
 );
+const collectSmsOpenDmFindings = createConditionalWarningCollector.findings({
+  collectWarnings: createConditionalWarningCollector<ResolvedSmsAccount>(
+    (account) =>
+      account.dmPolicy === "open" &&
+      account.allowFrom.includes("*") &&
+      '- SMS: dmPolicy="open" allows any phone number to message the bot.',
+  ),
+  checkId: "channels.sms.dm.open",
+  severity: "critical",
+  title: "SMS security warning",
+});
 
 function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
@@ -358,9 +367,13 @@ const smsMessageAdapter = defineChannelMessageAdapter({
           return;
         }
         const attemptToken = resolveSmsAttachmentAttemptToken(ctx.attemptToken);
-        // Core can fail after staging but before the adapter starts. Discard only
-        // while the attempt still proves Twilio's HTTP boundary was never crossed.
-        if (!attemptToken || attemptToken.platformDispatchStarted) {
+        // The durable marker precedes Twilio's final credential fence. A typed
+        // rejection still proves the HTTP boundary was never crossed.
+        if (
+          !attemptToken ||
+          (attemptToken.platformDispatchStarted &&
+            !(ctx.error instanceof PlatformMessageNotDispatchedError))
+        ) {
           return;
         }
         await attemptToken.attempt.cleanupHostedMedia();
@@ -432,6 +445,8 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     messaging: {
       targetPrefixes: ["twilio-sms"],
       normalizeTarget: (target) => normalizeSmsPhoneNumber(target),
+      inferTargetChatType: ({ to }) =>
+        looksLikeSmsPhoneNumber(normalizeSmsPhoneNumber(to)) ? "direct" : undefined,
       resolveOutboundSessionRoute: (params) => resolveSmsOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: looksLikeSmsPhoneNumber,
@@ -518,7 +533,10 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
   },
   security: {
     resolveDmPolicy: resolveSmsDmPolicy,
-    collectWarnings: ({ account }) => collectSmsSecurityWarnings(account),
+    collectWarnings: ({ account }) => [
+      ...collectSmsSecurityWarnings(account),
+      ...collectSmsOpenDmFindings(account),
+    ],
   },
   outbound: {
     deliveryMode: "gateway",

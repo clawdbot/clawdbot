@@ -11,7 +11,7 @@ import {
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
-import { formatLine, toPosixPath } from "./output.js";
+import { formatLine, normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import type {
@@ -33,7 +33,7 @@ export function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
 ): string {
-  const home = toPosixPath(resolveDaemonHomeDir(env));
+  const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
@@ -60,7 +60,8 @@ function collectLaunchAgentEnvironmentEntries(
   for (const [rawKey, rawValue] of Object.entries(environment ?? {})) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
     const value = rawValue?.trim();
-    if (!key || !value) {
+    // Empty NODE_OPTIONS intentionally clears launchd's inherited Node flags.
+    if (!key || value === undefined || (!value && key !== "NODE_OPTIONS")) {
       continue;
     }
     entries.push([key, value]);
@@ -351,7 +352,7 @@ export async function writeLaunchAgentPlist({
   await ensureSecureDirectory(logDir);
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-  const home = toPosixPath(resolveDaemonHomeDir(env));
+  const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
   const libraryDir = path.posix.join(home, "Library");
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);

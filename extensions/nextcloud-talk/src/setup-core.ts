@@ -22,7 +22,7 @@ import {
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   normalizeLowercaseStringOrEmpty,
-  readStringValue,
+  readNonEmptyStringPreservingWhitespace as readNonEmptyUntrimmedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultNextcloudTalkAccountId, resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
@@ -38,11 +38,6 @@ type NextcloudSetupInput = ChannelSetupInput & {
   url?: string;
   password?: string;
 };
-
-function readNonEmptyUntrimmedString(value: unknown): string | undefined {
-  const text = readStringValue(value);
-  return text ? text : undefined;
-}
 
 export function normalizeNextcloudTalkBaseUrl(value: string | undefined): string {
   return value?.trim().replace(/\/+$/, "") ?? "";
@@ -250,6 +245,7 @@ export const nextcloudTalkSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Nextcloud Talk environment credentials" },
+      envVars: ["NEXTCLOUD_TALK_BOT_SECRET"],
     },
   },
   legacyAdapter: nextcloudTalkSetupAdapter,

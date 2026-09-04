@@ -1,9 +1,9 @@
 import {
-  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   type Api,
   type ProviderReplayState,
 } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
   ResponseCreateParamsStreaming,
@@ -17,6 +17,7 @@ import type {
   OpenAIApiReasoningEffort,
   OpenAIReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
+import type { OpenAIResponsesCompactedWindow } from "./openai-responses-compaction-window.js";
 
 export const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 export const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -27,18 +28,16 @@ export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
-
-export class OpenAIResponsesWebSocketResponseFailedError extends Error {
-  readonly code: string;
-
-  constructor(hasOutput: boolean) {
-    super("OpenAI Responses WebSocket returned response.failed");
-    this.name = "OpenAIResponsesWebSocketResponseFailedError";
-    this.code = hasOutput
-      ? PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE
-      : PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE;
-  }
-}
+export const OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE =
+  "openai-responses-retained-compaction";
+export const OPENAI_RESPONSES_APIS: ReadonlySet<Api> = new Set([
+  "openai-responses",
+  "azure-openai-responses",
+  "openai-chatgpt-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
 
 export class OpenAIResponsesWebSocketPreDispatchError extends Error {
   constructor(cause: unknown) {
@@ -58,6 +57,61 @@ export class OpenAIResponsesWebSocketPostDispatchError extends Error {
   }
 }
 
+class OpenAIResponsesWebSocketServerError extends Error {
+  constructor(
+    readonly code: string,
+    readonly status: number | undefined,
+    readonly param: string | null,
+    message: string,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = "OpenAIResponsesWebSocketServerError";
+  }
+}
+
+export class OpenAIResponsesWebSocketSafeRetryError extends OpenAIResponsesWebSocketServerError {}
+
+function readWebSocketServerError(value: unknown) {
+  if (!isRecord(value) || value.type !== "error") {
+    return undefined;
+  }
+  const details = isRecord(value.error) ? value.error : value;
+  if (typeof details.code !== "string" || typeof details.message !== "string") {
+    return undefined;
+  }
+  const rawStatus = value.status ?? value.status_code;
+  return {
+    code: details.code,
+    message: details.message,
+    param: typeof details.param === "string" ? details.param : null,
+    status: typeof rawStatus === "number" ? rawStatus : undefined,
+  };
+}
+
+export function parseOpenAIResponsesWebSocketServerError(cause: unknown) {
+  if (!isRecord(cause)) {
+    return undefined;
+  }
+  let details = readWebSocketServerError(cause.error) ?? readWebSocketServerError(cause);
+  if (!details && typeof cause.message === "string") {
+    try {
+      details = readWebSocketServerError(JSON.parse(cause.message));
+    } catch {}
+  }
+  if (!details) {
+    return undefined;
+  }
+  const ErrorClass =
+    details.code === "previous_response_not_found" ||
+    details.code === "websocket_connection_limit_reached" ||
+    details.code === "invalid_encrypted_content" ||
+    details.code === "thinking_signature_invalid"
+      ? OpenAIResponsesWebSocketSafeRetryError
+      : OpenAIResponsesWebSocketServerError;
+  return new ErrorClass(details.code, details.status, details.param, details.message, cause);
+}
+
 export type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 export type ReplayableResponseCompactionItem = Omit<ResponseCompactionItem, "id"> & { id?: string };
 export type OpenAIResponsesReasoningReplayMetadata = {
@@ -75,9 +129,15 @@ export type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> 
   [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
 export type OpenAIResponsesCompactionReplayState = ProviderReplayState & {
-  type: typeof OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE;
-  baseUrlHash: string;
-};
+  compactedWindow?: OpenAIResponsesCompactedWindow;
+} & (
+    | { type: typeof OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE; baseUrlHash: string }
+    | {
+        type: typeof OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE;
+        baseUrlHash: string;
+        replayIndex?: never;
+      }
+  );
 
 export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
   reasoning?: OpenAIReasoningEffort;
@@ -91,7 +151,11 @@ export type OpenAIResponsesOptions = BaseOpenAIStreamOptions & {
 const PROMPT_OBSERVER = Symbol("openaiResponsesPromptObserver");
 export type ResponsesPromptObservation = {
   egress: "responses-sdk" | "responses-websocket" | "native-codex-websocket" | "native-codex-sse";
-  payloadVariant: "initial" | "reasoning-stripped" | "compaction-stripped";
+  payloadVariant:
+    | "initial"
+    | "reasoning-stripped"
+    | "compaction-stripped"
+    | "continuation-rejected";
   promptSource: "instructions" | "input.developer" | "input.system" | "missing";
   expectedChars: number;
   observedChars: number;
@@ -130,14 +194,17 @@ export type OpenAIResponsesRequestParams = {
   instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
+  prompt_cache_options?: { ttl: "30m" };
   metadata?: Record<string, string>;
+  previous_response_id?: string;
   store?: boolean;
   max_output_tokens?: number;
   temperature?: number;
   top_p?: number;
   text?: ResponseCreateParamsStreaming["text"];
   service_tier?: ResponseCreateParamsStreaming["service_tier"];
-  tools?: FunctionTool[];
+  tools?: Array<FunctionTool & { async?: boolean }>;
+  multi_agent?: { enabled?: boolean };
   tool_choice?: ResponseCreateParamsStreaming["tool_choice"];
   reasoning?:
     | { effort: OpenAIApiReasoningEffort }

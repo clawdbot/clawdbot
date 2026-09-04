@@ -22,6 +22,9 @@ export const TerminalOpenParamsSchema = closedObject({
   // Optional agent selector; defaults to the gateway's default agent. The
   // session starts in that agent's workspace and inherits its isolation.
   agentId: Type.Optional(NonEmptyString),
+  // Binds a Control UI shell opened inside a conversation to that exact
+  // session, so the session's agent and the initiating operator share it.
+  sessionKey: Type.Optional(NonEmptyString),
   catalog: Type.Optional(SessionCatalogLocatorSchema),
   cols: TerminalDimension,
   rows: TerminalDimension,
@@ -72,7 +75,7 @@ export const TerminalResizeParamsSchema = closedObject({
 });
 export type TerminalResizeParams = Static<typeof TerminalResizeParamsSchema>;
 
-/** Closes a session and kills its process tree. */
+/** Closes a connection-owned session or detaches from an agent-owned session. */
 export const TerminalCloseParamsSchema = closedObject({ sessionId: NonEmptyString });
 export type TerminalCloseParams = Static<typeof TerminalCloseParamsSchema>;
 
@@ -90,6 +93,8 @@ export const TerminalAttachResultSchema = closedObject({
   shell: NonEmptyString,
   cwd: NonEmptyString,
   confined: Type.Boolean(),
+  title: Type.Optional(NonEmptyString),
+  owner: Type.Optional(Type.Union([Type.Literal("conn"), Type.String({ pattern: "^agent:.+" })])),
   // Recent raw output from the server's bounded ring buffer, replayed into
   // the client emulator before live terminal.data resumes. Not a true screen
   // snapshot: after truncation it can start mid-escape-sequence; emulators
@@ -106,6 +111,7 @@ export const TerminalSessionInfoSchema = closedObject({
   sessionId: NonEmptyString,
   agentId: NonEmptyString,
   shell: NonEmptyString,
+  title: Type.Optional(NonEmptyString),
   cwd: NonEmptyString,
   confined: Type.Boolean(),
   /** False while the session is detached (no connection owns its stream). */

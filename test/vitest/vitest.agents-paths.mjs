@@ -5,6 +5,10 @@ const embeddedRoot = `${agentsRoot}/embedded-agent-runner`;
 // These suites mock shared runtime, network, or plugin modules and cannot
 // share the non-isolated core worker without leaking module state.
 const coreIsolatedFiles = [
+  "src/agents/cli-runner/bundle-mcp.user-config.test.ts",
+  "src/agents/failover/classify.legacy-provider-predicates.test.ts",
+  "src/agents/failover/failover-classification.corpus.test.ts",
+  "src/agents/failover/provider-structured-signals.test.ts",
   "src/agents/media-generation-task-status-shared.test.ts",
   "src/agents/media-generation-task-status.test.ts",
   "src/agents/mcp-http-fetch.test.ts",
@@ -17,7 +21,12 @@ const coreIsolatedFiles = [
   "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
-const incompleteTurnFiles = [`${embeddedRoot}/run.incomplete-turn.test.ts`];
+const incompleteTurnFiles = [
+  `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
+  `${embeddedRoot}/run.incomplete-turn.delivery-resolution.test.ts`,
+  `${embeddedRoot}/run.incomplete-turn.error-recovery.test.ts`,
+  `${embeddedRoot}/run.incomplete-turn.payload-resolution.test.ts`,
+];
 const overflowCompactionFiles = [
   `${embeddedRoot}/run.overflow-compaction.test.ts`,
   `${embeddedRoot}/run.prepared-harness-source-delivery.integration.test.ts`,

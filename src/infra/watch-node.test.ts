@@ -8,7 +8,7 @@ import { createRequireRecord, bundledPluginFile } from "openclaw/plugin-sdk/test
 import { describe, expect, it, vi } from "vitest";
 import { runNodeWatchedPaths } from "../../scripts/run-node.mts";
 import { runWatchMain } from "../../scripts/watch-node.mts";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const VOICE_CALL_README = bundledPluginFile("voice-call", "README.md");
 const VOICE_CALL_MANIFEST = bundledPluginFile("voice-call", "openclaw.plugin.json");
@@ -111,7 +111,7 @@ function requireSpawnEnv(spawn: ReturnType<typeof vi.fn>, callIndex: number) {
 describe("watch-node script", () => {
   it("wires chokidar watch to run-node with watched source/config paths", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
-    await withTempDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
+    await withTestDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
       fs.mkdirSync(path.join(cwd, "src", "infra"), { recursive: true });
       fs.mkdirSync(path.join(cwd, "extensions", "voice-call"), { recursive: true });
 
@@ -200,7 +200,7 @@ describe("watch-node script", () => {
 
   it("preserves explicit sync I/O trace overrides for gateway watch", async () => {
     const { child, spawn, createWatcher, fakeProcess } = createWatchHarness();
-    await withTempDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
+    await withTestDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
       const runPromise = runWatch({
         args: ["gateway", "--force"],
         cwd,
@@ -758,7 +758,7 @@ describe("watch-node script", () => {
 
   it("replaces an existing watcher lock holder before starting", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
-    await withTempDir({ prefix: "openclaw-watch-node-lock-" }, async (cwd) => {
+    await withTestDir({ prefix: "openclaw-watch-node-lock-" }, async (cwd) => {
       const lockPath = resolveTestWatchLockPath(cwd, ["gateway", "--force"]);
       fs.mkdirSync(path.dirname(lockPath), { recursive: true });
       fs.writeFileSync(

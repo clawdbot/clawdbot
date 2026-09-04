@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { parseFrontmatter, resolveOpenClawMetadata } from "./frontmatter.js";
+import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
+import { parseSkillFrontmatter, resolveSkillManifestMetadata } from "./frontmatter.js";
 import { loadSkills } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -74,18 +75,19 @@ disable-model-invocation: true
     );
 
     const result = loadSkillsFromPath(tempDir);
-    const frontmatter = parseFrontmatter(await fs.readFile(skillFile, "utf-8"));
+    const frontmatter = parseSkillFrontmatter(await fs.readFile(skillFile, "utf-8"));
 
     expect(result.diagnostics).toEqual([]);
     expect(result.skills).toEqual([
       expect.objectContaining({
         name: "json5-metadata",
+        displayName: "JSON5 Metadata",
         description: "Skill with JSON5-style metadata.",
         disableModelInvocation: true,
         filePath: skillFile,
       }),
     ]);
-    expect(resolveOpenClawMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
+    expect(resolveSkillManifestMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
   });
 
   it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {
@@ -124,5 +126,26 @@ description: Valid sibling
         message: expect.stringContaining("invalid frontmatter: BAD_INDENT"),
       }),
     ]);
+  });
+
+  it("keeps case-variant Windows project skill paths in project scope", async () => {
+    const root = tempDirs.make("openclaw-skill-scan-");
+    const projectDir = path.join(root, "project");
+    const skillDir = path.join(projectDir, ".openclaw", "skills", "project-skill");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(skillFile, "---\nname: project-skill\ndescription: Project skill.\n---\n");
+
+    expect(
+      withMockedWindowsPlatform(
+        () =>
+          loadSkills({
+            cwd: path.join(root, "PROJECT"),
+            agentDir: path.join(root, "agent"),
+            skillPaths: [skillFile],
+            includeDefaults: false,
+          }).skills[0]?.source,
+      ),
+    ).toBe("project");
   });
 });

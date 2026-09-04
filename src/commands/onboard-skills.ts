@@ -65,13 +65,6 @@ function formatSkillHint(skill: {
   return combined.length > maxLen ? `${truncateUtf16Safe(combined, maxLen - 1)}…` : combined;
 }
 
-const testing = { formatSkillHint, summarizeInstallFailure };
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardSkillsTestApi")] =
-    testing;
-}
-
 const SKIP_REASON_LABELS = {
   brew: "Homebrew",
   go: `Go toolchain (${MIN_AUTO_GO_VERSION}+)`,
@@ -127,7 +120,7 @@ function resolveDefaultNodeManager(
   config: OpenClawConfig,
   requested: NodeManagerChoice | undefined,
   runtime: RuntimeEnv,
-): NodeManagerChoice {
+) {
   if (requested !== undefined) {
     if (!isNodeManagerChoice(requested)) {
       runtime.error('Invalid --node-manager. Use "npm", "pnpm", or "bun".');
@@ -136,8 +129,7 @@ function resolveDefaultNodeManager(
     }
     return requested;
   }
-  const existing = config.skills?.install?.nodeManager;
-  return existing === "npm" || existing === "pnpm" || existing === "bun" ? existing : "npm";
+  return config.skills?.install?.nodeManager ?? "npm";
 }
 
 /** Runs the interactive skills setup step and returns the updated config. */

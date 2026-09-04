@@ -449,24 +449,39 @@ describe("trigger handling", () => {
     });
   });
 
-  it("sanitizes thinking directives before the agent run", async () => {
+  it("strips current thinking directives without rewriting history", async () => {
     await withTempHome(async (home) => {
+      const historyBody = [
+        "[Chat messages since your last reply - for context]",
+        "Peter: /thinking high [2025-12-05T21:45:00.000Z]",
+        "",
+        "[Current message - respond to this]",
+        "Give me the status",
+      ].join("\n");
+      const currentBody = "Give me the status\n\nif ready:\n    report_status()";
       const thinkCases = [
         {
           label: "context-wrapper",
           request: {
-            Body: [
-              "[Chat messages since your last reply - for context]",
-              "Peter: /thinking high [2025-12-05T21:45:00.000Z]",
-              "",
-              "[Current message - respond to this]",
-              "Give me the status",
-            ].join("\n"),
+            Body: historyBody,
+            commandText: "Give me the status",
             From: "+1002",
             To: "+2000",
+            CommandAuthorized: true,
           },
           options: {},
-          assertPrompt: true,
+          expectedPrompt: historyBody,
+        },
+        {
+          label: "current-message",
+          request: {
+            Body: `/thinking high ${currentBody}`,
+            From: "+1002",
+            To: "+2000",
+            CommandAuthorized: true,
+          },
+          options: {},
+          expectedPrompt: currentBody,
         },
         {
           label: "heartbeat",
@@ -476,7 +491,7 @@ describe("trigger handling", () => {
             To: "+1003",
           },
           options: { isHeartbeat: true },
-          assertPrompt: false,
+          expectedPrompt: undefined,
         },
       ] as const;
 
@@ -489,12 +504,10 @@ describe("trigger handling", () => {
         expect(text, testCase.label).toBe("ok");
         expect(text, testCase.label).not.toMatch(/Thinking level set/i);
         expect(runEmbeddedAgentMock, testCase.label).toHaveBeenCalledOnce();
-        if (testCase.assertPrompt) {
+        if (testCase.expectedPrompt !== undefined) {
           const prompt =
             firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent").prompt ?? "";
-          expect(prompt).toContain("Give me the status");
-          expect(prompt).not.toContain("/thinking high");
-          expect(prompt).not.toContain("/think high");
+          expect(prompt, testCase.label).toBe(testCase.expectedPrompt);
         }
       }
     });
@@ -545,13 +558,17 @@ describe("trigger handling", () => {
       const storePath = join(home, "compact-main.sessions.json");
       const cfg = makeCfg(home);
       cfg.session = { ...cfg.session, store: storePath };
-      mockSuccessfulCompaction();
-
       const request = {
         Body: "/compact focus on decisions",
         From: "+1003",
         To: "+2000",
       };
+      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "compact-main-session", updatedAt: Date.now() },
+      );
+      mockSuccessfulCompaction();
 
       const res = await getReplyFromConfig(
         {
@@ -564,7 +581,6 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
       expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
     });
   });
@@ -574,13 +590,19 @@ describe("trigger handling", () => {
       getCompactEmbeddedAgentSessionMock().mockReset();
       mockSuccessfulCompaction();
       const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "compact-worker.sessions.json") };
+      const storePath = join(home, "compact-worker.sessions.json");
+      const sessionKey = "agent:worker1:telegram:12345";
+      cfg.session = { ...cfg.session, store: storePath };
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "compact-worker-session", updatedAt: Date.now() },
+      );
       const res = await getReplyFromConfig(
         {
           Body: "/compact",
           From: "+1004",
           To: "+2000",
-          SessionKey: "agent:worker1:telegram:12345",
+          SessionKey: sessionKey,
           CommandAuthorized: true,
         },
         {},

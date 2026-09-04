@@ -1,28 +1,39 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { ControlUiPluginFrameGrantAck } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
   CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
   CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE,
   CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY,
   CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY,
   resolveControlUiPluginTabPathname,
-  type ControlUiPluginFrameGrantAck,
-} from "../../../../src/gateway/control-ui-contract.js";
+} from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+  scheduleStaleChunkReload,
+} from "../../app/stale-chunk-reload.ts";
+import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import { renderLoadingState } from "../../components/loading-state.ts";
 import { t } from "../../i18n/index.ts";
+import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderCustomPluginUiDisabled } from "../../plugins/control-ui-disabled.ts";
+import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { pluginTabKey } from "./route.ts";
 
+registerLoginEnglish();
+
 /**
- * Bundled plugin tab views ship with the Control UI and render natively; every
- * other tab either embeds the plugin-served panel (descriptor path) in a
- * sandboxed frame or shows the unavailable card.
+ * Views shipped with the Control UI use this adapter. Native plugin entries
+ * mount through the contribution runtime; descriptor paths use sandboxed frames.
  */
 type BundledPluginTabView = {
   render: (props: {
@@ -45,6 +56,12 @@ type BundledPluginTabView = {
   }) => unknown;
   stop: (host: object) => void;
 };
+
+type BundledPluginTabViewState =
+  | { status: "idle" }
+  | { status: "loading"; id: string; token: object }
+  | { status: "error"; id: string; error: unknown }
+  | { status: "ready"; id: string; view: BundledPluginTabView };
 
 function pluginFrameGrantCoversTab(
   grant: ControlUiPluginFrameGrantAck,
@@ -84,16 +101,15 @@ const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
 export class PluginPage extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) pluginId = "";
   @property({ attribute: false }) tabId = "";
+  @property({ attribute: false }) params: Readonly<Record<string, string>> = {};
 
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
 
-  @state() private bundledView: BundledPluginTabView | null = null;
+  @state() private bundledViewState: BundledPluginTabViewState = { status: "idle" };
   @state() private externalAuthReadyKey: string | null = null;
   @state() private externalAuthUnavailableKey: string | null = null;
 
-  private bundledViewId: string | null = null;
-  private bundledViewLoadToken: object | null = null;
   private bundledViewHost: object = {};
   private gatewaySource?: ApplicationContext<RouteId>["gateway"];
   private gatewayClient: GatewayBrowserClient | null = null;
@@ -117,6 +133,10 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     .watch(
       () => this.context?.sessions,
       (sessions, notify) => sessions.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.plugins,
+      (plugins, notify) => plugins.subscribe(notify),
     );
 
   private readonly handleVisibilityChange = () => {
@@ -156,6 +176,44 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     return load ? load() : Promise.reject(new Error(`Unknown bundled plugin tab: ${key}`));
   }
 
+  private hasCurrentBundledDescriptor(key: string): boolean {
+    return this.tabKey() === key && this.tabInfo() !== undefined && key in BUNDLED_TAB_VIEWS;
+  }
+
+  private startBundledViewLoad(key: string) {
+    const loading = { status: "loading", id: key, token: {} } as const;
+    this.bundledViewState = loading;
+    const settle = (nextState: BundledPluginTabViewState) => {
+      if (
+        this.bundledViewState.status !== "loading" ||
+        this.bundledViewState.token !== loading.token ||
+        !this.hasCurrentBundledDescriptor(key)
+      ) {
+        return;
+      }
+      this.bundledViewState = nextState;
+      if (nextState.status === "error" && isStaleChunkImportError(nextState.error)) {
+        void scheduleStaleChunkReload();
+      }
+    };
+    void this.loadBundledView(key).then(
+      (view) => settle({ status: "ready", id: key, view }),
+      (error: unknown) => settle({ status: "error", id: key, error }),
+    );
+  }
+
+  private readonly retryBundledView = () => {
+    const viewState = this.bundledViewState;
+    if (viewState.status !== "error" || !this.hasCurrentBundledDescriptor(viewState.id)) {
+      return;
+    }
+    if (isStaleChunkImportError(viewState.error)) {
+      void retryStaleChunkReloadWhenReachable();
+    } else {
+      this.bundledViewState = { status: "idle" };
+    }
+  };
+
   override willUpdate() {
     if (!this.isConnected) {
       return;
@@ -163,25 +221,15 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     const key = this.tabKey();
     const info = this.tabInfo();
     const hasBundledDescriptor = info !== undefined && key in BUNDLED_TAB_VIEWS;
+    const viewState = this.bundledViewState;
     // Switching between plugin tabs reuses this element; the previous bundled
     // view must stop its background polling before the next one renders. A
     // descriptor can also disappear in place after disablement or scope loss.
-    if (this.bundledViewId !== null && (this.bundledViewId !== key || !hasBundledDescriptor)) {
+    if (viewState.status !== "idle" && (viewState.id !== key || !hasBundledDescriptor)) {
       this.stopBundledView();
     }
-    if (this.bundledViewId === null && hasBundledDescriptor) {
-      const loadToken = {};
-      this.bundledViewId = key;
-      this.bundledViewLoadToken = loadToken;
-      void this.loadBundledView(key).then((view) => {
-        if (
-          this.bundledViewLoadToken === loadToken &&
-          this.bundledViewId === key &&
-          this.tabKey() === key
-        ) {
-          this.bundledView = view;
-        }
-      });
+    if (this.bundledViewState.status === "idle" && hasBundledDescriptor) {
+      this.startBundledViewLoad(key);
     }
     this.syncExternalTabAuth(info, hasBundledDescriptor);
   }
@@ -496,13 +544,13 @@ export class PluginPage extends OpenClawLightDomContentsElement {
 
   private stopBundledView() {
     this.replaceBundledViewHost();
-    this.bundledView = null;
-    this.bundledViewId = null;
-    this.bundledViewLoadToken = null;
+    this.bundledViewState = { status: "idle" };
   }
 
   private replaceBundledViewHost() {
-    this.bundledView?.stop(this.bundledViewHost);
+    if (this.bundledViewState.status === "ready") {
+      this.bundledViewState.view.stop(this.bundledViewHost);
+    }
     // Async controller work is keyed by host. A new host makes every completion
     // from the retired connection epoch unreachable without coupling plugins to Lit.
     this.bundledViewHost = {};
@@ -541,13 +589,27 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     // Only advertised tabs render: hello omits descriptors whose plugin is
     // inactive or whose required scopes the connection lacks.
     const info = this.tabInfo();
+    if (context.plugins?.registrations("pages").some((entry) => entry.key === this.tabKey())) {
+      return renderPluginContribution("pages", this.tabKey(), this.params);
+    }
     if (info && this.tabKey() in BUNDLED_TAB_VIEWS) {
-      if (!this.bundledView) {
+      const viewState = this.bundledViewState;
+      if (viewState.status === "loading") {
+        return renderLoadingState();
+      }
+      if (viewState.status === "error") {
+        return renderLazyViewError({
+          error: viewState.error,
+          onRetry: this.retryBundledView,
+          stale: isStaleChunkImportError(viewState.error),
+        });
+      }
+      if (viewState.status !== "ready") {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
       const config = context.config?.current;
-      return this.bundledView.render({
+      return viewState.view.render({
         host: this.bundledViewHost,
         client: snapshot.client,
         connected: snapshot.phase === "connected",
@@ -599,10 +661,27 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         </section>
       `;
     }
+    if (
+      context.gateway.snapshot.phase !== "connected" ||
+      context.plugins?.isLoading(this.pluginId)
+    ) {
+      return renderLoadingState();
+    }
+    const disabled = renderCustomPluginUiDisabled(context, this.pluginId);
     return html`
       <section class="card lazy-view-state" role="status">
-        <div class="card-title">${t("pluginTabs.unavailableTitle")}</div>
-        <div class="card-sub">${t("pluginTabs.unavailableSubtitle")}</div>
+        ${
+          disabled ??
+          html`
+            <div class="card-title">${t("pluginTabs.unavailableTitle")}</div>
+            <div class="card-sub">
+              ${
+                context.plugins?.errors.find((entry) => entry.pluginId === this.pluginId)
+                  ?.message ?? t("pluginTabs.unavailableSubtitle")
+              }
+            </div>
+          `
+        }
       </section>
     `;
   }

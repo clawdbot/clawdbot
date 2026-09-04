@@ -1,7 +1,11 @@
 // Duration formatting helpers produce compact, precise, and human display
 // strings from millisecond values.
 import prettyMilliseconds from "pretty-ms";
-import { formatSingleUnitDuration } from "./format-duration-internal.js";
+import {
+  formatDurationParts,
+  formatSingleUnitDuration,
+  resolveCompactDurationParts,
+} from "./format-duration-internal.js";
 
 export type FormatDurationSecondsOptions = {
   decimals?: number;
@@ -9,6 +13,8 @@ export type FormatDurationSecondsOptions = {
 };
 
 export type FormatDurationCompactOptions = {
+  /** Show year units instead of folding them into days. Default: false */
+  showYears?: boolean;
   /** Add space between units: "2m 5s" instead of "2m5s". Default: false */
   spaced?: boolean;
 };
@@ -56,18 +62,9 @@ export function formatDurationCompact(
   ms?: number | null,
   options?: FormatDurationCompactOptions,
 ): string | undefined {
-  if (ms == null || !Number.isFinite(ms) || ms <= 0) {
-    return undefined;
-  }
-  const roundedMs = Math.round(ms);
-  if (roundedMs < 1000) {
-    return prettyMilliseconds(roundedMs);
-  }
-  const formatted = prettyMilliseconds(Math.round(ms / 1000) * 1000, {
-    hideYear: true,
-    unitCount: 2,
-  });
-  return options?.spaced ? formatted : formatted.replaceAll(" ", "");
+  const parts = resolveCompactDurationParts(ms, options?.showYears);
+  const formatted = parts && formatDurationParts(parts);
+  return options?.spaced ? formatted : formatted?.replaceAll(" ", "");
 }
 
 /**

@@ -2,14 +2,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./program.js";
 import {
-  callGateway,
+  programGatewayCallMock,
   configureCommand,
   ensureConfigReadyMock,
-  runSystemAgentWithInference,
-  runTui,
   runtime,
-  setupCommand,
-  setupWizardCommand,
+  setupCommandMock,
+  setupWizardCommandMock,
+  systemAgentRunMock,
+  tuiRunMock,
 } from "./program.test-mocks.js";
 
 vi.mock("./config-cli.js", () => ({
@@ -44,8 +44,8 @@ describe("cli program (smoke)", () => {
   beforeEach(() => {
     program = createProgram();
     vi.clearAllMocks();
-    runTui.mockResolvedValue(undefined);
-    runSystemAgentWithInference.mockResolvedValue(undefined);
+    tuiRunMock.mockResolvedValue(undefined);
+    systemAgentRunMock.mockResolvedValue(undefined);
     ensureConfigReadyMock.mockResolvedValue(undefined);
   });
 
@@ -57,7 +57,7 @@ describe("cli program (smoke)", () => {
 
   it("runs tui with explicit timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
-    const options = firstMockArg(runTui) as {
+    const options = firstMockArg(tuiRunMock) as {
       timeoutMs?: number;
       historyLimit?: number;
       forceProcessExitOnReturn?: boolean;
@@ -68,24 +68,24 @@ describe("cli program (smoke)", () => {
   });
 
   it("resolves a positional tui short reference before launch", async () => {
-    callGateway.mockResolvedValue({ ok: true, key: "agent:main:thread:resolved" });
+    programGatewayCallMock.mockResolvedValue({ ok: true, key: "agent:main:thread:resolved" });
 
     await runProgram(["tui", "movies-a1166b81"]);
 
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(programGatewayCallMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.resolve",
         params: { shortId: "a1166b81", slugHint: "movies" },
       }),
     );
-    expect(firstMockArg(runTui)).toMatchObject({
+    expect(firstMockArg(tuiRunMock)).toMatchObject({
       local: false,
       session: "agent:main:thread:resolved",
     });
   });
 
   it("preserves a global-scope URL main session when launching tui", async () => {
-    callGateway.mockResolvedValue({
+    programGatewayCallMock.mockResolvedValue({
       defaultId: "main",
       mainKey: "main",
       scope: "global",
@@ -94,13 +94,13 @@ describe("cli program (smoke)", () => {
 
     await runProgram(["tui", "https://gateway.example/dashboard/ops"]);
 
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(programGatewayCallMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "agents.list",
         params: {},
       }),
     );
-    expect(firstMockArg(runTui)).toMatchObject({
+    expect(firstMockArg(tuiRunMock)).toMatchObject({
       local: false,
       session: "global",
       agentId: "ops",
@@ -110,7 +110,7 @@ describe("cli program (smoke)", () => {
   it("leaves tui agent inference unchanged without a URL agent", async () => {
     await runProgram(["tui"]);
 
-    expect(firstMockArg(runTui)).not.toHaveProperty("agentId");
+    expect(firstMockArg(tuiRunMock)).not.toHaveProperty("agentId");
   });
 
   it("rejects a URL target combined with --url", async () => {
@@ -124,12 +124,12 @@ describe("cli program (smoke)", () => {
     ).rejects.toThrow("exit");
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("pass one target"));
-    expect(runTui).not.toHaveBeenCalled();
+    expect(tuiRunMock).not.toHaveBeenCalled();
   });
 
   it("runs setup one-shot requests", async () => {
     await runProgram(["setup", "--message", "status"]);
-    const options = firstMockArg(runSystemAgentWithInference) as {
+    const options = firstMockArg(systemAgentRunMock) as {
       message?: string;
       yes?: boolean;
       json?: boolean;
@@ -137,28 +137,26 @@ describe("cli program (smoke)", () => {
     expect(options?.message).toBe("status");
     expect(options?.yes).toBe(false);
     expect(options?.json).toBe(false);
-    expect(runSystemAgentWithInference).toHaveBeenCalledWith(options, runtime);
+    expect(systemAgentRunMock).toHaveBeenCalledWith(options, runtime);
   });
 
   it("warns and ignores invalid tui timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "nope"]);
     expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
-    const options = firstMockArg(runTui) as { timeoutMs?: number };
+    const options = firstMockArg(tuiRunMock) as { timeoutMs?: number };
     expect(options?.timeoutMs).toBeUndefined();
   });
 
   it("rejects partial tui history limits", async () => {
     await expect(runProgram(["tui", "--history-limit", "10x"])).rejects.toThrow("exit");
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Error: --history-limit must be a positive integer.",
-    );
-    expect(runTui).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("--history-limit must be a positive integer.");
+    expect(tuiRunMock).not.toHaveBeenCalled();
   });
 
   it("accepts the maximum Gateway tui history limit", async () => {
     await runProgram(["tui", "--history-limit", "1000"]);
 
-    expect(firstMockArg(runTui)).toMatchObject({ local: false, historyLimit: 1000 });
+    expect(firstMockArg(tuiRunMock)).toMatchObject({ local: false, historyLimit: 1000 });
   });
 
   it.each([
@@ -168,21 +166,21 @@ describe("cli program (smoke)", () => {
   ])("preserves oversized history limits for local $entryPoint", async ({ args }) => {
     await runProgram([...args, "--history-limit", "1001"]);
 
-    expect(firstMockArg(runTui)).toMatchObject({ local: true, historyLimit: 1001 });
+    expect(firstMockArg(tuiRunMock)).toMatchObject({ local: true, historyLimit: 1001 });
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("rejects tui history limits above the Gateway maximum", async () => {
     await expect(runProgram(["tui", "--history-limit", "1001"])).rejects.toThrow("exit");
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: --history-limit must be at most 1000.");
-    expect(runTui).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("--history-limit must be at most 1000.");
+    expect(tuiRunMock).not.toHaveBeenCalled();
   });
 
   it("runs setup wizard when wizard flags are present", async () => {
     await runProgram(["setup", "--remote-url", "ws://example"]);
 
-    expect(setupCommand).not.toHaveBeenCalled();
-    expect(setupWizardCommand).toHaveBeenCalledTimes(1);
+    expect(setupCommandMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).toHaveBeenCalledTimes(1);
   });
 });

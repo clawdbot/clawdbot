@@ -4,6 +4,7 @@ import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runn
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import { logVerbose } from "../../globals.js";
@@ -24,6 +25,7 @@ import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { applySessionHints } from "./body.js";
+import { resolveTurnModelOverride } from "./dispatch-from-config.harness-defaults.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   buildExecOverridePromptHint,
@@ -31,7 +33,6 @@ import {
   hasReplyTargetContext,
   resolvePromptSessionContextForSystemEvent,
   resolvePromptSilentReplyConversationType,
-  stripPromptThinkingDirectives,
 } from "./get-reply-run-helpers.js";
 import { resolvePromptSourceReplyMode } from "./get-reply-run-source-mode.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
@@ -49,7 +50,11 @@ import {
   resolveBareResetBootstrapFileAccess,
   resolveBareSessionResetPromptState,
 } from "./session-reset-prompt.js";
-import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
+import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
+import {
+  isDirectedSourceReplyTurn,
+  isSyntheticSourceReplyTurn,
+} from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -82,7 +87,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     sessionEntryHandle,
     sessionStore,
   } = params;
-  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({ cfg, ctx, sessionKey });
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey });
   const { resolvedElevatedLevel, execOverrides, abortedLastRun } = params;
   let { sessionEntry } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
@@ -106,9 +111,39 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     ctx,
     isHeartbeat,
   });
+  copyChannelParticipantAdmissionEvidence(ctx, promptSessionCtx);
+  if (sessionCtx !== ctx) {
+    copyChannelParticipantAdmissionEvidence(sessionCtx, promptSessionCtx);
+  }
   const inboundEventKind = promptSessionCtx.InboundEventKind;
-  const { sourceReplyDeliveryMode, sessionPromptSourceReplyDeliveryMode } =
-    resolvePromptSourceReplyMode({ promptSessionCtx, opts });
+  const { sourceReplyDeliveryMode, injectedSessionStableMode } = resolvePromptSourceReplyMode({
+    promptSessionCtx,
+    opts,
+  });
+  // Direct resolver callers (heartbeat wakes, system events) skip dispatch's
+  // stable-mode injection; resolve the same session-stable fact here so their
+  // binding facts and messageToolPolicyHash match dispatched chat turns —
+  // otherwise chat<->heartbeat transitions ping-pong the CLI session (#121485).
+  // Synthetic turns must not fall back to their effective turn mode: a
+  // response-tool heartbeat's message_tool_only is per-turn enforcement, not
+  // session policy, and hashing it recreates the ping-pong.
+  const isSyntheticTurn = isSyntheticSourceReplyTurn({
+    inputProvenance: promptSessionCtx.InputProvenance,
+    isHeartbeat,
+  });
+  const sessionPromptSourceReplyDeliveryMode =
+    injectedSessionStableMode ??
+    (isSyntheticTurn && sessionEntry
+      ? resolveSessionStableReplyMode({
+          cfg,
+          ctx: { ...promptSessionCtx, CommandAuthorized: false },
+          sessionEntry,
+          sessionAgentId: agentId,
+          sessionKey,
+          sessionStore,
+          turnModelOverride: resolveTurnModelOverride(opts),
+        })
+      : sourceReplyDeliveryMode);
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,
@@ -187,11 +222,18 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     sourceConversationContextByMode[sessionPromptSourceReplyDeliveryMode ?? "automatic"];
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
   const groupIntro = isGroupChat ? buildGroupIntro({ sessionEntry, defaultActivation }) : "";
-  const isDirectedTurn =
-    isExplicitSourceReplyCommand(ctx, cfg) ||
-    (inboundEventKind !== "room_event" && (isDirectChat || ctx.WasMentioned === true));
+  const isDirectedTurn = isDirectedSourceReplyTurn(ctx, cfg, isDirectChat, inboundEventKind);
+  const isAmbientRoomEvent = inboundEventKind === "room_event" && !isDirectedTurn;
   const allowEmptyAssistantReplyAsSilent =
-    isGroupChat && !isDirectedTurn && silentReplySettings.policy === "allow";
+    isGroupChat &&
+    !isDirectedTurn &&
+    (isAmbientRoomEvent || silentReplySettings.policy === "allow");
+  // Heartbeats retain the embedded runner's trigger-owned optional default.
+  const terminalReplyExpectation = isHeartbeat
+    ? undefined
+    : isAmbientRoomEvent
+      ? "optional"
+      : "required";
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
@@ -250,13 +292,14 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
   const commandTurn = resolveCommandTurnContext(ctx);
+  const canInterpretCommands = ctx.CommandInterpretationSuppressed !== true;
   const isRegisteredWholeMessageCommand =
     isWholeMessageCommand && (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand);
   const isActiveCommandTurn =
-    isNativeCommandTurn(commandTurn) ||
-    (allowTextCommands &&
-      ctx.CommandInterpretationSuppressed !== true &&
-      (isTextSlashCommandTurn(commandTurn) || isRegisteredWholeMessageCommand));
+    canInterpretCommands &&
+    (isNativeCommandTurn(commandTurn) ||
+      (allowTextCommands &&
+        (isTextSlashCommandTurn(commandTurn) || isRegisteredWholeMessageCommand)));
   if (
     isActiveCommandTurn &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
@@ -268,12 +311,13 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   }
   const isBareNewOrReset = /^\/(new|reset)$/i.test(normalizedCommandBody);
   const isBareSessionReset =
-    softResetTriggered ||
-    (isNewSession &&
-      (isBareNewOrReset ||
-        (!hasCurrentReplyTargetContext &&
-          baseBodyTrimmedRaw.length === 0 &&
-          rawBodyTrimmed.length > 0)));
+    canInterpretCommands &&
+    (softResetTriggered ||
+      (isNewSession &&
+        (isBareNewOrReset ||
+          (!hasCurrentReplyTargetContext &&
+            baseBodyTrimmedRaw.length === 0 &&
+            rawBodyTrimmed.length > 0))));
   const startupAction =
     softResetTriggered || /^\/reset(?:\s|$)/i.test(normalizedCommandBody) ? "reset" : "new";
   const sessionWorkspaceOverride = resolveIngressWorkspaceOverrideForSessionRun({
@@ -306,9 +350,8 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     shouldApplyStartupContext({ cfg, action: startupAction })
       ? await buildSessionStartupContextPrelude({ workspaceDir, cfg })
       : null;
-  const baseBodyFinal = isBareSessionReset
-    ? (bareResetPromptState?.prompt ?? "")
-    : stripPromptThinkingDirectives(baseBody);
+  // Directive routing already owns stripping and authorization; prepared text is final.
+  const baseBodyFinal = isBareSessionReset ? (bareResetPromptState?.prompt ?? "") : baseBody;
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||
@@ -343,11 +386,15 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     ? undefined
     : (sessionStore?.[sessionKey] ?? sessionEntryHandle?.getCurrent() ?? sessionEntry);
   let activeGoalContext = formatActiveGoalContext(inboundContextSessionEntry);
-  let inboundUserContext = buildInboundUserContextPrefix(
-    inboundUserContextSessionCtx,
-    envelopeOptions,
-    inboundContextSessionEntry,
-  );
+  // Heartbeats are synthetic system turns: delivery facts still drive routing and
+  // formatting, but must not be presented to the model as user-role inbound context.
+  let inboundUserContext = isHeartbeat
+    ? ""
+    : buildInboundUserContextPrefix(
+        inboundUserContextSessionCtx,
+        envelopeOptions,
+        inboundContextSessionEntry,
+      );
   const refreshInboundContextAfterAdmissionWait = async () => {
     if (isHeartbeat) {
       return;
@@ -422,6 +469,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     startupContextPrelude,
     softResetTail,
     workspaceDir,
+    skillsWorkspaceDir: configuredWorkspaceDir,
     baseBodyFinal,
     hasUserBody,
     shouldInjectGroupIntro,
@@ -435,6 +483,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     getInboundContext: () => ({ activeGoalContext, inboundUserContext }),
     refreshInboundContextAfterAdmissionWait,
     allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation,
   } as const;
 }
 

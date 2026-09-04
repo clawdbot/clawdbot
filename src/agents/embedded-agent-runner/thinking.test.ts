@@ -4,12 +4,12 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
+import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import {
   assessLastAssistantMessage,
   dropReasoningFromHistory,
   dropThinkingBlocks,
   stripInvalidThinkingSignatures,
-  stripStaleThinkingSignaturesForCompactionReplay,
   wrapAnthropicStreamWithRecovery,
 } from "./thinking.js";
 
@@ -1078,7 +1078,7 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     expect(stripStaleThinkingSignaturesForCompactionReplay(messages)).toBe(messages);
   });
 
-  it("strips thinking signatures from assistant messages at or before the compaction timestamp", () => {
+  it("strips thinking signatures from assistant messages before the compaction timestamp", () => {
     const compactionSummary = castAgentMessage({
       role: "compactionSummary",
       summary: "summary",

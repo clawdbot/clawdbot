@@ -11,6 +11,7 @@ import {
   findTaskByRunIdForStatus,
   listTasksForOwnerOrRequesterSessionKeyForStatus,
 } from "../../../tasks/task-status-access.js";
+import { sleep } from "../../../utils/sleep.js";
 
 export type AsyncStartedToolMeta = {
   toolName?: string;
@@ -35,12 +36,6 @@ const COMPLETION_REQUIRED_TASK_KINDS = new Set([
 
 function resolveAsyncTaskPollIntervalMs(): number {
   return isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, Math.max(1, ms));
-  });
 }
 
 function createAbortError(signal: AbortSignal): Error {
@@ -187,7 +182,7 @@ export function shouldWaitForCompletionRequiredAsyncTasks(params: {
 export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
-  deadlineAtMs: number;
+  getDeadlineAtMs: () => number | undefined;
   now?: () => number;
   pollIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -231,7 +226,10 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       if (pendingRunIds.length === 0) {
         break;
       }
-      const remainingMs = params.deadlineAtMs - now();
+      // Approval pauses and resumed grace windows replace the owner's deadline.
+      // Unlimited waits still use finite sleeps and remain abort-responsive.
+      const deadlineAtMs = params.getDeadlineAtMs();
+      const remainingMs = deadlineAtMs === undefined ? pollIntervalMs : deadlineAtMs - now();
       if (remainingMs <= 0) {
         for (const runId of pendingRunIds) {
           timedOutRunIds.add(runId);

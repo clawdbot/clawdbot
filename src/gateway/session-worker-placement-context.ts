@@ -1,6 +1,6 @@
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { SessionWorkerPlacementContext } from "./worker-environments/session-placement-lifecycle.js";
 
@@ -15,9 +15,10 @@ const localPlacementState = resolveGlobalSingleton(
 );
 
 /** Uses the live Gateway owner when present; embedded runtimes share the same lightweight DB. */
-export function resolveSessionWorkerPlacementContext(): SessionWorkerPlacementContext {
-  const gatewayContext =
-    getPluginRuntimeGatewayRequestScope()?.context ?? getFallbackGatewayContext();
+export function resolveSessionWorkerPlacementContext(
+  owner?: GatewayRequestContext,
+): SessionWorkerPlacementContext {
+  const gatewayContext = getPluginRuntimeGatewayRequestScope()?.context ?? owner;
   if (gatewayContext?.workerSessionPlacementService) {
     return gatewayContext;
   }

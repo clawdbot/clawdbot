@@ -102,13 +102,15 @@ function transformAssistant<TApi extends Api>(
     if (block.type === "text") {
       return sameModel ? block : { type: "text" as const, text: block.text };
     }
+    const { thoughtSignature: _, async: _async, ...unsigned } = block;
+    // Pairing uses these IDs as shared keys, before model-specific normalization runs.
+    const trimmedId = block.id.trim();
     if (sameModel) {
-      return block;
+      return trimmedId === block.id ? block : Object.assign({}, block, { id: trimmedId });
     }
-    const { thoughtSignature: _, ...unsigned } = block;
-    const id = normalizeToolCallId?.(block.id, model, message) ?? block.id;
-    if (id !== block.id) {
-      toolCallIdMap.set(block.id, id);
+    const id = normalizeToolCallId?.(trimmedId, model, message) ?? trimmedId;
+    if (id !== trimmedId) {
+      toolCallIdMap.set(trimmedId, id);
     }
     return id === block.id ? unsigned : Object.assign({}, unsigned, { id });
   });
@@ -121,7 +123,46 @@ export function transformMessages<TApi extends Api>(
   normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
 ): Message[] {
   const toolCallIdMap = new Map<string, string>();
-  const normalized = messages.map((message) =>
+  // Other model contracts require ordinary adjacent call/results. Preserve real
+  // delayed outcomes before stripping the source model's async capability.
+  const asyncOwners = new Map<string, AssistantMessage>();
+  const relocated = new Map<AssistantMessage, Message[]>();
+  const movedResults = new Set<Message>();
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      const sameModel =
+        message.provider === model.provider &&
+        message.api === model.api &&
+        message.model === model.id;
+      for (const block of message.content ?? []) {
+        if (block.type === "toolCall") {
+          if (block.async && !sameModel) {
+            asyncOwners.set(block.id, message);
+          } else {
+            asyncOwners.delete(block.id);
+          }
+        }
+      }
+    } else if (message.role === "toolResult") {
+      const owner = asyncOwners.get(message.toolCallId);
+      if (owner) {
+        const results = relocated.get(owner) ?? [];
+        results.push(message);
+        relocated.set(owner, results);
+        movedResults.add(message);
+        asyncOwners.delete(message.toolCallId);
+      }
+    }
+  }
+  const source =
+    movedResults.size > 0
+      ? messages.flatMap((message) =>
+          movedResults.has(message)
+            ? []
+            : [message, ...(message.role === "assistant" ? (relocated.get(message) ?? []) : [])],
+        )
+      : messages;
+  const normalized = source.map((message) =>
     message.content == null ? Object.assign({}, message, { content: [] }) : message,
   );
   const transformed = downgradeUnsupportedImages(normalized, model).map((message) => {
@@ -131,11 +172,13 @@ export function transformMessages<TApi extends Api>(
     if (message.role !== "toolResult") {
       return message;
     }
-    const toolCallId = toolCallIdMap.get(message.toolCallId);
-    return toolCallId ? Object.assign({}, message, { toolCallId }) : message;
+    const trimmedId = message.toolCallId.trim();
+    const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
+    return toolCallId === message.toolCallId ? message : Object.assign({}, message, { toolCallId });
   });
 
   const result: Message[] = [];
+  const pendingAsyncCalls = new Map<string, ToolCall>();
   let pendingToolCalls: ToolCall[] = [];
   let existingToolResultIds = new Set<string>();
   const flushToolCalls = () => {
@@ -161,14 +204,27 @@ export function transformMessages<TApi extends Api>(
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         continue;
       }
-      pendingToolCalls = message.content.filter((block) => block.type === "toolCall");
+      pendingToolCalls = message.content.filter((block): block is ToolCall => {
+        if (block.type !== "toolCall") {
+          return false;
+        }
+        if (block.async) {
+          pendingAsyncCalls.set(block.id, block);
+          return false;
+        }
+        return true;
+      });
     } else if (message.role === "toolResult") {
       existingToolResultIds.add(message.toolCallId);
+      pendingAsyncCalls.delete(message.toolCallId);
     } else {
       flushToolCalls();
     }
     result.push(message);
   }
+  // Async calls may own results after later assistant fragments. Only a closed
+  // history without their result needs the ordinary missing-result repair.
+  pendingToolCalls.push(...pendingAsyncCalls.values());
   flushToolCalls();
   return result;
 }

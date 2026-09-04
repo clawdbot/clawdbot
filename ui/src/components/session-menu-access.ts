@@ -5,6 +5,7 @@ import type { SessionMenuActionKind } from "./session-menu.ts";
 
 type SessionMenuAccessRow = {
   key: string;
+  sessionId?: string;
   archived?: boolean;
 };
 
@@ -34,7 +35,10 @@ export function sessionMenuReasons(params: {
     const access = readSessionMethodAccess(snapshot, {
       method: "sessions.patchMany",
       params: {
-        targets: batchRows.map((row) => ({ key: row.key })),
+        targets: batchRows.map((row) => ({
+          key: row.key,
+          ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
+        })),
         patch,
       },
     });
@@ -45,7 +49,10 @@ export function sessionMenuReasons(params: {
   };
   const unreadReason = batchPatchReason({ unread: true });
   const categoryReason = batchPatchReason({ category: null });
-  const archiveReason = batchPatchReason({ archived: true });
+  const lifecycleRows = batchRows ?? [session];
+  const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
+    ? "Session lifecycle action requires a durable session identity."
+    : batchPatchReason({ archived: true });
   const groupReason = reason({
     method: "sessions.groups.put",
     requiredScope: "operator.write",
@@ -54,7 +61,11 @@ export function sessionMenuReasons(params: {
     .map((row) =>
       reason({
         method: "sessions.delete",
-        params: { key: row.key, ...(row.archived ? { archivedOnly: true } : {}) },
+        params: {
+          key: row.key,
+          ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
+          ...(row.archived ? { archivedOnly: true } : {}),
+        },
       }),
     )
     .find((value): value is string => Boolean(value));
@@ -70,6 +81,8 @@ export function sessionMenuReasons(params: {
       ? {
           "toggle-pin": patchReason,
           rename: patchReason,
+          "set-icon": patchReason,
+          "set-color": patchReason,
         }
       : {}),
     ...(unreadReason ? { "toggle-unread": unreadReason } : {}),

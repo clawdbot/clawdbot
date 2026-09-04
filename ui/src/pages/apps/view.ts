@@ -5,6 +5,7 @@ import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/apps.css";
 import { brandIcons } from "../about/brand-icons.ts";
 import { appsBrandIcons } from "./brand-icons.ts";
@@ -164,20 +165,16 @@ const APP_SECTIONS: readonly AppSection[] = [
         icon: appsBrandIcons.chrome,
         title: () => t("appsPage.cards.chrome.title"),
         desc: () => t("appsPage.cards.chrome.desc"),
-        // Store listing is submitted but not yet approved: setup guide stays
-        // the primary CTA so the working install route is never dead-ended.
-        // Once the listing is live, promote the store CTA and drop the badge.
-        badge: () => t("appsPage.badgeStoreComingSoon"),
         ctas: [
-          {
-            kind: "external",
-            href: "https://docs.openclaw.ai/tools/chrome-extension",
-            label: () => t("appsPage.ctaSetupGuide"),
-          },
           {
             kind: "external",
             href: "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
             label: () => t("appsPage.ctaChromeWebStore"),
+          },
+          {
+            kind: "external",
+            href: "https://docs.openclaw.ai/tools/chrome-extension",
+            label: () => t("appsPage.ctaSetupGuide"),
           },
         ],
       },
@@ -203,7 +200,7 @@ const APP_SECTIONS: readonly AppSection[] = [
 const COMMUNITY_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: () => string }> =
   [
     {
-      href: "https://discord.gg/clawd",
+      href: COMMUNITY_DISCORD_URL,
       icon: brandIcons.discord,
       label: () => t("appsPage.linkDiscord"),
     },

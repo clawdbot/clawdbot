@@ -1,13 +1,13 @@
-title: Matrix subagent thread spawn
+title: Matrix subagent thread spawn and unbind
 
 scenario:
   id: subagent-thread-spawn
   surface: channels
   coverage:
     primary:
-      - matrix.acp-subagent-spawn-hooks
+      - channels.native-threads
       - agent-runtime.subagent-turns-subagents
-  objective: Verify sessions_spawn(thread=true, mode=session) creates a persistent Matrix child thread and delivers the child result there.
+  objective: Verify a persistent Matrix child thread routes follow-ups to its child session until /session unbind restores ordinary thread routing without deleting the child.
   gatewayConfigPatch:
     tools:
       profile: coding
@@ -28,19 +28,26 @@ scenario:
     - The parent calls sessions_spawn with thread=true and mode=session.
     - Matrix emits the child-session introduction.
     - The child completion carries the introduction message as its normalized thread id.
+    - A bound follow-up is recorded in the child session history.
+    - /session unbind acknowledges the detach in the same thread without deleting the child session.
+    - The next follow-up is recorded only in a different session and replies once in the same thread.
   docsRefs:
     - docs/channels/matrix.md
     - docs/tools/subagents.md
   codeRefs:
     - src/agents/tools/sessions-spawn-tool.ts
+    - src/auto-reply/reply/commands-session.ts
+    - extensions/matrix/src/matrix/monitor/route.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
-    summary: Spawn a bound Matrix child session and require native thread relation evidence on completion.
+    summary: Spawn a bound Matrix child session, prove its inbound routing, then unbind and prove follow-up history moves to an ordinary thread session.
     config:
       conversationId: main
       childMarker: QA-MATRIX-SUBAGENT-THREAD-OK
+      boundMarker: QA-MATRIX-BOUND-FOLLOWUP-OK
+      unboundMarker: QA-MATRIX-UNBOUND-FOLLOWUP-OK
       prompt: 'Use sessions_spawn for this QA check. task="Finish with exactly QA-MATRIX-SUBAGENT-THREAD-OK." label=qa-thread-subagent thread=true mode=session. After spawn returns status="accepted", wait for the child session reply in the spawned Matrix thread. Do not write QA-MATRIX-SUBAGENT-THREAD-OK in the parent response.'
 
 flow:
@@ -89,3 +96,117 @@ flow:
             expr: "!env.mock || debugRequests.some((request) => request.plannedToolName === 'sessions_spawn' && /thread=true mode=session/i.test(String(request.allInputText ?? '')))"
             message: expected sessions_spawn(thread=true, mode=session) tool call
       detailsExpr: "`${completion.threadId}: ${completion.text}`"
+    - name: restores ordinary thread routing without deleting the child
+      actions:
+        - call: waitForCondition
+          saveAs: childSession
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "env.gateway.call('sessions.list', { agentId: 'qa', label: 'qa-thread-subagent' }, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: channel }
+            senderId: "@driver:matrix.test"
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw Reply exactly: ${config.boundMarker}`"
+            threadId:
+              ref: intro.id
+        - waitForOutbound:
+            conversation: { id: { ref: config.conversationId }, kind: channel }
+            textIncludes:
+              ref: config.boundMarker
+            threadId:
+              ref: intro.id
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 180000)
+        - call: waitForAgentHistoryReply
+          args:
+            - ref: env
+            - ref: childSession.key
+            - lambda:
+                params: [text]
+                expr: text.includes(config.boundMarker)
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - call: env.gateway.call
+          saveAs: sessionsBeforeUnbind
+          args:
+            - sessions.list
+            - agentId: qa
+            - timeoutMs: 30000
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: channel }
+            senderId: "@driver:matrix.test"
+            senderName: QA Driver
+            text: /session unbind
+            threadId:
+              ref: intro.id
+        - waitForOutbound:
+            conversation: { id: { ref: config.conversationId }, kind: channel }
+            textIncludes: Conversation unbound.
+            threadId:
+              ref: intro.id
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 45000)
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: channel }
+            senderId: "@driver:matrix.test"
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw Reply exactly: ${config.unboundMarker}`"
+            threadId:
+              ref: intro.id
+        - waitForOutbound:
+            conversation: { id: { ref: config.conversationId }, kind: channel }
+            textIncludes:
+              ref: config.unboundMarker
+            threadId:
+              ref: intro.id
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 180000)
+        - call: waitForCondition
+          saveAs: unboundSession
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "env.gateway.call('sessions.list', { agentId: 'qa' }, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.hasActiveRun === false && !sessionsBeforeUnbind.sessions.some((previous) => previous.key === session.key)))"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - call: waitForAgentHistoryReply
+          args:
+            - ref: env
+            - ref: unboundSession.key
+            - lambda:
+                params: [text]
+                expr: text.includes(config.unboundMarker)
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - call: env.gateway.call
+          saveAs: sessionsAfterUnbind
+          args:
+            - sessions.list
+            - agentId: qa
+              label: qa-thread-subagent
+            - timeoutMs: 30000
+        - assert:
+            expr: "sessionsAfterUnbind.sessions.some((session) => session.key === childSession.key && session.sessionId === childSession.sessionId)"
+            message: unbinding removed or replaced the child session
+        - call: readSessionTranscriptSummary
+          saveAs: childHistoryAfterUnbind
+          args:
+            - ref: env
+            - ref: childSession.key
+            - probeText:
+                ref: config.unboundMarker
+        - assert:
+            expr: "!childHistoryAfterUnbind.probeTextEndLine && unboundSession.sessionId !== childSession.sessionId"
+            message: the detached follow-up still reached the child transcript
+        - set: followupReplies
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && String(message.text ?? '').includes(config.unboundMarker))"
+        - assert:
+            expr: "followupReplies.length === 1 && followupReplies[0].conversation.id === config.conversationId && followupReplies[0].threadId === intro.id"
+            message:
+              expr: "`expected one detached follow-up in thread ${intro.id}, saw ${JSON.stringify(followupReplies)}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', threadId: intro.id, boundSessionKey: childSession.key, unboundSessionKey: unboundSession.key, childSessionPreserved: true, detachedFollowupReplies: followupReplies.length })"

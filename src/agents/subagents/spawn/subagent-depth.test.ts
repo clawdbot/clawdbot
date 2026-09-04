@@ -120,6 +120,33 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(2);
   });
 
+  it("reads a bare fixed-store key through its persisted owner", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-shared-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.sqlite");
+      await replaceSessionEntry(
+        { agentId: "ops", storePath, sessionKey: "global" },
+        {
+          sessionId: "global-session",
+          updatedAt: Date.now(),
+          spawnDepth: 2,
+        },
+      );
+      const cfg = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+        session: { scope: "global", store: storePath },
+      } satisfies OpenClawConfig;
+
+      expect(getSubagentDepthFromSessionStore("global", { cfg })).toBe(2);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolves a cross-agent parent outside the supplied child store", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-cross-agent-"));
     try {
@@ -149,6 +176,42 @@ describe("getSubagentDepthFromSessionStore", () => {
       });
 
       expect(depth).toBe(3);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps agent-scoped views separate for a fixed shared store", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-fixed-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.sqlite");
+      const childKey = "agent:ops:dashboard:child";
+      const parentKey = "agent:research:dashboard:parent";
+      await replaceSessionEntry(
+        { agentId: "ops", storePath, sessionKey: childKey },
+        {
+          sessionId: "child",
+          updatedAt: Date.now(),
+          spawnedBy: parentKey,
+        },
+      );
+      await replaceSessionEntry(
+        { agentId: "research", storePath, sessionKey: parentKey },
+        {
+          sessionId: "parent",
+          updatedAt: Date.now(),
+          spawnDepth: 2,
+        },
+      );
+
+      expect(
+        getSubagentDepthFromSessionStore(childKey, {
+          cfg: {
+            agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+            session: { store: storePath },
+          },
+        }),
+      ).toBe(3);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

@@ -3,11 +3,11 @@ import {
   asOptionalRecord as readRecordField,
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import type {
-  AgentCommandOutputEventData,
-  AgentItemEventData,
+import {
+  emitAgentActivityEvent,
+  type AgentCommandOutputEventData,
+  type AgentItemEventData,
 } from "../infra/agent-activity-events.js";
-import { emitAgentCommandOutputEvent } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { extractLiveExecOutput } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
@@ -24,9 +24,9 @@ import {
   capLiveExecResult,
   sanitizeToolResult,
   truncateLiveExecOutput,
-} from "./embedded-agent-subscribe.tools.js";
+} from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ChannelToolProgress = {
   text: string;
@@ -47,16 +47,23 @@ function readChannelToolProgress(result: unknown): ChannelToolProgress | undefin
   return { text: truncateLiveExecOutput(text) };
 }
 
-function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): boolean {
+function prepareLiveExecUpdate(
+  ctx: ToolHandlerContext,
+  toolCallId: string,
+  partialResult: unknown,
+): { result: unknown } | undefined {
   const now = Date.now();
   const state = ctx.state.execLiveUpdateStateById ?? new Map<string, { lastEmittedAtMs: number }>();
   ctx.state.execLiveUpdateStateById = state;
   const previous = state.get(toolCallId);
   if (previous && now - previous.lastEmittedAtMs < LIVE_EXEC_UPDATE_MIN_INTERVAL_MS) {
-    return false;
+    return undefined;
   }
-  state.set(toolCallId, { lastEmittedAtMs: now });
-  return true;
+  // Skip payload work inside the throttle; stamp after preparation so slow
+  // redaction cannot make the next detailed frame arrive back-to-back.
+  const result = capLiveExecResult(sanitizeToolResult(partialResult));
+  state.set(toolCallId, { lastEmittedAtMs: Date.now() });
+  return { result };
 }
 
 /** Handles partial tool output and emits throttled live UI updates. */
@@ -69,17 +76,16 @@ export function handleToolExecutionUpdate(
     hideFromChannelProgress?: boolean;
   },
 ) {
-  const toolName = normalizeToolName(evt.toolName);
+  const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const partial = evt.partialResult;
-  const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
-  const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
+  const execUpdate = isExecTool ? prepareLiveExecUpdate(ctx, toolCallId, partial) : undefined;
+  const liveResult = isExecTool ? execUpdate?.result : sanitizeToolResult(partial);
   const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
   // Typed progress already has a sanitized path; suppress duplicate raw previews.
-  const emitDetailedLiveUpdate =
-    !toolProgress && (!isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId));
+  const emitDetailedLiveUpdate = !toolProgress && (!isExecTool || execUpdate !== undefined);
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -146,9 +152,10 @@ export function handleToolExecutionUpdate(
         output,
         status: "running",
       };
-      emitAgentCommandOutputEvent({
+      emitAgentActivityEvent({
         runId: ctx.params.runId,
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+        stream: "command_output",
         data: outputData,
       });
       emitAgentEventCallbackBestEffort(ctx, {

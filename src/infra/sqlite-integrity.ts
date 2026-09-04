@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   readStableSqliteFileGeneration,
@@ -142,7 +143,7 @@ function bindSqliteIntegrityConfirmation(
 }
 
 function failedSqliteIntegrityConfirmation(error: unknown): UnboundSqliteIntegrityConfirmation {
-  const normalized = error instanceof Error ? error : new Error(String(error));
+  const normalized = toStringifiedError(error);
   return {
     status: "failed",
     error: normalized,
@@ -151,7 +152,7 @@ function failedSqliteIntegrityConfirmation(error: unknown): UnboundSqliteIntegri
 }
 
 function unboundSqliteIntegrityFailure(error: unknown): SqliteIntegrityConfirmation {
-  const normalized = error instanceof Error ? error : new Error(String(error));
+  const normalized = toStringifiedError(error);
   return { status: "failed", error: normalized, terminal: false };
 }
 
@@ -160,7 +161,7 @@ function closeSqliteDatabase(database: DatabaseSync): Error | undefined {
     database.close();
     return undefined;
   } catch (error) {
-    return error instanceof Error ? error : new Error(String(error));
+    return toStringifiedError(error);
   }
 }
 

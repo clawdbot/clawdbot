@@ -4,7 +4,6 @@ import {
   readPresenceEntries,
   resolveCurrentSelfUser,
   resolveSelfPresenceUser,
-  userProfileAvatarUrl,
 } from "./user-profile.ts";
 
 describe("connection user profile helpers", () => {
@@ -34,34 +33,11 @@ describe("connection user profile helpers", () => {
       id: "profile-1",
       name: "Ada",
     });
-    expect(
-      resolveCurrentSelfUser({
-        snapshotUser: { id: "previous-profile", name: "Previous User" },
-        presenceEntries,
-        presenceInstanceId: "self",
-      }),
-    ).toEqual({ id: "profile-1", name: "Ada" });
   });
 
-  it("reads presence payloads and builds scoped cache-busted avatar URLs", () => {
+  it("reads presence payloads", () => {
     const entries = [{ instanceId: "self", user: { id: "profile/1" }, ts: 1 }];
     expect(readPresenceEntries({ presence: entries })).toEqual(entries);
     expect(readPresenceEntries({ presence: null })).toBeUndefined();
-    expect(
-      userProfileAvatarUrl(
-        "wss://gateway.example.test/control",
-        "profile/1",
-        42,
-        "https://gateway.example.test/control/profile",
-      ),
-    ).toBe("https://gateway.example.test/api/users/profile%2F1/avatar?v=42");
-    expect(
-      userProfileAvatarUrl(
-        "wss://remote.example.test",
-        "profile-1",
-        "content-hash-png",
-        "https://gateway.example.test/control/profile",
-      ),
-    ).toBe("https://remote.example.test/api/users/profile-1/avatar?v=content-hash-png");
   });
 });

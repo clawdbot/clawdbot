@@ -22,6 +22,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { readDebugProxyCaptureBlob, readDebugProxyCaptureSessionEvents } from "./store-readonly.js";
 import type {
   CaptureBlobRecord,
   CaptureEventRecord,
@@ -463,19 +464,7 @@ class DebugProxyCaptureStoreImpl {
   }
 
   getSessionEvents(sessionId: string, limit = 500): Array<Record<string, unknown>> {
-    return this.db
-      .prepare(
-        `SELECT
-           id, session_id AS sessionId, ts, source_scope AS sourceScope, source_process AS sourceProcess,
-           protocol, direction, kind, flow_id AS flowId, method, host, path, status, close_code AS closeCode,
-           content_type AS contentType, headers_json AS headersJson, data_text AS dataText,
-           data_blob_id AS dataBlobId, data_sha256 AS dataSha256, error_text AS errorText, meta_json AS metaJson
-         FROM capture_events
-         WHERE session_id = ?
-         ORDER BY ts DESC, id DESC
-         LIMIT ?`,
-      )
-      .all(sessionId, limit) as Array<Record<string, unknown>>;
+    return readDebugProxyCaptureSessionEvents(this.db, sessionId, limit);
   }
 
   summarizeSessionCoverage(sessionId: string): CaptureSessionCoverageSummary {
@@ -514,11 +503,7 @@ class DebugProxyCaptureStoreImpl {
         hosts.set(host, (hosts.get(host) ?? 0) + 1);
         // Local model/provider endpoints are useful to surface separately when
         // debugging why cloud-provider labels are absent.
-        if (
-          host === "127.0.0.1:11434" ||
-          host.startsWith("127.0.0.1:") ||
-          host.startsWith("localhost:")
-        ) {
+        if (host.startsWith("127.0.0.1:") || host.startsWith("localhost:")) {
           localPeers.set(host, (localPeers.get(host) ?? 0) + 1);
         }
       }
@@ -548,14 +533,7 @@ class DebugProxyCaptureStoreImpl {
         ? gunzipSync(fs.readFileSync(blobPath)).toString("utf8")
         : null;
     }
-    const row = this.db
-      .prepare(`SELECT encoding, data FROM capture_blobs WHERE blob_id = ?`)
-      .get(blobId) as { data?: Uint8Array; encoding?: string } | undefined;
-    if (row?.data) {
-      const data = Buffer.from(row.data);
-      return (row.encoding === "gzip" ? gunzipSync(data) : data).toString("utf8");
-    }
-    return null;
+    return readDebugProxyCaptureBlob(this.db, blobId);
   }
 
   queryPreset(preset: CaptureQueryPreset, sessionId?: string): CaptureQueryRow[] {

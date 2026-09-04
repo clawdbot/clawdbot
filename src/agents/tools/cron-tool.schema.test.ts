@@ -7,6 +7,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCronTool } from "./cron-tool.js";
 
 /** Unwraps nullable anyOf unions to their object variant so paths can descend. */
@@ -108,6 +109,26 @@ describe("createCronToolSchema", () => {
   it("does not ship a separate patch object schema (#121606)", () => {
     expect(schemaRecord.properties).not.toHaveProperty("patch");
   });
+
+  it.each([undefined, "", " \t ", "agent:main:telegram:direct:alice", " agent:main:main "])(
+    "advertises job retargeting only without session scope (%j)",
+    (agentSessionKey) => {
+      const toolSchema = createCronTool({ agentSessionKey, agentId: "main" }).parameters;
+      for (const projected of [
+        toolSchema,
+        normalizeToolParameterSchema(toolSchema, { modelProvider: "gemini" }),
+        normalizeToolParameterSchema(toolSchema, {
+          modelCompat: { toolSchemaProfile: "llamacpp" },
+        }),
+      ]) {
+        const record = projected as unknown as Record<string, unknown>;
+        expect(keysAt(record, "job").includes("agentId")).toBe(!agentSessionKey?.trim());
+        expect(propertyAt(record, "agentId")).toMatchObject({ type: "string" });
+        expect(propertyAt(record, "agentId")?.description).toContain("list");
+        expect(propertyAt(record, "agentId")?.description).toContain("wake");
+      }
+    },
+  );
 
   it("exposes next_check with its relative duration parameter", () => {
     expect(Value.Check(schema, { action: "next_check", in: "15m" })).toBe(true);
@@ -470,5 +491,71 @@ describe("createCronToolSchema", () => {
     expect(json).not.toMatch(/"type"\s*:\s*\[/);
     // The "not" composition keyword is not supported by OpenAPI 3.0.
     expect(json).not.toMatch(/"not"\s*:\s*\{/);
+  });
+});
+
+describe("createCronToolSchema with cron triggers disabled", () => {
+  const triggersDisabledConfig = {
+    cron: { enabled: true, triggers: { enabled: false } },
+  } as OpenClawConfig;
+  const tool = createCronTool({ config: triggersDisabledConfig });
+  const schemaRecord = tool.parameters as unknown as Record<string, unknown>;
+
+  it("omits trigger from job", () => {
+    expect(keysAt(schemaRecord, "job")).not.toContain("trigger");
+  });
+
+  it("omits stream schedules from kind enums and drops stream-only fields", () => {
+    expect(propertyAt(schemaRecord, "job.schedule.kind")?.enum).toEqual(["at", "every", "cron"]);
+    const scheduleKeys = keysAt(schemaRecord, "job.schedule");
+    for (const streamField of ["command", "cwd", "mode", "match", "batchMs", "maxBatchBytes"]) {
+      expect(scheduleKeys).not.toContain(streamField);
+    }
+  });
+
+  it("omits script payloads from kind enums and drops script-only fields", () => {
+    expect(propertyAt(schemaRecord, "job.payload.kind")?.enum).toEqual([
+      "systemEvent",
+      "agentTurn",
+    ]);
+    const payloadKeys = keysAt(schemaRecord, "job.payload");
+    expect(payloadKeys).not.toContain("script");
+    expect(payloadKeys).not.toContain("toolBudget");
+  });
+
+  it("tells the model triggers are unavailable instead of documenting them", () => {
+    expect(tool.description).toContain("TRIGGERS DISABLED");
+    expect(tool.description).not.toContain("TRIGGER (condition watcher");
+    expect(tool.description).not.toContain('kind:"stream"');
+    expect(tool.description).not.toContain('kind:"script"');
+    expect(tool.description).not.toContain("Silent watcher");
+    expect(tool.description).not.toContain("event watchers");
+    expect(tool.description).toContain("say it is unsupported");
+  });
+
+  it("keeps the full surface when no config is provided", () => {
+    const configlessSchema = createCronTool().parameters as unknown as Record<string, unknown>;
+    expect(keysAt(configlessSchema, "job")).toContain("trigger");
+    expect(propertyAt(configlessSchema, "job.schedule.kind")?.enum).toContain("stream");
+  });
+
+  it("keeps the full surface when config omits cron.triggers (enabled default)", () => {
+    const defaultPostureSchema = createCronTool({
+      config: { cron: { enabled: true } } as OpenClawConfig,
+    }).parameters as unknown as Record<string, unknown>;
+    expect(keysAt(defaultPostureSchema, "job")).toContain("trigger");
+    expect(propertyAt(defaultPostureSchema, "job.schedule.kind")?.enum).toContain("stream");
+  });
+
+  it("still validates a plain reminder add call", () => {
+    expect(
+      Value.Check(tool.parameters, {
+        action: "add",
+        job: {
+          schedule: { kind: "cron", expr: "0 9 * * *", tz: "America/New_York" },
+          payload: { kind: "agentTurn", message: "Morning summary" },
+        },
+      }),
+    ).toBe(true);
   });
 });

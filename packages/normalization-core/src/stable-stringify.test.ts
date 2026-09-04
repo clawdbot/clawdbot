@@ -9,6 +9,17 @@ const sanitizeSurrogates = (text: string) =>
   text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 
 describe("stableStringify", () => {
+  it.each([
+    ['{"z":1,"a":2}', '{"a":2,"z":1}'],
+    [
+      '{"items":[3,null,{"z":false,"a":1.5}],"enabled":true}',
+      '{"enabled":true,"items":[3,null,{"a":1.5,"z":false}]}',
+    ],
+    ['["text",0,-2.5,null,false]', '["text",0,-2.5,null,false]'],
+  ])("preserves deterministic bytes for parsed JSON %#", (json, expected) => {
+    expect(stableStringify(JSON.parse(json))).toBe(expected);
+  });
+
   it("sorts object keys recursively", () => {
     expect(stableStringify({ b: { d: 4, c: 3 }, a: 1 })).toBe('{"a":1,"b":{"c":3,"d":4}}');
   });

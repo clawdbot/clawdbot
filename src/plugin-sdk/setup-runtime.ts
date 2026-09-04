@@ -47,6 +47,7 @@ export {
   createLegacyCompatChannelDmPolicy,
   promptLegacyChannelAllowFromForAccount,
 } from "../channels/plugins/setup-wizard-legacy-compat.js";
+
 export { createAllowlistSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";
 export {
   createCliPathTextInput,

@@ -25,6 +25,7 @@ import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
 import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
+import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const ISOLATED_GATEWAY_ENV_KEYS = [
@@ -62,17 +63,6 @@ function resetGatewayState(): void {
   resetTaskRegistryForTests({ persist: false });
 }
 
-function writeResponsesEvents(response: ServerResponse, events: unknown[]): void {
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
-}
-
 function writeAssistantResponse(response: ServerResponse, text: string): void {
   const message = {
     type: "message",
@@ -81,7 +71,7 @@ function writeAssistantResponse(response: ServerResponse, text: string): void {
     status: "completed",
     content: [{ type: "output_text", text, annotations: [] }],
   };
-  writeResponsesEvents(response, [
+  writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -196,7 +186,7 @@ describe("Gateway task and automation RPCs", () => {
             defaults: {
               workspace: workspaceDir,
               skipBootstrap: true,
-              heartbeat: { every: "5m" },
+              heartbeat: { every: "5m", target: "none" },
               model: { primary: provider.modelRef },
               models: {
                 [provider.modelRef]: {
@@ -398,28 +388,41 @@ describe("Gateway task and automation RPCs", () => {
         await expect
           .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
           .toBeGreaterThan(requestsBeforeWake);
-        await expect
-          .poll(
-            async () => {
-              const lastHeartbeat = await client.request<{
-                ts: number;
-                status: string;
-                reason?: string;
-                message?: string;
-                preview?: string;
-              }>("last-heartbeat", {});
-              return (
-                lastHeartbeat.ts >= wakeRequestedAt &&
-                lastHeartbeat.status === "skipped" &&
-                lastHeartbeat.reason === "target-none" &&
-                lastHeartbeat.message ===
-                  "Heartbeat delivery is disabled by configuration (target: none)." &&
-                lastHeartbeat.preview === `Heartbeat handled: ${wakeText}`
-              );
-            },
-            { timeout: 15_000, interval: 50 },
-          )
-          .toBe(true);
+        let observedHeartbeat: {
+          ts: number;
+          status: string;
+          reason?: string;
+          message?: string;
+          preview?: string;
+        } | null = null;
+        try {
+          await expect
+            .poll(
+              async () => {
+                observedHeartbeat = await client.request<{
+                  ts: number;
+                  status: string;
+                  reason?: string;
+                  message?: string;
+                  preview?: string;
+                }>("last-heartbeat", {});
+                return (
+                  observedHeartbeat.ts >= wakeRequestedAt &&
+                  observedHeartbeat.status === "skipped" &&
+                  observedHeartbeat.reason === "target-none" &&
+                  observedHeartbeat.message ===
+                    "Heartbeat delivery is disabled by configuration (target: none)." &&
+                  observedHeartbeat.preview === `Heartbeat handled: ${wakeText}`
+                );
+              },
+              { timeout: 15_000, interval: 50 },
+            )
+            .toBe(true);
+        } catch (error) {
+          throw new Error(`Unexpected last-heartbeat state: ${JSON.stringify(observedHeartbeat)}`, {
+            cause: error,
+          });
+        }
       } finally {
         if (gateway) {
           await disconnectGatewayClient(gateway.client);

@@ -6,6 +6,7 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import { markImplicitSameChatApprovalAuthorization } from "../../plugin-sdk/approval-auth-runtime.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -54,9 +55,11 @@ function expectApprovalResolverCall(params: {
   expect(request.clientDisplayName).toMatch(/^Chat approval \(.+\)$/);
 }
 
-type ApprovalKind = "exec" | "plugin";
 type ApprovalTestPolicy = Partial<
-  Record<ApprovalKind, { authorizedSenders: readonly string[]; accountId?: string; reply?: string }>
+  Record<
+    ChannelApprovalKind,
+    { authorizedSenders: readonly string[]; accountId?: string; reply?: string }
+  >
 >;
 
 const approvalPolicies = new WeakMap<OpenClawConfig, ApprovalTestPolicy>();
@@ -544,7 +547,7 @@ describe("handleApproveCommand", () => {
           plugin: {
             ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
             approvalCapability: {
-              authorizeActorAction: ({ approvalKind }: { approvalKind: "exec" | "plugin" }) =>
+              authorizeActorAction: ({ approvalKind }: { approvalKind: ChannelApprovalKind }) =>
                 approvalKind === "plugin"
                   ? { authorized: true }
                   : {

@@ -3,7 +3,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { tryListenOnPort } from "../infra/ports-probe.js";
-import { getFreePort, installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
+import {
+  getGatewayTestPort,
+  installGatewayTestHooks,
+  startTestGatewayServer,
+} from "./test-helpers.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 type StartGatewayServer = typeof import("./test-helpers.js").startTestGatewayServer;
@@ -80,7 +84,7 @@ describe("gateway startup websocket readiness", () => {
     let server: GatewayServerForTest | undefined;
     let client: WebSocket | undefined;
     try {
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       server = await startTestGatewayServer(port, {
         auth: { mode: "none" },
       });
@@ -111,7 +115,7 @@ describe("gateway startup websocket readiness", () => {
     let server: GatewayServerForTest | undefined;
     const clients: WebSocket[] = [];
     try {
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
       server = await startTestGatewayServer(port, {
         host: "127.0.0.2",
         auth: { mode: "none" },
@@ -135,7 +139,7 @@ describe("gateway startup websocket readiness", () => {
   });
 
   it("releases the loopback alias when the selected bind fails", async () => {
-    const port = await getFreePort();
+    const port = await getGatewayTestPort();
 
     await expect(
       startTestGatewayServer(port, {

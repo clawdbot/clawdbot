@@ -5,6 +5,7 @@ import {
   httpSource,
   matchesSource,
   messageRows,
+  failoverSignalRows,
   openRouterSource,
   patternsSource,
   reason,
@@ -13,163 +14,109 @@ import {
 } from "./failover-classification.corpus.test-support.js";
 export const authFormatCases = [
   // Authentication and authorization.
-  {
-    id: "billing-no-anthropic-credentials",
-    source: billingSource,
-    signal: { message: 'No credentials found for profile "anthropic:default".' },
-    expected: reason("auth"),
-  },
-  {
-    id: "billing-no-openai-api-key",
-    source: billingSource,
-    signal: { provider: "openai", message: "No API key found for profile openai." },
-    expected: reason("auth"),
-  },
-  {
-    id: "billing-oauth-refresh-failed",
-    source: billingSource,
-    signal: {
-      provider: "anthropic",
-      message:
-        "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
-    },
-    expected: reason("auth"),
-  },
-  {
-    id: "billing-could-not-authenticate-key",
-    source: billingSource,
-    signal: { message: "could not authenticate api key" },
-    expected: reason("auth"),
-  },
-  {
-    id: "billing-token-account-id",
-    source: billingSource,
-    signal: { message: "Failed to extract accountId from token" },
-    expected: reason("auth"),
-  },
-  {
-    id: "billing-insufficient-permissions",
-    source: billingSource,
-    signal: { message: "You have insufficient permissions for this operation." },
-    expected: reason("auth"),
-  },
-  {
-    id: "billing-missing-scope",
-    source: billingSource,
-    signal: { message: "Missing scopes: model.request" },
-    expected: reason("auth"),
-  },
-  {
-    id: "billing-api-key-revoked",
-    source: billingSource,
-    signal: { message: "Your api key has been revoked" },
-    expected: reason("auth_permanent"),
-  },
-  {
-    id: "billing-oauth-org-disabled",
-    source: billingSource,
-    signal: { message: "OAuth authentication is currently not allowed for this organization" },
-    expected: reason("auth_permanent"),
-  },
-  {
-    id: "billing-chinese-model-denied",
-    source: billingSource,
-    signal: { message: "403 您无权访问glm-5.1。" },
-    expected: reason("auth"),
-  },
-  {
-    id: "billing-chinese-key-banned",
-    source: billingSource,
-    signal: { message: "当前ak因违规请求被禁止访问该模型" },
-    expected: reason("auth"),
-  },
-  {
-    id: "billing-chinese-ce-011",
-    source: billingSource,
-    signal: { message: '{"success":false,"code":"CE-011"}' },
-    expected: reason("auth"),
-  },
-  {
-    id: "billing-chinese-auth-failed",
-    source: billingSource,
-    signal: { message: "鉴权失败，请检查API Key" },
-    expected: reason("auth"),
-  },
-  {
+  ...failoverSignalRows(billingSource, reason("auth"), [
+    [
+      "billing-no-anthropic-credentials",
+      { message: 'No credentials found for profile "anthropic:default".' },
+    ],
+    [
+      "billing-no-openai-api-key",
+      { provider: "openai", message: "No API key found for profile openai." },
+    ],
+    [
+      "billing-oauth-refresh-failed",
+      {
+        provider: "anthropic",
+        message:
+          "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
+      },
+    ],
+    ["billing-could-not-authenticate-key", { message: "could not authenticate api key" }],
+    ["billing-token-account-id", { message: "Failed to extract accountId from token" }],
+    [
+      "billing-insufficient-permissions",
+      { message: "You have insufficient permissions for this operation." },
+    ],
+    ["billing-missing-scope", { message: "Missing scopes: model.request" }],
+  ]),
+  ...failoverSignalRows(billingSource, reason("auth_permanent"), [
+    ["billing-api-key-revoked", { message: "Your api key has been revoked" }],
+    [
+      "billing-oauth-org-disabled",
+      { message: "OAuth authentication is currently not allowed for this organization" },
+    ],
+  ]),
+  ...failoverSignalRows(billingSource, reason("auth"), [
+    ["billing-chinese-model-denied", { message: "403 您无权访问glm-5.1。" }],
+    ["billing-chinese-key-banned", { message: "当前ak因违规请求被禁止访问该模型" }],
+    ["billing-chinese-ce-011", { message: '{"success":false,"code":"CE-011"}' }],
+    ["billing-chinese-auth-failed", { message: "鉴权失败，请检查API Key" }],
+  ]),
+  ...failoverSignalRows(matchesSource, reason("auth"), [
     // #48988
-    id: "matches-zai-1113",
-    source: matchesSource,
-    signal: {
-      provider: "zai",
-      message: '{"code":1113,"message":"invalid api endpoint or credentials"}',
-    },
-    expected: reason("auth"),
-  },
-  {
+    [
+      "matches-zai-1113",
+      {
+        provider: "zai",
+        message: '{"code":1113,"message":"invalid api endpoint or credentials"}',
+      },
+    ],
     // #114784
-    id: "matches-google-invalid-key",
-    source: matchesSource,
-    signal: {
-      provider: "google",
-      message:
-        "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]",
-    },
-    expected: reason("auth"),
-  },
-  {
-    id: "matches-google-api-key-invalid-code",
-    source: matchesSource,
-    signal: { provider: "google", message: '{"code":"API_KEY_INVALID"}' },
-    expected: reason("auth"),
-  },
-  {
-    id: "patterns-html-401",
-    source: patternsSource,
-    signal: {
-      status: 401,
-      message:
-        "<!doctype html><html><head><title>401 Unauthorized</title></head><body><h1>Unauthorized</h1></body></html>",
-    },
-    expected: reason("auth"),
-  },
-  {
-    id: "patterns-html-403",
-    source: patternsSource,
-    signal: {
-      status: 403,
-      message:
-        "<!doctype html><html><head><title>403 Forbidden</title></head><body><h1>Forbidden</h1></body></html>",
-    },
-    expected: reason("auth"),
-  },
-  {
-    id: "structured-403-quota-without-hook",
-    source: structuredSource,
-    signal: {
-      provider: "demo-provider",
-      status: 403,
-      code: "PROVIDER_QUOTA_EXHAUSTED",
-      message: "Forbidden",
-    },
-    expected: reason("auth"),
-  },
-  {
-    id: "structured-403-rate-without-hook",
-    source: structuredSource,
-    signal: {
-      provider: "demo-provider",
-      status: 403,
-      code: "PROVIDER_RATE_LIMITED",
-      message: "Forbidden",
-    },
-    expected: reason("auth"),
-  },
-  {
-    id: "structured-message-prefix-403",
-    source: structuredSource,
-    signal: { provider: "demo-provider", message: "403 concurrency limit breached" },
-    expected: reason("auth"),
-  },
+    [
+      "matches-google-invalid-key",
+      {
+        provider: "google",
+        message:
+          "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]",
+      },
+    ],
+    [
+      "matches-google-api-key-invalid-code",
+      { provider: "google", message: '{"code":"API_KEY_INVALID"}' },
+    ],
+  ]),
+  ...failoverSignalRows(patternsSource, reason("auth"), [
+    [
+      "patterns-html-401",
+      {
+        status: 401,
+        message:
+          "<!doctype html><html><head><title>401 Unauthorized</title></head><body><h1>Unauthorized</h1></body></html>",
+      },
+    ],
+    [
+      "patterns-html-403",
+      {
+        status: 403,
+        message:
+          "<!doctype html><html><head><title>403 Forbidden</title></head><body><h1>Forbidden</h1></body></html>",
+      },
+    ],
+  ]),
+  ...failoverSignalRows(structuredSource, reason("auth"), [
+    [
+      "structured-403-quota-without-hook",
+      {
+        provider: "demo-provider",
+        status: 403,
+        code: "PROVIDER_QUOTA_EXHAUSTED",
+        message: "Forbidden",
+      },
+    ],
+    [
+      "structured-403-rate-without-hook",
+      {
+        provider: "demo-provider",
+        status: 403,
+        code: "PROVIDER_RATE_LIMITED",
+        message: "Forbidden",
+      },
+    ],
+    [
+      "structured-message-prefix-403",
+      { provider: "demo-provider", message: "403 concurrency limit breached" },
+    ],
+  ]),
   {
     id: "http-invalid-api-key",
     source: httpSource,
@@ -284,27 +231,17 @@ export const authFormatCases = [
     expected: reason("auth"),
   },
   // Request shape and replay format.
-  {
-    id: "billing-invalid-request-format",
-    source: billingSource,
-    signal: { message: "invalid request format" },
-    expected: reason("format"),
-  },
-  {
-    id: "billing-prefill-unsupported",
-    source: billingSource,
-    signal: {
-      message:
-        "This model does not support assistant message prefill. The conversation must end with a user message.",
-    },
-    expected: reason("format"),
-  },
-  {
-    id: "billing-pattern-string",
-    source: billingSource,
-    signal: { message: "string should match pattern" },
-    expected: reason("format"),
-  },
+  ...failoverSignalRows(billingSource, reason("format"), [
+    ["billing-invalid-request-format", { message: "invalid request format" }],
+    [
+      "billing-prefill-unsupported",
+      {
+        message:
+          "This model does not support assistant message prefill. The conversation must end with a user message.",
+      },
+    ],
+    ["billing-pattern-string", { message: "string should match pattern" }],
+  ]),
   {
     // #91710
     id: "matches-harness-provider",
@@ -315,47 +252,41 @@ export const authFormatCases = [
     },
     expected: reason("format"),
   },
-  {
-    id: "structured-invalid-request-raw",
-    source: structuredSource,
-    signal: {
-      provider: "anthropic",
-      message:
-        '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: thinking blocks cannot be modified"}}',
-    },
-    expected: reason("format"),
-  },
-  {
-    id: "structured-invalid-request-typed",
-    source: structuredSource,
-    signal: {
-      provider: "anthropic",
-      errorType: "invalid_request_error",
-      message: "thinking blocks cannot be modified",
-    },
-    expected: reason("format"),
-  },
-  {
+  ...failoverSignalRows(structuredSource, reason("format"), [
+    [
+      "structured-invalid-request-raw",
+      {
+        provider: "anthropic",
+        message:
+          '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: thinking blocks cannot be modified"}}',
+      },
+    ],
+    [
+      "structured-invalid-request-typed",
+      {
+        provider: "anthropic",
+        errorType: "invalid_request_error",
+        message: "thinking blocks cannot be modified",
+      },
+    ],
     // #118615, #116967
-    id: "structured-invalid-signature",
-    source: structuredSource,
-    signal: {
-      provider: "anthropic",
-      message:
-        '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
-    },
-    expected: reason("format"),
-  },
-  {
-    id: "structured-invalid-signature-carrier",
-    source: structuredSource,
-    signal: {
-      provider: "anthropic",
-      message:
-        'Validation error: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
-    },
-    expected: reason("format"),
-  },
+    [
+      "structured-invalid-signature",
+      {
+        provider: "anthropic",
+        message:
+          '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+      },
+    ],
+    [
+      "structured-invalid-signature-carrier",
+      {
+        provider: "anthropic",
+        message:
+          'Validation error: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+      },
+    ],
+  ]),
   {
     id: "openrouter-image-input",
     source: openRouterSource,

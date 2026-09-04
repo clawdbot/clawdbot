@@ -1,6 +1,7 @@
 // Control UI helper presents Promise-based text input without relying on a native prompt bridge.
 import { html, nothing, render } from "lit";
 import { t } from "../i18n/index.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import "./modal-dialog.ts";
 
 type InputDialogOptions = {
@@ -104,7 +105,7 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
       try {
         message = await options.submit(value);
       } catch (error) {
-        message = String(error);
+        message = formatUiError(error);
       }
       if (settled) {
         return;
@@ -158,9 +159,11 @@ function presentInputDialog(options: InputDialogOptions): Promise<string | null>
                   autofocus
                 />
               </label>
-              ${failure
-                ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
-                : nothing}
+              ${
+                failure
+                  ? html`<div class="exec-approval-error" role="alert">${failure}</div>`
+                  : nothing
+              }
               <div class="exec-approval-actions">
                 <button type="submit" class="btn primary" ?disabled=${submitting || blocked}>
                   ${options.submitLabel ?? t("common.save")}

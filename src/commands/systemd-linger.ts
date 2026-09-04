@@ -42,7 +42,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
     return;
   }
   const env = params.env ?? process.env;
-  const prompter = params.prompter ?? { note };
+  const prompter: LingerPrompter = params.prompter ?? { note };
   const title = params.title ?? "Systemd";
   if (!(await isSystemdUserServiceAvailable())) {
     await prompter.note("Systemd user services are unavailable. Skipping lingering checks.", title);

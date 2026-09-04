@@ -49,7 +49,6 @@ describe("transformMessages", () => {
 
     const transformed = transformProviderMessages(messages, model);
 
-    expect(transformed).toHaveLength(3);
     expect(transformed.map((message) => message.content)).toEqual([[], [], []]);
   });
 
@@ -88,10 +87,21 @@ describe("transformMessages", () => {
     expect(advertised[0]?.content).toEqual([
       { type: "text", text: "before" },
       { type: "image", data: "image-one", mimeType: "image/png" },
-      { type: "text", text: "(video omitted: provider does not support video input)" },
+      { type: "video", data: sentinel, mimeType: "video/mp4" },
       { type: "text", text: "after" },
       { type: "image", data: "image-two", mimeType: "image/jpeg" },
     ]);
+
+    const responsesModel = {
+      ...advertisedVideoModel,
+      api: "openai-responses" as const,
+    } as ProviderModel<"openai-responses">;
+    const responses = transformProviderMessages(messages, responsesModel);
+    expect(responses[0]?.content).toContainEqual({
+      type: "text",
+      text: "(video omitted: provider does not support video input)",
+    });
+    expect(JSON.stringify(responses)).not.toContain(sentinel);
   });
 
   it("preserves structured tool blocks while projecting only real images", () => {
@@ -127,5 +137,77 @@ describe("transformMessages", () => {
     ]);
     expect(projected[0]).toBe(resource);
     expect(projected[2]).toBe(metadata);
+  });
+
+  it("pairs trimmed replay tool call and result ids without synthesizing an error", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: " call_1 ", name: "lookup", arguments: {} }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "toolUse",
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "lookup",
+        content: [{ type: "text", text: "actual result" }],
+        isError: false,
+        timestamp: 2,
+      },
+    ] as Message[];
+
+    const transformed = transformMessages(messages, model);
+
+    expect(transformed).toHaveLength(2);
+    expect(transformed[0]?.content).toEqual([
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+    ]);
+    expect(transformed[1]).toMatchObject({ role: "toolResult", toolCallId: "call_1" });
+
+    const transformedPaddedResult = transformMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_2", name: "lookup", arguments: {} }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: 3,
+        },
+        {
+          role: "toolResult",
+          toolCallId: " call_2 ",
+          toolName: "lookup",
+          content: [{ type: "text", text: "actual result" }],
+          isError: false,
+          timestamp: 4,
+        },
+      ] as Message[],
+      model,
+    );
+
+    expect(transformedPaddedResult).toHaveLength(2);
+    expect(transformedPaddedResult[1]).toMatchObject({ role: "toolResult", toolCallId: "call_2" });
   });
 });

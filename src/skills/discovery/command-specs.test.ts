@@ -71,12 +71,14 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
     const prefix = "a".repeat(98);
     const entry = createFixtureSkillEntry("emoji-skill");
+    entry.skill.displayName = "Emoji Skill";
     entry.skill.description = `${prefix}😀 extra text beyond the limit`;
 
     const specs = buildWorkspaceSkillCommandSpecs("/workspace", {
       entries: [entry],
     });
 
+    expect(specs[0]?.displayName).toBe("Emoji Skill");
     expect(specs[0]?.description).toBe(entry.skill.description);
     expect(specs[0]?.skillFile).toBe(entry.skill.filePath);
   });

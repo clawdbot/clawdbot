@@ -1,20 +1,16 @@
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { isCurrentPlacementTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 
 export type WorkerSessionToolSource = {
   agentId: string;
   sessionKey: string;
   sessionId: string;
-  binding: {
-    sessionId: string;
-    agentId: string;
-    sessionKey: string;
-    environmentId: string;
-    ownerEpoch: number;
-    runId: string;
+  turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> & {
+    owner: { kind: "worker"; environmentId: string; ownerEpoch: number };
   };
-  entry: NonNullable<ReturnType<typeof loadSessionEntryReadOnly>["entry"]>;
+  entry: NonNullable<ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"]>;
 };
 
 export type WorkerSessionToolTarget = {
@@ -39,22 +35,21 @@ export function resolveWorkerSessionToolSource(params: {
   placements: WorkerSessionPlacementStore;
 }): WorkerSessionToolSource {
   const identity = params.identity;
-  if (!identity.sessionId || !identity.runId) {
+  const claim = identity.turnClaim;
+  if (!identity.sessionId || !claim || claim.owner.kind !== "worker") {
     throw new Error("Worker session operation requires an active source turn");
   }
   const placement = params.placements.get(identity.sessionId);
   if (
     !placement ||
     (placement.state !== "active" && placement.state !== "draining") ||
-    placement.environmentId !== identity.environmentId ||
-    placement.activeOwnerEpoch !== identity.ownerEpoch ||
-    placement.turnClaim?.owner !== "worker" ||
-    placement.turnClaim.runId !== identity.runId ||
-    placement.turnClaim.ownerEpoch !== identity.ownerEpoch
+    !isCurrentPlacementTurnClaim(placement, claim)
   ) {
     throw new Error("Worker source session placement changed");
   }
-  const loaded = loadSessionEntryReadOnly(placement.sessionKey, { agentId: placement.agentId });
+  const loaded = loadGatewaySessionEntryReadOnly(placement.sessionKey, {
+    agentId: placement.agentId,
+  });
   if (
     loaded.canonicalKey !== placement.sessionKey ||
     loaded.entry?.sessionId !== identity.sessionId ||
@@ -66,14 +61,7 @@ export function resolveWorkerSessionToolSource(params: {
     agentId: placement.agentId,
     sessionKey: placement.sessionKey,
     sessionId: identity.sessionId,
-    binding: {
-      sessionId: identity.sessionId,
-      agentId: placement.agentId,
-      sessionKey: placement.sessionKey,
-      environmentId: identity.environmentId,
-      ownerEpoch: identity.ownerEpoch,
-      runId: identity.runId,
-    },
+    turnClaim: { ...claim, owner: claim.owner },
     entry: loaded.entry,
   };
 }
@@ -81,9 +69,8 @@ export function resolveWorkerSessionToolSource(params: {
 export function resolveWorkerSessionToolTarget(params: {
   source: WorkerSessionToolSource;
   requestedSessionKey: string;
-  placements: WorkerSessionPlacementStore;
 }): WorkerSessionToolTarget {
-  const loaded = loadSessionEntryReadOnly(params.requestedSessionKey);
+  const loaded = loadGatewaySessionEntryReadOnly(params.requestedSessionKey);
   const entry = loaded.entry;
   const targetSessionId = entry?.sessionId;
   if (
@@ -111,7 +98,7 @@ export function resolveWorkerSessionToolTarget(params: {
   );
   const parent =
     sharedParentIncarnation && sourceParent && sourceParentId
-      ? loadSessionEntryReadOnly(sourceParent)
+      ? loadGatewaySessionEntryReadOnly(sourceParent)
       : undefined;
   const siblingToSibling = Boolean(
     parent &&
@@ -122,18 +109,12 @@ export function resolveWorkerSessionToolTarget(params: {
   if (!parentToChild && !childToParent && !siblingToSibling) {
     throw new Error("Worker sessions_send target is outside the authorized session tree");
   }
-  const targetPlacement = params.placements.get(targetSessionId);
-  if (
-    !targetPlacement ||
-    targetPlacement.state !== "active" ||
-    targetPlacement.sessionKey !== loaded.canonicalKey
-  ) {
-    throw new Error("Worker sessions_send target is not an active cloud session incarnation");
-  }
+  // Session identity owns messaging authority. Target turn admission chooses
+  // its execution placement, including Gateway-local or reclaimed workers.
   return {
-    agentId: targetPlacement.agentId,
-    sessionKey: targetPlacement.sessionKey,
-    sessionId: targetPlacement.sessionId,
+    agentId: loaded.agentId,
+    sessionKey: loaded.canonicalKey,
+    sessionId: targetSessionId,
     ...(siblingToSibling && sourceParent && sourceParentId
       ? { topologyParent: { sessionKey: sourceParent, sessionId: sourceParentId } }
       : {}),
@@ -147,7 +128,7 @@ export function assertWorkerSessionToolChild(params: {
   sourceSessionId: string;
   targetAgentId: string;
 }): void {
-  const loaded = loadSessionEntryReadOnly(params.childSessionKey, {
+  const loaded = loadGatewaySessionEntryReadOnly(params.childSessionKey, {
     agentId: params.targetAgentId,
   });
   const parent =

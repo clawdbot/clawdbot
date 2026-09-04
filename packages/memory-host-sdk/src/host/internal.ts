@@ -8,13 +8,16 @@ import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
+import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
 import {
   isFileMissingError,
+  isPathInside,
   readRegularFile,
   statRegularFile,
   walkDirectory,
   type WalkDirectoryEntry,
 } from "./fs-utils.js";
+import { hashText } from "./hash.js";
 import {
   buildMemoryMultimodalLabel,
   classifyMemoryMultimodalPath,
@@ -35,7 +38,6 @@ import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryEntryProvenance, MemoryExtraPath } from "./types.js";
 
 export { hashText } from "./hash.js";
-import { hashText } from "./hash.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -81,6 +83,20 @@ function ensureMemoryHostDir(dir: string): string {
 }
 
 export { ensureMemoryHostDir as ensureDir };
+
+// File discovery skips non-regular entries. Keep the same rule when a listed
+// file changes before its index entry is built, or one path can abort the sync.
+async function statEnumerableMemoryFile(absPath: string): Promise<fsSync.Stats | null> {
+  try {
+    const stat = await fs.lstat(absPath);
+    return stat.isFile() ? stat : null;
+  } catch (error) {
+    if (isFileMissingError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
 
 function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
@@ -132,14 +148,12 @@ export function matchesExtraMemoryPathEntry(
     return true;
   }
   const relativePath = path.relative(entry.path, candidatePath);
-  if (!relativePath) {
-    return true;
-  }
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
-    return false;
-  }
   try {
-    return path.posix.matchesGlob(relativePath.replaceAll(path.sep, "/"), entry.pattern);
+    return (
+      !relativePath ||
+      (isPathInside(entry.path, candidatePath) &&
+        path.posix.matchesGlob(relativePath.replaceAll(path.sep, "/"), entry.pattern))
+    );
   } catch {
     return false;
   }
@@ -179,6 +193,39 @@ function shouldDescendMemoryEntry(
   return entry.kind === "directory" && entry.name !== ".openclaw-repair";
 }
 
+class MemorySourceScanError extends Error {
+  readonly path: string;
+  readonly code?: string;
+
+  constructor(sourcePath: string, cause: unknown) {
+    const code =
+      cause !== null &&
+      typeof cause === "object" &&
+      "code" in cause &&
+      typeof cause.code === "string"
+        ? cause.code
+        : undefined;
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`memory source scan failed at ${sourcePath}${code ? ` (${code})` : ""}: ${detail}`, {
+      cause,
+    });
+    this.name = "MemorySourceScanError";
+    this.path = sourcePath;
+    this.code = code;
+  }
+}
+
+async function scanMemorySource<T>(sourcePath: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (isFileMissingError(error) || error instanceof MemorySourceScanError) {
+      throw error;
+    }
+    throw new MemorySourceScanError(sourcePath, error);
+  }
+}
+
 async function collectMemoryFilesFromDir(
   dir: string,
   files: string[],
@@ -186,15 +233,21 @@ async function collectMemoryFilesFromDir(
   shouldSkipPath?: (absPath: string) => boolean,
   extraPathEntry?: NormalizedExtraMemoryPath,
 ): Promise<void> {
-  const scan = await walkDirectory(dir, {
-    symlinks: "skip",
-    descend: (entry) => shouldDescendMemoryEntry(entry, shouldSkipPath),
-    include: (entry) =>
-      !shouldSkipPath?.(entry.path) &&
-      entry.kind === "file" &&
-      isAllowedMemoryFilePath(entry.path, multimodal) &&
-      (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
-  });
+  const scan = await scanMemorySource(dir, () =>
+    walkDirectory(dir, {
+      symlinks: "skip",
+      descend: (entry) => shouldDescendMemoryEntry(entry, shouldSkipPath),
+      include: (entry) =>
+        !shouldSkipPath?.(entry.path) &&
+        entry.kind === "file" &&
+        isAllowedMemoryFilePath(entry.path, multimodal) &&
+        (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
+    }),
+  );
+  const operationalFailure = scan.failedDirs.find((failure) => !isFileMissingError(failure.error));
+  if (operationalFailure) {
+    throw new MemorySourceScanError(operationalFailure.path, operationalFailure.error);
+  }
   files.push(...scan.entries.map((entry) => entry.path));
 }
 
@@ -210,30 +263,31 @@ export async function listMemoryFiles(
     shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
 
   const addMarkdownFile = async (absPath: string) => {
-    try {
-      const stat = await statRegularFile(absPath);
-      if (stat.missing) {
-        return;
-      }
-      if (!absPath.endsWith(".md")) {
-        return;
-      }
-      result.push(absPath);
-    } catch {}
+    const stat = await scanMemorySource(absPath, () => statEnumerableMemoryFile(absPath));
+    if (!stat || !absPath.endsWith(".md")) {
+      return;
+    }
+    result.push(absPath);
   };
 
-  const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
+  const memoryFile = await scanMemorySource(workspaceDir, () =>
+    resolveCanonicalRootMemoryFile(workspaceDir),
+  );
   if (memoryFile) {
     await addMarkdownFile(memoryFile);
   }
   await addMarkdownFile(path.join(workspaceDir, "USER.md"));
   try {
-    const dirStat = await fs.lstat(memoryDir);
+    const dirStat = await scanMemorySource(memoryDir, () => fs.lstat(memoryDir));
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
       // Default memory roots stay Markdown-only; multimodal discovery is an extraPaths opt-in.
       await collectMemoryFilesFromDir(memoryDir, result, undefined, shouldSkipWorkspaceMemoryPath);
     }
-  } catch {}
+  } catch (error) {
+    if (!isFileMissingError(error)) {
+      throw error;
+    }
+  }
 
   const normalizedExtraPaths = normalizeExtraMemoryPathEntries(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {
@@ -243,7 +297,7 @@ export async function listMemoryFiles(
         continue;
       }
       try {
-        const stat = await fs.lstat(inputPath);
+        const stat = await scanMemorySource(inputPath, () => fs.lstat(inputPath));
         if (stat.isSymbolicLink()) {
           continue;
         }
@@ -257,10 +311,18 @@ export async function listMemoryFiles(
           );
           continue;
         }
-        if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
+        if (
+          stat.isFile() &&
+          (isExplicitExtraMarkdownFilePath(inputPath) ||
+            isAllowedMemoryFilePath(inputPath, multimodal))
+        ) {
           result.push(inputPath);
         }
-      } catch {}
+      } catch (error) {
+        if (!isFileMissingError(error)) {
+          throw error;
+        }
+      }
     }
   }
   if (result.length <= 1) {
@@ -287,11 +349,10 @@ export async function buildFileEntry(
   workspaceDir: string,
   multimodal?: MemoryMultimodalSettings,
 ): Promise<MemoryFileEntry | null> {
-  const regularFile = await statRegularFile(absPath);
-  if (regularFile.missing) {
+  const stat = await statEnumerableMemoryFile(absPath);
+  if (!stat) {
     return null;
   }
-  const stat = regularFile.stat;
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);

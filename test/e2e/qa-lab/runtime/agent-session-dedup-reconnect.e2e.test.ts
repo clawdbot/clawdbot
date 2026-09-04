@@ -1,11 +1,13 @@
 import { createServer, type ServerResponse } from "node:http";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -16,7 +18,7 @@ const ORIGINAL_MESSAGE = "Return exactly SESSION-DEDUP-RECONNECT-OK.";
 const CHANGED_MESSAGE = "This changed replay must not create another turn.";
 const TERMINAL_TEXT = "SESSION-DEDUP-RECONNECT-OK";
 
-type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type GatewayHandle = QaGatewayChild;
 type AgentResult = {
   runId?: string;
   status?: string;
@@ -44,17 +46,6 @@ afterEach(async () => {
   }
 });
 
-function writeResponsesEvents(response: ServerResponse, events: unknown[]): void {
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
-}
-
 function writeAssistantResponse(response: ServerResponse): void {
   const message = {
     type: "message",
@@ -63,7 +54,7 @@ function writeAssistantResponse(response: ServerResponse): void {
     status: "completed",
     content: [{ type: "output_text", text: TERMINAL_TEXT, annotations: [] }],
   };
-  writeResponsesEvents(response, [
+  writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -212,11 +203,13 @@ describe("agent session deduplication across reconnect", () => {
     async () => {
       const provider = await startControlledProvider();
       cleanups.push(() => provider.stop());
-      const gateway = await startQaGatewayChild({
+      const gatewayOwner = createQaGatewayChild();
+      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+      const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
-          argsPrefix: ["--import", "tsx", "src/entry.ts"],
+          argsPrefix: ["dist/entry.js"],
           cwd: process.cwd(),
           usePackagedPlugins: true,
         },
@@ -228,13 +221,11 @@ describe("agent session deduplication across reconnect", () => {
         controlUiEnabled: false,
         fastMode: true,
         runtimeEnvPatch: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
-        mutateConfig: ({ plugins: _plugins, ...config }) => config,
+        mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
       });
-      cleanups.push(() => gateway.stop());
 
       const clientA = await connectOperator(gateway, "Session dedup client A");
       const acceptedA = await clientA.request<AgentResult>("agent", {

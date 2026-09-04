@@ -1,8 +1,8 @@
 import { createServer } from "node:net";
+import path from "node:path";
 // QA runtime helpers register and execute plugin QA scenarios from local files.
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
-import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 import { runExec } from "./process-runtime.js";
+import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
@@ -19,6 +19,23 @@ export type {
   LiveTransportQaCredentialCliOptions,
   LiveTransportQaSuiteCommandOptions,
 } from "./qa-runner-runtime.js";
+
+/** Release only this QA root's parent stores before its files are removed. */
+export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
+  const [auth, agents, state, paths] = await Promise.all([
+    import("../agents/auth-profiles/sqlite.js"),
+    import("../state/openclaw-agent-db.js"),
+    import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-state-db.paths.js"),
+  ]);
+  // Agent close releases leases through shared state. Keep that owner alive
+  // until every scoped handle closes, or exit-time release can recreate the root.
+  auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
+  agents.closeOpenClawAgentDatabases(tempRoot);
+  state.closeOpenClawStateDatabaseByPath(
+    paths.resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }),
+  );
+}
 
 type QaRuntimeSurface = {
   acquireQaCredentialLease: <TPayload>(options: {
@@ -42,7 +59,13 @@ type QaRuntimeSurface = {
       preferredLiveModel?: string;
     },
   ) => string;
-  startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
+  createQaLiveLaneGateway: () => {
+    start: (...args: unknown[]) => Promise<unknown>;
+    stop: () => Promise<{
+      process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
+      errors: unknown[];
+    }>;
+  };
   startQaCredentialLeaseHeartbeat: (lease: {
     heartbeat(): Promise<void>;
     heartbeatIntervalMs: number;
@@ -62,20 +85,12 @@ function isMissingQaRuntimeError(error: unknown) {
   );
 }
 
-/** Load the bundled QA lab runtime surface, throwing when the private bundle is absent. */
-export function loadQaRuntimeModule(): QaRuntimeSurface {
-  const env = resolvePrivateQaBundledPluginsEnv();
-  return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
-    dirName: "qa-lab",
-    artifactBasename: "runtime-api.js",
-    ...(env ? { env } : {}),
-  });
-}
+const loadQaLabRuntimeModule = loadQaRunnerRuntimeModule as unknown as () => QaRuntimeSurface;
+export { loadQaLabRuntimeModule as loadQaRuntimeModule };
 
-/** Check whether the bundled QA lab runtime surface is present without hiding other load errors. */
-export function isQaRuntimeAvailable(): boolean {
+function isQaRuntimeAvailableStrict(): boolean {
   try {
-    loadQaRuntimeModule();
+    loadQaLabRuntimeModule();
     return true;
   } catch (error) {
     if (isMissingQaRuntimeError(error)) {
@@ -84,6 +99,8 @@ export function isQaRuntimeAvailable(): boolean {
     throw error;
   }
 }
+
+export { isQaRuntimeAvailableStrict as isQaRuntimeAvailable };
 
 /** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (

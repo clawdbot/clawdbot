@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -139,6 +140,7 @@ class ConnectionManagerTest {
       listOf(
         ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
         ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY,
+        ConnectionManager.USAGE_REFRESHING_CLIENT_CAPABILITY,
       ),
       options.caps,
     )
@@ -148,7 +150,13 @@ class ConnectionManagerTest {
   fun buildOperatorConnectOptions_omitsInlineWidgetsWithoutIsolatedWebViews() {
     val options = newManager(inlineWidgetsAvailable = false).buildOperatorConnectOptions()
 
-    assertEquals(listOf(ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY), options.caps)
+    assertEquals(
+      listOf(
+        ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
+        ConnectionManager.USAGE_REFRESHING_CLIENT_CAPABILITY,
+      ),
+      options.caps,
+    )
   }
 
   @Test
@@ -422,20 +430,27 @@ class ConnectionManagerTest {
       )
     prefs.setVoiceWakeEnabled(voiceWakeEnabled)
 
+    val dispatcher =
+      newInvokeDispatcher(
+        cameraEnabled = { cameraEnabled },
+        locationEnabled = locationMode != LocationMode.Off,
+        motionActivityAvailable = motionActivityAvailable,
+        motionPedometerAvailable = motionPedometerAvailable,
+        sendSmsAvailable = sendSmsAvailable,
+        readSmsAvailable = readSmsAvailable,
+        smsSearchPossible = { smsSearchPossible },
+        callLogAvailable = callLogAvailable,
+        photosAvailable = photosAvailable,
+        installedAppsSharingEnabled = installedAppsSharingEnabled,
+        debugBuild = BuildConfig.DEBUG,
+        voiceWakeAvailable = { prefs.voiceWakeEnabled.value && voiceWakeAvailable },
+        mobileUiAvailable = mobileUiAvailable,
+      )
+
     return ConnectionManager(
       prefs = prefs,
-      cameraEnabled = { cameraEnabled },
-      locationMode = { locationMode },
-      motionActivityAvailable = { motionActivityAvailable },
-      motionPedometerAvailable = { motionPedometerAvailable },
-      sendSmsAvailable = { sendSmsAvailable },
-      readSmsAvailable = { readSmsAvailable },
-      smsSearchPossible = { smsSearchPossible },
-      callLogAvailable = { callLogAvailable },
-      photosAvailable = { photosAvailable },
-      installedAppsSharingEnabled = { installedAppsSharingEnabled },
-      voiceWakeAvailable = { voiceWakeAvailable },
-      mobileUiAvailable = { mobileUiAvailable },
+      advertisedCapabilities = dispatcher::buildCapabilities,
+      advertisedCommands = dispatcher::buildInvokeCommands,
       inlineWidgetsAvailable = { inlineWidgetsAvailable },
       permissionSnapshot = { permissionSnapshot },
       manualTls = { false },

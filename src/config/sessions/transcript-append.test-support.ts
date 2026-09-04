@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -118,7 +119,7 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
     if (parsed.type === "session") {
       return { isNonSessionEntry: false, hasParentLinkedEntry: false };
     }
-    const entryId = normalizeEntryId(parsed.id);
+    const entryId = readNonBlankString(parsed.id);
     if (!entryId) {
       return { isNonSessionEntry: true, hasParentLinkedEntry: false };
     }
@@ -134,13 +135,13 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
       };
     }
     if (parsed.type === "leaf") {
-      const targetId = parsed.targetId === null ? null : normalizeEntryId(parsed.targetId);
+      const targetId = parsed.targetId === null ? null : readNonBlankString(parsed.targetId);
       const appendParentId =
         parsed.appendParentId === undefined
           ? undefined
           : parsed.appendParentId === null
             ? null
-            : normalizeEntryId(parsed.appendParentId);
+            : readNonBlankString(parsed.appendParentId);
       if (
         (parsed.targetId !== null && targetId === undefined) ||
         (parsed.appendParentId !== undefined && appendParentId === undefined) ||
@@ -177,10 +178,6 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
   } catch {
     return { isNonSessionEntry: false, hasParentLinkedEntry: false };
   }
-}
-
-function normalizeEntryId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function generateEntryId(existingIds: Set<string>): string {
@@ -390,7 +387,7 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
       output.push(serializeJsonlLine({ ...record, version: CURRENT_SESSION_VERSION }));
       continue;
     }
-    const id = normalizeEntryId(record.id) ?? generateEntryId(existingIds);
+    const id = readNonBlankString(record.id) ?? generateEntryId(existingIds);
     existingIds.add(id);
     record.id = id;
     if (!Object.hasOwn(record, "parentId")) {

@@ -26,6 +26,7 @@ export interface AiProviderRequestPolicyInput {
   transport?: "stream" | "websocket" | "http" | "media-understanding";
   modelId?: string | null;
   compat?: unknown;
+  model?: object;
 }
 
 /** Context shared by plugin-owned provider stream hooks. */
@@ -36,6 +37,8 @@ export interface AiProviderStreamHookContext {
   provider: string;
   modelId: string;
   model: Model;
+  /** Wire-format API before simple completion projects an internal transport alias. */
+  sourceApi?: Api;
 }
 
 /** Narrow plugin-runtime port used by package-owned transports. */
@@ -137,8 +140,8 @@ export interface AiTransportHost {
   ): typeof fetch | undefined;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;
-  /** Redacts secrets inside structured tool-result payloads. */
-  redactSecrets<T>(value: T): T;
+  /** Redacts model-visible tool results without treating ordinary source assignments as secrets. */
+  redactModelVisibleSecrets<T>(value: T): T;
   /** Redacts secret-bearing text in tool payload strings. */
   redactToolPayloadText(text: string): string;
   /** Normalizes Anthropic inline image blocks before provider payload construction. */
@@ -155,8 +158,6 @@ export interface AiTransportHost {
   plugin: AiTransportPluginHost;
   /** Builds provider-owned Copilot compatibility headers for one message turn. */
   buildCopilotDynamicHeaders(messages: Context["messages"]): Record<string, string>;
-  /** Resolves endpoint classification without importing core provider registries. */
-  resolveProviderEndpointClass(baseUrl?: string): string;
   /** Resolves provider capability flags used by payload compatibility policy. */
   resolveProviderRequestCapabilities(
     input: AiProviderRequestPolicyInput,
@@ -169,6 +170,7 @@ export interface AiTransportHost {
     providerHeaders?: Record<string, string>;
     callerHeaders?: Record<string, string>;
     precedence?: "caller-wins" | "defaults-win";
+    model?: object;
   }): Record<string, string> | undefined;
   /** Returns the host-configured request timeout attached to a model. */
   resolveModelRequestTimeoutMs(model: Model): number | undefined;
@@ -180,8 +182,6 @@ export interface AiTransportHost {
   transformTransportMessages: AiTransformTransportMessages;
   /** Registers a custom transport API with the host's stream error bridge. */
   registerCustomApi(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean;
-  /** Prepares the provider-owned Google simple-completion alias when needed. */
-  prepareGoogleSimpleCompletionModel(registry: ApiRegistry, model: Model): Model;
   /**
    * Emits one transport diagnostic; build runs only when the host logs it and
    * may return null to suppress the entry (e.g. de-duplication).
@@ -228,7 +228,7 @@ type ActiveAiTransportHost = Omit<AiTransportHost, "normalizeAnthropicInlineCont
 const inertAiTransportHost: ActiveAiTransportHost = {
   buildModelFetch: () => undefined,
   resolveSecretSentinel: (value) => value,
-  redactSecrets: (value) => value,
+  redactModelVisibleSecrets: (value) => value,
   redactToolPayloadText: (text) => text,
   normalizeAnthropicInlineContentBlocks: async (content) => [...content],
   resolveOpenAIStrictToolSetting: (_model, options) =>
@@ -242,7 +242,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
     },
   },
   buildCopilotDynamicHeaders: () => ({}),
-  resolveProviderEndpointClass: () => "default",
   resolveProviderRequestCapabilities: () => ({
     endpointClass: "default",
     knownProviderFamily: "",
@@ -261,7 +260,6 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   transformTransportMessages: (messages, model, normalizeToolCallId) =>
     transformMessages(messages, model, normalizeToolCallId),
   registerCustomApi: queueCustomApiRegistration,
-  prepareGoogleSimpleCompletionModel: (_registry, model) => model,
   logDebug: () => {},
   logInfo: () => {},
   logWarn: () => {},

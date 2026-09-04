@@ -5,13 +5,14 @@ import Testing
 struct DashboardRouteMapTests {
     @Test func `route constants match Control UI paths`() {
         #expect(DashboardRouteMap.channelsSettingsPath == "/settings/channels")
+        #expect(DashboardRouteMap.talkSettingsPath == "/settings/talk")
         #expect(DashboardRouteMap.skillsPagePath == "/skills")
         #expect(DashboardRouteMap.cronJobsPagePath == "/cron")
         #expect(DashboardRouteMap.sessionsPagePath == "/sessions")
         #expect(DashboardRouteMap.devicesSettingsPath == "/settings/devices")
     }
 
-    @Test(arguments: ["/settings/channels", "/skills", "/cron"])
+    @Test(arguments: ["/settings/channels", "/settings/talk", "/skills", "/cron"])
     func `same-app path validation accepts rooted paths`(_ path: String) {
         #expect(DashboardRouteMap.isValidSameAppPath(path))
     }
@@ -47,7 +48,10 @@ struct DashboardRouteMapTests {
         #expect(url.absoluteString == "http://127.0.0.1:18789/control/custodian?onboarding=1#token=test-token")
     }
 
-    @Test(arguments: ["", "onboarding=1", "?onboarding=1#x", "?a=b#frag"])
+    @Test(arguments: [
+        "", "onboarding=1", "?onboarding=1#x", "?a=b#frag",
+        "?session=%", "?session=%2", "?session=%GG", "?session=has space",
+    ])
     func `same-app search validation rejects non-query input`(_ search: String) throws {
         #expect(!DashboardRouteMap.isValidSameAppSearch(search))
         #expect(try DashboardRouteMap.dashboardURL(
@@ -56,7 +60,8 @@ struct DashboardRouteMapTests {
             to: #require(URL(string: "http://127.0.0.1:18789/control/"))) == nil)
     }
 
-    @Test func `same-app search validation accepts a plain query`() {
-        #expect(DashboardRouteMap.isValidSameAppSearch("?onboarding=1"))
+    @Test(arguments: ["?onboarding=1", "?session=%E2%9C%93%2Ffoo%25"])
+    func `same-app search validation accepts a plain query`(_ search: String) {
+        #expect(DashboardRouteMap.isValidSameAppSearch(search))
     }
 }

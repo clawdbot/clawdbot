@@ -1,11 +1,13 @@
 // Auth modes suite covers password, token, none, Tailscale, and control-UI
 // origin behavior across gateway WebSocket authentication modes.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
-  getFreePort,
+  getGatewayTestPort,
   openTailscaleWs,
   openWs,
   originForPort,
@@ -31,7 +33,7 @@ export function registerAuthModesSuite(): void {
 
     beforeAll(async () => {
       testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port, { openAiChatCompletionsEnabled: true });
     });
 
@@ -89,7 +91,7 @@ export function registerAuthModesSuite(): void {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
       testState.gatewayAuth = { mode: "token", token: "secret" };
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port, { openAiChatCompletionsEnabled: true });
     });
 
@@ -179,7 +181,7 @@ export function registerAuthModesSuite(): void {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "none" };
-      port = await getFreePort();
+      port = await getGatewayTestPort();
       server = await startTestGatewayServer(port);
     });
 
@@ -224,7 +226,7 @@ export function registerAuthModesSuite(): void {
           ? { mode: "token" as const, token: "", allowTailscale: false }
           : { mode: "password" as const, password: "", allowTailscale: false };
       testState.gatewayAuth = auth;
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
 
       try {
         await expect(startTestGatewayServer(port, { auth })).rejects.toThrow(testCase.expected);
@@ -239,7 +241,7 @@ export function registerAuthModesSuite(): void {
 
     test("rejects non-loopback exposure without effective auth before listening", async () => {
       testState.gatewayAuth = { mode: "none" };
-      const port = await getFreePort();
+      const port = await getGatewayTestPort();
 
       await expect(
         startTestGatewayServer(port, {
@@ -256,7 +258,9 @@ export function registerAuthModesSuite(): void {
 
   describe("tailscale auth", () => {
     let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
-    let port: number;
+    let tailscaleEndpoint: NonNullable<
+      ReturnType<Awaited<ReturnType<typeof startTestGatewayServer>>["getTailscaleIngressEndpoint"]>
+    >;
     const tailscaleOrigin = "https://gateway.tailnet.ts.net";
 
     beforeAll(async () => {
@@ -267,13 +271,20 @@ export function registerAuthModesSuite(): void {
         nextConfig: {
           gateway: {
             auth: testState.gatewayAuth,
+            tailscale: { mode: "serve" },
             controlUi: testState.gatewayControlUi,
           },
         },
         afterWrite: { mode: "auto" },
       });
-      port = await getFreePort();
-      server = await startTestGatewayServer(port);
+      server = await startTestGatewayServer(await getGatewayTestPort(), {
+        controlUiEnabled: true,
+      });
+      const endpoint = server.getTailscaleIngressEndpoint();
+      if (!endpoint) {
+        throw new Error("expected managed Tailscale listener");
+      }
+      tailscaleEndpoint = endpoint;
     });
 
     afterAll(async () => {
@@ -291,15 +302,15 @@ export function registerAuthModesSuite(): void {
     });
 
     test("requires device identity when only tailscale auth is available", async () => {
-      const ws = await openTailscaleWs(port);
+      const ws = await openTailscaleWs(tailscaleEndpoint);
       const res = await connectReq(ws, { skipDefaultAuth: true, device: null });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("device identity required");
       ws.close();
     });
 
-    test("skips pairing for tailscale-authenticated control ui with device identity", async () => {
-      const ws = await openTailscaleWs(port, { origin: tailscaleOrigin });
+    test("authorizes assistant media through the live Tailscale identity", async () => {
+      const ws = await openTailscaleWs(tailscaleEndpoint, { origin: tailscaleOrigin });
       const res = await connectReq(ws, {
         skipDefaultAuth: true,
         client: {
@@ -307,13 +318,69 @@ export function registerAuthModesSuite(): void {
         },
       });
       expect(res.ok, JSON.stringify(res)).toBe(true);
+      // SAFETY: a successful connect response carries the hello-ok payload shape.
+      const payload = res.payload as { auth?: { deviceToken?: string } } | undefined;
+      expect(payload?.auth?.deviceToken).toBe(undefined);
+      testTailscaleWhois.calls.length = 0;
+
+      const stateDir = process.env.OPENCLAW_STATE_DIR;
+      if (!stateDir) {
+        throw new Error("expected Tailscale Control UI media fixture");
+      }
+      const mediaDir = path.join(stateDir, "media", "tailscale-control-ui");
+      await fs.mkdir(mediaDir, { recursive: true });
+      const mediaPath = path.join(mediaDir, "preview.png");
+      await fs.writeFile(mediaPath, Buffer.from("not-a-real-png"));
+      const mediaUrl = new URL(
+        "/__openclaw__/assistant-media",
+        `http://${tailscaleEndpoint.host}:${tailscaleEndpoint.port}`,
+      );
+      mediaUrl.searchParams.set("meta", "1");
+      mediaUrl.searchParams.set("source", mediaPath);
+      const headers = {
+        origin: tailscaleOrigin,
+        "sec-fetch-site": "same-origin",
+        "x-forwarded-for": "100.64.0.1",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "gateway.tailnet.ts.net",
+        "tailscale-user-login": "peter",
+        "tailscale-user-name": "Peter",
+      };
+
+      const media = await fetch(mediaUrl, { headers });
+      const mediaBody = await media.json();
+      expect(media.status, JSON.stringify(mediaBody)).toBe(200);
+      expect(mediaBody).toMatchObject({ available: true, mimeType: "image/png" });
+
+      testTailscaleWhois.value = null;
+      const revokedMedia = await fetch(mediaUrl, { headers });
+      expect(revokedMedia.status).toBe(401);
+      const revokedBytesUrl = new URL(mediaUrl);
+      revokedBytesUrl.searchParams.delete("meta");
+      const revokedBytes = await fetch(revokedBytesUrl, { headers });
+      expect(revokedBytes.status).toBe(401);
+      expect(testTailscaleWhois.calls).toEqual([
+        {
+          ip: "100.64.0.1",
+          opts: { cacheTtlMs: 0, errorTtlMs: 0 },
+        },
+        {
+          ip: "100.64.0.1",
+          opts: { cacheTtlMs: 0, errorTtlMs: 0 },
+        },
+        {
+          ip: "100.64.0.1",
+          opts: { cacheTtlMs: 0, errorTtlMs: 0 },
+        },
+      ]);
+
       const status = await rpcReq(ws, "status");
       expect(status.ok).toBe(true);
       ws.close();
     });
 
     test("connects with shared token but clears scopes when tailscale auth skips device", async () => {
-      const ws = await openTailscaleWs(port);
+      const ws = await openTailscaleWs(tailscaleEndpoint);
       const res = await connectReq(ws, { token: "secret", device: null });
       expect(res.ok).toBe(true);
       const status = await rpcReq(ws, "status");

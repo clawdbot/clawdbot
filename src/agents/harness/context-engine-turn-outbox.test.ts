@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessage,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type {
   TranscriptTurnAdmission,
@@ -74,7 +74,6 @@ function createPayload(params: {
     boundary,
     isHeartbeat: false,
     messages: [],
-    prePromptMessageCount: params.sequence,
   };
 }
 
@@ -138,50 +137,48 @@ describe("context-engine turn outbox", () => {
     ).toBeUndefined();
   });
 
-  it("drains a versionless v1 row after an engine adds the turn-local contract", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-upgrade-"));
+  it("keeps a row pending when its persisted payload has no state", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-state-"));
     tempDirs.push(stateDir);
     const database = openOpenClawAgentDatabase({
       agentId: "main",
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
     const payload = createPayload({
-      advancementKey: "session-a:legacy-ready",
+      advancementKey: "session-a:missing-state",
       databasePath: database.path,
-      sequence: 3,
+      sequence: 1,
       sessionId: "session-a",
     });
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
-    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
-      status: "committed",
-    }));
-    const commitTurnLocal = vi.fn<NonNullable<ContextEngine["commitTurnLocal"]>>(async () => ({
-      status: "committed",
-    }));
+    database.db
+      .prepare(
+        "UPDATE context_engine_turn_outbox SET payload_json = '{}' WHERE advancement_key = ?",
+      )
+      .run(payload.boundary.admission.logicalTurnId);
+    const commitTurn = vi.fn(async () => ({ status: "committed" as const }));
     const engine = {
-      info: {
-        id: "test",
-        name: "Test",
-        transcriptSemantics: {
-          turnAdvancementIdempotency: "atomic-idempotent-turn-local-v1",
-        },
-      },
+      info: { id: "test", name: "Test" },
       ingest: async () => ({ ingested: true }),
       assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
       compact: async () => ({ ok: true, compacted: false }),
       commitTurn,
-      commitTurnLocal,
     } satisfies ContextEngine;
 
-    await drainContextEngineTurnOutbox({
+    const result = await drainContextEngineTurnOutbox({
       database,
       engine,
       engineId: "test",
       warn: vi.fn(),
     });
 
-    expect(commitTurn).toHaveBeenCalledWith(expect.objectContaining({ prePromptMessageCount: 3 }));
-    expect(commitTurnLocal).not.toHaveBeenCalled();
+    expect(result.pending).toBe(true);
+    expect(commitTurn).not.toHaveBeenCalled();
+    expect(
+      database.db
+        .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
+        .get(payload.boundary.admission.logicalTurnId),
+    ).toBeDefined();
   });
 
   it("drains prior work before fresh-turn assembly and records dispatch admission", async () => {
@@ -193,7 +190,7 @@ describe("context-engine turn outbox", () => {
       sessionKey: "agent:main:recovered-turn",
       storePath: path.join(stateDir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const admitted = await appendTranscriptMessage(target, {
       message: { role: "user", content: "first" },
       now: 1_000,
@@ -232,7 +229,6 @@ describe("context-engine turn outbox", () => {
       database,
       engineId: "test",
       isHeartbeat: true,
-      turnAdvancementIdempotency: "atomic-idempotent-turn-local-v1",
     });
     const current = await appendTranscriptMessage(target, {
       message: { role: "user", content: "second" },
@@ -252,7 +248,7 @@ describe("context-engine turn outbox", () => {
       message: currentMessage,
       target: async () => undefined,
     });
-    const commitTurnLocal = vi.fn<NonNullable<ContextEngine["commitTurnLocal"]>>(async () => ({
+    const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
       status: "committed",
     }));
     const engine = {
@@ -261,14 +257,13 @@ describe("context-engine turn outbox", () => {
         name: "Test",
         transcriptSemantics: {
           currentTurnFence: "before-current-turn-entry-v1",
-          turnAdvancementIdempotency: "atomic-idempotent-turn-local-v1",
+          turnAdvancementIdempotency: "atomic-idempotent-v1",
         },
       },
       ingest: async () => ({ ingested: true }),
       assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
       compact: async () => ({ ok: true, compacted: false }),
-      commitTurn: async () => ({ status: "committed" as const }),
-      commitTurnLocal,
+      commitTurn,
     } satisfies ContextEngine;
     const lease = {
       engine,
@@ -292,8 +287,8 @@ describe("context-engine turn outbox", () => {
       sessionTarget: target,
     });
 
-    expect(commitTurnLocal).toHaveBeenCalledOnce();
-    expect(commitTurnLocal).toHaveBeenCalledWith(
+    expect(commitTurn).toHaveBeenCalledOnce();
+    expect(commitTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         advancementKey: admission.logicalTurnId,
         isHeartbeat: true,
@@ -306,7 +301,7 @@ describe("context-engine turn outbox", () => {
     expect(
       database.db.prepare("SELECT advancement_key FROM context_engine_turn_outbox").all(),
     ).toHaveLength(0);
-    expect(commitTurnLocal.mock.calls[0]?.[0]).not.toHaveProperty("prePromptMessageCount");
+    expect(commitTurn.mock.calls[0]?.[0]).not.toHaveProperty("prePromptMessageCount");
 
     recorder.markRuntimePersisted(currentMessage, currentAdmission);
     const queued = database.db
@@ -333,7 +328,7 @@ describe("context-engine turn outbox", () => {
       sessionKey: "agent:main:unaccepted-turn",
       storePath: path.join(stateDir, "sessions.json"),
     };
-    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const admitted = await appendTranscriptMessage(target, {
       message: { role: "user", content: "first" },
       now: 1_000,
@@ -421,7 +416,7 @@ describe("context-engine turn outbox", () => {
     });
   });
 
-  it("retains unrecoverable accepted recovery as a blocking marker", async () => {
+  it("retains unrecoverable accepted recovery as a terminal marker without blocking later turns", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-blocked-"));
     tempDirs.push(stateDir);
     const database = openOpenClawAgentDatabase({
@@ -445,7 +440,6 @@ describe("context-engine turn outbox", () => {
       database,
       engineId: "test",
       isHeartbeat: false,
-      turnAdvancementIdempotency: "atomic-idempotent-v1",
     });
     const warn = vi.fn();
 
@@ -466,6 +460,17 @@ describe("context-engine turn outbox", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("blocked unrecoverable turn advancement"),
     );
+
+    enqueueContextEngineTurnCommit({
+      database,
+      engineId: "test",
+      payload: createPayload({
+        advancementKey: "session-a:later-ready",
+        databasePath: database.path,
+        sequence: 3,
+        sessionId: "session-a",
+      }),
+    });
 
     const engine = {
       info: {
@@ -495,22 +500,43 @@ describe("context-engine turn outbox", () => {
       deferDisposalUntil: vi.fn(),
       dispose: vi.fn(async () => undefined),
     } satisfies ContextEngineLogicalTurnLease;
+    const currentAdmission = {
+      ...payload.boundary.admission,
+      logicalTurnId: "session-a:current",
+    };
 
     await drainPendingContextEngineTurnsBeforeRun({
-      admission: payload.boundary.admission,
+      admission: currentAdmission,
       lease,
       warn,
     });
 
-    expect(engine.commitTurn).not.toHaveBeenCalled();
-    expect(degradeBeforeStart).toHaveBeenCalledWith(
-      "pending durable turn advancement could not be completed before the next turn",
+    expect(engine.commitTurn).toHaveBeenCalledOnce();
+    expect(engine.commitTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ advancementKey: "session-a:later-ready" }),
     );
+    expect(degradeBeforeStart).not.toHaveBeenCalled();
     expect(
       database.db
         .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
         .get(payload.boundary.admission.logicalTurnId),
     ).toBeDefined();
+    expect(
+      database.db
+        .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
+        .get("session-a:later-ready"),
+    ).toBeUndefined();
+    expect(
+      JSON.parse(
+        (
+          database.db
+            .prepare(
+              "SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?",
+            )
+            .get(currentAdmission.logicalTurnId) as { payload_json: string }
+        ).payload_json,
+      ),
+    ).toMatchObject({ state: "admitted" });
   });
 
   it("does not let later same-session turns overtake a failed commit", async () => {

@@ -1,14 +1,14 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { runSecurityAudit } from "./audit.js";
+import { runSecurityAuditCore } from "./audit.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
-type AuditOverrides = Omit<Parameters<typeof runSecurityAudit>[0], "config">;
+type AuditOverrides = Omit<Parameters<typeof runSecurityAuditCore>[0], "config">;
 
 export async function collectSecurityAuditFindings(
   config: OpenClawConfig,
   overrides: AuditOverrides = {},
 ): Promise<SecurityAuditFinding[]> {
-  const report = await runSecurityAudit({
+  const report = await runSecurityAuditCore({
     config,
     sourceConfig: config,
     includeFilesystem: false,

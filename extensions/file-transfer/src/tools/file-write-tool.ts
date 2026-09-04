@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asBoolean, asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { inspectStrictBase64 } from "../shared/base64.js";
 import { humanSize } from "../shared/params.js";
@@ -66,10 +66,7 @@ export function createFileWriteTool(): AnyAgentTool {
   return {
     ...FILE_WRITE_TOOL_DESCRIPTOR,
     async execute(_toolCallId, params) {
-      const raw: Record<string, unknown> =
-        params && typeof params === "object" && !Array.isArray(params)
-          ? (params as Record<string, unknown>)
-          : {};
+      const raw = asNonArrayRecord(params);
 
       const { node: nodeQuery, requestedPath: filePath } = readRequiredNodePath(raw);
       const contentBase64 = typeof raw.contentBase64 === "string" ? raw.contentBase64 : undefined;

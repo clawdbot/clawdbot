@@ -16,7 +16,7 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
   Partial<
     Pick<
       SubagentLifecycleHookRunner,
-      "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentProgress" | "runSubagentEnded"
+      "runSubagentSpawned" | "runSubagentProgress" | "runSubagentEnded"
     >
   >;
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
@@ -134,6 +134,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   getRuntimeConfig?: () => Record<string, unknown>;
   loadSessionStoreMock?: MockFn;
   loadPreparedModelCatalogMock?: MockFn;
+  resolveProviderRefOwnershipMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionEntryFromParentMock?: MockFn;
@@ -220,7 +221,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
     dispatchGatewayMethodInProcess: (...args: unknown[]) =>
       params.dispatchGatewayMethodInProcessMock?.(...args),
     hasInProcessGatewayContext: () => Boolean(params.hasInProcessGatewayContextMock?.()),
-    buildSubagentSystemPrompt: () => "system-prompt",
     forkSessionEntryFromParent:
       params.forkSessionEntryFromParentMock ??
       (async () => {
@@ -268,6 +268,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
     loadPreparedModelCatalog: (...args: unknown[]) =>
       params.loadPreparedModelCatalogMock?.(...args) ?? [],
+    resolveProviderRefOwnership: (...args: unknown[]) =>
+      params.resolveProviderRefOwnershipMock?.(...args) ?? {
+        status: "owned",
+        pluginIds: ["test-provider"],
+      },
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
       ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
     loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
@@ -315,7 +320,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     // Real scope resolver: spawn's admin-tier pinning depends on params-aware
     // sessions.patch policy, so a stub here would hide policy regressions.
     resolveLeastPrivilegeOperatorScopesForMethod,
-    upsertSessionEntry: async (
+    upsertSessionEntryCore: async (
       scope: { storePath?: string; sessionKey: string },
       patch: Record<string, unknown>,
     ) => {
@@ -390,6 +395,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   vi.doMock("../registry/subagent-registry.js", () => ({
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
+    getSubagentDeliveryBacklogPressure: () => ({ suspended: 0, blocked: false }),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun:
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),

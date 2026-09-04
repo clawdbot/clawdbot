@@ -1,9 +1,8 @@
 // sessions.create parent-disposition coverage. Kept separate because the main
 // reset-hook suite is already at its max-lines budget.
 import { expect, test, vi } from "vitest";
-import { createDeferred } from "../shared/deferred.js";
-import { embeddedRunMock } from "./test-helpers.js";
-import { writeSessionStore } from "./test-helpers.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   beforeResetHookMocks,
   beforeResetHookState,
@@ -58,8 +57,8 @@ async function startDeferredSessionCleanup(sessionId: string) {
   embeddedRunMock.activeIds.add(sessionId);
   embeddedRunMock.waitResults.set(sessionId, false);
 
-  const retirement = createDeferred();
-  const retirementStarted = createDeferred();
+  const retirement = createDeferredCore();
+  const retirementStarted = createDeferredCore();
   let retirements = 0;
   bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(
     async ({ retainAcrossReuse }) => {
@@ -195,7 +194,7 @@ test("completed wait keeps cleanup armed when a same-id replacement starts durin
   providerRuntimeMocks.cleanupSessionResources.mockClear();
   embeddedRunMock.activeIds.add(sessionId);
   embeddedRunMock.waitResults.set(sessionId, true);
-  const retirement = createDeferred();
+  const retirement = createDeferredCore();
   let terminalRetirements = 0;
   bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(
     async ({ retainAcrossReuse }) => {

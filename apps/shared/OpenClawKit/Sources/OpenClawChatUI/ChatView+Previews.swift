@@ -8,6 +8,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         case empty
         case loading
         case error
+        case systemNotices
     }
 
     let scenario: Scenario
@@ -38,6 +39,31 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
                 domain: "OpenClawChatPreviewTransport",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Gateway not connected. Check Tailscale and retry."])
+        case .systemNotices:
+            return OpenClawChatHistoryPayload(
+                sessionKey: sessionKey,
+                sessionId: "preview-system-notices",
+                messages: [
+                    Self.systemNotice(
+                        text: "[System] Resume the interrupted turn with internal recovery context.",
+                        sourceTool: "main_session_restart_recovery",
+                        timestamp: 1),
+                    Self.systemNotice(
+                        text: "[System] Gateway restarted after installing an update.",
+                        sourceTool: "restart-sentinel",
+                        timestamp: 2),
+                    Self.historyMarker(
+                        kind: "compaction",
+                        id: "preview-compaction",
+                        timestamp: 3,
+                        tokensBefore: 48000,
+                        tokensAfter: 19500),
+                    Self.historyMarker(
+                        kind: "reset",
+                        id: "preview-reset",
+                        timestamp: 4),
+                ],
+                thinkingLevel: "medium")
         }
 
         return OpenClawChatHistoryPayload(
@@ -68,7 +94,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
             thinkingLevel: "medium")
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
+    func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
         [
             OpenClawChatModelChoice(
                 modelID: "gpt-5.6-luna",
@@ -121,7 +147,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
         switch self.scenario {
-        case .connected, .empty, .loading:
+        case .connected, .empty, .loading, .systemNotices:
             true
         case .error:
             false
@@ -141,6 +167,36 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
             "role": role,
             "content": [["type": "text", "text": text]],
             "timestamp": timestamp,
+        ])
+    }
+
+    private static func systemNotice(text: String, sourceTool: String, timestamp: Double) -> AnyCodable {
+        AnyCodable([
+            "role": "user",
+            "content": [["type": "text", "text": text]],
+            "timestamp": timestamp,
+            "provenance": [
+                "kind": "internal_system",
+                "sourceTool": sourceTool,
+            ],
+        ])
+    }
+
+    private static func historyMarker(
+        kind: String,
+        id: String,
+        timestamp: Double,
+        tokensBefore: Double? = nil,
+        tokensAfter: Double? = nil) -> AnyCodable
+    {
+        var marker: [String: Any] = ["kind": kind, "id": id]
+        marker["tokensBefore"] = tokensBefore
+        marker["tokensAfter"] = tokensAfter
+        return AnyCodable([
+            "role": "system",
+            "content": [],
+            "timestamp": timestamp,
+            "__openclaw": marker,
         ])
     }
 
@@ -232,6 +288,12 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
     OpenClawChatPreview(
         scenario: .error,
         sessionKey: "error-preview")
+}
+
+#Preview("System notices") {
+    OpenClawChatPreview(
+        scenario: .systemNotices,
+        sessionKey: "system-notices-preview")
 }
 
 #Preview("Onboarding chat") {

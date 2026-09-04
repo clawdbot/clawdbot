@@ -47,7 +47,9 @@ function listCandidateSkillFiles(skillsDir: string, warn: (message: string) => v
   try {
     entries = fs.readdirSync(skillsDir, { withFileTypes: true });
   } catch (error) {
-    warn(`node host skill scan skipped (${skillsDir}): ${String(error)}`);
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      warn(`node host skill scan skipped (${skillsDir}): ${String(error)}`);
+    }
     return [];
   }
   const candidates: string[] = [];

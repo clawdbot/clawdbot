@@ -1,5 +1,6 @@
 /** Reads persisted generated catalogs without constructing a model registry. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asPositiveFiniteNumber as readPositiveNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogEntry, ModelInputType } from "../../agents/model-catalog.types.js";
@@ -13,10 +14,6 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 
 const modelApis = new Set<string>(MODEL_APIS);
 const modelInputs = new Set<ModelInputType>(["text", "image", "audio", "video", "document"]);
-
-function readPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
 
 function readModelApi(value: unknown): ModelApi | undefined {
   const api = readString(value);

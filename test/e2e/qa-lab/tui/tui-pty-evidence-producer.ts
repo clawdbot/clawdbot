@@ -11,6 +11,7 @@ import {
   type QaEvidenceSummaryJson,
   type QaSeedScenarioWithSource,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "../runtime/script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/tui/tui-pty-evidence-producer.ts";
@@ -88,10 +89,6 @@ type ProducerDependencies = {
 type ProofMatrixCase = TuiPtyCase & {
   matchedAssertions: string[];
 };
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function readOptionValue(argv: readonly string[], index: number, option: string) {
   const value = argv[index + 1];

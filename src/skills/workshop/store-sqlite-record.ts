@@ -60,6 +60,7 @@ function proposalRowValues(params: {
   record: SkillProposalRecord;
   ownerAgentId: string | null;
   workspaceDir: string;
+  claimReleasedTime: number | null;
 }): Insertable<SkillWorkshopDatabase["skill_workshop_proposals"]> {
   const { record } = params;
   return {
@@ -81,29 +82,8 @@ function proposalRowValues(params: {
     quarantined_at: record.quarantinedAt ?? null,
     stale_at: record.staleAt ?? null,
     status_reason: record.statusReason ?? null,
+    claim_released_time: params.claimReleasedTime,
   };
-}
-
-function replaceOriginRuns(
-  database: DatabaseSync,
-  record: SkillProposalRecord,
-  kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database),
-): void {
-  executeSqliteQuerySync(
-    database,
-    kysely.deleteFrom("skill_workshop_proposal_origin_runs").where("proposal_id", "=", record.id),
-  );
-  record.originRunIds?.forEach((runId, position) => {
-    executeSqliteQuerySync(
-      database,
-      kysely.insertInto("skill_workshop_proposal_origin_runs").values({
-        proposal_id: record.id,
-        run_id: runId,
-        position,
-        mutation_count: record.originRunMutationCounts?.[runId] ?? 1,
-      }),
-    );
-  });
 }
 
 export function insertProposal(
@@ -113,9 +93,10 @@ export function insertProposal(
   const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   executeSqliteQuerySync(
     database,
-    kysely.insertInto("skill_workshop_proposals").values(proposalRowValues(params)),
+    kysely
+      .insertInto("skill_workshop_proposals")
+      .values(proposalRowValues({ ...params, claimReleasedTime: null })),
   );
-  replaceOriginRuns(database, params.record, kysely);
 }
 
 export function updateProposal(
@@ -128,10 +109,10 @@ export function updateProposal(
     record,
     ownerAgentId: current.owner_agent_id,
     workspaceDir: current.workspace_dir,
+    claimReleasedTime: current.claim_released_time,
   });
   executeSqliteQuerySync(
     database,
     kysely.updateTable("skill_workshop_proposals").set(values).where("proposal_id", "=", record.id),
   );
-  replaceOriginRuns(database, record, kysely);
 }

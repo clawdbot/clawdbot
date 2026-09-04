@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -117,22 +116,9 @@ function buildCodexLoginFlowKey(params: HandleCommandsParams, provider: string):
     keyPart(params.command.accountId ?? params.ctx.AccountId, "default"),
     keyPart(params.ctx.OriginatingTo ?? params.command.to ?? params.command.channelId, "unknown"),
     keyPart(threadId, "main"),
-    keyPart(
-      params.agentId ??
-        resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg }),
-      "main",
-    ),
+    params.agentId,
     provider,
   ].join(":");
-}
-
-function resolveLoginAgentId(params: HandleCommandsParams): string | undefined {
-  return (
-    normalizeOptionalString(params.agentId) ??
-    (params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : undefined)
-  );
 }
 
 async function emitLoginMessage(params: HandleCommandsParams, text: string): Promise<void> {
@@ -318,15 +304,6 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  const agentId = resolveLoginAgentId(params);
-  if (!agentId) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "Codex login is unavailable because the active agent could not be resolved.",
-      },
-    };
-  }
   if (!isPrivateLoginContext(params)) {
     return {
       shouldContinue: false,
@@ -339,7 +316,7 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
   const reply = await runChannelCodexLogin({
     commandParams: params,
     provider,
-    agentId,
+    agentId: params.agentId,
   });
   return { shouldContinue: false, reply };
 };

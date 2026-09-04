@@ -1,11 +1,20 @@
+import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
+import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 // Matrix plugin module implements events behavior.
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { PluginRuntime, RuntimeLogger } from "../../runtime-api.js";
-import type { CoreConfig } from "../../types.js";
+import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
+import { readMatrixMessages } from "../actions/messages.js";
+import { getMatrixRoomInfo } from "../actions/room.js";
 import type { MatrixAuth } from "../client.js";
+import { readJoinedMatrixMembers } from "../direct-room.js";
 import { formatMatrixEncryptedEventDisabledWarning } from "../encryption-guidance.js";
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
+import type { createDirectRoomTracker } from "./direct.js";
+import type { createMatrixRoomInfoResolver } from "./room-info.js";
+import { resolveMatrixRoomConfig } from "./rooms.js";
+import { resolveMatrixInboundRoute } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import { createMatrixVerificationEventRouter } from "./verification-events.js";
@@ -176,10 +185,11 @@ export function registerMatrixMonitorEvents(params: {
   dmEnabled: boolean;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   readStoreAllowFrom: () => Promise<string[]>;
-  directTracker?: {
-    invalidateRoom: (roomId: string) => void;
-    rememberInvite?: (roomId: string, remoteUserId: string) => void;
-  };
+  directTracker: ReturnType<typeof createDirectRoomTracker>;
+  groupPolicy: "open" | "allowlist" | "disabled";
+  roomsConfig?: Record<string, MatrixRoomConfig>;
+  needsRoomAliasesForConfig: boolean;
+  getRoomInfo: ReturnType<typeof createMatrixRoomInfoResolver>["getRoomInfo"];
   invalidateMemberDisplayName?: (roomId: string, userId: string) => void;
   logVerboseMessage: (message: string) => void;
   warnedEncryptedRooms: Set<string>;
@@ -360,6 +370,74 @@ export function registerMatrixMonitorEvents(params: {
     directTracker?.invalidateRoom(roomId);
     const eventId = event?.event_id ?? "unknown";
     logVerboseMessage(`matrix: join room=${roomId} id=${eventId}`);
+    if (event.membershipProvenance !== "transition" || event.state_key !== auth.userId) {
+      return;
+    }
+    void runMonitorTask(`join introduction room=${roomId}`, async () => {
+      const members = await readJoinedMatrixMembers(client, roomId);
+      // Classification needs a real remote member, not the self-join's sender.
+      // Unknown membership cannot establish either room admission or DM exclusion.
+      const remoteUserId = members?.find((member) => member !== auth.userId);
+      if (
+        !members?.includes(auth.userId) ||
+        !remoteUserId ||
+        (await directTracker.isDirectMessage({
+          roomId,
+          senderId: remoteUserId,
+          selfUserId: auth.userId,
+          joinedMembers: members,
+        }))
+      ) {
+        return;
+      }
+      const roomInfo = await params.getRoomInfo(roomId, {
+        includeAliases: params.needsRoomAliasesForConfig,
+      });
+      const roomConfig = resolveMatrixRoomConfig({
+        rooms: params.roomsConfig,
+        roomId,
+        aliases: [roomInfo.canonicalAlias ?? "", ...roomInfo.altAliases].filter(Boolean),
+      });
+      const roomAllowed =
+        (!params.needsRoomAliasesForConfig || roomInfo.aliasesResolved) &&
+        params.groupPolicy !== "disabled" &&
+        (roomConfig.config ? roomConfig.allowed : params.groupPolicy === "open");
+      const options = { cfg, accountId: auth.accountId, client };
+      await reportChannelRoomJoin({
+        cfg,
+        channel: "matrix",
+        accountId: auth.accountId,
+        conversationId: roomId,
+        deliverTo: `room:${roomId}`,
+        route: resolveMatrixInboundRoute({
+          cfg,
+          accountId: auth.accountId,
+          roomId,
+          senderId: auth.userId,
+          isDirectMessage: false,
+          resolveAgentRoute,
+        }).route,
+        roomAllowed,
+        resolveRoomContext: async ({ messageLimit }) => {
+          const info = await getMatrixRoomInfo(roomId, options);
+          const context = { title: info.name ?? undefined, purpose: info.topic ?? undefined };
+          try {
+            const { messages } = await readMatrixMessages(roomId, {
+              ...options,
+              limit: messageLimit,
+            });
+            return {
+              ...context,
+              recentMessages: messages
+                .toReversed()
+                .flatMap(({ sender, body }) => (body?.trim() ? [{ sender, text: body }] : [])),
+            };
+          } catch {
+            return context;
+          }
+        },
+      });
+    });
   };
 
   const onRoomEvent = (roomId: string, event: MatrixRawEvent) => {

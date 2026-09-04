@@ -28,6 +28,8 @@ export type ProviderCreateStreamFnContext = {
  */
 export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
   model?: ProviderRuntimeModel;
+  /** Wire-format API before simple completion projects an internal transport alias. */
+  sourceApi?: ProviderRuntimeModel["api"];
   streamFn?: StreamFn;
 };
 

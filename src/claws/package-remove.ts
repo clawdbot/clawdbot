@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflight.js";
@@ -278,6 +279,16 @@ export async function planClawPackageRemovals(
       (packageRef.independentOwner || packageRef.origin === "pre-existing")
     ) {
       retain("Package has a current non-Claw owner or pre-existing origin.");
+      continue;
+    }
+    if (
+      packageRef.kind === "plugin" &&
+      !explicitlySelected &&
+      cleanup.mode === "remove-if-unused"
+    ) {
+      retain(
+        "Global plugins are excluded from generic remove-if-unused cleanup; select the plugin explicitly to invoke its canonical owner.",
+      );
       continue;
     }
 
@@ -578,7 +589,7 @@ async function applyClawPackageRemovalsUnlocked(
       results.push({
         ...base,
         action: "error",
-        reason: error instanceof Error ? error.message : String(error),
+        reason: coerceErrorMessage(error),
       });
     } finally {
       try {

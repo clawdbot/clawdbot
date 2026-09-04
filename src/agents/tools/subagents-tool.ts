@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import { resolveTaskSessionAgentId } from "../../tasks/task-session-identity.js";
 import { TASK_STATUS_DETAIL_MAX_CHARS, sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import {
@@ -19,7 +20,12 @@ import {
 } from "../subagents/registry/subagent-control.js";
 import { buildSubagentList } from "../subagents/registry/subagent-list.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readPositiveIntegerParam, readToolStringParam } from "./common.js";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readToolStringParam,
+  ToolInputError,
+} from "./common.js";
 
 const SUBAGENT_ACTIONS = ["list", "cancel"] as const;
 type SubagentAction = (typeof SUBAGENT_ACTIONS)[number];
@@ -42,6 +48,7 @@ const STATUS_MAP: Record<TaskStatus, string> = {
 
 type SubagentsToolOptions = {
   agentSessionKey?: string;
+  agentId?: string;
   config?: OpenClawConfig;
   listTasks?: typeof listTaskRecordsUnsorted;
   cancelTask?: typeof cancelDetachedTaskRunById;
@@ -51,8 +58,25 @@ function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 
-function listTreeTasks(tasks: TaskRecord[], rootSessionKey: string): TaskRecord[] {
-  const visibleKeys = new Set([rootSessionKey]);
+function taskOwnerMatches(
+  task: TaskRecord,
+  sessionKey: string,
+  agentId: string,
+  cfg: OpenClawConfig,
+): boolean {
+  return (
+    task.ownerKey === sessionKey &&
+    resolveTaskSessionAgentId(task.ownerKey, task.requesterAgentId, cfg) === agentId
+  );
+}
+
+function listTreeTasks(
+  tasks: TaskRecord[],
+  rootSessionKey: string,
+  rootAgentId: string,
+  cfg: OpenClawConfig,
+): TaskRecord[] {
+  const visibleSessions = new Set([`${rootAgentId}\0${rootSessionKey}`]);
   const visibleTasks = new Set<string>();
   let changed = true;
   while (changed) {
@@ -61,13 +85,21 @@ function listTreeTasks(tasks: TaskRecord[], rootSessionKey: string): TaskRecord[
       if (task.scopeKind !== "session" || visibleTasks.has(task.taskId)) {
         continue;
       }
-      if (!visibleKeys.has(task.ownerKey)) {
+      const taskRequesterAgentId = resolveTaskSessionAgentId(
+        task.ownerKey,
+        task.requesterAgentId,
+        cfg,
+      );
+      if (!visibleSessions.has(`${taskRequesterAgentId ?? ""}\0${task.ownerKey}`)) {
         continue;
       }
       visibleTasks.add(task.taskId);
-      if (task.childSessionKey && !visibleKeys.has(task.childSessionKey)) {
-        visibleKeys.add(task.childSessionKey);
-        changed = true;
+      if (task.childSessionKey) {
+        const childIdentity = `${task.agentId ?? taskRequesterAgentId ?? ""}\0${task.childSessionKey}`;
+        if (!visibleSessions.has(childIdentity)) {
+          visibleSessions.add(childIdentity);
+          changed = true;
+        }
       }
     }
   }
@@ -114,12 +146,23 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       const controller = resolveSubagentController({
         cfg,
         agentSessionKey: opts?.agentSessionKey,
+        agentId: opts.agentId,
       });
+      const controllerAgentId = controller.controllerAgentId;
+      if (!controllerAgentId) {
+        throw new ToolInputError("subagent controller agent required");
+      }
       // The caller only sees subagents controlled by its effective controller session.
-      const runs = listControlledSubagentRuns(controller.controllerSessionKey);
+      const runs = listControlledSubagentRuns(
+        controller.controllerSessionKey,
+        controllerAgentId,
+        cfg,
+      );
       const treeTasks = listTreeTasks(
         (opts.listTasks ?? listTaskRecordsUnsorted)(),
         controller.controllerSessionKey,
+        controllerAgentId,
+        cfg,
       );
 
       if (action === "list") {
@@ -163,7 +206,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         // control-scope gate every other cross-session subagent mutation enforces.
         if (
           controller.controlScope !== "children" &&
-          target.ownerKey !== controller.callerSessionKey
+          !taskOwnerMatches(target, controller.callerSessionKey, controllerAgentId, cfg)
         ) {
           return jsonResult({
             status: "forbidden",

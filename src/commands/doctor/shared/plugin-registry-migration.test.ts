@@ -4,19 +4,21 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { recordPluginCandidateInstallOwner } from "../../../plugins/candidate-install-owner.js";
 import type { PluginCandidate } from "../../../plugins/discovery.js";
+import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
-  writePersistedInstalledPluginIndex,
 } from "../../../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../../../plugins/installed-plugin-index.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
 } from "../../../plugins/test-helpers/fs-fixtures.js";
+import * as stateDbReadOnly from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
-import { migratePluginRegistryForInstall } from "./plugin-registry-migration.js";
+import { migratePluginRegistryForDoctor } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -40,7 +42,11 @@ function createCandidate(
   rootDir: string,
   id = "demo",
   origin: PluginCandidate["origin"] = "global",
-  options: { enabledByDefault?: boolean; manifest?: Record<string, unknown> } = {},
+  options: {
+    enabledByDefault?: boolean;
+    installOwner?: string;
+    manifest?: Record<string, unknown>;
+  } = {},
 ): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
@@ -59,12 +65,15 @@ function createCandidate(
     }),
     "utf8",
   );
-  return {
-    idHint: id,
-    source: path.join(rootDir, "index.ts"),
-    rootDir,
-    origin,
-  };
+  return recordPluginCandidateInstallOwner(
+    {
+      idHint: id,
+      source: path.join(rootDir, "index.ts"),
+      rootDir,
+      origin,
+    },
+    options.installOwner,
+  );
 }
 
 function createCurrentIndex(): InstalledPluginIndex {
@@ -94,7 +103,7 @@ function expectSha256(value: unknown) {
 }
 
 function requireMigratedIndex(
-  result: Awaited<ReturnType<typeof migratePluginRegistryForInstall>>,
+  result: Awaited<ReturnType<typeof migratePluginRegistryForDoctor>>,
 ): InstalledPluginIndex {
   if (result.status !== "migrated") {
     throw new Error(`Expected migration result to be migrated, got ${result.status}`);
@@ -113,32 +122,85 @@ function requirePlugin(index: InstalledPluginIndex | null | undefined, pluginId:
 function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}") {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const valueJson = JSON.stringify({
+        revision: 123,
+        index: {
+          version: 1,
+          warning: null,
+          hostContractVersion: "2026.4.25",
+          compatRegistryVersion: "compat-v1",
+          migrationVersion: 0,
+          policyHash: "stale-policy",
+          generatedAtMs: 123,
+          installRecords: JSON.parse(installRecordsJson) as unknown,
+          plugins: [],
+          diagnostics: [],
+        },
+      });
       db.prepare(
         `
-          INSERT OR REPLACE INTO installed_plugin_index (
-            index_key, version, host_contract_version, compat_registry_version,
-            migration_version, policy_hash, generated_at_ms, refresh_reason,
-            install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
-          ) VALUES (
-            'installed-plugin-index', 1, '2026.4.25', 'compat-v1',
-            0, 'stale-policy', 123, NULL,
-            @install_records_json, '[]', '[]', NULL, 123
-          )
+          INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms)
+          VALUES ('plugins.installedIndex', ?, 123)
         `,
-      ).run({ install_records_json: installRecordsJson });
+      ).run(valueJson);
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
 }
 
-describe("plugin registry install migration", () => {
+describe("doctor plugin registry migration", () => {
+  it("stops migration with the original error when the shared registry read fails", async () => {
+    const stateDir = makeTempDir();
+    const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } };
+    insertStalePersistedIndexRow(stateDir, JSON.stringify(records));
+    const error = Object.assign(new Error("database is locked"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 5,
+    });
+    const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
+    readSpy.mockImplementationOnce(() => {
+      throw error;
+    });
+    const readConfig = vi.fn(() => ({}));
+    await expect
+      .soft(
+        migratePluginRegistryForDoctor({
+          stateDir,
+          readConfig,
+          candidates: [],
+          env: hermeticEnv(),
+        }),
+      )
+      .rejects.toBe(error);
+    expect.soft(readConfig).not.toHaveBeenCalled();
+    expect(readSpy).toHaveBeenCalledOnce();
+    readSpy.mockRestore();
+    const row = runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
+          )
+          .get(),
+      { env: { OPENCLAW_STATE_DIR: stateDir } },
+    );
+    expect(row).toMatchObject({ updated_at_ms: 123 });
+    const restored = await migratePluginRegistryForDoctor({
+      stateDir,
+      readConfig,
+      candidates: [],
+      env: hermeticEnv(),
+    });
+    expect(requireMigratedIndex(restored).installRecords).toEqual(records);
+  });
+
   it("short-circuits when a current registry file already exists", async () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
     const readConfig = vi.fn(async () => ({}));
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       readConfig,
       env: hermeticEnv(),
@@ -160,7 +222,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(pluginDir, { recursive: true });
     insertStalePersistedIndexRow(stateDir);
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [createCandidate(pluginDir)],
       readConfig: async () => ({}),
@@ -184,35 +246,34 @@ describe("plugin registry install migration", () => {
     insertStalePersistedIndexRow(stateDir, installRecordsJson);
 
     await expect(
-      migratePluginRegistryForInstall({
+      migratePluginRegistryForDoctor({
         stateDir,
         readConfig: async () => ({}),
         env: hermeticEnv(),
       }),
     ).rejects.toThrow(
-      "delete only the installed_plugin_index row with index_key='installed-plugin-index'",
+      "delete only the config_machine_state row with state_key='plugins.installedIndex'",
     );
 
     const row = runOpenClawStateWriteTransaction(
       ({ db }) =>
         db
           .prepare(
-            `SELECT migration_version, install_records_json, updated_at_ms
-               FROM installed_plugin_index
-              WHERE index_key = 'installed-plugin-index'`,
+            `SELECT value_json, updated_at_ms
+               FROM config_machine_state
+              WHERE state_key = 'plugins.installedIndex'`,
           )
-          .get() as {
-          migration_version: number | bigint;
-          install_records_json: string;
-          updated_at_ms: number | bigint;
-        },
+          .get() as { value_json: string; updated_at_ms: number | bigint },
       { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
     );
-    expect(row).toEqual({
-      migration_version: 0,
-      install_records_json: installRecordsJson,
-      updated_at_ms: 123,
-    });
+    expect(row.updated_at_ms).toBe(123);
+    const persistedValue = JSON.parse(row.value_json) as {
+      index: { migrationVersion: number; installRecords: unknown };
+    };
+    expect(persistedValue.index.migrationVersion).toBe(0);
+    expect(JSON.stringify(persistedValue.index.installRecords)).toBe(
+      JSON.stringify(JSON.parse(installRecordsJson)),
+    );
   });
 
   it("rejects invalid config install records before recovery or persistence", async () => {
@@ -222,7 +283,7 @@ describe("plugin registry install migration", () => {
     ) as OpenClawConfig;
 
     await expect(
-      migratePluginRegistryForInstall({
+      migratePluginRegistryForDoctor({
         stateDir,
         readConfig: async () => invalidConfig,
         env: hermeticEnv(),
@@ -242,7 +303,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(disabledDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(enabledDir, "enabled-demo"),
@@ -283,7 +344,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(openaiDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(openaiDir, "openai", "bundled", { enabledByDefault: true }),
@@ -309,7 +370,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(migrationDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(migrationDir, "migrate-demo", "bundled", {
@@ -338,7 +399,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(openaiDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(openaiDir, "openai", "bundled"),
@@ -370,7 +431,7 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(memoryDir, { recursive: true });
     fs.mkdirSync(unusedBundledDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [
         createCandidate(memoryDir, "memory-core", "bundled", {
@@ -406,7 +467,7 @@ describe("plugin registry install migration", () => {
     const stateDir = makeTempDir();
     const readConfig = vi.fn(async () => ({}));
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       dryRun: true,
       readConfig,
@@ -427,16 +488,17 @@ describe("plugin registry install migration", () => {
     fs.mkdirSync(pluginDir, { recursive: true });
     const candidate = createCandidate(pluginDir);
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [candidate],
-      readConfig: async () => ({}),
+      config: {},
       env: hermeticEnv(),
     });
     expectRecordFields(requireRecord(result, "migration result"), {
       status: "migrated",
       migrated: true,
     });
+    expect(result.preflight.action).toBe("initialize");
     const current = requireMigratedIndex(result);
     expect(current.refreshReason).toBe("migration");
     expect(current.migrationVersion).toBe(1);
@@ -452,9 +514,9 @@ describe("plugin registry install migration", () => {
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
-      candidates: [createCandidate(pluginDir)],
+      candidates: [createCandidate(pluginDir, "demo", "global", { installOwner: "demo" })],
       readConfig: async () => ({
         plugins: {
           entries: {
@@ -499,7 +561,7 @@ describe("plugin registry install migration", () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "missing");
 
-    const result = await migratePluginRegistryForInstall({
+    const result = await migratePluginRegistryForDoctor({
       stateDir,
       candidates: [],
       readConfig: async () => ({

@@ -1,6 +1,7 @@
 // Imessage provider module implements model/runtime integration.
 import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
@@ -18,8 +19,13 @@ import {
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import {
+  resolveChannelGroups,
+  resolveChannelGroupsConfigPath,
+} from "openclaw/plugin-sdk/channel-policy";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
+  ensureConfiguredBindingRouteReady,
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -45,6 +51,7 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
@@ -54,6 +61,7 @@ import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
+import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
@@ -94,7 +102,6 @@ import {
   isStaleIMessageBacklog,
 } from "./inbound-dedupe.js";
 import {
-  buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
   mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
@@ -112,7 +119,7 @@ import {
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
-import { normalizeAllowList, resolveRuntime } from "./runtime.js";
+import { resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
@@ -267,17 +274,15 @@ const IMESSAGE_DIAGNOSTIC_DROP_REASONS = new Set([
   "agent echo in self-chat",
   "echo",
   "from me",
+  "no mention",
   "reflected assistant content",
   "self-chat echo",
 ]);
-const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me"]);
-
-function shouldThrottleIMessageInboundDropDiagnostic(reason: string): boolean {
-  return IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(reason);
-}
+const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me", "no mention"]);
 
 function describeIMessageInboundDropDiagnostic(params: {
   accountId: string;
+  groupsConfigPath: string;
   reason: string;
   message: Pick<IMessagePayload, "chat_id" | "created_at" | "guid" | "id" | "is_group">;
 }): string | null {
@@ -288,13 +293,17 @@ function describeIMessageInboundDropDiagnostic(params: {
     typeof params.message.id === "number" || typeof params.message.id === "string"
       ? String(params.message.id)
       : "unknown";
+  const mentionHint =
+    params.reason === "no mention"
+      ? ` Mention the agent (default patterns come from its identity name/emoji), or set ${params.groupsConfigPath}["${params.message.chat_id}"].requireMention=false. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`
+      : "";
   return (
     `imessage: dropped inbound message account=${params.accountId} reason=${JSON.stringify(
       params.reason,
     )} ` +
     `chat_id=${params.message.chat_id ?? "unknown"} group=${params.message.is_group === true} ` +
     `message_id=${messageId} guid=${params.message.guid ? "present" : "missing"} ` +
-    `created_at=${params.message.created_at ?? "unknown"}`
+    `created_at=${params.message.created_at ?? "unknown"}${mentionHint}`
   );
 }
 
@@ -353,6 +362,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     cfg,
     accountId: opts.accountId,
   });
+  const groupsConfigPath = resolveChannelGroupsConfigPath({
+    cfg,
+    channel: "imessage",
+    accountId: accountInfo.accountId,
+    groups: resolveChannelGroups(cfg, "imessage", accountInfo.accountId),
+  });
   const approvalGatewayRuntime =
     opts.channelRuntime?.runtimeContexts.get<IMessageApprovalGatewayRuntime>({
       channelId: "imessage",
@@ -371,9 +386,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const selfChatCache = createSelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
-  const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
+  const allowFrom = normalizeStringEntries(opts.allowFrom ?? imessageCfg.allowFrom);
   const configuredGroupAllowFrom = opts.groupAllowFrom ?? imessageCfg.groupAllowFrom;
-  const groupAllowFrom = normalizeAllowList(
+  const groupAllowFrom = normalizeStringEntries(
     configuredGroupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
@@ -680,13 +695,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
-  async function handleMessageNow(
-    message: IMessagePayload,
-    ingressLifecycle?: IMessageIngressLifecycle,
-  ) {
-    await handleMessageNowInner(message, ingressLifecycle);
-  }
-
   // iMessage delivers a poll's comment as a separate inline reply to the poll
   // balloon; fold it into the poll so the agent votes once instead of also
   // replying to the caption in prose (a redundant restatement of the vote).
@@ -716,7 +724,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     };
   }
 
-  async function handleMessageNowInner(
+  async function handleMessageNow(
     rawMessage: IMessagePayload,
     ingressLifecycle?: IMessageIngressLifecycle,
   ) {
@@ -792,27 +800,22 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
 
     if (decision.kind === "drop") {
-      // Record echo/reflection drops so the rate limiter can detect sustained loops.
-      // Only loop-related drop reasons feed the counter; policy/mention/empty drops
-      // are normal and should not escalate. "from me" is excluded: every own-send
-      // (agent replies, multi-chunk sends, operator phone traffic) produces a
-      // from-me row, so counting it lets a normal outbound burst trip the limiter
-      // and silently suppress the next legitimate inbound message.
+      // Count reflected agent content, not ordinary own-send or self-chat dedupe
+      // rows: counting those benign drops mutes legitimate conversation bursts.
       const isLoopDrop =
-        decision.reason === "echo" ||
-        decision.reason === "self-chat echo" ||
-        decision.reason === "reflected assistant content";
+        decision.reason === "echo" || decision.reason === "reflected assistant content";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
       }
       const diagnostic = describeIMessageInboundDropDiagnostic({
         accountId: accountInfo.accountId,
+        groupsConfigPath,
         reason: decision.reason,
         message,
       });
       if (diagnostic) {
         const throttleKey = `${rateLimitKey}:${decision.reason}`;
-        const shouldThrottleDiagnostic = shouldThrottleIMessageInboundDropDiagnostic(
+        const shouldThrottleDiagnostic = IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(
           decision.reason,
         );
         if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.check(throttleKey)) {
@@ -911,6 +914,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
+    if (decision.bindingResolution) {
+      const readiness = await ensureConfiguredBindingRouteReady({
+        cfg,
+        bindingResolution: decision.bindingResolution,
+      });
+      if (!readiness.ok) {
+        runtime.error?.(
+          `imessage: dropped inbound message; configured ACP binding unavailable for ${decision.bindingResolution.record.conversation.conversationId}: ${readiness.error}`,
+        );
+        return;
+      }
+    }
+
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
@@ -939,12 +955,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       sendPolicy !== "deny" &&
       (configuredTypingMode === undefined || configuredTypingMode === "instant");
     const shouldStartDirectTyping = supportsTyping && shouldUseDirectToolTypingOptions;
+    const earlyDirectTypingService =
+      resolveIMessageDirectChatService(imessageCfg.service, decision.chatGuid) ?? "auto";
     const earlyDirectTypingTarget = shouldStartDirectTyping
-      ? buildDirectIMessageReplyTarget({
-          cfg,
-          accountId: decision.route.accountId,
-          sender: decision.sender,
-        })
+      ? `${earlyDirectTypingService}:${decision.sender}`
       : undefined;
     let stopEarlyDirectTyping: (() => void) | undefined;
     if (earlyDirectTypingTarget) {
@@ -1045,8 +1059,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             logVerbose,
           })
         : undefined;
+    // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+    const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
     const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
       cfg,
+      accountService: imessageCfg.service,
       decision: contextDecision,
       message,
       previousTimestamp,
@@ -1054,6 +1071,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       historyLimit,
       groupHistories,
       dmHistory,
+      buildContext: pluginChannelRuntime?.inbound.buildContext,
       media: {
         facts: mediaAttachments,
       },
@@ -1076,13 +1094,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
+    // The read RPC has no service argument, so preserve the inbound direct
+    // conversation through its exact chat GUID instead of a bare handle.
+    const readTarget =
+      !decision.isGroup && decision.chatGuid ? `chat_guid:${decision.chatGuid}` : typingTarget;
 
-    if (supportsRead && sendReadReceipts && typingTarget) {
+    if (supportsRead && sendReadReceipts && readTarget) {
       // Read receipts are best-effort channel UI. Do not put them on the
       // critical path before model dispatch; slow private-API reads otherwise
       // make accepted iMessage turns feel stuck before the agent starts. Use
       // a short-lived client so a stuck read cannot block monitor-client typing.
-      void markIMessageChatRead(typingTarget, {
+      void markIMessageChatRead(readTarget, {
         cfg,
         accountId: accountInfo.accountId,
         cliPath,
@@ -1248,6 +1270,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             sessionKey: decision.route.sessionKey,
           },
           ctxPayload,
+          // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+          dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
           record: {
             updateLastRoute:
               !decision.isGroup && updateTarget
@@ -1390,7 +1414,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (isApprovalCommand) {
         // Resolve approval commands through the ordinary authenticated command
         // pipeline, but ahead of the chat lane containing the run they release.
-        await handleMessageNowInner(repairedMessage);
+        await handleMessageNow(repairedMessage);
         return { kind: "completed" };
       }
       const conversation = resolveApprovalControlConversation(repairedMessage);

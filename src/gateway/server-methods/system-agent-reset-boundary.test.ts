@@ -11,7 +11,7 @@ import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "../../system-agent/system-agent.test-helpers.js";
 import { appendTranscriptTurn, readTranscriptTail } from "../../system-agent/transcript-store.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -122,7 +122,7 @@ function nextSessionSeed() {
  * directory's lifetime or its removal fails on platforms that lock open files.
  */
 async function withTranscriptState(prefix: string, run: () => Promise<void>): Promise<void> {
-  await withTempDir({ prefix }, async (stateDir) => {
+  await withTestDir({ prefix }, async (stateDir) => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       await run();

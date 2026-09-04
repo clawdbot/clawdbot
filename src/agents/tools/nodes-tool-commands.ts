@@ -15,17 +15,11 @@ import {
   readToolStringParam,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
-import { callGatewayTool } from "./gateway.js";
+import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
 import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
-import { resolveNodeId } from "./nodes-utils.js";
+import { resolveAgentNodeId } from "./nodes-utils.js";
 
 const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
-const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([
-  ["computer.act", "computer"],
-  ["mobile.ui.observe", "mobile_ui"],
-  ["mobile.ui.act", "mobile_ui"],
-]);
-
 const NODE_READ_ACTION_COMMANDS = {
   camera_list: "camera.list",
   notifications_list: "notifications.list",
@@ -181,18 +175,12 @@ export async function executeNodeCommandAction(params: {
     }
     case "invoke": {
       const node = readToolStringParam(params.input, "node", { required: true });
-      const nodeId = await resolveNodeId(params.gatewayOpts, node);
+      const nodeId = await resolveAgentNodeId(params.gatewayOpts, node);
       const invokeCommand = readToolStringParam(params.input, "invokeCommand", { required: true });
       const invokeCommandNormalized = normalizeLowercaseStringOrEmpty(invokeCommand);
       if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
           `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
-        );
-      }
-      const dedicatedTool = DEDICATED_TOOL_INVOKE_COMMANDS.get(invokeCommandNormalized);
-      if (dedicatedTool) {
-        throw new Error(
-          `invokeCommand "${invokeCommand}" cannot be invoked through the generic nodes surface; use the dedicated ${dedicatedTool} tool`,
         );
       }
       const dedicatedAction = params.mediaInvokeActions[invokeCommandNormalized];
@@ -228,14 +216,18 @@ export async function executeNodeCommandAction(params: {
         }
       }
       const invokeTimeoutMs = readPositiveIntegerParam(params.input, "invokeTimeoutMs");
-      const raw = await callGatewayTool("node.invoke", params.gatewayOpts, {
-        nodeId,
-        command: invokeCommand,
-        params: invokeParams,
-        timeoutMs: invokeTimeoutMs,
-        idempotencyKey: crypto.randomUUID(),
-        ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
-      });
+      const raw = await callNodesToolNodeInvoke(
+        params.gatewayOpts,
+        {
+          nodeId,
+          command: invokeCommand,
+          params: invokeParams,
+          timeoutMs: invokeTimeoutMs,
+          idempotencyKey: crypto.randomUUID(),
+          ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
+        },
+        { rawInvoke: true },
+      );
       return jsonResult(raw ?? {});
     }
   }
@@ -248,8 +240,8 @@ async function invokeNodeCommandPayload(params: {
   command: string;
   commandParams?: Record<string, unknown>;
 }): Promise<unknown> {
-  const nodeId = await resolveNodeId(params.gatewayOpts, params.node);
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", params.gatewayOpts, {
+  const nodeId = await resolveAgentNodeId(params.gatewayOpts, params.node);
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(params.gatewayOpts, {
     nodeId,
     command: params.command,
     params: params.commandParams ?? {},

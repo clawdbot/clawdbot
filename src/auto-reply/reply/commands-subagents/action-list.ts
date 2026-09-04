@@ -1,4 +1,4 @@
-// Lists subagent runs with focus and status information.
+// Lists subagent runs with lifecycle status.
 import { buildSubagentList } from "../../../agents/subagents/registry/subagent-list.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";

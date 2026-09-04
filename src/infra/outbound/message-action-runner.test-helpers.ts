@@ -1,6 +1,7 @@
 // Shared runner-facade test harness. These mocks isolate message-action routing,
 // execution, and send coordination from real channel and gateway runtimes.
 import { vi } from "vitest";
+import { jsonResult } from "../../agents/tools/common.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelMessageActionContext,
@@ -33,9 +34,7 @@ const hoistedMessageActionRunnerMocks = vi.hoisted(() => ({
   prepareOutboundMirrorRoute: vi.fn(),
   beginTerminalSourceReplyDelivery: vi.fn(),
   cancelTerminalSourceReplyDelivery: vi.fn(),
-  isCurrentSourceReplyActionName: vi.fn(() => false),
   isDeliveredCurrentSourceReply: vi.fn(() => false),
-  isDeliveredCurrentSourceReplyAction: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
   loadWebMedia: vi.fn<typeof import("../../media/web-media.js").loadWebMedia>(),
 }));
@@ -67,9 +66,7 @@ vi.mock("./message.gateway.runtime.js", () => ({
 vi.mock("./source-reply-mirror.js", () => ({
   beginTerminalSourceReplyDelivery: messageActionRunnerMocks.beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery: messageActionRunnerMocks.cancelTerminalSourceReplyDelivery,
-  isCurrentSourceReplyActionName: messageActionRunnerMocks.isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply: messageActionRunnerMocks.isDeliveredCurrentSourceReply,
-  isDeliveredCurrentSourceReplyAction: messageActionRunnerMocks.isDeliveredCurrentSourceReplyAction,
   reconcileTerminalSourceReplyDelivery:
     messageActionRunnerMocks.reconcileTerminalSourceReplyDelivery,
 }));
@@ -98,10 +95,8 @@ vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
       : undefined,
 }));
 
-vi.mock("./message-action-threading.js", async () => {
-  const { createOutboundThreadingMock } =
-    await import("./message-action-threading.test-helpers.js");
-  const threading = createOutboundThreadingMock();
+vi.mock("./message-action-threading.js", async (importOriginal) => {
+  const threading = await importOriginal<typeof import("./message-action-threading.js")>();
   messageActionRunnerMocks.prepareOutboundMirrorRoute.mockImplementation(
     threading.prepareOutboundMirrorRoute,
   );
@@ -111,7 +106,8 @@ vi.mock("./message-action-threading.js", async () => {
   };
 });
 
-vi.mock("../../media/web-media.js", () => ({
+vi.mock("../../media/web-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../media/web-media.js")>()),
   loadWebMedia: messageActionRunnerMocks.loadWebMedia,
 }));
 
@@ -134,6 +130,70 @@ export function createAlwaysConfiguredPluginConfig(
     resolveAccount: () => account,
     isConfigured: () => true,
   };
+}
+
+export function createActionHubPluginFixture() {
+  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+    jsonResult({ ok: true, params }),
+  );
+  const plugin: ChannelPlugin = {
+    id: "actionhub",
+    meta: {
+      id: "actionhub",
+      label: "Action Hub",
+      selectionLabel: "Action Hub",
+      docsPath: "/channels/actionhub",
+      blurb: "Action Hub action dispatch test plugin.",
+    },
+    capabilities: { chatTypes: ["direct", "channel"] },
+    config: createAlwaysConfiguredPluginConfig(),
+    messaging: {
+      targetPrefixes: ["actionhub", "actionhub-alias"],
+      normalizeTarget: (raw) => raw.replace(/^actionhub-alias:/i, "actionhub:"),
+      targetResolver: {
+        looksLikeId: () => true,
+      },
+    },
+    actions: {
+      describeMessageTool: () => ({
+        actions: [
+          "pin",
+          "unpin",
+          "list-pins",
+          "member-info",
+          "channel-info",
+          "edit",
+          "thread-create",
+          "thread-reply",
+        ],
+      }),
+      messageActionTargetAliases: {
+        edit: {
+          aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+          deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+        },
+        pin: {
+          aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+          deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+        },
+        unpin: {
+          aliases: ["messageId", "chatId", "chat_id", "channel_id"],
+          deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
+        },
+      },
+      supportsAction: ({ action }) =>
+        action === "pin" ||
+        action === "unpin" ||
+        action === "list-pins" ||
+        action === "member-info" ||
+        action === "channel-info" ||
+        action === "edit" ||
+        action === "thread-create" ||
+        action === "thread-reply",
+      handleAction,
+    },
+  };
+  return { handleAction, plugin };
 }
 
 export function createGatewayActionPlugin(params: {

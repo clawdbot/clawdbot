@@ -338,11 +338,15 @@ export function resolveGatewayProbeCredentialsFromConfig(params: {
   mode: GatewayCredentialMode;
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
 }): ResolvedGatewayCredentials {
   return resolveGatewayCredentialsFromConfig({
     cfg: params.cfg,
     env: params.env,
     explicitAuth: params.explicitAuth,
+    urlOverride: params.urlOverride,
+    urlOverrideSource: params.urlOverrideSource,
     modeOverride: params.mode,
     remoteTokenFallback: "remote-only",
   });

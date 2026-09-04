@@ -215,7 +215,7 @@ iMessage recovers messages missed while the gateway was down: on startup it repl
 
 - **Allowlists carry over by handle.** `channels.imessage.allowFrom` recognizes the same `+15555550123` / `user@example.com` strings BlueBubbles used — copy them verbatim.
 - **Pairing-store approvals do not transfer.** The pairing store is per channel and nothing migrates the old BlueBubbles store. Senders who were approved only through pairing must pair once more under iMessage, or you add their handles to `allowFrom`.
-- **Sessions** stay scoped per agent + chat. DMs collapse into the agent main session under default `session.dmScope=main`; group sessions stay isolated per `chat_id` (`agent:<agentId>:imessage:group:<chat_id>`). Old conversation history under BlueBubbles session keys does not carry into iMessage sessions.
+- **Sessions** stay scoped per agent + chat. DMs collapse into the agent main session under default `session.dmScope=main`; with default `session.groupScope="per-group"`, group sessions stay isolated per `chat_id` (`agent:<agentId>:imessage:group:<chat_id>`). Old conversation history under BlueBubbles session keys does not carry into iMessage sessions.
 - **ACP bindings** referencing `match.channel: "bluebubbles"` must change to `"imessage"`. The `match.peer.id` shapes (`chat_id:`, `chat_guid:`, `chat_identifier:`, bare handle) are identical.
 
 ## No rollback channel

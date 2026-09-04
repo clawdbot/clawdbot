@@ -19,6 +19,8 @@ export type ChatPaneElement = HTMLElement & {
   prepareForEviction?: () => void;
   presented?: boolean;
   sessionKey?: string;
+  transcriptLoading?: boolean;
+  visuallyPresented?: boolean;
 };
 
 let pendingHandoff: PendingHandoff | undefined;
@@ -60,7 +62,12 @@ export class RouteDraftComposerFocus {
       pendingHandoff = undefined;
       this.maintain(data.sessionKey);
     }
-    return Boolean(data?.draft && consumedData !== data && matchesActivePane);
+    return Boolean(
+      data &&
+      consumedData !== data &&
+      matchesActivePane &&
+      (data.draft !== undefined || data.focusComposer),
+    );
   }
 
   shouldFocusPane(

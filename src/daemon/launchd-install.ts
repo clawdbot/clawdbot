@@ -28,7 +28,7 @@ import {
   writeLaunchAgentPlist,
 } from "./launchd-service-files.js";
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
-import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
+import { formatLine, normalizeWindowsPathSeparators, writeFormattedLines } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import type {
   GatewayServiceEnv,
@@ -44,9 +44,12 @@ export async function uninstallLaunchAgent({
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
   const plistPath = resolveLaunchAgentPlistPath(env);
-  const bootout = await execLaunchctl(["bootout", domain, plistPath]);
-  if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-    throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+  const probe = await probeLaunchAgentState(`${domain}/${label}`);
+  if (probe.state !== "not-loaded") {
+    const bootout = await execLaunchctl(["bootout", domain, plistPath]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+    }
   }
 
   try {
@@ -59,7 +62,7 @@ export async function uninstallLaunchAgent({
     return;
   }
 
-  const home = toPosixPath(resolveDaemonHomeDir(env));
+  const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
   const trashDir = path.posix.join(home, ".Trash");
   const dest = path.join(trashDir, `${label}.plist`);
   try {

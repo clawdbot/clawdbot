@@ -3,15 +3,6 @@ import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generati
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderPlugin,
-} from "openclaw/plugin-sdk/realtime-voice";
-import { createRealtimeVoiceAudioQueue } from "openclaw/plugin-sdk/realtime-voice-audio-queue";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
@@ -21,20 +12,17 @@ import {
 } from "./generation-provider-metadata.js";
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { registerGoogleProvider } from "./provider-registration.js";
+import { createLazyGoogleRealtimeVoiceProvider } from "./realtime-voice-lazy.js";
 import { buildGoogleSpeechProvider } from "./speech-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
 let googleMediaUnderstandingProviderPromise: Promise<MediaUnderstandingProvider> | null = null;
 let googleMusicGenerationProviderPromise: Promise<MusicGenerationProvider> | null = null;
-let googleRealtimeVoiceProviderPromise: Promise<RealtimeVoiceProviderPlugin> | null = null;
 let googleVideoGenerationProviderPromise: Promise<VideoGenerationProvider> | null = null;
 
 type GoogleMediaUnderstandingProvider = Required<
-  Pick<
-    MediaUnderstandingProvider,
-    "describeImage" | "describeImages" | "transcribeAudio" | "describeVideo"
-  >
+  Pick<MediaUnderstandingProvider, "transcribeAudio" | "describeVideo">
 >;
 
 async function loadGoogleImageGenerationProvider(): Promise<ImageGenerationProvider> {
@@ -64,15 +52,6 @@ async function loadGoogleMusicGenerationProvider(): Promise<MusicGenerationProvi
   return await googleMusicGenerationProviderPromise;
 }
 
-async function loadGoogleRealtimeVoiceProvider(): Promise<RealtimeVoiceProviderPlugin> {
-  if (!googleRealtimeVoiceProviderPromise) {
-    googleRealtimeVoiceProviderPromise = import("./realtime-voice-provider.js").then((mod) =>
-      mod.buildGoogleRealtimeVoiceProvider(),
-    );
-  }
-  return await googleRealtimeVoiceProviderPromise;
-}
-
 async function loadGoogleVideoGenerationProvider(): Promise<VideoGenerationProvider> {
   if (!googleVideoGenerationProviderPromise) {
     googleVideoGenerationProviderPromise = import("./video-generation-provider.js").then((mod) =>
@@ -84,12 +63,7 @@ async function loadGoogleVideoGenerationProvider(): Promise<VideoGenerationProvi
 
 async function loadGoogleRequiredMediaUnderstandingProvider(): Promise<GoogleMediaUnderstandingProvider> {
   const provider = await loadGoogleMediaUnderstandingProvider();
-  if (
-    !provider.describeImage ||
-    !provider.describeImages ||
-    !provider.transcribeAudio ||
-    !provider.describeVideo
-  ) {
+  if (!provider.transcribeAudio || !provider.describeVideo) {
     throw new Error("google media understanding provider missing required handlers");
   }
   return provider as GoogleMediaUnderstandingProvider;
@@ -137,10 +111,8 @@ function createLazyGoogleMediaUnderstandingProvider(): MediaUnderstandingProvide
     },
     autoPriority: { image: 30, audio: 40, video: 10 },
     nativeDocumentInputs: ["pdf"],
-    describeImage: async (...args) =>
-      await (await loadGoogleRequiredMediaUnderstandingProvider()).describeImage(...args),
-    describeImages: async (...args) =>
-      await (await loadGoogleRequiredMediaUnderstandingProvider()).describeImages(...args),
+    describeImage: undefined,
+    describeImages: undefined,
     transcribeAudio: async (...args) =>
       await (await loadGoogleRequiredMediaUnderstandingProvider()).transcribeAudio(...args),
     describeVideo: async (...args) =>
@@ -153,254 +125,6 @@ function createLazyGoogleMusicGenerationProvider(): MusicGenerationProvider {
     ...createGoogleMusicGenerationProviderMetadata(),
     generateMusic: async (...args) =>
       await (await loadGoogleMusicGenerationProvider()).generateMusic(...args),
-  };
-}
-
-function resolveGoogleRealtimeProviderConfig(
-  rawConfig: RealtimeVoiceProviderConfig,
-  cfg?: { models?: { providers?: { google?: { apiKey?: unknown } } } },
-): RealtimeVoiceProviderConfig {
-  const providers =
-    typeof rawConfig.providers === "object" &&
-    rawConfig.providers !== null &&
-    !Array.isArray(rawConfig.providers)
-      ? (rawConfig.providers as Record<string, unknown>)
-      : undefined;
-  const nested = providers?.google;
-  const raw =
-    typeof nested === "object" && nested !== null && !Array.isArray(nested)
-      ? (nested as Record<string, unknown>)
-      : typeof rawConfig.google === "object" &&
-          rawConfig.google !== null &&
-          !Array.isArray(rawConfig.google)
-        ? (rawConfig.google as Record<string, unknown>)
-        : rawConfig;
-  return {
-    ...raw,
-    ...(raw.apiKey === undefined
-      ? cfg?.models?.providers?.google?.apiKey === undefined
-        ? {}
-        : {
-            apiKey: normalizeResolvedSecretInputString({
-              value: cfg.models.providers.google.apiKey,
-              path: "models.providers.google.apiKey",
-            }),
-          }
-      : {
-          apiKey: normalizeResolvedSecretInputString({
-            value: raw.apiKey,
-            path: "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
-          }),
-        }),
-  };
-}
-
-function resolveGoogleRealtimeEnvApiKey(): string | undefined {
-  return (
-    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
-    normalizeOptionalString(process.env.GOOGLE_API_KEY)
-  );
-}
-
-const GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGES = 128;
-const GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGE_BYTES = 256 * 1024;
-
-function createLazyGoogleRealtimeVoiceBridge(
-  req: RealtimeVoiceBridgeCreateRequest,
-): RealtimeVoiceBridge {
-  let bridge: RealtimeVoiceBridge | undefined;
-  let bridgePromise: Promise<RealtimeVoiceBridge> | undefined;
-  let bridgeReady = false;
-  let bridgeClosed = false;
-  let closed = false;
-  // Provider close is terminal for input admission. Only an explicit connect()
-  // call may reopen it; late callbacks and microphone frames stay ignored.
-  let providerTerminated = false;
-  let latestMediaTimestamp: number | undefined;
-  let pendingGreeting: string | undefined;
-  // Lazy startup keeps the newest microphone tail when loading stalls.
-  const pendingAudio = createRealtimeVoiceAudioQueue("drop-oldest");
-  const pendingUserMessages: string[] = [];
-  let pendingUserMessageBytes = 0;
-  // Loading and connecting finish on separate async boundaries. Keep close ownership
-  // here so either late completion closes the provider bridge exactly once.
-  const closeBridge = (loadedBridge = bridge) => {
-    if (!loadedBridge || bridgeClosed) {
-      return;
-    }
-    bridgeClosed = true;
-    loadedBridge.close();
-  };
-  const loadBridge = async () => {
-    if (!bridgePromise) {
-      bridgePromise = loadGoogleRealtimeVoiceProvider().then((provider) =>
-        provider.createBridge({
-          ...req,
-          onReady: () => {
-            if (closed || providerTerminated) {
-              return;
-            }
-            req.onReady?.();
-            if (closed || providerTerminated || !bridge) {
-              return;
-            }
-            bridgeReady = true;
-            // `connect()` and provider readiness are separate lifecycle facts.
-            // Release prompts only after the provider can accept user content.
-            flushPending(bridge);
-          },
-          onClose: (reason) => {
-            bridgeReady = false;
-            providerTerminated = true;
-            pendingAudio.clear();
-            req.onClose?.(reason);
-          },
-        }),
-      );
-    }
-    bridge = await bridgePromise;
-    if (closed) {
-      closeBridge(bridge);
-    }
-    return bridge;
-  };
-  const requireBridge = () => {
-    if (!bridge) {
-      throw new Error("Google realtime voice bridge is not connected");
-    }
-    return bridge;
-  };
-  const flushPending = (loadedBridge: RealtimeVoiceBridge) => {
-    if (closed || providerTerminated) {
-      return;
-    }
-    if (typeof latestMediaTimestamp === "number") {
-      loadedBridge.setMediaTimestamp(latestMediaTimestamp);
-    }
-    for (const audio of pendingAudio.drain()) {
-      loadedBridge.sendAudio(audio);
-    }
-    const userMessages = pendingUserMessages.splice(0);
-    pendingUserMessageBytes = 0;
-    for (const text of userMessages) {
-      loadedBridge.sendUserMessage?.(text);
-    }
-    if (pendingGreeting !== undefined) {
-      const greeting = pendingGreeting;
-      pendingGreeting = undefined;
-      loadedBridge.triggerGreeting?.(greeting);
-    }
-  };
-  return {
-    get supportsToolResultContinuation() {
-      return bridge?.supportsToolResultContinuation ?? false;
-    },
-    supportsToolResultSuppression: false,
-    connect: async () => {
-      const loadedBridge = await loadBridge();
-      if (closed) {
-        closeBridge(loadedBridge);
-        return;
-      }
-      providerTerminated = false;
-      try {
-        await loadedBridge.connect();
-      } catch (error) {
-        bridgeReady = false;
-        providerTerminated = true;
-        pendingAudio.clear();
-        throw error;
-      }
-      if (closed) {
-        closeBridge(loadedBridge);
-      }
-    },
-    sendAudio: (audio) => {
-      if (closed || providerTerminated) {
-        return;
-      }
-      if (bridgeReady && bridge) {
-        bridge.sendAudio(audio);
-        return;
-      }
-      pendingAudio.enqueue(audio);
-    },
-    setMediaTimestamp: (ts) => {
-      if (closed) {
-        return;
-      }
-      latestMediaTimestamp = ts;
-      bridge?.setMediaTimestamp(ts);
-    },
-    sendUserMessage: (text) => {
-      if (closed) {
-        return;
-      }
-      if (bridgeReady && bridge) {
-        bridge.sendUserMessage?.(text);
-        return;
-      }
-      const messageBytes = Buffer.byteLength(text, "utf8");
-      if (
-        pendingUserMessages.length >= GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGES ||
-        pendingUserMessageBytes + messageBytes > GOOGLE_REALTIME_LAZY_MAX_PENDING_USER_MESSAGE_BYTES
-      ) {
-        req.onError?.(
-          new Error("Google realtime voice pending user message queue overflow during startup"),
-        );
-        return;
-      }
-      pendingUserMessages.push(text);
-      pendingUserMessageBytes += messageBytes;
-    },
-    triggerGreeting: (instructions) => {
-      if (closed) {
-        return;
-      }
-      if (bridgeReady && bridge) {
-        bridge.triggerGreeting?.(instructions);
-        return;
-      }
-      pendingGreeting = instructions;
-    },
-    handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),
-    submitToolResult: (callId, result, options) =>
-      requireBridge().submitToolResult(callId, result, options),
-    acknowledgeMark: () => requireBridge().acknowledgeMark(),
-    close: () => {
-      closed = true;
-      bridgeReady = false;
-      providerTerminated = true;
-      pendingAudio.clear();
-      pendingUserMessages.length = 0;
-      pendingUserMessageBytes = 0;
-      pendingGreeting = undefined;
-      closeBridge();
-    },
-    isConnected: () => bridge?.isConnected() ?? false,
-  };
-}
-
-function createLazyGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
-  return {
-    id: "google",
-    label: "Google Live Voice",
-    autoSelectOrder: 20,
-    resolveConfig: ({ cfg, rawConfig }) => resolveGoogleRealtimeProviderConfig(rawConfig, cfg),
-    isConfigured: ({ cfg, providerConfig }) =>
-      Boolean(
-        normalizeOptionalString(providerConfig.apiKey) ??
-        normalizeOptionalString(cfg?.models?.providers?.google?.apiKey) ??
-        resolveGoogleRealtimeEnvApiKey(),
-      ),
-    createBridge: createLazyGoogleRealtimeVoiceBridge,
-    createBrowserSession: async (req) => {
-      const provider = await loadGoogleRealtimeVoiceProvider();
-      if (!provider.createBrowserSession) {
-        throw new Error("Google realtime voice browser sessions are unavailable");
-      }
-      return await provider.createBrowserSession(req);
-    },
   };
 }
 
@@ -420,7 +144,7 @@ export default definePluginEntry({
     api.registerCliBackend(buildGoogleGeminiCliBackend());
     registerGoogleGeminiCliProvider(api);
     registerGoogleProvider(api);
-    api.registerMemoryEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
     api.registerMusicGenerationProvider(createLazyGoogleMusicGenerationProvider());

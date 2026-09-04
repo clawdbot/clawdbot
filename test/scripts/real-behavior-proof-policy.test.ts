@@ -1,5 +1,6 @@
 // PR Context And Evidence Policy tests cover GitHub PR-body policy behavior.
 import { readFileSync } from "node:fs";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   NEEDS_PR_CONTEXT_LABEL,
@@ -636,7 +637,10 @@ describe("isMaintainerTeamMember", () => {
         timeoutMs: 5,
         token: "t",
       }),
-    ).rejects.toThrow(/maintainer membership lookup for u timed out after 5ms/);
+    ).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: "maintainer membership lookup for u timed out after 5ms",
+    });
   });
 
   it("times out stalled membership response bodies", async () => {
@@ -689,17 +693,3 @@ describe("readBoundedGitHubApiJson", () => {
     });
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

@@ -8,13 +8,20 @@ import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../../config/sessions.js";
-import { patchSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveSessionStorePathCore,
+} from "../../../config/sessions.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
-import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
+import {
+  getDeliveryAttemptCount,
+  getDeliveryLastError,
+  hasRetainedRequiredCompletionDelivery,
+} from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -108,7 +115,7 @@ export async function persistSubagentSessionTiming(
 
   const cfg = getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const startedAt = getSubagentSessionStartedAt(entry);
   const endedAt =
     typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
@@ -120,7 +127,7 @@ export async function persistSubagentSessionTiming(
       : getSubagentSessionRuntimeMs(entry);
   const status = resolveSubagentSessionStatus(entry);
 
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     { storePath, sessionKey: childSessionKey },
     (sessionEntry) => {
       // Recheck under the session-store write lock. A completion may have
@@ -270,6 +277,9 @@ export function reconcileOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
+  if (hasRetainedRequiredCompletionDelivery(params.entry)) {
+    return false;
+  }
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {

@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
-import { resolveStorePath } from "../../../config/sessions.js";
-import { resolveSessionTranscriptRuntimeReadTarget } from "../../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/selection.js";
+import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { createEmbeddedRunReplayState } from "../replay-state.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
@@ -44,6 +45,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   getPostCompactionAbortError: () => Error | undefined;
   setPostCompactionAbortController: (controller: AbortController | undefined) => void;
   clearPostCompactionAbortController: (controller: AbortController) => void;
+  permissionChange?: Parameters<typeof dispatchEmbeddedRunAttempt>[0]["permissionChange"];
 }) {
   const {
     runInput,
@@ -58,6 +60,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const {
     workspaceResolution,
     workspaceDir,
+    bootstrapWorkspaceDir,
     isCanonicalWorkspace,
     agentDir,
     resolvedSessionKey,
@@ -77,8 +80,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     notifyToolResult,
     resolveAttemptFastModeParam,
   } = runInput.progressController;
-  const { laneTaskAbortController, laneTaskReleaseController, noteLaneTaskProgress } =
-    runInput.laneController;
+  const { createAttemptControls } = runInput.laneController;
   const {
     requestedModelId,
     expectedHarnessArtifact,
@@ -99,12 +101,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);
   }
-  const basePrompt =
+  const prompt =
     sessionPromptState.activePrompt.override ??
     resolveEmbeddedAttemptBasePrompt({ provider, prompt: params.prompt });
-  const prompt = terminalRetryState.compactionContinuationInstruction
-    ? `${basePrompt}\n\n${terminalRetryState.compactionContinuationInstruction}`
-    : basePrompt;
   const resolvedAttemptApiKey = resolveAttemptDispatchApiKey({
     apiKeyInfo: runtime.apiKeyInfo,
     runtimeAuthState: runtime.runtimeAuthState,
@@ -120,11 +119,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const resolvedTranscriptTarget =
     reusableSessionTarget ??
     (resolvedSessionKey
-      ? await resolveSessionTranscriptRuntimeReadTarget({
+      ? await resolveSessionTranscriptRuntimeTarget({
           agentId: workspaceResolution.agentId,
           sessionId: sessionPromptState.sessionId,
           sessionKey: resolvedSessionKey,
-          storePath: resolveStorePath(params.config?.session?.store, {
+          storePath: resolveSessionStorePathCore(params.config?.session?.store, {
             agentId: workspaceResolution.agentId,
           }),
         })
@@ -137,6 +136,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           ...sessionPromptState.sessionWriterFence,
         }
       : undefined;
+  await sessionPromptState.settleOwnedTranscriptProjection(
+    resolvedSessionTarget,
+    params.abortSignal,
+  );
   const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
@@ -165,7 +168,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtimePlan,
   });
   const trajectoryRecorder =
-    runtime.agentHarness.id === CODEX_HARNESS_ID && !params.disableTrajectory
+    runtime.agentHarness.id === CODEX_HARNESS_ID &&
+    !params.disableTrajectory &&
+    params.sessionPersistence !== "detached"
       ? createTrajectoryRuntimeRecorder({
           cfg: params.config,
           env: process.env,
@@ -200,36 +205,59 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     emitStartupStageSummary(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
     startupStagesEmitted = true;
   }
+  const fallbackReason = input.resolveRuntimeFallbackReason();
+  recordAdmittedModelRoutingDecision({
+    admittedRunContext: params.admittedRunContext,
+    abortSignal: params.abortSignal,
+    requestedProvider: params.modelRoutingProvenance?.requestedProvider ?? runInput.provider,
+    requestedModel:
+      params.modelRoutingProvenance?.requestedModel ?? requestedModelId ?? runInput.modelId,
+    selectedProvider: provider,
+    selectedModel: modelId,
+    selectionMode:
+      runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "explicit" : "automatic",
+    credentialProfileId: runtime.lastProfileId,
+    fallbackSelected:
+      params.modelRoutingProvenance?.stage === "fallback" || Boolean(fallbackReason),
+    fallbackReason: params.modelRoutingProvenance?.fallbackReason,
+  });
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,
+    permissionChange: input.permissionChange,
+    runStartedAtMs: runInput.startedAtMs,
     transcriptOwnership: params.sessionManager
       ? { kind: "caller-owned", sessionManager: params.sessionManager }
       : { kind: "runtime-target", sessionTarget: resolvedSessionTarget },
     runtime: {
+      contextEngineAgentId: runInput.contextEngineAgentId,
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,
       sessionKey: resolvedSessionKey,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
       workspaceDir,
+      bootstrapWorkspaceDir,
       isCanonicalWorkspace,
       agentDir,
       preparedModelRuntime: runInput.preparedModelRuntime,
       contextEngine: nativeModelOwned ? undefined : contextEngine,
       contextTokenBudget: runtime.contextTokenBudget,
+      authoredContextTokenCap: runtime.authoredContextTokenCap,
       contextWindowInfo: runtime.contextWindowInfo,
       prompt,
       provider,
       modelId,
       requestedModelId,
-      fallbackActive: modelId !== requestedModelId || Boolean(input.resolveRuntimeFallbackReason()),
-      fallbackReason: input.resolveRuntimeFallbackReason(),
+      fallbackActive: modelId !== requestedModelId || Boolean(fallbackReason),
+      fallbackReason,
       agentHarnessId: runtime.agentHarness.id,
+      nativeSessionRuntime: preparedRuntime.nativeSessionRuntime,
       expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
       runtimePlan,
       model: effectiveModel,
       resolvedApiKey: resolvedAttemptApiKey,
       authProfileId: runtime.lastProfileId,
-      authProfileIdSource: lockedProfileId ? "user" : "auto",
+      authProfileIdSource:
+        runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "user" : "auto",
       initialReplayState: input.replayState,
       authStorage,
       authProfileStore: resolveRunAttemptAuthProfileStore(),
@@ -252,9 +280,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     control: {
       lifecycleGeneration,
       pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
-      laneTaskAbortController,
-      laneTaskReleaseController,
-      noteLaneTaskProgress,
+      createAttemptControls,
       onToolOutcome: input.observeToolOutcome,
       isTurnTainted: input.isTurnTainted,
       allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,

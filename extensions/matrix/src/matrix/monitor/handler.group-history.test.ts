@@ -434,6 +434,95 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     );
   });
 
+  it.each([
+    {
+      description: "filename-only image",
+      msgtype: "m.image",
+      body: "photo.jpg",
+      expected: "[matrix image attachment]",
+    },
+    {
+      description: "captioned image",
+      msgtype: "m.image",
+      body: "look at this",
+      filename: "photo.jpg",
+      expected: "look at this\n\n[matrix image attachment]",
+    },
+    {
+      description: "filename-only video",
+      msgtype: "m.video",
+      body: "clip.mp4",
+      expected: "[matrix video attachment]",
+    },
+  ])("preserves $description markers in pending room history", async (attachment) => {
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const downloadContent = vi.fn();
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
+      client: { downloadContent },
+    });
+
+    await handler(
+      DEFAULT_ROOM,
+      createMatrixRoomMessageEvent({
+        eventId: "$history-attachment",
+        originServerTs: 1000,
+        content: {
+          msgtype: attachment.msgtype,
+          body: attachment.body,
+          ...(attachment.filename ? { filename: attachment.filename } : {}),
+          url: "mxc://example.org/history-attachment",
+        },
+      }),
+    );
+
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(downloadContent).not.toHaveBeenCalled();
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$history-trigger", body: "trigger", ts: 2000 }),
+    );
+
+    expect(inboundHistoryBodies(finalizeInboundContext, 0)).toEqual([attachment.expected]);
+    expect(downloadContent).not.toHaveBeenCalled();
+  });
+
+  it("preserves encrypted media-only history when a blank top-level URL masks its file URL", async () => {
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext);
+
+    await handler(
+      DEFAULT_ROOM,
+      createMatrixRoomMessageEvent({
+        eventId: "$encrypted-media-a",
+        originServerTs: 1000,
+        content: {
+          msgtype: "m.image",
+          body: " \t ",
+          url: "",
+          file: {
+            url: "mxc://example.org/encrypted-media-a",
+            key: { kty: "oct", key_ops: ["encrypt"], alg: "A256CTR", k: "secret", ext: true },
+            iv: "iv",
+            hashes: { sha256: "hash" },
+            v: "v2",
+          },
+        },
+      }),
+    );
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$trigger-encrypted-media", body: "trigger", ts: 2000 }),
+    );
+
+    expectSomeBodyContaining(
+      inboundHistoryBodies(finalizeInboundContext, 0),
+      "[matrix image attachment]",
+    );
+  });
+
   it("includes skipped poll updates in next trigger history", async () => {
     const getEvent = vi.fn(async () => ({
       event_id: "$poll",

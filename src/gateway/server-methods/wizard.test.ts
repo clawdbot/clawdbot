@@ -12,6 +12,35 @@ import {
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
+
+const setupTargetLock = vi.hoisted(() => ({
+  beforeRelease: undefined as Promise<void> | undefined,
+  releaseReached: undefined as (() => void) | undefined,
+}));
+
+vi.mock("../../infra/file-lock.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/file-lock.js")>(
+    "../../infra/file-lock.js",
+  );
+  return {
+    ...actual,
+    withFileLock: async <T>(
+      filePath: string,
+      options: Parameters<typeof actual.acquireFileLock>[1],
+      run: () => Promise<T>,
+    ): Promise<T> => {
+      const lock = await actual.acquireFileLock(filePath, options);
+      try {
+        return await run();
+      } finally {
+        setupTargetLock.releaseReached?.();
+        await setupTargetLock.beforeRelease;
+        await lock.release();
+      }
+    },
+  };
+});
+
 import {
   runExclusiveSystemAgentSetupActivation,
   whenAdmittedWizardSessionSettled,
@@ -186,15 +215,18 @@ describe("wizard setup ownership", () => {
       respond: blockedRespond,
       context,
     } as never);
-    expect(blockedRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-    expect(wizardRunner).not.toHaveBeenCalled();
+    try {
+      expect(blockedRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE", details: { code: "SETUP_ADMISSION_BUSY" } }),
+      );
+      expect(wizardRunner).not.toHaveBeenCalled();
+    } finally {
+      releaseStructured.resolve();
+      await structured;
+    }
 
-    releaseStructured.resolve();
-    await structured;
     const admittedRespond = vi.fn();
     await expectDefined(
       wizardHandlers["wizard.start"],
@@ -239,18 +271,24 @@ describe("wizard setup ownership", () => {
       systemAgentHandlers["openclaw.setup.activate"],
       "openclaw.setup.activate test invariant",
     )({ params: { kind: "claude-cli" }, respond: activateRespond } as never);
-    expect(activateRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-    );
-
-    runnerSettled.resolve();
-    const session = expectDefined(
-      [...tracker.wizardSessions.values()][0],
-      "active classic setup session",
-    );
-    await whenAdmittedWizardSessionSettled(session);
+    try {
+      expect(activateRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          retryable: true,
+          details: { code: "SETUP_ADMISSION_BUSY" },
+        }),
+      );
+    } finally {
+      runnerSettled.resolve();
+      const session = expectDefined(
+        [...tracker.wizardSessions.values()][0],
+        "active classic setup session",
+      );
+      await whenAdmittedWizardSessionSettled(session);
+    }
     const structuredTask = vi.fn(async () => "ok");
     await expect(runExclusiveSystemAgentSetupActivation(structuredTask)).resolves.toBe("ok");
     expect(structuredTask).toHaveBeenCalledOnce();
@@ -405,16 +443,18 @@ describe("wizard setup ownership", () => {
       respond: blockedRespond,
       context,
     } as never);
-    expect(blockedRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-
-    runnerSettled.resolve();
-    await vi.waitFor(() => {
-      expect(tracker.wizardSessions.has(start.sessionId)).toBe(false);
-    });
+    try {
+      expect(blockedRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE", details: { code: "SETUP_ADMISSION_BUSY" } }),
+      );
+    } finally {
+      runnerSettled.resolve();
+      await vi.waitFor(() => {
+        expect(tracker.wizardSessions.has(start.sessionId)).toBe(false);
+      });
+    }
 
     const replacementRespond = vi.fn();
     await expectDefined(
@@ -428,6 +468,96 @@ describe("wizard setup ownership", () => {
     expect(replacementRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
 
     await cancelWizardSessions(tracker.wizardSessions);
+  });
+
+  it.each([
+    ["wizard.status", "done"],
+    ["wizard.status", "error"],
+    ["wizard.next", "done"],
+    ["wizard.next", "error"],
+  ] as const)("settles setup admission before %s returns %s", async (method, terminal) => {
+    const runnerSettled = createDeferred();
+    const releaseSetupTargetLock = createDeferred();
+    const setupTargetLockReleaseReached = createDeferred();
+    setupTargetLock.beforeRelease = releaseSetupTargetLock.promise;
+    setupTargetLock.releaseReached = setupTargetLockReleaseReached.resolve;
+    const tracker = createWizardSessionTracker();
+    const context = {
+      ...tracker,
+      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
+        prompter.progress("working");
+        await runnerSettled.promise;
+        if (terminal === "error") {
+          throw new Error("Provider rejected sign-in");
+        }
+      },
+    };
+    let admittedSession: import("../../wizard/session.js").WizardSession | undefined;
+
+    try {
+      const startRespond = vi.fn();
+      await expectDefined(
+        wizardHandlers["wizard.start"],
+        "wizard.start test invariant",
+      )({ params: { mode: "local" }, respond: startRespond, context } as never);
+      const [, start] = startRespond.mock.calls[0] ?? [];
+      expect(start).toMatchObject({ status: "running" });
+      admittedSession = expectDefined(
+        tracker.wizardSessions.get(start.sessionId),
+        "admitted classic setup session",
+      );
+
+      runnerSettled.resolve();
+      await setupTargetLockReleaseReached.promise;
+      expect(admittedSession.getStatus()).toBe(terminal);
+      await expect(runExclusiveSystemAgentSetupActivation(async () => undefined)).rejects.toThrow(
+        "setup is already in progress",
+      );
+
+      const replacementRespond = vi.fn();
+      let replacementStart: Promise<void> | undefined;
+      const statusRespond = vi.fn(() => {
+        replacementStart = Promise.resolve(
+          expectDefined(
+            wizardHandlers["wizard.start"],
+            "wizard.start test invariant",
+          )({ params: { mode: "local" }, respond: replacementRespond, context } as never),
+        );
+      });
+      const statusTask = Promise.resolve(
+        expectDefined(
+          wizardHandlers[method],
+          `${method} test invariant`,
+        )({ params: { sessionId: start.sessionId }, respond: statusRespond, context } as never),
+      );
+
+      await Promise.resolve();
+      expect(statusRespond).not.toHaveBeenCalled();
+      releaseSetupTargetLock.resolve();
+      await statusTask;
+      await vi.waitFor(() => expect(replacementStart).toBeDefined());
+      await replacementStart;
+
+      expect(statusRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: terminal }),
+        undefined,
+      );
+      expect(replacementRespond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "running" }),
+        undefined,
+      );
+    } finally {
+      runnerSettled.resolve();
+      releaseSetupTargetLock.resolve();
+      if (admittedSession) {
+        await whenAdmittedWizardSessionSettled(admittedSession);
+      }
+      await cancelWizardSessions(tracker.wizardSessions);
+      setupTargetLock.beforeRelease = undefined;
+      setupTargetLock.releaseReached = undefined;
+    }
   });
 
   it.each([

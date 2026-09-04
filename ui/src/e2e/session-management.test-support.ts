@@ -1,11 +1,12 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
+  startControlUiE2eServer,
   waitForConfirmModal,
   type MockGatewayControls,
   type MockGatewayRequest,
@@ -16,56 +17,14 @@ export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForC
 
 export const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-export const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "thread-management",
-);
 
-export function createSessionManagementE2eSuite() {
+export function createSessionManagementE2eSuite(source = false) {
   return createControlUiE2eSuite({
     name: "Control UI session management mocked Gateway E2E",
+    ...(source ? { startServer: () => startControlUiE2eServer(undefined, { source: true }) } : {}),
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
   });
-}
-
-export function sessionRow(
-  key: string,
-  label: string,
-  updatedAt: number,
-  options: {
-    archived?: boolean;
-    category?: string;
-    pinned?: boolean;
-    pinnedAt?: number;
-    hasActiveRun?: boolean;
-    unread?: boolean;
-    status?: string;
-    spawnedBy?: string;
-    startedAt?: number;
-    endedAt?: number;
-    childSessions?: string[];
-    execNode?: string;
-    forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
-    worktree?: { id?: string; branch?: string; repoRoot?: string };
-  } = {},
-) {
-  return {
-    contextTokens: null,
-    displayName: label,
-    hasActiveRun: false,
-    key,
-    kind: "direct",
-    label,
-    model: "gpt-5.5",
-    modelProvider: "openai",
-    status: "done",
-    totalTokens: 0,
-    updatedAt,
-    ...options,
-  };
 }
 
 export function sessionsListResponse(
@@ -95,12 +54,7 @@ export function sessionsListResponse(
   };
 }
 
-export function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+export const requireRecord = createRequireRecord("record", "expected-object-value");
 
 export async function waitForPatch(
   gateway: MockGatewayControls,
@@ -121,8 +75,33 @@ export async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
-export async function activateMenuItem(item: Locator): Promise<void> {
-  await item.evaluate((element) => (element as HTMLElement).click());
+/** Dispatches before a successful action can remove its own control from the DOM. */
+export async function activateSelfRemovingControl(control: Locator): Promise<void> {
+  await control.evaluate((element) => {
+    const target = element as HTMLElement & { disabled?: boolean };
+    const style = getComputedStyle(target);
+    const bounds = target.getBoundingClientRect();
+    const root = target.getRootNode();
+    const hitTestRoot = root instanceof ShadowRoot ? root : document;
+    const hitTarget = hitTestRoot.elementFromPoint(
+      bounds.left + bounds.width / 2,
+      bounds.top + bounds.height / 2,
+    );
+    if (
+      !target.isConnected ||
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      bounds.width <= 0 ||
+      bounds.height <= 0 ||
+      target.disabled === true ||
+      target.getAttribute("aria-disabled") === "true" ||
+      !hitTarget ||
+      (hitTarget !== target && !target.contains(hitTarget))
+    ) {
+      throw new Error("Self-removing control must be visible and enabled before activation");
+    }
+    target.click();
+  });
 }
 
 export function trimmedTextContents(locator: Locator): Promise<string[]> {
@@ -160,7 +139,11 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
   expect(index).toBeGreaterThanOrEqual(0);
   await expect
     .poll(() =>
-      page.locator("openclaw-session-menu > wa-dropdown > wa-dropdown-item:focus").count(),
+      page
+        .locator(
+          ":is(openclaw-session-menu, openclaw-chat-header-session-menu) > wa-dropdown > wa-dropdown-item:focus",
+        )
+        .count(),
     )
     .toBe(1);
   await page.keyboard.press("Home");
@@ -183,16 +166,19 @@ export async function submitInputDialog(page: Page, value: string): Promise<void
   await field.waitFor({ state: "detached" });
 }
 
-export async function captureUiProof(page: Page, fileName: string) {
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   // Dialogs and menus fade in, so an undisabled capture can land mid-transition
   // and prove nothing about the state it was taken for.
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(owner.artifactDir, fileName),
   });
 }

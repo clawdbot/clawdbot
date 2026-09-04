@@ -12,8 +12,8 @@ vi.mock("../media/input-files.js", async () => {
 });
 
 import {
-  agentCommand,
-  getFreePort,
+  agentCommandMock,
+  getGatewayTestPort,
   installGatewayTestHooks,
   startGatewayServerWithRetries,
 } from "./test-helpers.js";
@@ -28,7 +28,7 @@ let port: number;
 
 beforeAll(async () => {
   const started = await startGatewayServerWithRetries({
-    port: await getFreePort(),
+    port: await getGatewayTestPort(),
     opts: {
       host: "127.0.0.1",
       auth: { mode: "none" },
@@ -87,7 +87,7 @@ describe("OpenResponses file-only input that renders to images", () => {
         { type: "image", data: Buffer.alloc(8, 1).toString("base64"), mimeType: "image/png" },
       ],
     });
-    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
 
     const res = await postResponses({
       model: "openclaw",
@@ -112,8 +112,8 @@ describe("OpenResponses file-only input that renders to images", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(agentCommand).toHaveBeenCalledTimes(1);
-    const opts = agentCommand.mock.calls[0]?.[0] as { message?: string; images?: unknown[] };
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const opts = agentCommandMock.mock.calls[0]?.[0] as { message?: string; images?: unknown[] };
     expect(opts.message ?? "").not.toBe("");
     expect(opts.images?.length).toBe(1);
     await res.text();
@@ -125,7 +125,7 @@ describe("OpenResponses file-only input that renders to images", () => {
       text: "",
       images: [],
     });
-    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
 
     const res = await postResponses({
       model: "openclaw",
@@ -150,8 +150,8 @@ describe("OpenResponses file-only input that renders to images", () => {
 
     const body = await res.text();
     expect(res.status, body).toBe(200);
-    expect(agentCommand).toHaveBeenCalledTimes(1);
-    const opts = agentCommand.mock.calls[0]?.[0] as { extraSystemPrompt?: string };
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const opts = agentCommandMock.mock.calls[0]?.[0] as { extraSystemPrompt?: string };
     expect(opts.extraSystemPrompt).toContain('<file name="empty.txt">');
     expect(opts.extraSystemPrompt).toContain("[No extractable text]");
   });
@@ -177,7 +177,7 @@ describe("OpenResponses file-only input that renders to images", () => {
       text: "historical file contents",
       images: [],
     });
-    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
 
     const res = await postResponses({
       model: "openclaw",
@@ -195,8 +195,8 @@ describe("OpenResponses file-only input that renders to images", () => {
     const body = await res.text();
     expect(res.status, body).toBe(200);
     expect(extractFileContentFromSourceMock).not.toHaveBeenCalled();
-    expect(agentCommand).toHaveBeenCalledTimes(1);
-    const opts = agentCommand.mock.calls[0]?.[0] as {
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const opts = agentCommandMock.mock.calls[0]?.[0] as {
       message?: string;
       images?: unknown[];
       extraSystemPrompt?: string;
@@ -215,7 +215,7 @@ describe("OpenResponses file-only input that renders to images", () => {
         images: [],
       }),
     );
-    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
 
     const res = await postResponses({
       model: "openclaw",
@@ -245,7 +245,7 @@ describe("OpenResponses file-only input that renders to images", () => {
     const body = await res.text();
     expect(res.status, body).toBe(200);
     expect(extractFileContentFromSourceMock).toHaveBeenCalledTimes(1);
-    const opts = agentCommand.mock.calls[0]?.[0] as {
+    const opts = agentCommandMock.mock.calls[0]?.[0] as {
       images?: unknown[];
       extraSystemPrompt?: string;
     };
@@ -262,7 +262,7 @@ describe("OpenResponses file-only input that renders to images", () => {
         text: "should not become current input",
         images: [],
       });
-      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
 
       const res = await postResponses({
         model: "openclaw",
@@ -283,7 +283,7 @@ describe("OpenResponses file-only input that renders to images", () => {
       const body = await res.text();
       expect(res.status, body).toBe(200);
       expect(extractFileContentFromSourceMock).not.toHaveBeenCalled();
-      const opts = agentCommand.mock.calls[0]?.[0] as {
+      const opts = agentCommandMock.mock.calls[0]?.[0] as {
         images?: unknown[];
         extraSystemPrompt?: string;
       };
@@ -295,7 +295,7 @@ describe("OpenResponses file-only input that renders to images", () => {
   it.each(["input_image", "input_file"] as const)(
     "does not fetch a historical %s URL on a newer text-only turn",
     async (type) => {
-      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
 
       const res = await postResponses({
         model: "openclaw",
@@ -311,7 +311,7 @@ describe("OpenResponses file-only input that renders to images", () => {
 
       const body = await res.text();
       expect(res.status, body).toBe(200);
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(agentCommandMock).toHaveBeenCalledTimes(1);
       expect(extractFileContentFromSourceMock).not.toHaveBeenCalled();
     },
   );
@@ -331,7 +331,7 @@ describe("OpenResponses file-only input that renders to images", () => {
     });
 
     expect(res.status).toBe(400);
-    expect(agentCommand).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
     expect(extractFileContentFromSourceMock).not.toHaveBeenCalled();
     await res.text();
   });
