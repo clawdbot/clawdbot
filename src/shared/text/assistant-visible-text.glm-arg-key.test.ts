@@ -31,6 +31,7 @@ describe("stripAssistantInternalScaffolding GLM arg_key", () => {
 
   it("holds an incomplete <tool_call>exec prefix until GLM args arrive", () => {
     expectVisibleText("Visible\n<tool_call>exec", "Visible\n");
+    expectVisibleText("Visible\n<tool_call>x", "Visible\n");
     expectVisibleText("Visible\n<tool_call>exec ", "Visible\n");
     expectVisibleText("Visible\n<tool_call>exec\n", "Visible\n");
     expectVisibleText("Visible\n<tool_call>exec<arg_key>", "Visible\n");

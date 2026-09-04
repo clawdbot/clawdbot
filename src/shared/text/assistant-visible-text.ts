@@ -55,7 +55,7 @@ const TOOL_CALL_GLM_ARG_CLOSED_RE =
 // Hold a <tool_call> tool-name / whitespace / partial <arg_key> prefix until
 // classified. A later replacement cannot unsay an emitted prefix.
 const TOOL_CALL_GLM_ARG_INCOMPLETE_RE =
-  /^(?:[A-Za-z_][\w./:-]+)?(?:\s+|\s*<\s*(?:arg_key\b[^>]*)?|\s*<\s*arg_key\b[^>]*>[^\s<]*)?$/i;
+  /^(?:[A-Za-z_][\w./:-]*)?(?:\s+|\s*<\s*(?:arg_key\b[^>]*)?|\s*<\s*arg_key\b[^>]*>[^\s<]*)?$/i;
 const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
