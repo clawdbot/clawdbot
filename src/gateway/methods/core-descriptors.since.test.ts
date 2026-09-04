@@ -82,6 +82,7 @@ const TRAIN_2026_7_METHODS = [
 
 const CURRENT_TRAIN_METHODS = [
   "canvas.document.view",
+  "assistant.media.get",
   "diagnostics.lanes",
   "plugins.inspect",
   "plugins.controlUi.list",

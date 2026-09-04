@@ -35,7 +35,7 @@ import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.t
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import type { MessageActionDetails } from "./chat-message-markdown.ts";
-import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { AssistantMediaResolver, ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
 import {
   dismissConfirmedActionPopovers,
@@ -123,6 +123,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   localMediaPreviewRoots?: string[];
   connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
+  resolveAssistantMedia?: AssistantMediaResolver;
   resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;

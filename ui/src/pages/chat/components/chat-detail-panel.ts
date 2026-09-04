@@ -108,13 +108,17 @@ class ChatDetailPanel extends OpenClawLightDomElement {
 
   protected override willUpdate(changed: Map<string, unknown>) {
     const previousRuntime = changed.get("attachmentRuntime");
-    if (
-      previousRuntime &&
-      typeof previousRuntime === "object" &&
-      "connectionEpoch" in previousRuntime &&
-      previousRuntime.connectionEpoch !== this.attachmentRuntime.connectionEpoch
-    ) {
-      releaseChatMediaResourceSubscriber(this.requestAttachmentUpdate);
+    if (previousRuntime && typeof previousRuntime === "object") {
+      const previousConnectionEpoch =
+        "connectionEpoch" in previousRuntime ? previousRuntime.connectionEpoch : undefined;
+      const previousAssistantMediaScope =
+        "assistantMediaScope" in previousRuntime ? previousRuntime.assistantMediaScope : undefined;
+      if (
+        previousConnectionEpoch !== this.attachmentRuntime.connectionEpoch ||
+        previousAssistantMediaScope !== this.attachmentRuntime.assistantMediaScope
+      ) {
+        releaseChatMediaResourceSubscriber(this.requestAttachmentUpdate);
+      }
     }
     if (!changed.has("content")) {
       return;

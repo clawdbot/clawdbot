@@ -142,6 +142,83 @@ describe("task detail panel", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("scopes assistant media requests to a subagent task transcript session", async () => {
+    const childSessionKey = "agent:work:task-child-media";
+    const source = "/home/work/.openclaw/media/outbound/task-report.png";
+    const task: TaskSummary = {
+      id: "task-child-media",
+      taskId: "task-child-media",
+      status: "completed",
+      runtime: "subagent",
+      agentId: "work",
+      title: "Child media work",
+      sessionKey: "agent:main:main",
+      childSessionKey,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const request = vi.fn(async () => ({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "image", url: source, alt: "Task report" }],
+          timestamp: 2_000,
+        },
+      ],
+    }));
+    const resolveAssistantMedia = vi.fn(async () => ({
+      available: true as const,
+      mediaTicket: "task-child-ticket",
+      mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }));
+    const host: TaskDetailHost = {
+      sessionKey: "agent:main:main",
+      client: createGatewayBrowserClientFixture({ request }),
+      connected: true,
+      hello: null,
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+      sessionsResultAgentId: "work",
+    };
+    const sessions: SessionsListResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [{ key: childSessionKey, kind: "direct", updatedAt: 2_000 }],
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const chat = {
+      ...threadProps("pane-task-child-media", host.sessionKey),
+      sessions,
+      resolveAssistantMedia,
+      onRequestUpdate: () => rerender(),
+    };
+    const rerender = () => {
+      render(
+        html`${renderTaskDetailPanel({
+          backgroundTasks: backgroundTasks(task),
+          chat,
+          host,
+          task,
+          transcript,
+        })}`,
+        container,
+      );
+      transcript.hostUpdated();
+    };
+
+    rerender();
+    await vi.waitFor(() => expect(host.taskDetailState).toBeDefined());
+    rerender();
+    transcript.hostConnected();
+    await flushDeferredRowPrune();
+    await vi.waitFor(() =>
+      expect(resolveAssistantMedia).toHaveBeenCalledWith(source, childSessionKey),
+    );
+    transcript.hostDisconnected();
+  });
+
   it.each([
     {
       name: "uses qualified child session archive attribution",

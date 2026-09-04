@@ -5,7 +5,10 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
-import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
+import {
+  resolveAssistantAttachmentAuthToken,
+  resolveChatAssistantMedia,
+} from "../chat-pane-state.ts";
 import { createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
@@ -149,6 +152,37 @@ describe("chat transcript invalidation", () => {
       }
     },
   );
+
+  it("keeps settled rows idle when the assistant media resolver callback is recreated", async () => {
+    const props = {
+      ...threadProps("pane-media-resolver-identity", "agent:main:main", [
+        {
+          role: "assistant",
+          content: "Stable reply",
+          timestamp: 1_000,
+          __openclaw: { id: "stable-media-resolver-row" },
+        },
+      ]),
+      resolveAssistantMedia: vi.fn(async () => null),
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+
+    rerender();
+    transcript.hostConnected();
+    await flushDeferredRowPrune();
+    const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+
+    props.resolveAssistantMedia = vi.fn(async () => null);
+    rerender();
+
+    expect(renderGroup).not.toHaveBeenCalled();
+    transcript.hostDisconnected();
+  });
 
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";
@@ -294,32 +328,16 @@ describe("chat transcript invalidation", () => {
     transcript.hostDisconnected();
   });
 
-  it("reconciles guarded local attachments when pane preview roots change", async () => {
-    let previousSignal: AbortSignal | undefined;
-    const fetchMock = vi.fn((_source: string, init?: RequestInit) => {
-      if (fetchMock.mock.calls.length === 1) {
-        return new Promise<Response>((_resolve, reject) => {
-          previousSignal = init?.signal ?? undefined;
-          previousSignal?.addEventListener(
-            "abort",
-            () => reject(new DOMException("preview roots changed", "AbortError")),
-            { once: true },
-          );
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({
-          available: true,
-          mediaTicket: "root-restored-ticket",
-          mediaTicketExpiresAt: new Date(Date.now() + 90_000).toISOString(),
-        }),
-      } as Response);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
+  it("keeps session-authorized local attachments when bootstrap preview roots change", async () => {
+    const request = vi.fn(() =>
+      Promise.resolve({
+        available: true,
+        mediaTicket: "session-authorized-ticket",
+        mediaTicketExpiresAt: new Date(Date.now() + 90_000).toISOString(),
+      }),
+    );
     const client = {
-      request: vi.fn(async () => null),
+      request,
     } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
     const sessions = {} as Parameters<typeof createTestChatPane>[0]["sessions"];
     const { pane, state } = createTestChatPane({ client, sessions });
@@ -348,8 +366,10 @@ describe("chat transcript invalidation", () => {
         renderChatThread(
           {
             ...threadProps("pane-local-media-roots", state.sessionKey, messages),
-            assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
+            connectionEpoch: state.connectionEpoch,
             localMediaPreviewRoots: state.localMediaPreviewRoots,
+            resolveAssistantMedia: (mediaSource, sessionKey = state.sessionKey) =>
+              resolveChatAssistantMedia(state, mediaSource, sessionKey),
             onRequestUpdate: renderPane,
           },
           transcript,
@@ -365,49 +385,42 @@ describe("chat transcript invalidation", () => {
     transcript.hostUpdated();
     await flushDeferredRowPrune();
 
-    const previousResource = observeChatMediaResource(
-      "assistant-attachment",
-      `::test-auth-token::${source}`,
+    const cacheKey = `::gateway:${state.connectionEpoch}::${state.sessionKey}::${source}`;
+    const previousResource = observeChatMediaResource("assistant-attachment", cacheKey);
+    expect(request).toHaveBeenCalledWith(
+      "assistant.media.get",
+      { source, sessionKey: state.sessionKey },
+      { timeoutMs: 30_000 },
     );
-    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(previousResource.subscribers.size).toBe(1);
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__download")?.getAttribute("href"),
+      ).toContain("mediaTicket=session-authorized-ticket");
+    });
 
-    const config = {
+    configPane.applyApplicationConfig({
       ...pane.context.config.current,
       localMediaPreviewRoots: ["/tmp/elsewhere"],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
-    };
-    configPane.applyApplicationConfig(config);
-    await flushDeferredRowPrune();
-
-    expect(previousSignal?.aborted).toBe(true);
-    expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(
-      container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent,
-    ).toContain("Outside allowed folders");
-
-    configPane.applyApplicationConfig({
-      ...config,
-      localMediaPreviewRoots: ["/tmp/openclaw"],
     });
     await flushDeferredRowPrune();
 
-    const restoredResource = observeChatMediaResource(
-      "assistant-attachment",
-      `::test-auth-token::${source}`,
+    const currentResource = observeChatMediaResource("assistant-attachment", cacheKey);
+    expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
+    expect(isChatMediaResourceCurrent(currentResource)).toBe(true);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      "assistant.media.get",
+      { source, sessionKey: state.sessionKey },
+      { timeoutMs: 30_000 },
     );
-    const metadataCalls = fetchMock.mock.calls.filter(([input]) => input.includes("meta=1"));
-    expect(metadataCalls).toHaveLength(2);
-    expect(new Headers(metadataCalls[1]?.[1]?.headers).get("Authorization")).toBe(
-      "Bearer test-auth-token",
-    );
-    expect(isChatMediaResourceCurrent(restoredResource)).toBe(true);
-    expect(restoredResource.subscribers.size).toBe(1);
+    expect(currentResource.subscribers.size).toBe(1);
+    expect(container.textContent).not.toContain("Outside allowed folders");
     expect(
       container.querySelector(".chat-assistant-attachment-card__download")?.getAttribute("href"),
-    ).toContain("mediaTicket=root-restored-ticket");
+    ).toContain("mediaTicket=session-authorized-ticket");
 
     releaseChatMediaResourceSubscriber(renderPane);
     transcript.hostDisconnected();

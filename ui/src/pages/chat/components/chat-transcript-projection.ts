@@ -287,6 +287,7 @@ export function projectChatTranscript(
     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
     connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
+    resolveAssistantMedia: props.resolveAssistantMedia,
     resolveArtifactDownload: props.resolveArtifactDownload,
     onRequestOpenImage: props.onRequestOpenImage,
     onOpenImage: props.onOpenImage,

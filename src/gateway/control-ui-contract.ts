@@ -64,6 +64,21 @@ export type ControlUiSessionPreview =
     }
   | { status: "unavailable" };
 
+/** Short-lived local-media capability minted for an authenticated Control UI caller. */
+export type AssistantMediaGetResult =
+  | {
+      available: true;
+      mediaTicket: string;
+      mediaTicketExpiresAt: string;
+      mimeType?: string;
+      playback?: "native" | "transcode";
+      sizeBytes?: number;
+      durationMs?: number;
+      width?: number;
+      height?: number;
+    }
+  | { available: false; reason: string; code: string };
+
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
 /** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */

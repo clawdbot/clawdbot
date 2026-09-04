@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -24,26 +25,23 @@ suite.define(() => {
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
       const url = new URL(route.request().url());
       requestedMediaUrls.push(url);
-      if (url.searchParams.get("meta") === "1") {
-        expect(route.request().headers().authorization).toBe("Bearer e2e-device-token");
-        await route.fulfill({
-          contentType: "application/json",
-          body: JSON.stringify({
-            available: true,
-            mediaTicket: "ticket-dollar-home",
-            mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-          }),
-        });
-        return;
-      }
+      expect(route.request().headers().authorization).toBeUndefined();
       await route.fulfill({
         contentType: "audio/mpeg",
         body: createPlaybackMediaFixture("mp3"),
       });
     });
 
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       localMediaPreviewRoots: ["/home/us$&r/media"],
+      featureMethods: [...defaultControlUiFeatureMethods, "assistant.media.get"],
+      methodResponses: {
+        "assistant.media.get": {
+          available: true,
+          mediaTicket: "ticket-dollar-home",
+          mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        },
+      },
       historyMessages: [
         {
           id: "assistant-dollar-home-audio",
@@ -69,15 +67,16 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const attachment = page.locator("openclaw-chat-audio-player");
       await attachment.waitFor({ state: "visible", timeout: 10_000 });
+      const request = await gateway.waitForRequest("assistant.media.get");
+      expect(request.params).toEqual({ source, sessionKey: "agent:main:main" });
       await expect
         .poll(() => requestedMediaUrls.length, { timeout: 10_000 })
-        .toBeGreaterThanOrEqual(2);
-      expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
-      expect(requestedMediaUrls[0]?.searchParams.get("source")).toBe(source);
+        .toBeGreaterThanOrEqual(1);
+      expect(requestedMediaUrls.every((url) => url.searchParams.get("meta") !== "1")).toBe(true);
       expect(
-        requestedMediaUrls
-          .slice(1)
-          .some((url) => url.searchParams.get("mediaTicket") === "ticket-dollar-home"),
+        requestedMediaUrls.some(
+          (url) => url.searchParams.get("mediaTicket") === "ticket-dollar-home",
+        ),
       ).toBe(true);
       const downloadHref = await attachment
         .locator(".chat-assistant-attachment-card__download")

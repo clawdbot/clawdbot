@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
@@ -28,38 +29,21 @@ suite.define(() => {
         const sessionId = "image-handoff-session";
         const source = "media://inbound/stable-preview.png";
         const prompt = "Keep this image visible while the prompt is accepted.";
-        let releaseMetadata!: () => void;
         let releaseImage!: () => void;
-        const metadataGate = new Promise<void>((resolve) => {
-          releaseMetadata = resolve;
-        });
         const imageGate = new Promise<void>((resolve) => {
           releaseImage = resolve;
         });
-        let metadataRequested = false;
         let imageRequested = false;
+        let mediaResolved = false;
         await page.route("**/__openclaw__/assistant-media?**", async (route) => {
           const request = route.request();
           const url = new URL(request.url());
           expect(url.searchParams.get("source")).toBe(source);
-          if (url.searchParams.get("meta") === "1") {
-            metadataRequested = true;
-            expect(request.headers().authorization).toBe("Bearer e2e-device-token");
-            await metadataGate;
-            await route.fulfill({
-              json: {
-                available: true,
-                mediaTicket: "stable-image-ticket",
-                mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-              },
-            });
-          } else {
-            imageRequested = true;
-            expect(url.searchParams.get("mediaTicket")).toBe("stable-image-ticket");
-            expect(request.headers().authorization).toBeUndefined();
-            await imageGate;
-            await route.fulfill({ contentType: "image/png", body: imageBytes });
-          }
+          imageRequested = true;
+          expect(url.searchParams.get("mediaTicket")).toBe("stable-image-ticket");
+          expect(request.headers().authorization).toBeUndefined();
+          await imageGate;
+          await route.fulfill({ contentType: "image/png", body: imageBytes });
         });
         const initialHistory = {
           messages: [],
@@ -68,7 +52,17 @@ suite.define(() => {
         };
         const gateway = await installMockGateway(page, {
           historyMessages: [],
-          methodResponses: { "chat.startup": initialHistory, "chat.history": initialHistory },
+          deferredMethods: ["assistant.media.get"],
+          featureMethods: [...defaultControlUiFeatureMethods, "assistant.media.get"],
+          methodResponses: {
+            "chat.startup": initialHistory,
+            "chat.history": initialHistory,
+            "assistant.media.get": {
+              available: true,
+              mediaTicket: "stable-image-ticket",
+              mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+            },
+          },
         });
         const capture = async (stage: string) => {
           if (proofDir) {
@@ -214,9 +208,11 @@ suite.define(() => {
             message: canonical,
           });
           await page.locator('.chat-bubble[data-entry-id="accepted-image-input"]').waitFor();
-          await expect.poll(() => metadataRequested).toBe(true);
+          const mediaRequest = await gateway.waitForRequest("assistant.media.get");
+          expect(mediaRequest.params).toEqual({ source, sessionKey });
           await expectImageStillVisible("03-canonical-metadata-loading");
-          releaseMetadata();
+          await gateway.resolveDeferred("assistant.media.get");
+          mediaResolved = true;
           await expect.poll(() => imageRequested).toBe(true);
           await expectImageStillVisible("04-canonical-image-loading");
           releaseImage();
@@ -234,7 +230,9 @@ suite.define(() => {
           expect(frames.length).toBeGreaterThan(1);
           expect(frames.every(Boolean)).toBe(true);
         } finally {
-          releaseMetadata();
+          if (!mediaResolved) {
+            await gateway.resolveDeferred("assistant.media.get").catch(() => undefined);
+          }
           releaseImage();
           await capture("06-final");
         }

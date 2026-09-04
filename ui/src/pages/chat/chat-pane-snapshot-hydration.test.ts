@@ -3,6 +3,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AssistantMediaGetResult } from "../../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -66,11 +67,7 @@ describe("stored chat snapshot hydration", () => {
     async ({ cacheMode, senderName }) => {
       installTranscriptDomMocks();
       vi.stubGlobal("indexedDB", new IDBFactory());
-      const mediaResponse = createDeferred<Response>();
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(() => mediaResponse.promise),
-      );
+      const mediaResponse = createDeferred<AssistantMediaGetResult>();
       const targetSessionKey = "agent:main:cached-initial";
       const runId = "cached-initial-send";
       const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
@@ -144,6 +141,7 @@ describe("stored chat snapshot hydration", () => {
               pendingInputs: getChatPendingInputs(remounted.state)?.page.items,
               assistantAttachmentAuthToken: "test-auth-token",
               connectionEpoch: 1,
+              resolveAssistantMedia: () => mediaResponse.promise,
               onRequestUpdate: renderPane,
             },
             transcript,

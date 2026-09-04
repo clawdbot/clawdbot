@@ -698,6 +698,7 @@ export function createGatewayHttpServer(opts: {
         (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
           ...controlUiRouteOptions,
           agentId: resolveAssistantAgentId(configSnapshot),
+          clients,
         }),
       );
       addRequestStage(controlUiEnabled, async () =>

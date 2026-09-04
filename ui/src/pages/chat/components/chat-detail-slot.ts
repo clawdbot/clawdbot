@@ -58,10 +58,12 @@ export function renderChatDetailSlot(params: {
       .content=${content}
       .execNode=${selectedChatSessionRow(host)?.execNode ?? null}
       .attachmentRuntime=${{
+        assistantMediaScope: params.chat.sessionKey,
         authToken: params.chat.assistantAttachmentAuthToken,
         connectionEpoch: params.chat.connectionEpoch,
         localMediaPreviewRoots: params.chat.localMediaPreviewRoots ?? [],
         resourceBasePath: params.chat.resourceBasePath,
+        resolveAssistantMedia: params.chat.resolveAssistantMedia,
         resolveArtifactDownload: params.chat.resolveArtifactDownload,
       }}
       .basePath=${params.chat.basePath ?? ""}

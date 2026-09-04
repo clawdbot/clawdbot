@@ -18,6 +18,7 @@ export { controlUiSessionPath, controlUiSessionUrl, waitForConfirmModal };
 
 const NEW_SESSION_FEATURE_METHODS = [
   "agent.wait",
+  "assistant.media.get",
   "chat.metadata",
   "chat.startup",
   "sessions.create",

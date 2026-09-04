@@ -157,16 +157,12 @@ suite.define(() => {
     const mediaBlocked = new Promise<void>((resolve) => {
       releaseMedia = resolve;
     });
-    let metadataRequested = false;
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
-      const metadata = new URL(route.request().url()).searchParams.has("meta");
-      metadataRequested ||= metadata;
       await mediaBlocked;
-      await route.fulfill(
-        metadata
-          ? { json: { available: true } }
-          : { contentType: "image/png", body: Buffer.from(ONE_PIXEL_PNG_B64, "base64") },
-      );
+      await route.fulfill({
+        contentType: "image/png",
+        body: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      });
     });
     const acceptedAt = Date.now();
     const pendingInput = {
@@ -219,7 +215,7 @@ suite.define(() => {
       },
     };
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.startup"],
+      deferredMethods: ["assistant.media.get", "chat.startup"],
       workspace: WORKSPACE,
       workspaceGit: true,
       historyMessages: [],
@@ -245,6 +241,7 @@ suite.define(() => {
         status: "running",
       },
       featureMethods: [
+        "assistant.media.get",
         "chat.abort",
         "chat.metadata",
         "chat.send",
@@ -256,6 +253,11 @@ suite.define(() => {
         "worktrees.branches",
       ],
       methodResponses: {
+        "assistant.media.get": {
+          available: true,
+          mediaTicket: "ticket-github-project-image",
+          mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        },
         "projects.list": { projects: [] },
         "projects.searchRemote": remoteSearchResult,
         "worktrees.branches": {
@@ -376,7 +378,7 @@ suite.define(() => {
         };
       });
       await gateway.resolveDeferred("chat.startup");
-      await expect.poll(() => metadataRequested).toBe(true);
+      await gateway.waitForRequest("assistant.media.get");
       expect(await page.locator(".chat-notice").count()).toBe(0);
       const working = page.locator('.chat-working-indicator[role="status"]');
       await pollLocatorText(working).toContain("Preparing workspace…");
@@ -506,6 +508,7 @@ suite.define(() => {
     } finally {
       releaseChatModule();
       releaseMedia();
+      await gateway.resolveDeferred("assistant.media.get").catch(() => undefined);
       await context.close();
     }
   });

@@ -100,19 +100,16 @@ describe("attachment sidebar source ownership", () => {
     { kind: "image", outcome: "offline" },
     { kind: "document", outcome: "offline" },
     { kind: "image", outcome: "missing" },
-    { kind: "document", outcome: "denied" },
   ] as const)(
     "handles $outcome renewal after a local $kind raster has loaded",
     async ({ kind, outcome }) => {
       vi.useFakeTimers();
-      const availableResponse = (mediaTicket: string) =>
-        Response.json({
-          available: true,
-          mediaTicket,
-          mediaTicketExpiresAt: new Date(Date.now() + 31_000).toISOString(),
-        });
-      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(availableResponse("loaded"));
-      vi.stubGlobal("fetch", fetchMock);
+      const availableResponse = (mediaTicket: string) => ({
+        available: true as const,
+        mediaTicket,
+        mediaTicketExpiresAt: new Date(Date.now() + 31_000).toISOString(),
+      });
+      const resolveAssistantMedia = vi.fn().mockResolvedValueOnce(availableResponse("loaded"));
       const container = document.body.appendChild(document.createElement("div"));
       onTestFinished(() => {
         render(null, container);
@@ -129,9 +126,9 @@ describe("attachment sidebar source ownership", () => {
       const rerender = () =>
         render(
           renderAssistantAttachments([attachment], {
-            authToken: "test-token",
             localMediaPreviewRoots: ["/tmp/openclaw"],
             onRequestUpdate: rerender,
+            resolveAssistantMedia,
           }),
           container,
         );
@@ -143,17 +140,18 @@ describe("attachment sidebar source ownership", () => {
       Object.defineProperty(displayed, "naturalWidth", { value: 1 });
       displayed.dispatchEvent(new Event("load"));
       if (outcome === "offline") {
-        fetchMock.mockRejectedValue(new TypeError("Gateway offline"));
+        resolveAssistantMedia.mockRejectedValue(new TypeError("Gateway offline"));
         await vi.advanceTimersByTimeAsync(11_000);
         expect(container.querySelector("img")).toBe(displayed);
         await vi.advanceTimersByTimeAsync(20_001);
         expect(container.querySelector("img")).toBe(displayed);
         expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
       } else {
-        const retryable = outcome === "missing";
-        fetchMock.mockResolvedValueOnce(
-          Response.json({ available: false, reason: "Attachment removed", retryable }),
-        );
+        resolveAssistantMedia.mockResolvedValueOnce({
+          available: false,
+          code: "file-not-found",
+          reason: "Attachment removed",
+        });
         await vi.advanceTimersByTimeAsync(1_000);
         expect(container.querySelector("img")).toBeNull();
         displayed.dispatchEvent(new Event("load"));
@@ -162,18 +160,13 @@ describe("attachment sidebar source ownership", () => {
         const retry = container.querySelector<HTMLButtonElement>(
           ".chat-assistant-attachment-card__retry",
         );
-        if (outcome === "missing") {
-          expect(container.textContent).toContain("Attachment removed");
-          fetchMock.mockResolvedValueOnce(availableResponse("recovered"));
-          expectDefined(retry, "Retry action for a recoverable missing image").click();
-          await vi.advanceTimersByTimeAsync(0);
-          expect(container.querySelector("img")?.getAttribute("src")).toContain(
-            "mediaTicket=recovered",
-          );
-        } else {
-          expect(container.textContent).toContain("Unavailable");
-          expect(retry).toBeNull();
-        }
+        expect(container.textContent).toContain("Attachment removed");
+        resolveAssistantMedia.mockResolvedValueOnce(availableResponse("recovered"));
+        expectDefined(retry, "Retry action for a recoverable missing image").click();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(container.querySelector("img")?.getAttribute("src")).toContain(
+          "mediaTicket=recovered",
+        );
       }
     },
   );
@@ -969,20 +962,17 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("resolves an open local sidebar attachment with the current runtime credentials", async () => {
+  it("re-resolves an open local sidebar attachment after the selected session changes", async () => {
     const source = "/tmp/openclaw/clip.mp3";
     const container = document.body.appendChild(document.createElement("div"));
-    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const token = new Headers(init?.headers).get("Authorization")?.replace("Bearer ", "") ?? "";
-      return new Response(
-        JSON.stringify({
-          available: true,
-          mediaTicket: `ticket-${token}`,
-          mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+    const mediaResult = (ticket: string) => ({
+      available: true as const,
+      mediaTicket: ticket,
+      mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
     });
+    const firstResolver = vi.fn(async () => mediaResult("ticket-epoch-1"));
+    const secondResolver = vi.fn(async () => mediaResult("ticket-epoch-2"));
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     let sidebarContent: AttachmentSidebarContent | undefined;
     const transcriptUpdate = () => rerender();
@@ -1001,9 +991,11 @@ describe("attachment sidebar source ownership", () => {
             },
           ],
           {
-            authToken: "token-A",
+            assistantMediaScope: "agent:main:main",
+            connectionEpoch: 1,
             localMediaPreviewRoots: ["/tmp/openclaw"],
             onRequestUpdate: transcriptUpdate,
+            resolveAssistantMedia: firstResolver,
           },
           (content) => {
             if (content.kind === "attachment") {
@@ -1022,43 +1014,32 @@ describe("attachment sidebar source ownership", () => {
 
     const sidebarUpdate = vi.fn();
     subscribers.add(sidebarUpdate);
-    const resolveSource = sidebarContent?.resolveSource as unknown as
-      | ((
-          onRequestUpdate: () => void,
-          runtime: {
-            authToken?: string | null;
-            localMediaPreviewRoots: readonly string[];
-            resourceBasePath?: string;
-          },
-        ) => { src: string; authToken?: string | null } | null)
-      | undefined;
-    expect(resolveSource).toBeDefined();
     expect(
-      resolveSource?.(sidebarUpdate, {
-        authToken: "token-B",
+      sidebarContent?.resolveSource?.(sidebarUpdate, {
+        assistantMediaScope: "agent:research:main",
+        connectionEpoch: 1,
         localMediaPreviewRoots: ["/tmp/openclaw"],
+        resolveAssistantMedia: secondResolver,
       }),
     ).toBeNull();
     await flushAttachmentResolution();
 
     expect(
-      resolveSource?.(sidebarUpdate, {
-        authToken: "token-B",
+      sidebarContent?.resolveSource?.(sidebarUpdate, {
+        assistantMediaScope: "agent:research:main",
+        connectionEpoch: 1,
         localMediaPreviewRoots: ["/tmp/openclaw"],
+        resolveAssistantMedia: secondResolver,
       }),
     ).toEqual(
       expect.objectContaining({
-        authToken: "token-B",
-        src: expect.stringContaining("mediaTicket=ticket-token-B"),
+        authToken: null,
+        src: expect.stringContaining("mediaTicket=ticket-epoch-2"),
       }),
     );
-    expect(fetchMock).toHaveBeenLastCalledWith(
-      expect.any(String),
-      expect.objectContaining({ headers: expect.any(Headers) }),
-    );
-    expect(new Headers(fetchMock.mock.calls.at(-1)?.[1]?.headers).get("Authorization")).toBe(
-      "Bearer token-B",
-    );
+    expect(firstResolver).toHaveBeenCalledOnce();
+    expect(secondResolver).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
     container.remove();
   });
 });

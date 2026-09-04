@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   buildLocalWebchatAudioMessage,
   captureUiProofEnabled,
@@ -79,6 +80,11 @@ suite.define(() => {
       ticket: "ticket-bootstrap-image",
     },
     {
+      kind: "video",
+      source: "/home/node/.openclaw/media/outbound/bootstrap-video.mp4",
+      ticket: "ticket-bootstrap-video",
+    },
+    {
       kind: "image",
       source: "FILE:///home/node/.openclaw/media/outbound/bootstrap-uppercase-image.png",
       ticket: "ticket-bootstrap-uppercase-image",
@@ -95,7 +101,7 @@ suite.define(() => {
       structured: true,
     },
   ] as const)(
-    "renders local assistant $kind through server metadata before preview roots load",
+    "renders local assistant $kind through Gateway-issued tickets before preview roots load",
     async ({ kind, source: fixtureSource, ticket, ...options }) => {
       const source =
         "structured" in options
@@ -109,41 +115,30 @@ suite.define(() => {
       const page = await context.newPage();
       const requestedMediaUrls: URL[] = [];
       const expectedSource = "structured" in options ? new URL(source).pathname : source;
-
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
         requestedMediaUrls.push(url);
         expect(url.searchParams.get("source")).toBe(expectedSource);
-        if (url.searchParams.get("meta") === "1") {
-          expect(request.headers().authorization).toBe("Bearer e2e-device-token");
-          await route.fulfill({
-            contentType: "application/json",
-            body: JSON.stringify({
-              available: true,
-              mediaTicket: ticket,
-              mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-            }),
-          });
-          return;
-        }
-
         expect(url.searchParams.get("mediaTicket")).toBe(ticket);
         expect(request.headers().authorization).toBeUndefined();
-        await route.fulfill(
+        const contentType =
+          kind === "image" ? "image/png" : kind === "audio" ? "audio/mpeg" : "video/mp4";
+        const body =
           kind === "image"
-            ? {
-                contentType: "image/png",
-                body: await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png")),
-              }
-            : {
-                contentType: "audio/mpeg",
-                body: createPlaybackMediaFixture("mp3"),
-              },
-        );
+            ? await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"))
+            : createPlaybackMediaFixture(kind === "audio" ? "mp3" : "mp4");
+        await route.fulfill({ contentType, body });
       });
-
       await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "assistant.media.get"],
+        methodResponses: {
+          "assistant.media.get": {
+            available: true,
+            mediaTicket: ticket,
+            mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          },
+        },
         historyMessages: [
           kind === "image"
             ? {
@@ -163,24 +158,22 @@ suite.define(() => {
               },
         ],
       });
-
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
         const media =
           kind === "image"
             ? page.getByAltText("Local bootstrap image")
-            : page.locator("openclaw-chat-audio-player");
+            : page.locator(
+                kind === "audio" ? "openclaw-chat-audio-player" : "openclaw-chat-video-player",
+              );
         await media.waitFor({
           state: "visible",
           timeout: 10_000,
         });
-        await expect
-          .poll(() => requestedMediaUrls.length, { timeout: 10_000 })
-          .toBeGreaterThanOrEqual(2);
-        expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
-        expect(
-          requestedMediaUrls.slice(1).some((url) => url.searchParams.get("mediaTicket") === ticket),
-        ).toBe(true);
+        if (kind === "image") {
+          await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(1);
+          expect(requestedMediaUrls[0]?.searchParams.get("mediaTicket")).toBe(ticket);
+        }
         if (kind === "audio") {
           expect(
             await media.locator(".chat-assistant-attachment-card__download").getAttribute("href"),
@@ -192,9 +185,10 @@ suite.define(() => {
                 .evaluate((element) => (element as HTMLMediaElement).readyState),
             )
             .toBeGreaterThanOrEqual(1);
+          await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(1);
+          expect(requestedMediaUrls[0]?.searchParams.get("mediaTicket")).toBe(ticket);
         }
         expect(await page.getByText("Outside allowed folders").count()).toBe(0);
-
         if (kind === "image") {
           await expect
             .poll(() =>
@@ -204,7 +198,6 @@ suite.define(() => {
             )
             .toBe(180);
         }
-
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
           await page.screenshot({
             fullPage: true,
@@ -217,7 +210,7 @@ suite.define(() => {
               proof: "control-ui-local-media-bootstrap",
               kind,
               source,
-              metadataAuthenticated: true,
+              metadataAuthenticatedByGateway: true,
               ticketScoped: true,
               rawRequestHasBearer: false,
               requests: requestedMediaUrls.map((url) => ({
@@ -225,85 +218,6 @@ suite.define(() => {
                 meta: url.searchParams.get("meta"),
                 mediaTicket: url.searchParams.get("mediaTicket"),
               })),
-            })}\n`,
-          );
-        }
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
-    },
-  );
-
-  it.each([
-    {
-      code: "outside-allowed-folders",
-      reason: "Outside allowed folders",
-      source: "/home/node/private/bootstrap-secret.mp3",
-    },
-    {
-      code: "file-not-found",
-      reason: "File not found",
-      source: "/home/node/.openclaw/media/outbound/bootstrap-missing.mp3",
-    },
-  ] as const)(
-    "keeps server-rejected $code media blocked before preview roots load",
-    async ({ code, reason, source }) => {
-      const context = await suite.newBrowserContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
-      const page = await context.newPage();
-      const requestedMediaUrls: URL[] = [];
-
-      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
-        const request = route.request();
-        const url = new URL(request.url());
-        requestedMediaUrls.push(url);
-        expect(url.searchParams.get("source")).toBe(source);
-        expect(url.searchParams.get("meta")).toBe("1");
-        expect(request.headers().authorization).toBe("Bearer e2e-device-token");
-        await route.fulfill({
-          contentType: "application/json",
-          body: JSON.stringify({ available: false, code, reason }),
-        });
-      });
-
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            id: `assistant-bootstrap-blocked-${code}`,
-            role: "assistant",
-            content: [{ type: "text", text: `Unavailable recording\nMEDIA:${source}` }],
-            timestamp: Date.now(),
-          },
-        ],
-      });
-
-      try {
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const status = page.locator(".chat-assistant-attachment-card__status-meta");
-        await status.waitFor({ state: "visible", timeout: 10_000 });
-        await expect.poll(() => status.textContent()).toContain(reason);
-        expect(requestedMediaUrls).toHaveLength(1);
-        expect(await page.locator(".chat-assistant-attachment-card audio").count()).toBe(0);
-        expect(await page.locator(".chat-assistant-attachment-card__download").count()).toBe(0);
-
-        if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(suite.artifactDir, `bootstrap-blocked-${code}.png`),
-          });
-        }
-        if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
-          process.stdout.write(
-            `${JSON.stringify({
-              proof: "control-ui-local-media-bootstrap",
-              code,
-              source,
-              metadataAuthenticated: true,
-              rawMediaRequested: false,
-              visibleReason: reason,
             })}\n`,
           );
         }
@@ -619,18 +533,6 @@ suite.define(() => {
         const url = new URL(request.url());
         requestedMediaUrls.push(url);
         expect(url.searchParams.get("source")).toBe(source);
-        if (url.searchParams.get("meta") === "1") {
-          expect(request.headers().authorization).toBe("Bearer e2e-device-token");
-          await route.fulfill({
-            contentType: "application/json",
-            body: JSON.stringify({
-              available: true,
-              mediaTicket: "ticket-inbound",
-              mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-            }),
-          });
-          return;
-        }
         expect(url.searchParams.get("mediaTicket")).toBe("ticket-inbound");
         expect(request.headers().authorization).toBeUndefined();
         await route.fulfill({
@@ -641,7 +543,15 @@ suite.define(() => {
           ),
         });
       });
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "assistant.media.get"],
+        methodResponses: {
+          "assistant.media.get": {
+            available: true,
+            mediaTicket: "ticket-inbound",
+            mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+          },
+        },
         historyMessages: [
           {
             id: "user-inbound-media-ref",
@@ -663,7 +573,9 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
-        await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
+        await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(1);
+        const request = await gateway.waitForRequest("assistant.media.get");
+        expect(request.params).toEqual({ source, sessionKey: "agent:main:main" });
         const image = page.locator("img.chat-message-image");
         await image.waitFor({ state: "visible", timeout: 10_000 });
         await expect

@@ -54,3 +54,15 @@ export function resolveToolUseId(block: ToolContentBlock): string | undefined {
   }
   return undefined;
 }
+
+/** Shared tool-envelope classification for rendering and media authorization. */
+export function hasToolMessageEnvelope(message: Record<string, unknown> | undefined): boolean {
+  return (
+    typeof message?.toolCallId === "string" ||
+    typeof message?.tool_call_id === "string" ||
+    typeof message?.toolUseId === "string" ||
+    typeof message?.tool_use_id === "string" ||
+    typeof message?.toolName === "string" ||
+    typeof message?.tool_name === "string"
+  );
+}

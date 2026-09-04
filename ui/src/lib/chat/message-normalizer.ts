@@ -16,6 +16,7 @@ import {
 } from "../../../../src/chat/canvas-render.js";
 import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
 import {
+  hasToolMessageEnvelope,
   isToolCallContentType,
   isToolResultContentType,
   resolveToolBlockArgs,
@@ -105,17 +106,6 @@ export function normalizeRoleForGrouping(role: string): string {
     return "tool";
   }
   return role;
-}
-
-function hasToolMessageEnvelope(message: Record<string, unknown> | undefined): boolean {
-  return (
-    typeof message?.toolCallId === "string" ||
-    typeof message?.tool_call_id === "string" ||
-    typeof message?.toolUseId === "string" ||
-    typeof message?.tool_use_id === "string" ||
-    typeof message?.toolName === "string" ||
-    typeof message?.tool_name === "string"
-  );
 }
 
 export function resolveMessageRole(message: unknown): string {

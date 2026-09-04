@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
   applySelectedSessionProjection,
+  resolveChatAssistantMedia,
   resolveChatArtifactDownload,
   SessionParticipationTracker,
 } from "./chat-pane-state.ts";
@@ -123,6 +124,45 @@ describe("resolveChatArtifactDownload", () => {
       url: "/api/chat/media/outgoing/main/image/full?mediaTicket=ticket",
       expiresAt: "2026-07-28T00:00:00.000Z",
     });
+  });
+});
+
+describe("resolveChatAssistantMedia", () => {
+  it("uses the connected Gateway session without changing artifacts.download", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "assistant.media.get") {
+        return {
+          available: true,
+          mediaTicket: "ticket-chat-media",
+          mediaTicketExpiresAt: "2026-09-03T12:00:00.000Z",
+        };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+
+    await expect(
+      resolveChatAssistantMedia(
+        {
+          connected: true,
+          client: { request } as never,
+        },
+        "/tmp/openclaw/image.png",
+        "agent:main:research-chat",
+      ),
+    ).resolves.toMatchObject({ mediaTicket: "ticket-chat-media" });
+    expect(request).toHaveBeenCalledWith(
+      "assistant.media.get",
+      { source: "/tmp/openclaw/image.png", sessionKey: "agent:main:research-chat" },
+      { timeoutMs: 30_000 },
+    );
+    await expect(
+      resolveChatAssistantMedia(
+        { connected: false, client: { request } as never },
+        "/tmp/x",
+        "agent:main:offline",
+      ),
+    ).resolves.toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });
 

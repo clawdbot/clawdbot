@@ -1,5 +1,5 @@
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { AssistantMediaResolver, ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
@@ -55,10 +55,12 @@ type AttachmentSidebarSource = {
 };
 
 export type AttachmentSidebarRuntime = {
+  assistantMediaScope?: string;
   connectionEpoch?: number;
   authToken?: string | null;
   localMediaPreviewRoots: readonly string[];
   resourceBasePath?: string;
+  resolveAssistantMedia?: AssistantMediaResolver;
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 

@@ -271,6 +271,39 @@ describe("playback transcode policy", () => {
 });
 
 describe("resolvePlaybackTranscode", () => {
+  it.each(["cache", "probe"] as const)(
+    "rejects revoked authority after %s lookup before starting new work",
+    async (boundary) => {
+      const source = await createSource(`revoked-${boundary}.caf`);
+      let active = true;
+      probePlaybackMediaFileDescriptor.mockImplementationOnce(async () => {
+        active = false;
+        return { durationMs: 1000, audioCodec: "pcm_s16le", audioStreamIndex: 0 };
+      });
+      const assertActive = () => {
+        if (!active) {
+          throw new Error("media authority revoked");
+        }
+      };
+      const resolution = playback.resolvePlaybackTranscode(
+        { ...source, mimeType: "audio/x-caf", kind: "audio" },
+        assertActive,
+      );
+      if (boundary === "cache") {
+        active = false;
+      }
+      try {
+        await expect(resolution).rejects.toThrow("media authority revoked");
+        if (boundary === "cache") {
+          expect(probePlaybackMediaFileDescriptor).not.toHaveBeenCalled();
+        }
+        expect(runFfmpeg).not.toHaveBeenCalled();
+      } finally {
+        await settlePlaybackTranscodeJobsForTest();
+      }
+    },
+  );
+
   it("rejects descriptor growth after reading only the bounded overflow byte", async () => {
     const contents = Buffer.from("123456");
     const read = vi.fn(async (buffer: Buffer, offset: number, length: number, position: number) => {

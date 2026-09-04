@@ -617,6 +617,7 @@ async function transcodePlaybackSource(params: {
 /** Resolves a native, pending, cached, or failed playback rendition without blocking on ffmpeg. */
 export async function resolvePlaybackTranscode(
   params: PlaybackSourceParams,
+  assertActive?: () => void,
 ): Promise<PlaybackTranscodeResolution> {
   const policy: PlaybackPolicyEntry = PLAYBACK_TRANSCODE_POLICY[params.kind];
   if (!resolvePlaybackMode(params.mimeType, policy)) {
@@ -632,6 +633,7 @@ export async function resolvePlaybackTranscode(
     extension: target.extension,
     maxBytes,
   });
+  assertActive?.();
   if (cachedPath) {
     return {
       kind: "transcoded",
@@ -642,6 +644,9 @@ export async function resolvePlaybackTranscode(
   }
 
   const inspection = await inspectPlaybackSource(params);
+  // Admit new shared-cache work only while the caller is live. The cache
+  // owns admitted conversions; readers revalidate separately before delivery.
+  assertActive?.();
   if (inspection.mode === "native") {
     return { kind: "passthrough" };
   }

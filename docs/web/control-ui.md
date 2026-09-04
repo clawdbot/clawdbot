@@ -1151,13 +1151,15 @@ If you disable gateway auth (not recommended on shared hosts), the avatar route 
 
 ## Assistant media route auth
 
-When gateway auth is configured, assistant local-media previews use a two-step route:
+Local chat attachments are resolved in the selected session, including sessions owned by a non-default agent:
 
-- `GET /__openclaw__/assistant-media?meta=1&source=<path>` requires the normal Control UI operator auth; the browser sends the gateway token as a bearer header when checking availability.
-- Successful metadata responses include a short-lived `mediaTicket` scoped to that exact source path.
-- Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
+- The authenticated Control UI WebSocket calls `assistant.media.get` with the exact source and required `sessionKey`. The Gateway checks that the caller can see the session, that its transcript references the source, and that the file is inside that agent's allowed media roots.
+- Successful requests return a short-lived `mediaTicket` bound to that source, session, agent, and live connection. Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` rather than reusable gateway credentials.
+- The HTTP byte route rechecks live connection and session access before file and response effects. A disconnected or replaced connection, hidden session, removed source reference, or expired ticket cannot authorize new reads.
 
-This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
+Bootstrap preview roots describe the default agent; they do not override the selected session's server-side media permissions. Attachment caches and refresh subscriptions are scoped by session and connection.
+
+Browser-tool screenshots retain the existing authenticated HTTP media route. That route supports verified same-origin Tailscale identity and trusted-proxy authentication; it does not require migrating screenshots to the session-scoped chat RPC.
 
 Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. Retention applies only to that mounted image; it does not extend its media ticket or authorize fresh reads. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image.
 

@@ -9,7 +9,7 @@ import {
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import type { ControlUiSessionPreview } from "../control-ui-contract.js";
+import type { AssistantMediaGetResult, ControlUiSessionPreview } from "../control-ui-contract.js";
 import { formatControlUiGitHubPreviewError } from "../control-ui-github-api.js";
 import {
   loadControlUiGitHubPreview,
@@ -17,13 +17,14 @@ import {
   type ControlUiGitHubPreviewIdentity,
   type ControlUiGitHubPreviewTarget,
 } from "../control-ui-github-preview.js";
+import {
+  resolveControlUiSessionAccess,
+  type ControlUiSessionAccess,
+} from "../control-ui-session-access.js";
 import { parseControlUiSessionPullRequestsSubscribeParams } from "../control-ui-session-pr-subscriptions.js";
+import { resolveControlUiAssistantMedia } from "../control-ui.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { createSessionListEntryFilter } from "../session-sharing.js";
-import { buildGatewaySessionRow } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { loadSessionEntriesForTarget } from "./sessions-shared.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -85,23 +86,17 @@ async function prepareControlUiGitHubIdentity(
   };
 }
 
-type SessionPreviewSource = {
-  sessionKey: string;
-  title?: string;
-  derivedTitle?: string;
-  agentId: string;
-  kind?: string;
-  channel?: string;
-  updatedAt?: number | null;
-  lastMessagePreview?: string;
-  archived?: boolean;
-};
-
 type LoadSessionPreview = (
   sessionKey: string,
   context: GatewayRequestContext,
   client: GatewayClient | null,
-) => SessionPreviewSource | null | Promise<SessionPreviewSource | null>;
+) => ControlUiSessionAccess | null | Promise<ControlUiSessionAccess | null>;
+
+type LoadAssistantMedia = (
+  source: string,
+  context: GatewayRequestContext,
+  authority: Parameters<typeof resolveControlUiAssistantMedia>[2],
+) => Promise<AssistantMediaGetResult>;
 
 const SESSION_PREVIEW_TEXT_MAX_CHARS = 200;
 
@@ -118,7 +113,31 @@ function parseSessionPreviewKey(params: unknown): string | null {
   return sessionKey && sessionKey.length <= 512 ? sessionKey : null;
 }
 
-function projectSessionPreview(source: SessionPreviewSource | null): ControlUiSessionPreview {
+function parseAssistantMediaParams(params: unknown): { source: string; sessionKey: string } | null {
+  if (
+    !isRecord(params) ||
+    Object.keys(params).some((key) => key !== "source" && key !== "sessionKey")
+  ) {
+    return null;
+  }
+  const source = typeof params.source === "string" ? params.source.trim() : "";
+  if (!source || source.length > 8192) {
+    return null;
+  }
+  const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
+  return sessionKey && sessionKey.length <= 512 ? { source, sessionKey } : null;
+}
+
+async function loadAssistantMedia(
+  source: string,
+  context: GatewayRequestContext,
+  authority: Parameters<typeof resolveControlUiAssistantMedia>[2],
+): Promise<AssistantMediaGetResult> {
+  const cfg = context.getRuntimeConfig();
+  return await resolveControlUiAssistantMedia(source, cfg, authority);
+}
+
+function projectSessionPreview(source: ControlUiSessionAccess | null): ControlUiSessionPreview {
   if (!source) {
     return { status: "unavailable" };
   }
@@ -149,55 +168,93 @@ function loadControlUiSessionPreview(
   sessionKey: string,
   context: GatewayRequestContext,
   client: GatewayClient | null,
-): SessionPreviewSource | null {
-  const cfg = context.getRuntimeConfig();
-  const requestedAgent = resolveRequestedGlobalAgentId(cfg, sessionKey);
-  if (!requestedAgent.ok) {
-    return null;
-  }
-  const { target, storePath, store, entry } = loadSessionEntriesForTarget({
-    key: sessionKey,
-    cfg,
-    ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
-  });
-  if (!entry) {
-    return null;
-  }
-  // Hover previews must not reveal more than sessions.list: apply the same
-  // incognito/draft sharing predicate so a member cannot preview-by-key a
-  // session the sidebar hides from them.
-  const entryFilter = createSessionListEntryFilter({ client, cfg });
-  if (entryFilter && !entryFilter(target.canonicalKey, entry)) {
-    return null;
-  }
-  const row = buildGatewaySessionRow({
-    cfg,
-    storePath,
-    store,
-    key: target.canonicalKey,
-    entry,
-    includeDerivedTitles: true,
-    includeLastMessage: true,
-    skipTranscriptUsageFallback: true,
-  });
-  return {
-    sessionKey: row.key,
-    agentId: row.agentId ?? target.agentId,
-    title: row.displayName,
-    derivedTitle: row.derivedTitle,
-    kind: row.kind,
-    channel: row.channel,
-    updatedAt: row.updatedAt,
-    lastMessagePreview: row.lastMessagePreview,
-    archived: row.archived,
-  };
+): ControlUiSessionAccess | null {
+  return resolveControlUiSessionAccess(sessionKey, context.getRuntimeConfig(), client);
 }
 
 export function createControlUiHandlers(
   loadGitHubPreview: LoadGitHubPreview = loadControlUiGitHubPreview,
   loadSessionPreview: LoadSessionPreview = loadControlUiSessionPreview,
+  loadMedia: LoadAssistantMedia = loadAssistantMedia,
 ): GatewayRequestHandlers {
   return {
+    "assistant.media.get": async ({ params, context, client, respond, signal }) => {
+      const parsed = parseAssistantMediaParams(params);
+      if (!parsed) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid assistant.media.get params"),
+        );
+        return;
+      }
+      const connId = client?.connId;
+      const clientUnavailable = new Error("Client unavailable");
+      const sessionUnavailable = new Error("Session unavailable");
+      const session = resolveControlUiSessionAccess(
+        parsed.sessionKey,
+        context.getRuntimeConfig(),
+        client,
+        parsed.source,
+      );
+      // Carry the exact live connection and selected session into each media
+      // effect; a pre-await access snapshot cannot authorize later file I/O.
+      const assertActive = () => {
+        if (
+          !connId ||
+          signal?.aborted ||
+          !context.getClientConnIds?.((current) => current === client).has(connId)
+        ) {
+          throw clientUnavailable;
+        }
+        const current = resolveControlUiSessionAccess(
+          parsed.sessionKey,
+          context.getRuntimeConfig(),
+          client,
+          parsed.source,
+        );
+        if (
+          !current ||
+          !session ||
+          current.agentId !== session.agentId ||
+          current.sessionKey !== session.sessionKey
+        ) {
+          throw sessionUnavailable;
+        }
+      };
+      try {
+        if (!client || !connId) {
+          throw clientUnavailable;
+        }
+        if (!session) {
+          throw sessionUnavailable;
+        }
+        assertActive();
+        const result = await loadMedia(parsed.source, context, {
+          agentId: session.agentId,
+          connId,
+          client,
+          sessionKey: session.sessionKey,
+          assertActive,
+        });
+        assertActive();
+        respond(true, result, undefined);
+      } catch (error) {
+        if (error !== clientUnavailable && error !== sessionUnavailable) {
+          throw error;
+        }
+        respond(
+          true,
+          {
+            available: false,
+            reason:
+              error === clientUnavailable ? clientUnavailable.message : sessionUnavailable.message,
+            code: error === clientUnavailable ? "client_unavailable" : "session_unavailable",
+          },
+          undefined,
+        );
+      }
+    },
     "controlUi.githubPreview": async (options) => {
       const { params, respond, context } = options;
       const target = parseControlUiGitHubPreviewTarget(params);

@@ -28,6 +28,29 @@ installConnectedControlUiServerSuite((started) => {
 });
 
 describe("Gateway RPC fixture session writes", () => {
+  test("preserves every agent when replacing one shared fixture store", async () => {
+    const storePath = path.join(process.env.OPENCLAW_STATE_DIR!, "multi-agent-fixture.sqlite");
+    testState.sessionStorePath = storePath;
+    const mainKey = "agent:main:main";
+    const otherKey = "agent:research:main";
+    await writeSessionStore({
+      entries: {
+        [mainKey]: { sessionId: "main-fixture", updatedAt: 1 },
+        [otherKey]: { sessionId: "research-fixture", updatedAt: 1 },
+      },
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: mainKey, storePath })?.sessionId).toBe(
+      "main-fixture",
+    );
+    expect(
+      loadSessionEntry({ agentId: "research", sessionKey: otherKey, storePath })?.sessionId,
+    ).toBe("research-fixture");
+    await writeSessionStore({ entries: {} });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: mainKey, storePath })).toBeUndefined();
+    expect(
+      loadSessionEntry({ agentId: "research", sessionKey: otherKey, storePath }),
+    ).toBeUndefined();
+  });
   test.each(["raw WebSocket", "rpcReq"])("%s preserves queued session writes", async (request) => {
     const dir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-rpc-writes-")),

@@ -369,7 +369,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["channels.pairing.list", "channel-pairing", "operator.pairing", "2026.7"],
   ["channels.pairing.approve", "channel-pairing", "dynamic", "2026.7"],
   ["channels.pairing.dismiss", "channel-pairing", "operator.pairing", "2026.7"],
-  ["assistant.media.get", null, "operator.read", "<=2026.7", { advertise: false }],
+  ["assistant.media.get", "control-ui", "operator.read", "2026.8"],
   ["sessions.get", "sessions-read", "operator.read", "<=2026.7", { advertise: false }],
   ["sessions.resolve", "sessions-read", "operator.read", "<=2026.7", { advertise: false }],
   ["sessions.usage", "usage", "operator.read", "<=2026.7", { advertise: false }],

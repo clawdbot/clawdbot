@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ArtifactDownloadResult, GatewaySessionRow } from "../../api/types.ts";
+import { resolveAssistantMedia } from "../../app/assistant-media.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 
 type SelectedSessionProjectionState = {
@@ -105,6 +106,18 @@ export async function resolveChatArtifactDownload(
   }
   const expiresAt = typeof result?.expiresAt === "string" ? result.expiresAt.trim() : undefined;
   return { url, ...(expiresAt ? { expiresAt } : {}) };
+}
+
+/** Resolve a local chat media source through the pane's authenticated Gateway connection. */
+export async function resolveChatAssistantMedia(
+  state: { connected: boolean; client?: GatewayBrowserClient | null },
+  source: string,
+  sessionKey: string,
+) {
+  if (!state.connected || !state.client) {
+    return null;
+  }
+  return await resolveAssistantMedia(state.client, source, sessionKey);
 }
 
 export function dismissChatError(state: {

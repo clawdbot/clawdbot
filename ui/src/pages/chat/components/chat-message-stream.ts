@@ -33,6 +33,7 @@ type StreamMessageOptions = Pick<
   | "localMediaPreviewRoots"
   | "connectionEpoch"
   | "assistantAttachmentAuthToken"
+  | "resolveAssistantMedia"
   | "resolveArtifactDownload"
   | "onRequestOpenImage"
   | "onOpenImage"

@@ -140,10 +140,12 @@ class MessageImageResourceDirective extends AsyncDirective {
       : options;
     const availability = resolveAssistantAttachmentAvailability(
       image.url,
-      options?.localMediaPreviewRoots ?? [],
       options?.resourceBasePath,
-      options?.authToken,
       subscriptionOptions?.onRequestUpdate,
+      options?.resolveAssistantMedia,
+      options?.connectionEpoch,
+      options?.assistantMediaScope,
+      options?.localMediaPreviewRoots,
     );
     const decodeFailed = this.retained?.status === "unavailable";
     // Tickets authorize new reads, not already decoded pixels. Only this
@@ -182,8 +184,9 @@ class MessageImageResourceDirective extends AsyncDirective {
                 retryAssistantAttachmentAvailability(
                   image.url,
                   options?.resourceBasePath,
-                  options?.authToken,
                   subscriptionOptions?.onRequestUpdate,
+                  options?.connectionEpoch,
+                  options?.assistantMediaScope,
                 )
             : undefined,
       });

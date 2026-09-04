@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator } from "../infra/local-file-access.js";
 
 const PATH_PARENT_SEGMENT_RE = /(?:^|[\\/])\.\.(?:[\\/]|$)/u;
@@ -46,7 +47,9 @@ function normalizeMalformedLocalFileUrl(value: string): string | undefined {
 
 /** Canonicalizes equivalent local media references without resolving the filesystem. */
 export function normalizeMediaReferenceForComparison(value: string): string {
-  const trimmed = value.trim();
+  // Ticket minting resolves home-relative sources; transcript and delivery
+  // comparisons must recognize that same spelling without filesystem I/O.
+  const trimmed = expandHomePrefix(value.trim());
   if (!trimmed) {
     return "";
   }

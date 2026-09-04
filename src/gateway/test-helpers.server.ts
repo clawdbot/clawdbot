@@ -57,7 +57,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -306,10 +306,17 @@ export async function writeSessionStore(params: {
   if (upsertsByAgentId.size === 0) {
     upsertsByAgentId.set(normalizeAgentId(params.agentId ?? DEFAULT_AGENT_ID), []);
   }
+  const replacementOwners = new Map(
+    [...upsertsByAgentId].flatMap(([agentId, entries]) =>
+      entries.map(({ sessionKey }) => [sessionKey, agentId] as const),
+    ),
+  );
   for (const [agentId, upserts] of upsertsByAgentId) {
-    const removals = listSessionEntriesCore({ agentId, storePath }).map(({ sessionKey }) => ({
-      sessionKey,
-    }));
+    // Exact SQLite locators can share rows across agents. A later group must
+    // not remove a requested session already replaced by an earlier group.
+    const removals = listSessionEntriesCore({ agentId, storePath })
+      .filter(({ sessionKey }) => (replacementOwners.get(sessionKey) ?? agentId) === agentId)
+      .map(({ sessionKey }) => ({ sessionKey }));
     await applySessionEntryLifecycleMutation({
       agentId,
       storePath,
@@ -512,8 +519,9 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   if (tempHome && activeSuiteGatewayServerCount === 0) {
-    // Release fixture-owned handles while their lease environment still exists.
-    closeOpenClawAgentDatabases(tempHome);
+    // Fixtures delete and recreate their paths; reset pathname validation too,
+    // rather than treating a newly created file as an already validated reopen.
+    closeOpenClawAgentDatabasesForTest();
   }
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
