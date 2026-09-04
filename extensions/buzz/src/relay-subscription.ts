@@ -43,11 +43,20 @@ export class BuzzQueryLeaseUnavailableError extends Error {
 
 export type BuzzRelaySubscriptionHandle = ReturnType<Relay["prepareSubscription"]> & {
   /**
-   * Settles once the REQ frame has left the client. `close()` must not run
+   * Settles once the REQ frame has left the client. `closeOnce()` must not run
    * before this, or the CLOSE can overtake an asynchronously registered REQ and
    * leave the subscription orphaned server-side.
    */
   requestSent: Promise<void>;
+  /**
+   * This subscription's only closer. nostr-tools guards just the CLOSE frame
+   * behind `closed`; every `close()` call still drops the id from `openSubs`,
+   * decrements `relay.ongoingOperations` and fires `onclose`. A second call
+   * therefore reports less work in flight than the relay really has, and
+   * `scheduleIdleClose()` can then tear down a connection other rooms are
+   * still using. Timeout cleanup and send failure both close through here.
+   */
+  closeOnce: (reason: string) => void;
 };
 
 export function openBuzzRelaySubscription(
@@ -78,15 +87,26 @@ export function openBuzzRelaySubscription(
   // Gateway owns reconnects; nostr-tools automatic refires must stay disabled
   // so fresh sessions keep these wire filters separate from client validation.
   const frame = JSON.stringify(["REQ", subscription.id, ...requestFilters]);
+  let closeRequested = false;
+  const closeOnce = (reason: string) => {
+    if (closeRequested || subscription.closed) {
+      return;
+    }
+    closeRequested = true;
+    subscription.close(reason);
+  };
   const requestSent = relay.send(frame).catch((error: unknown) => {
-    if (subscription.closed || relay.openSubs.get(subscription.id) !== subscription) {
+    // A socket drop closes its subscriptions after disconnecting, so it clears
+    // openSubs and decrements the counter without ever setting `closed`. A
+    // missing entry is the only evidence that path already ran.
+    if (relay.openSubs.get(subscription.id) !== subscription) {
       return;
     }
     const message = error instanceof Error ? error.message : String(error);
-    subscription.close(`Buzz relay subscription request failed: ${message}`);
+    closeOnce(`Buzz relay subscription request failed: ${message}`);
   });
-  // SAFETY: Object.assign returns that same subscription with requestSent added, which is the handle shape.
-  return Object.assign(subscription, { requestSent }) as BuzzRelaySubscriptionHandle;
+  // SAFETY: Object.assign returns that same subscription with the handle members added.
+  return Object.assign(subscription, { requestSent, closeOnce }) as BuzzRelaySubscriptionHandle;
 }
 
 export async function queryBuzzRelaySnapshot<TResult>(
@@ -137,7 +157,6 @@ async function runBuzzRelaySnapshot<TResult>(
   return await new Promise<TResult>((resolve, reject) => {
     let settled = false;
     let receivedEose = false;
-    let subscriptionClosed = false;
     let subscription: BuzzRelaySubscriptionHandle | undefined;
     const timeout = setTimeout(() => {
       const error = new Error(params.timeoutMessage);
@@ -155,13 +174,11 @@ async function runBuzzRelaySnapshot<TResult>(
         params.relay.close();
       }
     }, params.timeoutMs ?? 10_000);
-    // nostr-tools decrements ongoingOperations on every close() call, so a
-    // subscription must be closed exactly once.
+    // The handle owns closing. A send rejection arriving after the timeout runs
+    // its own cleanup, and a second close() here would unbalance the relay's
+    // operation count.
     const closeSubscription = () => {
-      if (subscription && !subscriptionClosed) {
-        subscriptionClosed = true;
-        subscription.close(params.closeReason);
-      }
+      subscription?.closeOnce(params.closeReason);
     };
     const closeAfterRealEose = () => {
       if (receivedEose) {

@@ -246,6 +246,35 @@ describe("queryBuzzRelaySnapshot query capacity", () => {
     }
   });
 
+  it("closes once when a timed-out lookup's send rejects afterwards", async () => {
+    let rejectSend: ((error: Error) => void) | undefined;
+    const { close, closeRelay, relay } = createRelay(
+      async () =>
+        await new Promise<void>((_resolve, reject) => {
+          rejectSend = reject;
+        }),
+    );
+
+    const pending = queryBuzzRelaySnapshot(snapshotParams(relay));
+    // Awaiting the rejection is what waits for the timeout; a fixed sleep would
+    // race the timer on a loaded runner.
+    await expect(pending).rejects.toThrow("timed out");
+    expect(close).not.toHaveBeenCalled();
+
+    // Both cleanups now want this subscription gone: the send failure runs its
+    // own, and the timeout's was deferred onto the very promise that just
+    // rejected. Two close() calls would decrement relay.ongoingOperations
+    // twice and let scheduleIdleClose() drop a connection other rooms share.
+    rejectSend?.(new Error("socket closed"));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledWith("Buzz relay subscription request failed: socket closed");
+    expect(closeRelay).not.toHaveBeenCalled();
+  });
+
   it("waits for the REQ frame before closing a timed-out subscription", async () => {
     let releaseSend: (() => void) | undefined;
     const { close, closeRelay, relay } = createRelay(
