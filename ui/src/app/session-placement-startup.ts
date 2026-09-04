@@ -11,10 +11,15 @@ import type {
 } from "../lib/sessions/session-placement-recovery.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "./stale-chunk-reload.ts";
 
 export type ApplicationPlacementStartupStatus = {
   readonly sessionKey: string;
-  readonly targetKind: SessionPlacementTarget["kind"];
+  // A restored key holds admission before the lazy runtime validates its target and payload.
+  readonly targetKind?: SessionPlacementTarget["kind"];
   readonly phase:
     | "pending"
     | "requested"
@@ -91,10 +96,12 @@ export function createApplicationPlacementStartup(
   let disposed = false;
   let runtime: ApplicationPlacementStartupRuntime | undefined;
   let runtimeLoad: Promise<void> | undefined;
-  let runtimeError: string | undefined;
+  let runtimeError: Error | undefined;
   const listeners = new Set<() => void>();
   let stopGateway: (() => void) | undefined;
-  let pendingStoredRecovery: ((sessionKey: string) => boolean) | undefined;
+  let pendingStoredRecovery:
+    | ((sessionKey: string) => { startedAt: number } | undefined)
+    | undefined;
 
   const publish = () => listeners.forEach((listener) => listener());
   const readyClient = () => {
@@ -151,11 +158,18 @@ export function createApplicationPlacementStartup(
       };
       const current = capturePlacementStartupConnection(gateway, owner);
       const keys = listSessionPlacementRecoveryStorageKeys(owner.gatewayUrl, owner.recoveryScope);
+      const restored = { startedAt: Date.now() };
       pendingStoredRecovery = (key) =>
         current() &&
         keys.includes(
           sessionPlacementRecoveryExactStorageKey(owner.gatewayUrl, owner.recoveryScope, key),
-        );
+        )
+          ? restored
+          : undefined;
+    }
+    if (runtimeError !== undefined) {
+      runtimeError = undefined;
+      publish();
     }
     runtimeLoad ??= loadRuntime().then(
       ({ default: createApplicationPlacementStartupRuntime }) => {
@@ -168,7 +182,7 @@ export function createApplicationPlacementStartup(
       },
       (error: unknown) => {
         runtimeLoad = undefined;
-        runtimeError = formatUiError(error);
+        runtimeError = new Error(formatUiError(error));
         publish();
       },
     );
@@ -177,16 +191,18 @@ export function createApplicationPlacementStartup(
   return {
     get(sessionKey) {
       const input = preRuntimeEntries.get(sessionKey)?.();
-      if (!input) {
+      const pending = input
+        ? { targetKind: input.recovery.target.kind, startedAt: input.createdAt }
+        : pendingStoredRecovery?.(sessionKey);
+      if (!pending) {
         return runtime?.get(sessionKey) ?? null;
       }
       return readyClient()
         ? {
             sessionKey,
-            targetKind: input.recovery.target.kind,
+            ...pending,
             phase: runtimeError ? "failed" : "pending",
-            startedAt: input.createdAt,
-            error: runtimeError,
+            error: runtimeError?.message,
             retryable: Boolean(runtimeError),
           }
         : null;
@@ -235,6 +251,25 @@ export function createApplicationPlacementStartup(
       const input = preRuntimeEntries.get(sessionKey)?.();
       if (input) {
         return resumeRecovery(input);
+      }
+      const stored = pendingStoredRecovery;
+      if (stored?.(sessionKey)) {
+        const error = runtimeError;
+        if (isStaleChunkImportError(error)) {
+          // A failed hashed import stays cached. Reload only while the saved
+          // owner remains current, and never discard another memory-only start.
+          void retryStaleChunkReloadWhenReachable({
+            canReload: () =>
+              !disposed &&
+              runtimeError === error &&
+              Boolean(stored(sessionKey)) &&
+              [...preRuntimeEntries.values()].every(
+                (readInput) => readInput()?.persistRecovery !== false,
+              ),
+          });
+          return;
+        }
+        return resumeRecovery();
       }
       runtime?.retry(sessionKey);
     },
