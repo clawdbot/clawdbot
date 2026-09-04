@@ -286,69 +286,261 @@ esac
     },
   );
 
-  it.skipIf(process.platform === "win32").each([
-    { status: "queued", conclusion: null, exitCode: 16, output: "TIMEOUT" },
-    { status: "in_progress", conclusion: null, exitCode: 16, output: "TIMEOUT" },
-    { status: "completed", conclusion: "success", exitCode: 0, output: "GREEN" },
-    {
-      status: "completed",
-      conclusion: "failure",
-      exitCode: 15,
-      output: "FAILING checks=CI workflow (failure)",
-    },
-  ])(
-    "uses attached $status/$conclusion CI instead of a prior pull-request failure",
-    async ({ status, conclusion, exitCode, output }) => {
-      const run = { id: 201, workflow_id: 10, status, conclusion };
-      const pr = {
-        state: "OPEN",
-        mergeable: true,
-        headRefOid: sha,
-        statusCheckRollup: {
-          state: "FAILURE",
-          contexts: {
-            totalCount: 1,
-            pageInfo: { hasNextPage: false, endCursor: null },
-            nodes: [
-              {
-                kind: "CheckRun",
-                databaseId: 1_000,
-                name: "old matrix shard",
-                status: "COMPLETED",
-                conclusion: "FAILURE",
-                checkSuite: {
-                  workflowRun: {
-                    databaseId: 100,
-                    event: "pull_request",
-                    workflow: { databaseId: 10 },
+  describe.skipIf(process.platform === "win32")("PR run replacement ownership", () => {
+    const association = (number = 42, baseRef = "main") => ({
+      number,
+      head: { sha },
+      base: { ref: baseRef, sha: "b".repeat(40) },
+    });
+
+    it.each<{
+      label: string;
+      status?: string;
+      conclusion?: string | null;
+      runPatch?: Record<string, unknown>;
+      previousPatch?: Record<string, unknown>;
+      checkSuiteId?: number | null;
+      oldConclusion?: "FAILURE" | "CANCELLED";
+      checkEvent?: string;
+      newCheckName?: string;
+      newCheckEvent?: string | null;
+      expectedRun?: number;
+      completion?: "ci-run";
+      exitCode?: number;
+      output?: string;
+    }>([
+      {
+        label: "queued replacement",
+        status: "queued",
+        conclusion: null,
+        exitCode: 16,
+        output: "TIMEOUT",
+      },
+      {
+        label: "running replacement",
+        status: "in_progress",
+        conclusion: null,
+        exitCode: 16,
+        output: "TIMEOUT",
+      },
+      { label: "successful replacement", exitCode: 0, output: "GREEN" },
+      {
+        label: "same-PR unique cancellation replacement",
+        oldConclusion: "CANCELLED",
+        newCheckName: "new matrix shard",
+        exitCode: 0,
+        output: "GREEN",
+      },
+      {
+        label: "unassociated unique cancellation replacement",
+        oldConclusion: "CANCELLED",
+        newCheckName: "new matrix shard",
+        runPatch: { pull_requests: [] },
+      },
+      {
+        label: "another PR's unique cancellation replacement",
+        oldConclusion: "CANCELLED",
+        newCheckName: "new matrix shard",
+        runPatch: { pull_requests: [association(43)] },
+        expectedRun: 100,
+      },
+      {
+        label: "unique target cancellation with unbound newer checks",
+        oldConclusion: "CANCELLED",
+        checkEvent: "pull_request_target",
+        newCheckName: "new matrix shard",
+      },
+      {
+        label: "unique target cancellation with unbound newer run metadata",
+        oldConclusion: "CANCELLED",
+        checkEvent: "pull_request_target",
+      },
+      {
+        label: "same-name replacement from a different event",
+        checkEvent: "pull_request_target",
+        newCheckName: "old matrix shard",
+        newCheckEvent: "pull_request",
+      },
+      {
+        label: "same-name replacement with an unknown event",
+        checkEvent: "pull_request_target",
+        newCheckName: "old matrix shard",
+        newCheckEvent: null,
+      },
+      {
+        label: "same-name same-event target replacement",
+        oldConclusion: "CANCELLED",
+        checkEvent: "pull_request_target",
+        newCheckName: "old matrix shard",
+        exitCode: 0,
+        output: "GREEN",
+      },
+
+      {
+        label: "failed replacement",
+        conclusion: "failure",
+        output: "FAILING checks=CI workflow (failure)",
+      },
+      {
+        label: "another PR with the same head and a different base",
+        runPatch: { pull_requests: [association(43, "release/2026.9")] },
+        expectedRun: 100,
+      },
+      { label: "missing replacement association", runPatch: { pull_requests: undefined } },
+      { label: "empty replacement association", runPatch: { pull_requests: [] } },
+      {
+        label: "ambiguous replacement association",
+        runPatch: { pull_requests: [association(), association(43)] },
+      },
+      {
+        label: "malformed replacement association",
+        runPatch: { pull_requests: [association(), { number: "43", head: { sha } }] },
+      },
+      { label: "empty prior association", previousPatch: { pull_requests: [] } },
+      {
+        label: "another PR's prior graph",
+        previousPatch: { pull_requests: [association(43, "release/2026.9")] },
+      },
+      {
+        label: "ambiguous prior association",
+        previousPatch: { pull_requests: [association(), association(43)] },
+      },
+      { label: "different replacement event", runPatch: { event: "workflow_dispatch" } },
+      { label: "different replacement head", runPatch: { head_sha: "c".repeat(40) } },
+      {
+        label: "different association head",
+        runPatch: { pull_requests: [{ ...association(), head: { sha: "c".repeat(40) } }] },
+      },
+      { label: "different prior event", previousPatch: { event: "workflow_dispatch" } },
+      { label: "different prior head", previousPatch: { head_sha: "c".repeat(40) } },
+      { label: "different workflow", runPatch: { workflow_id: 20 } },
+      { label: "missing replacement suite", runPatch: { check_suite_id: undefined } },
+      { label: "missing prior suite", previousPatch: { check_suite_id: undefined } },
+      { label: "mismatched prior check suite", checkSuiteId: 999 },
+      { label: "missing prior check suite", checkSuiteId: null },
+      {
+        label: "same PR rerun after its base changed",
+        runPatch: { pull_requests: [association(42, "release/2026.9")] },
+        exitCode: 0,
+        output: "GREEN",
+      },
+      {
+        label: "existing ci-run completion policy",
+        runPatch: { pull_requests: [association(43, "release/2026.9")] },
+        completion: "ci-run",
+        exitCode: 0,
+        output: "GREEN",
+      },
+    ])(
+      "preserves replacement ownership for $label",
+      async ({
+        status = "completed",
+        conclusion = "success",
+        runPatch,
+        previousPatch,
+        checkSuiteId = 10_000,
+        oldConclusion = "FAILURE",
+        checkEvent = "pull_request",
+        newCheckName,
+        newCheckEvent = checkEvent,
+        expectedRun = 201,
+        completion,
+        exitCode = 15,
+        output = "FAILING checks=old matrix shard",
+      }) => {
+        const identity = {
+          workflow_id: 10,
+          event: "pull_request",
+          head_sha: sha,
+          pull_requests: [association()],
+        };
+        const run = {
+          ...identity,
+          id: 201,
+          check_suite_id: 20_000,
+          status,
+          conclusion,
+          ...runPatch,
+        };
+        const previous = {
+          ...identity,
+          id: 100,
+          check_suite_id: 10_000,
+          status: "completed",
+          conclusion: oldConclusion.toLowerCase(),
+          ...previousPatch,
+        };
+        const pr = {
+          state: "OPEN",
+          mergeable: true,
+          headRefOid: sha,
+          statusCheckRollup: {
+            state: "FAILURE",
+            contexts: {
+              totalCount: newCheckName ? 2 : 1,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  kind: "CheckRun",
+                  databaseId: 1_000,
+                  name: "old matrix shard",
+                  status: "COMPLETED",
+                  conclusion: oldConclusion,
+                  checkSuite: {
+                    databaseId: checkSuiteId ?? undefined,
+                    workflowRun: {
+                      databaseId: 100,
+                      event: checkEvent,
+                      workflow: { databaseId: 10 },
+                    },
                   },
                 },
-              },
-            ],
+                ...(newCheckName
+                  ? [
+                      {
+                        kind: "CheckRun",
+                        databaseId: 2_000,
+                        name: newCheckName,
+                        status: "COMPLETED",
+                        conclusion: "SUCCESS",
+                        checkSuite: {
+                          databaseId: 20_000,
+                          workflowRun: {
+                            databaseId: 201,
+                            event: newCheckEvent ?? undefined,
+                            workflow: { databaseId: 10 },
+                          },
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            },
           },
-        },
-      };
-      const result = await runWatcher(
-        `#!/usr/bin/env node
+        };
+        const result = await runWatcher(
+          `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const pr = ${JSON.stringify(pr)};
-const run = ${JSON.stringify(run)};
+const runs = ${JSON.stringify([run, previous])};
 let value;
 if (args[0] === "pr" && args[1] === "view") value = pr;
-else if (args[0] === "run" && args[1] === "view") value = run;
+else if (args[0] === "run" && args[1] === "view") value = runs.find((run) => String(run.id) === args[2]);
 else if (args[0] === "api" && args[1] === "graphql") value = { data: { repository: { pullRequest: pr } } };
-else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { workflow_runs: [run] };
+else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { workflow_runs: runs };
+else if (args[1]?.includes("/actions/runs?event=pull_request_target")) value = { workflow_runs: [{ ...runs[0], event: "pull_request_target", pull_requests: [] }] };
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 console.log(JSON.stringify(value));
 `,
-      );
-
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-      expect(result.stdout).toContain("ATTACHED run=201");
-      expect(result.stdout).toContain(output);
-      expect(result.stdout).not.toContain("FAILING checks=old matrix shard");
-    },
-  );
+          sha,
+          completion ? ["--completion", completion] : [],
+        );
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+        expect(result.stdout).toContain(`ATTACHED run=${expectedRun}`);
+        expect(result.stdout).toContain(output);
+      },
+    );
+  });
 
   describe.skipIf(process.platform === "win32")("queued placeholder CLI evidence", () => {
     it.each([
@@ -1066,6 +1258,7 @@ console.log(JSON.stringify(value));
             {
               kind: "CheckRun",
               name: "Real behavior proof",
+              databaseId: 1_000,
               status: "COMPLETED",
               conclusion: "CANCELLED",
               checkSuite: {
@@ -1075,6 +1268,7 @@ console.log(JSON.stringify(value));
             {
               kind: "CheckRun",
               name: "Real behavior proof",
+              databaseId: 2_000,
               status: "IN_PROGRESS",
               conclusion: null,
               checkSuite: {
@@ -1093,78 +1287,6 @@ console.log(JSON.stringify(value));
       }),
     ).toEqual({ verdict: "PENDING", pendingCount: 2, failingNames: [], supersededCount: 1 });
   });
-
-  it.each<{
-    label: string;
-    name?: string;
-    conclusion?: string;
-    event?: string | null;
-    workflowId?: number | null;
-    newerRunId?: number;
-    newerWorkflowId?: number | null;
-    ciStatus?: string;
-    verdict?: string;
-  }>([
-    { label: "pending CI", ciStatus: "IN_PROGRESS", verdict: "PENDING" },
-    { label: "successful CI with a different check name", name: "target guard", verdict: "GREEN" },
-    { label: "latest target cancellation", newerRunId: 100 },
-    { label: "real target failure", conclusion: "FAILURE" },
-    { label: "another event's cancellation", event: "pull_request" },
-    { label: "another workflow", newerWorkflowId: 20 },
-    { label: "unknown event", event: null },
-    { label: "unknown visible workflow identity", workflowId: null },
-    { label: "unknown replacement workflow identity", newerWorkflowId: null },
-  ])(
-    "uses newer same-workflow target-run identity without hiding $label",
-    ({
-      name = "dispatch",
-      conclusion = "CANCELLED",
-      event = "pull_request_target",
-      workflowId = 10,
-      newerRunId = 200,
-      newerWorkflowId = 10,
-      ciStatus = "COMPLETED",
-      verdict = "FAILING",
-    }) => {
-      expect(
-        classifyRollup(
-          {
-            state: "FAILURE",
-            contexts: {
-              nodes: [
-                {
-                  kind: "CheckRun",
-                  name,
-                  status: "COMPLETED",
-                  conclusion,
-                  checkSuite: {
-                    workflowRun: {
-                      databaseId: 100,
-                      event: event ?? undefined,
-                      workflow: { databaseId: workflowId ?? undefined },
-                    },
-                  },
-                },
-                {
-                  kind: "CheckRun",
-                  name: "CI",
-                  status: ciStatus,
-                  conclusion: ciStatus === "COMPLETED" ? "SUCCESS" : null,
-                  checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },
-                },
-              ],
-            },
-          },
-          [{ id: newerRunId, workflow_id: newerWorkflowId ?? undefined }],
-        ),
-      ).toEqual({
-        verdict,
-        pendingCount: ciStatus === "IN_PROGRESS" ? 1 : 0,
-        failingNames: verdict === "FAILING" ? [name] : [],
-        supersededCount: verdict === "FAILING" ? 0 : 1,
-      });
-    },
-  );
 
   it("keeps only the newest same-run check attempt while its replacement is pending", () => {
     expect(
@@ -1222,7 +1344,7 @@ console.log(JSON.stringify(value));
     ).toEqual({ verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 1 });
   });
 
-  it("accepts newest successful runs when the aggregate remains failed", () => {
+  it("retains unique cancellations across independent workflows", () => {
     expect(
       classifyRollup({
         state: "FAILURE",
@@ -1263,7 +1385,12 @@ console.log(JSON.stringify(value));
           ],
         },
       }),
-    ).toEqual({ verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 2 });
+    ).toEqual({
+      verdict: "FAILING",
+      pendingCount: 0,
+      failingNames: ["old CI", "old proof"],
+      supersededCount: 0,
+    });
   });
 
   it("preserves a genuine failure from the newest workflow run", () => {
@@ -1274,7 +1401,7 @@ console.log(JSON.stringify(value));
           nodes: [
             {
               kind: "CheckRun",
-              name: "superseded cancellation",
+              name: "older cancelled check",
               status: "COMPLETED",
               conclusion: "CANCELLED",
               checkSuite: { workflowRun: { databaseId: 100, workflow: { databaseId: 20 } } },
@@ -1292,8 +1419,8 @@ console.log(JSON.stringify(value));
     ).toEqual({
       verdict: "FAILING",
       pendingCount: 0,
-      failingNames: ["unit"],
-      supersededCount: 1,
+      failingNames: ["older cancelled check", "unit"],
+      supersededCount: 0,
     });
   });
 
@@ -1330,112 +1457,10 @@ console.log(JSON.stringify(value));
     ).toEqual({
       verdict: "FAILING",
       pendingCount: 0,
-      failingNames: ["unit"],
-      supersededCount: 1,
+      failingNames: ["old deploy", "unit"],
+      supersededCount: 0,
     });
   });
-
-  it.each<{
-    label: string;
-    event?: string;
-    workflowId?: number;
-    attachedRun?: { id: number; workflow_id?: number };
-    superseded?: boolean;
-  }>([
-    { label: "no attached run", event: "pull_request", workflowId: 20 },
-    {
-      label: "newer attached pull-request run",
-      event: "pull_request",
-      workflowId: 20,
-      attachedRun: { id: 400, workflow_id: 20 },
-      superseded: true,
-    },
-    {
-      label: "manual invocation",
-      event: "workflow_dispatch",
-      workflowId: 20,
-      attachedRun: { id: 400, workflow_id: 20 },
-    },
-    {
-      label: "unknown event",
-      workflowId: 20,
-      attachedRun: { id: 400, workflow_id: 20 },
-    },
-    {
-      label: "unknown check workflow",
-      event: "pull_request",
-      attachedRun: { id: 400, workflow_id: 20 },
-    },
-    {
-      label: "unknown attached workflow",
-      event: "pull_request",
-      workflowId: 20,
-      attachedRun: { id: 400 },
-    },
-    {
-      label: "different workflow",
-      event: "pull_request",
-      workflowId: 20,
-      attachedRun: { id: 400, workflow_id: 30 },
-    },
-    {
-      label: "current run",
-      event: "pull_request",
-      workflowId: 20,
-      attachedRun: { id: 300, workflow_id: 20 },
-    },
-    {
-      label: "newer run",
-      event: "pull_request",
-      workflowId: 20,
-      attachedRun: { id: 200, workflow_id: 20 },
-    },
-  ])(
-    "keeps unique older failures unless replaced: $label",
-    ({ event, workflowId, attachedRun, superseded = false }) => {
-      expect(
-        classifyRollup(
-          {
-            state: "FAILURE",
-            contexts: {
-              nodes: [
-                {
-                  kind: "CheckRun",
-                  databaseId: 1_000,
-                  name: "nightly-special",
-                  status: "COMPLETED",
-                  conclusion: "FAILURE",
-                  checkSuite: {
-                    workflowRun: {
-                      databaseId: 300,
-                      event,
-                      workflow: { databaseId: workflowId },
-                    },
-                  },
-                },
-                {
-                  kind: "CheckRun",
-                  databaseId: 2_000,
-                  name: "unit",
-                  status: "COMPLETED",
-                  conclusion: "SUCCESS",
-                  checkSuite: { workflowRun: { databaseId: 400, workflow: { databaseId: 20 } } },
-                },
-              ],
-            },
-          },
-          [],
-          undefined,
-          attachedRun,
-        ),
-      ).toEqual({
-        verdict: superseded ? "GREEN" : "FAILING",
-        pendingCount: 0,
-        failingNames: superseded ? [] : ["nightly-special"],
-        supersededCount: superseded ? 1 : 0,
-      });
-    },
-  );
 
   it("supersedes same-name checks across runs of the same workflow", () => {
     expect(
@@ -1474,7 +1499,8 @@ console.log(JSON.stringify(value));
           nodes: [
             {
               kind: "CheckRun",
-              name: "old CI",
+              name: "CI",
+              databaseId: 1_000,
               status: "COMPLETED",
               conclusion: "CANCELLED",
               checkSuite: { workflowRun: { databaseId: 100, workflow: { databaseId: 20 } } },
@@ -1482,6 +1508,7 @@ console.log(JSON.stringify(value));
             {
               kind: "CheckRun",
               name: "CI",
+              databaseId: 2_000,
               status: "COMPLETED",
               conclusion: "SUCCESS",
               checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },

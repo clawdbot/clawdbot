@@ -29,6 +29,7 @@ const RollupCheckSchema = z.object({
   state: optionalString,
   checkSuite: optionalNullable(
     z.object({
+      databaseId: optionalNumber,
       workflowRun: optionalNullable(
         z.object({
           databaseId: optionalNumber,
@@ -70,6 +71,13 @@ const RollupResponseSchema = z.object({
 const RunListItemSchema = z.object({
   id: z.number(),
   workflow_id: optionalNumber,
+  check_suite_id: optionalNumber,
+  event: optionalString,
+  head_sha: optionalString,
+  // Do not discard malformed members: that could make an ambiguous association unique.
+  pull_requests: optional(
+    z.array(z.object({ number: z.number().int().positive(), head: z.object({ sha: z.string() }) })),
+  ),
   conclusion: optionalNullable(z.string()),
 });
 const RunListSchema = z
@@ -111,6 +119,7 @@ type RollupPage = z.infer<typeof RollupPageSchema>;
 type RunListItem = z.infer<typeof RunListItemSchema>;
 type RunStatus = z.infer<typeof RunStatusSchema>;
 type JobIdentity = { runId: number; checkId: number };
+type PrRunReplacement = { workflowId: number; checkSuites: ReadonlyMap<number, number> };
 const FAILURE_CONCLUSIONS = new Set([
   "ACTION_REQUIRED",
   "CANCELLED",
@@ -119,7 +128,7 @@ const FAILURE_CONCLUSIONS = new Set([
   "STALE",
   "TIMED_OUT",
 ]);
-const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor} nodes{kind:__typename ... on CheckRun{name status conclusion databaseId checkSuite{workflowRun{databaseId event workflow{databaseId}}}} ... on StatusContext{context state}}}}}}}`;
+const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor} nodes{kind:__typename ... on CheckRun{name status conclusion databaseId checkSuite{databaseId workflowRun{databaseId event workflow{databaseId}}}} ... on StatusContext{context state}}}}}}}`;
 const MAX_ALIAS_READS_PER_POLL = 32;
 const GH_READ_OPTIONS = {
   stdio: ["ignore", "pipe", "pipe"],
@@ -216,7 +225,7 @@ function checkRunIdentity(check: RollupCheck) {
   if (typeof runId !== "number" || typeof workflowId !== "number") {
     return undefined;
   }
-  return { runId, workflowId };
+  return { runId, workflowId, event: check.checkSuite?.workflowRun?.event };
 }
 // Strict recency ordering for same-name checks: newest run wins; within one run
 // (rerun attempts reuse the run id) the newest check-run id wins.
@@ -225,9 +234,8 @@ const newerJob = (a: JobIdentity, b: JobIdentity) =>
 
 export function classifyRollup(
   rollup: RollupPayload | null | undefined,
-  runs: RunListItem[] = [],
   reconciledChecks: ReadonlyMap<number, string> = new Map(),
-  attachedRun?: RunListItem,
+  replacement?: PrRunReplacement,
 ) {
   const rawNodes = rollup?.contexts?.nodes ?? [];
   const hiddenContextCount = Math.max(
@@ -241,19 +249,14 @@ export function classifyRollup(
     check.status === "QUEUED" &&
     check.conclusion === null &&
     reconciledChecks.get(check.databaseId) === check.name;
-  const newestRunByWorkflow = new Map<number, number>();
   const bestByJob = new Map<string, JobIdentity & { reconciled: boolean }>();
   for (const check of rawNodes) {
     const identity = checkRunIdentity(check);
     if (!identity) {
       continue;
     }
-    newestRunByWorkflow.set(
-      identity.workflowId,
-      Math.max(newestRunByWorkflow.get(identity.workflowId) ?? 0, identity.runId),
-    );
     if (check.name && typeof check.databaseId === "number") {
-      const key = `${identity.workflowId}:${check.name}`;
+      const key = `${identity.workflowId}:${identity.event ?? ""}:${check.name}`;
       const reconciled = isReconciledPlaceholder(check);
       const candidate = { runId: identity.runId, checkId: check.databaseId, reconciled };
       const best = bestByJob.get(key);
@@ -264,22 +267,20 @@ export function classifyRollup(
   }
   let supersededCount = 0;
   let reconciledCount = 0;
-  // Re-triggers leave every prior run's check runs on the SHA forever and GitHub's aggregate
-  // counts them. A check is superseded when a newer same-workflow check shares its name
-  // (GitHub's latest-name-wins semantics), or when its cancelled workflow has a newer run.
-  // Actions run metadata also proves target-run supersession before a newer run posts jobs.
-  // Other invocations retain unique names; attached PR CI replaces its entire prior graph.
+  // GitHub CLI deduplicates same-name checks within a workflow/event on the shared SHA.
+  // Unique jobs, including cancellations, need exact same-PR run/suite replacement proof.
   const nodes = rawNodes.filter((check) => {
     const identity = checkRunIdentity(check);
     if (!identity) {
       return true;
     }
-    // PR CI runs replace one another even before new matrix job names appear.
-    // Require event and workflow identity so manual or unrelated checks remain visible.
+    // A shared head can belong to different PR bases. Only event-bound run/suite
+    // evidence permits replacing an older graph before new job names appear.
+    const replacedSuite = replacement?.checkSuites.get(identity.runId);
     if (
-      attachedRun &&
-      identity.workflowId === attachedRun.workflow_id &&
-      identity.runId < attachedRun.id &&
+      replacedSuite !== undefined &&
+      identity.workflowId === replacement?.workflowId &&
+      check.checkSuite?.databaseId === replacedSuite &&
       check.checkSuite?.workflowRun?.event === "pull_request"
     ) {
       supersededCount += 1;
@@ -292,7 +293,7 @@ export function classifyRollup(
       return false;
     }
     if (check.name && typeof check.databaseId === "number") {
-      const best = bestByJob.get(`${identity.workflowId}:${check.name}`);
+      const best = bestByJob.get(`${identity.workflowId}:${identity.event ?? ""}:${check.name}`);
       // A removed placeholder cannot hide a verified sibling that changed in this
       // attempt. Uncovered earlier attempts and newer runs retain normal supersession.
       const changedAlias = reconciledChecks.has(check.databaseId);
@@ -304,16 +305,6 @@ export function classifyRollup(
         supersededCount += 1;
         return false;
       }
-    }
-    const newestRun = newestRunByWorkflow.get(identity.workflowId) ?? identity.runId;
-    if (
-      check.conclusion === "CANCELLED" &&
-      (newestRun > identity.runId ||
-        (check.checkSuite?.workflowRun?.event === "pull_request_target" &&
-          runs.some((run) => run.workflow_id === identity.workflowId && run.id > identity.runId)))
-    ) {
-      supersededCount += 1;
-      return false;
     }
     return true;
   });
@@ -402,18 +393,44 @@ export const buildFindRunArgs = (repo: string, sha: string) =>
   workflowRunsApiArgs(repo, sha, "pull_request", 20);
 export const selectRunAfter = (runs: RunListItem[], after?: number) =>
   runs.find((run) => run.conclusion !== "skipped" && (after === undefined || run.id > after));
-const findRun = (repo: string, sha: string, after?: number) =>
-  selectRunAfter(
-    RunListSchema.parse(execGhJson(buildFindRunArgs(repo, sha), GH_READ_OPTIONS)),
-    after,
-  );
-const findTargetRuns = (repo: string, sha: string, deadline?: number) =>
-  RunListSchema.parse(
-    execGhJson(
-      ["api", `repos/${repo}/actions/runs?event=pull_request_target&head_sha=${sha}&per_page=100`],
-      ghReadOptions(deadline),
-    ),
-  );
+function findRun(repo: string, sha: string, after?: number, pr?: number) {
+  const runs = RunListSchema.parse(execGhJson(buildFindRunArgs(repo, sha), GH_READ_OPTIONS));
+  const candidates =
+    pr === undefined
+      ? runs
+      : runs.filter(
+          (run) =>
+            !run.pull_requests?.length ||
+            run.pull_requests.some((request) => request.number === pr),
+        );
+  const run = selectRunAfter(candidates, after);
+  if (!run) {
+    return undefined;
+  }
+  const boundToPr = (candidate: RunListItem) =>
+    pr !== undefined &&
+    candidate.event === "pull_request" &&
+    candidate.head_sha === sha &&
+    candidate.pull_requests?.length === 1 &&
+    candidate.pull_requests[0]?.number === pr &&
+    candidate.pull_requests[0]?.head.sha === sha;
+  const checkSuites = new Map<number, number>();
+  if (boundToPr(run) && run.workflow_id !== undefined && run.check_suite_id !== undefined) {
+    for (const previous of runs) {
+      if (
+        previous.id < run.id &&
+        previous.workflow_id === run.workflow_id &&
+        previous.check_suite_id !== undefined &&
+        boundToPr(previous)
+      ) {
+        checkSuites.set(previous.id, previous.check_suite_id);
+      }
+    }
+  }
+  const replacement =
+    run.workflow_id === undefined ? undefined : { workflowId: run.workflow_id, checkSuites };
+  return { run, replacement };
+}
 const readRun = (repo: string, runId: number, deadline?: number) =>
   RunStatusSchema.parse(
     execGhJson(
@@ -421,34 +438,6 @@ const readRun = (repo: string, runId: number, deadline?: number) =>
       ghReadOptions(deadline),
     ),
   );
-
-function classifyPrRollup(
-  pr: RollupPage,
-  repo: string,
-  headSha: string,
-  attachedRun: RunListItem,
-  reconciledChecks?: ReadonlyMap<number, string>,
-  deadline?: number,
-) {
-  const result = classifyRollup(pr.statusCheckRollup, [], reconciledChecks, attachedRun);
-  if (
-    result.verdict !== "FAILING" ||
-    !pr.statusCheckRollup?.contexts?.nodes?.some(
-      (check) =>
-        check.conclusion === "CANCELLED" &&
-        check.checkSuite?.workflowRun?.event === "pull_request_target" &&
-        checkRunIdentity(check),
-    )
-  ) {
-    return result;
-  }
-  return classifyRollup(
-    pr.statusCheckRollup,
-    findTargetRuns(repo, headSha, deadline),
-    reconciledChecks,
-    attachedRun,
-  );
-}
 
 function readQueuedPlaceholderEvidence(
   repo: string,
@@ -740,18 +729,23 @@ async function main(argv = process.argv.slice(2)) {
         if (blocked !== null) {
           return { exitCode: blocked };
         }
-        const candidate = findRun(args.repo, args.headSha, args.after);
+        const candidate = findRun(
+          args.repo,
+          args.headSha,
+          args.after,
+          args.completion === "rollup" ? args.pr : undefined,
+        );
         if (candidate) {
           const classification = classifyRunAttachment(
-            candidate.id,
-            readRun(args.repo, candidate.id),
+            candidate.run.id,
+            readRun(args.repo, candidate.run.id),
             args.after,
           );
           if (classification.attach) {
             if (classification.warning) {
               console.log(classification.warning);
             }
-            return { run: candidate };
+            return candidate;
           }
         }
       } catch (error) {
@@ -804,7 +798,7 @@ async function main(argv = process.argv.slice(2)) {
         if (blocked !== null) {
           return blocked;
         }
-        let result = classifyPrRollup(pr, args.repo, args.headSha, attached);
+        let result = classifyRollup(pr.statusCheckRollup, undefined, attachment.replacement);
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
         let run = result.verdict === "FAILING" ? undefined : readRun(args.repo, runId);
@@ -830,14 +824,7 @@ async function main(argv = process.argv.slice(2)) {
             if (currentBlocked !== null) {
               return currentBlocked;
             }
-            result = classifyPrRollup(
-              pr,
-              args.repo,
-              args.headSha,
-              attached,
-              reconciled,
-              watchDeadline,
-            );
+            result = classifyRollup(pr.statusCheckRollup, reconciled, attachment.replacement);
             run =
               result.verdict === "FAILING" ? undefined : readRun(args.repo, runId, watchDeadline);
           }
