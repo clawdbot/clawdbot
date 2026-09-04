@@ -210,15 +210,17 @@ export function createCronAgentWatchdog(params: {
   };
 }
 
-/** Runs timeout cleanup with a guard so stuck cleanup cannot block the cron lane. */
+/** Runs timeout cleanup with a guard so stuck cleanup cannot block the cron lane.
+ *  Returns true only when the original execution is confirmed terminated/cancelled;
+ *  false when cleanup is unavailable, rejects, or exceeds the guard timeout. */
 export async function cleanupTimedOutCronAgentRun(
   state: CronServiceState,
   job: CronJob,
   timeoutMs: number,
   execution?: CronAgentExecutionStarted,
-): Promise<void> {
+): Promise<boolean> {
   if (!state.deps.cleanupTimedOutAgentRun) {
-    return;
+    return false;
   }
   // Log the timeout event with execution state for debugging #137215.
   state.deps.log.warn(
@@ -255,11 +257,13 @@ export async function cleanupTimedOutCronAgentRun(
         "cron: timeout cleanup exceeded guard timeout; original execution may still be running",
       );
     }
+    return settled;
   } catch (err) {
     state.deps.log.warn(
       { jobId: job.id, jobName: job.name, err: String(err) },
       "cron: timed-out agent cleanup failed",
     );
+    return false;
   } finally {
     if (settleTimer) {
       clearTimeout(settleTimer);

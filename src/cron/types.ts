@@ -199,6 +199,8 @@ export type CronRunOutcome = {
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   errorClassification?: CronRunErrorClassification;
+  /** True when a timed-out run's original execution could not be confirmed cancelled. */
+  timeoutCleanupUnconfirmed?: boolean;
   /** Transient internal detail; never project into persisted or public cron events. */
   failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;

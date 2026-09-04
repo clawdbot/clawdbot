@@ -291,12 +291,12 @@ export function applyJobResult(
       } else if (result.status === "error") {
         const retryDecision = resolveTransientCronRetryDecision({
           cronConfig: state.deps.cronConfig,
-          jobId: job.id,
           error: result.error,
           errorClassification: result.errorClassification,
           lastErrorReason: job.state.lastErrorReason,
           executionStarted: result.executionStarted,
           consecutiveErrors: job.state.consecutiveErrors,
+          timeoutCleanupUnconfirmed: result.timeoutCleanupUnconfirmed,
         });
         if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
           // Schedule retry with backoff (#24355).
@@ -371,12 +371,12 @@ export function applyJobResult(
     } else if (result.status === "error" && isJobEnabled(job)) {
       const retryDecision = resolveTransientCronRetryDecision({
         cronConfig: state.deps.cronConfig,
-        jobId: job.id,
         error: result.error,
         errorClassification: result.errorClassification,
         lastErrorReason: job.state.lastErrorReason,
         executionStarted: result.executionStarted,
         consecutiveErrors: job.state.consecutiveErrors,
+        timeoutCleanupUnconfirmed: result.timeoutCleanupUnconfirmed,
       });
       let normalNext: number | undefined;
       let normalNextComputed = false;

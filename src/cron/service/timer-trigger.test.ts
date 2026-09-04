@@ -1,6 +1,5 @@
 // Retry-decision tests preserve provider classifications before cron message matching.
 import { describe, expect, it, vi } from "vitest";
-import * as activeJobs from "../active-jobs.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import { createCronServiceState } from "./state.js";
@@ -130,14 +129,14 @@ describe("resolveTransientCronRetryDecision", () => {
     });
   });
 
-  it("does not retry when an active execution is in progress", () => {
-    // Simulate a job that timed out but is still running (abort ignored).
-    // The retry decision should see the active execution and decline to retry.
-    // This is the core fix for #137215.
+  it("holds the retry when a timed-out run's cleanup cannot confirm termination", () => {
+    // #137215: a job that times out may still be running (abort ignored). When
+    // cleanup cannot confirm the original execution stopped, hold the retry
+    // instead of overlapping the still-running work.
     const error = "cron webhook delivery timed out: the job exceeded its timeout";
-    const errorClassification = { kind: "reason" as const, reason: "timeout" };
+    const errorClassification = { kind: "reason", reason: "timeout" } as const;
 
-    // Without jobId, the function cannot check active state and would retry.
+    // Without an unconfirmed cleanup, a timeout error retries normally.
     expect(
       resolveTransientCronRetryDecision({
         error,
@@ -149,24 +148,17 @@ describe("resolveTransientCronRetryDecision", () => {
       reason: "transient retry",
     });
 
-    // Mock isCronJobActive to return true for our test job
-    vi.spyOn(activeJobs, "isCronJobActive").mockReturnValue(true);
-
-    try {
-      // With a jobId that has an active execution, retry is blocked.
-      expect(
-        resolveTransientCronRetryDecision({
-          error,
-          errorClassification,
-          jobId: "test-job-with-active-execution",
-          consecutiveErrors: 1,
-        }),
-      ).toMatchObject({
-        retryable: false,
-        reason: "active execution in progress",
-      });
-    } finally {
-      vi.restoreAllMocks();
-    }
+    // When cleanup cannot confirm the original execution stopped, hold the retry.
+    expect(
+      resolveTransientCronRetryDecision({
+        error,
+        errorClassification,
+        timeoutCleanupUnconfirmed: true,
+        consecutiveErrors: 1,
+      }),
+    ).toMatchObject({
+      retryable: false,
+      reason: "original execution may still be running",
+    });
   });
 });

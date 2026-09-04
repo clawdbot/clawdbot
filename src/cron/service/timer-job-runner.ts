@@ -425,7 +425,12 @@ async function executeJobCoreWithTimeoutUnfinalized(
         },
         "cron: timeout fired; watchdog triggered cleanup but original execution may continue",
       );
-      await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
+      const cleanupConfirmed = await cleanupTimedOutCronAgentRun(
+        state,
+        job,
+        jobTimeoutMs,
+        activeExecution,
+      );
       const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
       const observedLaneWait = watchdog.observedLaneWait();
       const isolatedAgentSetupTimeout =
@@ -443,6 +448,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
         diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
           nowMs: state.deps.nowMs,
         }),
+        // #137215: when cleanup cannot confirm the original execution stopped,
+        // hold the retry instead of overlapping the still-running work.
+        ...(cleanupConfirmed ? {} : { timeoutCleanupUnconfirmed: true }),
         ...(isolatedAgentSetupTimeout ? { isolatedAgentSetupTimeout } : {}),
       };
       return withPrimaryWebhookInterruption({
