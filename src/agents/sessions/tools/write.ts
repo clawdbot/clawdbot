@@ -77,6 +77,8 @@ const WriteToolOutputSchema = Type.Union([
  * Override these to delegate file writing to remote systems (for example SSH).
  */
 export interface WriteOperations {
+  /** Resolve a user-supplied path in this backend's path space. */
+  resolvePath?: (filePath: string, cwd: string) => string;
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Write content to a file */
@@ -517,7 +519,9 @@ export function createWriteToolDefinition(
   options?: WriteToolOptions,
 ): ToolDefinition<typeof writeSchema, WriteToolDetails> {
   const ops = options?.operations ?? defaultWriteOperations;
-  const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
+  const resolvePath =
+    options?.operations?.resolvePath ??
+    (options?.operations ? resolveToCwd : resolveLocalPathToCwd);
   return {
     name: "write",
     label: "write",

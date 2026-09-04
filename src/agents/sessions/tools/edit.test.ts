@@ -447,6 +447,61 @@ describe("edit tool", () => {
     },
   );
 
+  it("uses the injected path resolver for both preview and execution", async () => {
+    let persisted = Buffer.from("before\n");
+    const resolvePath = vi.fn((filePath: string) => `remote:${filePath}`);
+    const access = vi.fn(async () => {});
+    const readFile = vi.fn(async () => persisted);
+    const writeFile = vi.fn(async (_absolutePath: string, content: string) => {
+      persisted = Buffer.from(content);
+    });
+    const operations: EditOperations = {
+      resolvePath,
+      access,
+      readFile,
+      statFile: async () => ({ type: "file", size: persisted.byteLength }),
+      writeFile,
+    };
+    const cwd = "/remote/workspace";
+    const tool = createEditToolDefinition(cwd, { operations });
+    const args = {
+      path: "/c/work/demo.txt",
+      edits: [{ oldText: "before", newText: "after" }],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd,
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-resolved-preview",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+    const preview = (component as { preview?: { error?: string; diff?: string } } | undefined)
+      ?.preview;
+    expect(preview?.error).toBeUndefined();
+    expect(preview?.diff).toContain("after");
+
+    await tool.execute("call-resolved-execution", args);
+
+    expect(resolvePath).toHaveBeenNthCalledWith(1, args.path, cwd);
+    expect(resolvePath).toHaveBeenNthCalledWith(2, args.path, cwd);
+    expect(access).toHaveBeenCalledTimes(2);
+    expect(access).toHaveBeenCalledWith(`remote:${args.path}`);
+    expect(
+      readFile.mock.calls.every(([absolutePath]) => absolutePath === `remote:${args.path}`),
+    ).toBe(true);
+    expect(writeFile).toHaveBeenCalledWith(`remote:${args.path}`, "after\n");
+  });
+
   it("renders fuzzy Unicode previews from the original source bytes", async () => {
     const readFile = vi.fn(async () =>
       Buffer.from(

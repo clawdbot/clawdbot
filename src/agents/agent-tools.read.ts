@@ -52,7 +52,11 @@ import {
   type ReadToolDetails,
   type ReadToolTruncationDetails,
 } from "./sessions/tools/index.js";
-import { expandOsHomePrefix, resolveToCwd } from "./sessions/tools/path-utils.js";
+import {
+  expandOsHomePrefix,
+  resolveLocalPathToCwd,
+  resolveToCwd,
+} from "./sessions/tools/path-utils.js";
 import {
   createBoundedReadTextPage,
   formatReadContinuationNotice,
@@ -1403,6 +1407,7 @@ function createHostWriteOperations(
     // When workspaceOnly is false, allow writes anywhere on the host
     return withMemoryWriteProvenance(
       {
+        resolvePath: resolveLocalPathToCwd,
         mkdir: async (dir: string) => {
           const resolved = resolveHostPath(dir);
           options?.abortSignal?.throwIfAborted();
@@ -1427,6 +1432,7 @@ function createHostWriteOperations(
   const getRoot = () => (rootPromise ??= fsRoot(root));
   return withMemoryWriteProvenance(
     {
+      resolvePath: resolveLocalPathToCwd,
       mkdir: async (dir: string) => {
         const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
         const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
@@ -1466,6 +1472,7 @@ function createHostEditOperations(
     // When workspaceOnly is false, allow edits anywhere on the host
     return withMemoryWriteProvenance(
       {
+        resolvePath: resolveLocalPathToCwd,
         readFile: async (absolutePath: string) => {
           return await fs.readFile(resolveHostPath(absolutePath));
         },
@@ -1488,6 +1495,7 @@ function createHostEditOperations(
   const getRoot = () => (rootPromise ??= fsRoot(root));
   return withMemoryWriteProvenance(
     {
+      resolvePath: resolveLocalPathToCwd,
       readFile: async (absolutePath: string) => {
         // Canonicalize symlink parents like the write path: fs-safe 0.5.2
         // rejects intermediate symlinks by default, but in-workspace symlink

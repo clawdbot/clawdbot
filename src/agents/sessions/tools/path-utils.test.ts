@@ -4,9 +4,23 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { getReadPathVariants, resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
+import {
+  getReadPathVariants,
+  normalizeWindowsPosixDrivePath,
+  resolveLocalPathToCwd,
+  resolveToCwd,
+} from "./path-utils.js";
+import { createReadTool } from "./read.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function toWindowsPosixDrivePath(nativePath: string, prefix: "" | "cygdrive/" | "mnt/"): string {
+  const drive = nativePath[0]?.toLowerCase();
+  if (!drive || nativePath[1] !== ":") {
+    throw new Error(`Expected a Windows drive path, got ${nativePath}`);
+  }
+  return `/${prefix}${drive}${nativePath.slice(2).replaceAll("\\", "/")}`;
+}
 
 describe("resolveToCwd", () => {
   const cwd = path.resolve("workspace");
@@ -67,4 +81,44 @@ describe("getReadPathVariants", () => {
     expect(variants.length).toBeGreaterThan(0);
     expect(new Set(variants.map((variant) => path.dirname(variant)))).toEqual(new Set([parent]));
   });
+});
+
+describe("normalizeWindowsPosixDrivePath", () => {
+  it.each([
+    ["/c/Users/Test/file.txt", "C:\\Users\\Test\\file.txt"],
+    ["/cygdrive/d/work/file.txt", "D:\\work\\file.txt"],
+    ["/mnt/e/work/file.txt", "E:\\work\\file.txt"],
+    ["/f", "F:\\"],
+  ])("maps %s to %s on native Windows", (input, expected) => {
+    expect(normalizeWindowsPosixDrivePath(input, "win32")).toBe(expected);
+  });
+
+  it.each(["/home/user/file.txt", "/tmp/file.txt", "/mnt/home/file.txt", "//server/share"])(
+    "leaves non-drive path %s unchanged",
+    (input) => {
+      expect(normalizeWindowsPosixDrivePath(input, "win32")).toBe(input);
+    },
+  );
+
+  it("leaves POSIX drive-like paths unchanged outside Windows", () => {
+    expect(normalizeWindowsPosixDrivePath("/c/work/file.txt", "linux")).toBe("/c/work/file.txt");
+  });
+});
+
+describe.runIf(process.platform === "win32")("local Windows POSIX drive paths", () => {
+  it.each(["", "cygdrive/", "mnt/"] as const)(
+    "reads an existing file through the %s form",
+    async (prefix) => {
+      const dir = tempDirs.make("openclaw-msys-read-");
+      const nativePath = path.join(dir, "fixture.txt");
+      await fs.writeFile(nativePath, "fixture", "utf8");
+      const tool = createReadTool(dir);
+
+      const result = await tool.execute("read-posix-drive", {
+        path: toWindowsPosixDrivePath(nativePath, prefix),
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "fixture" }]);
+    },
+  );
 });
