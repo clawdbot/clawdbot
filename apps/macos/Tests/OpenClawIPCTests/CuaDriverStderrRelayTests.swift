@@ -89,7 +89,8 @@ struct CuaDriverStderrRelayTests {
         process.arguments = [
             "-c",
             """
-            printf '%s\\n' 'DANGER: Cua Driver is running in unrestricted mode. Runtime approval prompts are disabled.' \\
+            printf '%s\\n' \\
+                'DANGER: Cua Driver is running in unrestricted mode. Runtime approval prompts are disabled.' \\
                 'driver diagnostic' >&2
             IFS= read -r response
             """,
@@ -175,7 +176,7 @@ struct CuaDriverStderrRelayTests {
     }
 
     @Test(arguments: [false, true])
-    func `natural exit drains queued stderr but explicit stop cancels it`(naturalExit: Bool) throws {
+    func `natural exit drains queued stderr but explicit stop cancels it`(naturalExit: Bool) async throws {
         let firstChunk = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try Data(("gate\n" + String(repeating: "x", count: 4090) + "\n").utf8).write(to: firstChunk)
         defer { try? FileManager.default.removeItem(at: firstChunk) }
@@ -228,23 +229,22 @@ struct CuaDriverStderrRelayTests {
             }
             process.waitUntilExit()
         }
-        try #require(entered.wait(timeout: .now() + 2) == .success)
+        try #require(await Self.waitForSignal(entered))
         try input.fileHandleForWriting.write(contentsOf: Data("exit\n".utf8))
-        process.waitUntilExit()
-        try #require(exited.wait(timeout: .now() + 2) == .success)
+        try #require(await Self.waitForSignal(exited))
         if naturalExit {
-            #expect(notified.wait(timeout: .now()) == .timedOut)
+            #expect(await !Self.waitForSignal(notified, timeout: 0))
         } else {
-            #expect(notified.wait(timeout: .now() + 2) == .success)
+            #expect(await Self.waitForSignal(notified))
         }
         release.signal()
         if naturalExit {
-            #expect(notified.wait(timeout: .now() + 2) == .success)
+            #expect(await Self.waitForSignal(notified))
         }
         Task { await relay.finishReading()
             closed.signal()
         }
-        #expect(closed.wait(timeout: .now() + 2) == .success)
+        #expect(await Self.waitForSignal(closed))
         #expect(process.terminationStatus == 0)
         #expect(probe.events.contains(.error("final driver diagnostic")) == naturalExit)
     }
