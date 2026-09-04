@@ -81,7 +81,7 @@ legacy `config.allowedModels` value into `llm.allowedCompletionModels` without w
 | --------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `prompt`        | string | Required. Task instruction for the LLM.                                                                                                       |
 | `input`         | any    | Optional payload; serialized to JSON and appended to the prompt.                                                                              |
-| `schema`        | object | Optional JSON Schema the parsed output must validate against.                                                                                 |
+| `schema`        | object | Optional JSON Schema that constrains supported runtimes and validates the parsed output.                                                      |
 | `provider`      | string | Overrides `defaultProvider` / the agent's default provider.                                                                                   |
 | `model`         | string | Overrides `defaultModel`; accepts bare model ids, aliases, or a `provider/model` ref (a duplicate provider prefix is stripped automatically). |
 | `thinking`      | string | Reasoning level (e.g. `low`, `medium`); must be one supported by the resolved model.                                                          |
@@ -98,13 +98,19 @@ and `details.model` naming what actually ran.
 Each call starts a fresh prompt-only inference operation. It does not reuse the
 calling agent's transcript or native runtime session, run agent lifecycle hooks,
 or deliver model output to a channel. OpenClaw uses the selected provider,
-model, auth profile, and runtime exactly once; it does not fall back to another
-route when that owner cannot provide a literal zero-tool call.
+model, auth profile, and runtime without falling back to another route when that
+owner cannot provide a literal zero-tool call. A native-schema rejection may
+cause one prompt-constrained retry on that same route before local validation.
 
 A selected agent harness must implement isolated completion. Otherwise the call
 fails before inference with a `does not support isolated completion` error.
-This fail-closed behavior prevents a JSON task from silently becoming a normal
-tool-capable agent turn.
+
+When the selected harness supports native structured output, OpenClaw forwards
+a detached JSON-safe schema snapshot when it fits within 1 KiB. Larger or
+unusual schemas are not forwarded natively. If Codex explicitly rejects the
+schema, OpenClaw retries the isolated turn once with it as a user-level prompt
+constraint. `llm-task` always validates the parsed result, and the retry remains
+a fresh zero-tool turn rather than a normal tool-capable agent turn.
 
 CLI runtimes must provide the equivalent isolated preparation guarantee. The
 bundled Claude and Gemini CLI runtimes do; a different CLI runtime that has not

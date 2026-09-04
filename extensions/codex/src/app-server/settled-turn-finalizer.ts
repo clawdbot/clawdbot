@@ -92,7 +92,7 @@ export async function runCodexSettledTurnFinalization(
     provider: modelProvider,
     api: resolveCodexLocalRuntimeAttribution(attempt).api,
   };
-  assertCodexPassiveTurnItems(bounded.items, attempt.prompt, "settled-turn finalization");
+  assertCodexPassiveTurnItems(bounded.items, bounded.submittedInput, "settled-turn finalization");
   const text = isSilentReplyText(bounded.text) ? "" : bounded.text.trim();
   const assistant = createAttributedCodexAssistantMessage(attribution, text, {
     tokenUsage: bounded.usage,

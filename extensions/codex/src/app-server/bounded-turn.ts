@@ -17,6 +17,10 @@ import {
   readCodexNotificationItem,
 } from "./attempt-notifications.js";
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
+import {
+  buildOutputSchemaFallbackPrompt,
+  isCodexOutputSchemaUnsupported,
+} from "./bounded-turn-output-schema.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
@@ -82,6 +86,7 @@ export type CodexBoundedTurnOptions = {
 type CodexBoundedTurnResult = {
   text: string;
   items: CodexThreadItem[];
+  submittedInput: CodexUserInput[];
   model: string;
   nativeSelection: { model: string; modelProvider?: string | null };
   usage?: ReturnType<typeof normalizeCodexResponseTokenUsage>;
@@ -114,6 +119,7 @@ type CodexBoundedTurnParams = {
   taskLabel: string;
   developerInstructions: string;
   input: CodexUserInput[];
+  outputSchema?: JsonObject;
   requiredModalities: string[];
   isolation: "configured-transport" | "private-stdio";
   threadConfig?: JsonObject;
@@ -233,6 +239,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   const timeout = setTimeout(() => abortRun(timeoutError), Math.max(1, remainingRunMs));
   timeout.unref?.();
   let retrySelection = false;
+  let retryWithoutOutputSchema = false;
   const requestOptions = {
     timeoutMs,
     signal: abortController.signal,
@@ -324,6 +331,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
             input: params.input,
             approvalPolicy: "on-request",
             effort: "low",
+            ...(params.outputSchema ? { outputSchema: params.outputSchema } : {}),
           } satisfies CodexTurnStartParams,
           requestOptions,
         ),
@@ -339,6 +347,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       params.assertCurrent?.();
       return {
         ...result,
+        submittedInput: params.input,
         model: modelSelection.catalogId,
         nativeSelection: { model: thread.model, modelProvider: thread.modelProvider },
       };
@@ -355,7 +364,13 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         timeoutError,
       );
     }
-    if (ownsClient && isCodexAppServerStartSelectionChangedError(error) && selectionAttempt === 0) {
+    if (params.outputSchema && isCodexOutputSchemaUnsupported(error)) {
+      retryWithoutOutputSchema = true;
+    } else if (
+      ownsClient &&
+      isCodexAppServerStartSelectionChangedError(error) &&
+      selectionAttempt === 0
+    ) {
       retrySelection = true;
     } else {
       throw error;
@@ -367,6 +382,28 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     if (ownsClient) {
       await closeCodexStartupClientBestEffort(client);
     }
+  }
+  if (retryWithoutOutputSchema && params.outputSchema) {
+    // Preserve the shipped llm-task.schema behavior when Codex rejects schema
+    // keywords the host accepts. Remove when the pinned dialects align.
+    const { outputSchema, ...fallbackParams } = params;
+    return await runBoundedCodexAppServerTurnInWorkspace(
+      {
+        ...fallbackParams,
+        input: [
+          ...fallbackParams.input,
+          {
+            type: "text",
+            text: buildOutputSchemaFallbackPrompt(outputSchema),
+            text_elements: [],
+          },
+        ],
+      },
+      appServer,
+      workspace,
+      selectionAttempt,
+      { deadline, timeoutMs: totalTimeoutMs },
+    );
   }
   if (retrySelection) {
     return await runBoundedCodexAppServerTurnInWorkspace(
@@ -598,7 +635,7 @@ function createCodexBoundedTurnCollector(
     async collect(
       startedTurn: CodexTurn,
       options: { signal: AbortSignal; timeoutError: CodexBoundedTurnTimeoutError },
-    ): Promise<Omit<CodexBoundedTurnResult, "model" | "nativeSelection">> {
+    ): Promise<Omit<CodexBoundedTurnResult, "model" | "nativeSelection" | "submittedInput">> {
       turnId = startedTurn.id;
       if (isTerminalTurnStatus(startedTurn.status)) {
         completedTurn = startedTurn;

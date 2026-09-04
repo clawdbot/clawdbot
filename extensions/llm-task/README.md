@@ -87,6 +87,12 @@ Doctor grants the shipped selection permissions and moves legacy
 Returns `details.json` containing the parsed JSON (and validates against
 `schema` when provided).
 
+When the selected isolated runtime supports native structured output, the same
+schema also constrains generation. Codex retries with a prompt-level constraint
+when it explicitly rejects the schema dialect; local validation remains the
+final result check. OpenClaw forwards only a detached schema snapshot that fits
+within 1 KiB; other schemas are not forwarded natively.
+
 ## Notes
 
 - The tool is **JSON-only** and instructs the model to output only JSON
