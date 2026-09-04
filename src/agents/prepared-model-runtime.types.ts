@@ -81,6 +81,7 @@ export type PreparedReplyDispatchRuntime = Readonly<{
   workspaceDir: string;
   config: OpenClawConfig;
   modelCatalog: ModelCatalogSnapshot;
+  readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   inboundPluginRegistry: PluginRegistry;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;

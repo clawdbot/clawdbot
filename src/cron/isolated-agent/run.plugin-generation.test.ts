@@ -153,20 +153,14 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       typeof import("../../agents/agent-scope-config.js")
     >("../../agents/agent-scope-config.js");
     resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
-    loadModelCatalogOwnerMock.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/workspace",
-      config,
-      metadataSnapshot,
-      modelCatalog: {
-        entries: [
-          { provider: "openai", id: "gpt-5.4", reasoning: true },
-          { provider: "openai", id: "account-discovered", reasoning: false },
-        ],
-        routeVariants: [],
-      },
-    });
+    const fullModelCatalog = {
+      entries: [
+        { provider: "openai", id: "gpt-5.4", reasoning: true },
+        { provider: "openai", id: "account-discovered", reasoning: false },
+      ],
+      routeVariants: [],
+    };
+    const readFullModelCatalog = vi.fn(() => fullModelCatalog);
     preparedRuntimeMocks.loadDispatchRuntime.mockResolvedValue({
       agentId: "default",
       agentDir: "/tmp/dispatch-agent-dir",
@@ -176,6 +170,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
         entries: [{ provider: "openai", id: "gpt-5.4", reasoning: true }],
         routeVariants: [],
       },
+      readFullModelCatalog,
       pluginGeneration,
     });
     const release = vi.fn();
@@ -189,11 +184,78 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     await expect(
       runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ cfg: config, agentId: "default" })),
     ).resolves.toMatchObject({ status: "ok", provider: "openai", model: "gpt-5.4" });
-    expect(preparedRuntimeMocks.loadDispatchRuntime.mock.invocationCallOrder[0]).toBeLessThan(
-      loadModelCatalogOwnerMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
+    expect(readFullModelCatalog).toHaveBeenCalledOnce();
     expect(preparedRuntimeMocks.acquireRuntime.mock.calls[0]?.[1]).toMatchObject({
       pluginGeneration,
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("keeps model selection on the dispatch generation when the owner read would advance", async () => {
+    const config = {
+      agents: { entries: { default: { thinkingDefault: "high" as const } } },
+    };
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    const generationA = {
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: metadataSnapshot,
+    } satisfies PreparedModelRuntimePluginGeneration;
+    const modelCatalogA = {
+      entries: [{ provider: "openai", id: "gpt-5.4", reasoning: true }],
+      routeVariants: [],
+    };
+    const modelCatalogB = {
+      entries: [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
+      routeVariants: [],
+    };
+    const { resolveAgentConfig } = await vi.importActual<
+      typeof import("../../agents/agent-scope-config.js")
+    >("../../agents/agent-scope-config.js");
+    resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
+    loadModelCatalogMock.mockResolvedValue([]);
+    loadModelCatalogOwnerMock.mockResolvedValue({
+      agentId: "default",
+      agentDir: "/tmp/dispatch-agent-dir",
+      workspaceDir: "/tmp/workspace",
+      config,
+      metadataSnapshot,
+      modelCatalog: modelCatalogB,
+    });
+    preparedRuntimeMocks.loadDispatchRuntime.mockResolvedValue({
+      agentId: "default",
+      agentDir: "/tmp/dispatch-agent-dir",
+      workspaceDir: "/tmp/workspace",
+      config,
+      modelCatalog: modelCatalogA,
+      pluginGeneration: generationA,
+    });
+    const release = vi.fn();
+    preparedRuntimeMocks.acquireRuntime.mockResolvedValue({
+      snapshot: { config, metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
+      pluginGeneration: generationA,
+      release,
+    });
+    mockRunCronFallbackPassthrough();
+
+    await expect(
+      runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          cfg: config,
+          agentId: "default",
+          job: {
+            payload: { kind: "agentTurn", message: "test", thinking: "high" },
+          },
+        }),
+      ),
+    ).resolves.toMatchObject({ status: "ok", provider: "openai", model: "gpt-5.4" });
+    expect(loadModelCatalogOwnerMock).not.toHaveBeenCalled();
+    expect(loadModelCatalogMock).not.toHaveBeenCalled();
+    expect(preparedRuntimeMocks.acquireRuntime.mock.calls[0]?.[1]).toMatchObject({
+      pluginGeneration: generationA,
     });
     expect(release).toHaveBeenCalledOnce();
   });

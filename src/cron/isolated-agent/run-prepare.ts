@@ -8,7 +8,6 @@ import {
   PreparedModelRuntimeOwnerNotPublishedError,
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
-import { preparedModelRuntimeConfigsMatch } from "../../agents/prepared-model-runtime.owner.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -171,6 +170,7 @@ export async function prepareCronRunContext(params: {
   });
   const modelOwner = await resolveCronModelSelectionOwner({
     cfg: requestedRuntimeCfg,
+    publishedRuntime,
     ...(requiredAgentId
       ? {
           agentId: initialAgentId,
@@ -181,17 +181,6 @@ export async function prepareCronRunContext(params: {
       : {}),
   });
   const { agentId, agentDir } = modelOwner;
-  if (
-    publishedRuntime &&
-    (publishedRuntime.agentId !== agentId ||
-      publishedRuntime.agentDir !== agentDir ||
-      publishedRuntime.pluginGeneration.pluginMetadataSnapshot !== modelOwner.metadataSnapshot ||
-      !preparedModelRuntimeConfigsMatch(publishedRuntime.config, modelOwner.config))
-  ) {
-    throw new PreparedModelRuntimeOwnerNotPublishedError(
-      "cron model runtime generation was superseded during preparation",
-    );
-  }
   const agentConfigOverride = requiredAgentId
     ? resolveAgentConfig(modelOwner.config, agentId)
     : undefined;
