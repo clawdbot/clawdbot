@@ -19,6 +19,17 @@ import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-ser
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
   taskState: 3 as number | string,
+  execFile: vi.fn<typeof import("../../daemon/exec-file.js").execFileUtf8>(async () => ({
+    stdout: "",
+    stderr: "",
+    code: 0,
+    termination: "exit" as const,
+  })),
+}));
+
+vi.mock("../../daemon/exec-file.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/exec-file.js")>()),
+  execFileUtf8: mocks.execFile,
 }));
 
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
@@ -275,6 +286,52 @@ it
     );
   }),
 );
+
+const USER_SCOPE_BUS_STDERR =
+  "Failed to connect to user scope bus via local transport: No such file or directory";
+const MACHINE_SCOPE_BUS_STDERR =
+  "Failed to connect to system scope bus via machine transport: Permission denied\nCall failed: Transport endpoint is not connected";
+
+it("names the user bus when both busctl scopes fail below the service boundary", () =>
+  // Debian without dbus-user-session: busctl --user cannot reach the bus and the
+  // machine-scope retry fails with a transport error no hint family classifies.
+  withServiceHome(() =>
+    withEnvAsync(
+      // A set bus address keeps systemd absence unproven, as on the reported host.
+      { DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus" },
+      async () => {
+        mockProcessPlatform("linux");
+        const daemon =
+          await vi.importActual<typeof import("../../daemon/service.js")>(
+            "../../daemon/service.js",
+          );
+        mocks.service.mockImplementation(() => daemon.resolveGatewayService());
+        mocks.execFile.mockImplementation(async (_command, args) => ({
+          stdout: "",
+          stderr: args[0] === "--machine" ? MACHINE_SCOPE_BUS_STDERR : USER_SCOPE_BUS_STDERR,
+          code: 1,
+          termination: "exit" as const,
+        }));
+        const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+          root: process.cwd(),
+          updateInstallKind: "package",
+          shouldRestart: true,
+          phase: "inspect",
+          jsonMode: true,
+        });
+        expect(mocks.execFile).toHaveBeenCalledWith(
+          "busctl",
+          expect.arrayContaining(["--machine"]),
+          expect.anything(),
+        );
+        expect(inspected.serviceMutationAllowed).toBe(false);
+        expect(inspected.blockMessage).toContain("dbus-user-session");
+        expect(inspected.blockMessage).toContain("loginctl enable-linger");
+        expect(inspected.blockMessage).toContain("XDG_RUNTIME_DIR");
+        expect(inspected.blockMessage).not.toContain("machine transport");
+      },
+    ),
+  ));
 
 const USER_BUS_INSPECTION_FAILURE =
   "Effective systemd service command could not be inspected: Failed to connect to user scope bus via local transport: No such file or directory";

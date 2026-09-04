@@ -269,19 +269,20 @@ async function execSystemdUserCommand(
   }
 
   const detail = readSystemctlDetail(directResult);
-  if (
-    directResult.termination !== "exit" ||
-    !machineUser ||
-    !shouldFallbackToMachineUserScope(detail)
-  ) {
-    return directResult;
-  }
-
-  const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
+  const machineScopeArgs =
+    directResult.termination === "exit" && machineUser && shouldFallbackToMachineUserScope(detail)
+      ? resolveSystemctlMachineUserScopeArgs(machineUser)
+      : [];
   if (machineScopeArgs.length === 0) {
     return directResult;
   }
-  return await run(machineScopeArgs);
+  const machineResult = await run(machineScopeArgs);
+  if (machineResult.code === 0) {
+    return machineResult;
+  }
+  // A failed retry diagnoses the machine transport, not the user manager. Keep the
+  // direct --user stderr so callers still classify the real user-bus failure.
+  return { ...machineResult, stderr: `${directResult.stderr}\n${machineResult.stderr}`.trim() };
 }
 
 export async function execSystemctlUser(

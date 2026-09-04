@@ -367,6 +367,23 @@ describe("runDaemonInstall", () => {
     expect(service.readCommand).toHaveBeenCalledOnce();
   });
 
+  it("names the systemd user-bus repair when the definition cannot be inspected", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    service.readCommand.mockRejectedValueOnce(
+      new Error(
+        "Effective systemd service command could not be inspected: Failed to connect to user scope bus via local transport: No such file or directory",
+      ),
+    );
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed[0]?.message).toContain("SERVICE_DEFINITION_UNKNOWN");
+    expect(actionState.failed[0]?.hints).toEqual(
+      expect.arrayContaining([expect.stringContaining("dbus-user-session")]),
+    );
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("blocks non-default install identities before inspecting host services", async () => {
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
 

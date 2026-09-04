@@ -6,7 +6,28 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
+const execFile = vi.hoisted(() =>
+  vi.fn<typeof import("../daemon/exec-file.js").execFileUtf8>(async () => ({
+    stdout: "",
+    stderr: "",
+    code: 0,
+    termination: "exit" as const,
+  })),
+);
+
+// Inject the service-manager fault at the process boundary so the fixture covers
+// the scope fallback and hint classification the operator actually hits.
+vi.mock("../daemon/exec-file.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/exec-file.js")>()),
+  execFileUtf8: execFile,
+}));
+
 const { mocks } = await import("./doctor-health.test-support.js");
+
+const USER_SCOPE_BUS_STDERR =
+  "Failed to connect to user scope bus via local transport: No such file or directory";
+const MACHINE_SCOPE_BUS_STDERR =
+  "Failed to connect to system scope bus via machine transport: Permission denied\nCall failed: Transport endpoint is not connected";
 
 beforeEach(() => {
   mocks.service.mockReset();
@@ -27,6 +48,14 @@ it("names the systemd user-bus failure when repair cannot inspect the managed se
   mocks.servicePlatform = "linux";
   vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
   vi.stubEnv("OPENCLAW_CONTAINER", undefined);
+  // A set bus address keeps systemd absence unproven, as on the reported host.
+  vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus");
+  execFile.mockImplementation(async (_command, args) => ({
+    stdout: "",
+    stderr: args[0] === "--machine" ? MACHINE_SCOPE_BUS_STDERR : USER_SCOPE_BUS_STDERR,
+    code: 1,
+    termination: "exit" as const,
+  }));
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
@@ -36,24 +65,26 @@ it("names the systemd user-bus failure when repair cannot inspect the managed se
     mocks.packageRoot.mockReturnValue(process.cwd());
     mocks.config.mockReturnValue(cfg);
     const stop = vi.fn();
-    mocks.service.mockReturnValue({
-      readCommand: async () => {
-        throw new Error(
-          "Effective systemd service command could not be inspected: Failed to connect to user scope bus via local transport: No such file or directory",
-        );
-      },
-      readRuntime: async () => ({ status: "running" }),
-      isLoaded: async () => true,
-      stop,
-      restart: vi.fn(),
-    });
+    const daemon =
+      await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const systemdService = daemon.resolveGatewayService();
+    platform.mockRestore();
+    mocks.service.mockReturnValue({ ...systemdService, stop });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const run = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
     await expect(run).rejects.toThrow("Doctor could not enter maintenance");
     await expect(run).rejects.toThrow("gateway status --deep");
     await expect(run).rejects.toThrow("dbus-user-session");
     await expect(run).rejects.toThrow("loginctl enable-linger");
-    await expect(run).rejects.not.toThrow(/--no-restart|before the update|No such file/);
+    await expect(run).rejects.not.toThrow(
+      /--no-restart|before the update|No such file|machine transport/,
+    );
+    expect(execFile).toHaveBeenCalledWith(
+      "busctl",
+      expect.arrayContaining(["--machine"]),
+      expect.anything(),
+    );
     expect(stop).not.toHaveBeenCalled();
     expect(mocks.runContributions).not.toHaveBeenCalled();
     expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
