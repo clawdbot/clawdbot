@@ -1096,6 +1096,8 @@ describe("cron method validation", () => {
         limit: 1,
         hasMore: true,
         nextOffset: 1,
+        visibility: "caller-scoped",
+        scopeNotice: expect.stringContaining("limited to this caller"),
         jobs: [expect.objectContaining({ id: "cron-safe-1" })],
       }),
       undefined,
