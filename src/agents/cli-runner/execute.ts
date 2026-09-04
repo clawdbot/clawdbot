@@ -510,6 +510,7 @@ export async function executePreparedCliRun(
         executionCommand = executableIdentity.invocation.command;
         executionArgv0 = executableIdentity.invocation.argv0;
         executionLeadingArgv = executableIdentity.invocation.leadingArgv;
+        context.executableIdentity = executableIdentity;
         context.runtimeArtifactFingerprint = fingerprintCliRuntimeArtifact({
           provider: params.provider,
           backendId: context.backendResolved.id,

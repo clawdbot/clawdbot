@@ -2,6 +2,17 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
 
+/**
+ * Structural subset of the agent-side CliExecutableIdentity.
+ * Re-declared here to avoid a cross-boundary import from src/agents/ into src/plugins/.
+ * Only the fields consumed by plugin backends are included.
+ */
+type CliExecutableIdentityRef = Readonly<{
+  invocation: Readonly<{
+    command: string;
+  }>;
+}>;
+
 /** Static command adapter owned by a CLI backend plugin registration. */
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
@@ -256,6 +267,8 @@ export type CliBackendExecuteContext = {
   timeoutMs: number;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;
+  /** Resolved executable identity when auth binding or exact tool availability ran. */
+  executableIdentity?: CliExecutableIdentityRef;
   /** Exact host-owned reusable process lifecycle and current-turn admission. */
   liveSession?: CliBackendLiveSessionCapability;
   /** Closure-bound approval capability; retained copies fail after the run closes. */

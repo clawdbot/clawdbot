@@ -395,6 +395,8 @@ export type PreparedCliRunContext = {
   runtimeOwnerFingerprint?: string;
   /** Exact executable/package implementation used by this CLI process. */
   runtimeArtifactFingerprint?: string;
+  /** Resolved executable identity when auth binding or exact tool availability ran. */
+  executableIdentity?: import("../cli-executable-identity.js").CliExecutableIdentity;
   authBindingSkipsLocalCredential?: true;
   authEpochVersion: number;
   extraSystemPromptHash?: string;
