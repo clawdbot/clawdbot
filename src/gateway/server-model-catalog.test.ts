@@ -351,6 +351,23 @@ describe("gateway prepared model catalog", () => {
     expect(loaded.authModes).toEqual({});
   });
 
+  it("reports a prepared auth failure when fresh auth was requested", async () => {
+    const config = ownerConfig();
+    const candidate = ownerSnapshot(config);
+    const error = new Error("prepared auth refresh failed");
+    setPreparedModelRuntimeAuthLoader(candidate, async () => {
+      throw error;
+    });
+
+    await expect(
+      loadPreparedGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
+        refreshAuth: true,
+      }),
+    ).rejects.toBe(error);
+  });
+
   it("retries the whole owner projection when deferred auth supersedes its generation", async () => {
     const staleConfig = ownerConfig("main", { logging: { level: "info" } });
     const currentConfig = ownerConfig("main", { logging: { level: "debug" } });

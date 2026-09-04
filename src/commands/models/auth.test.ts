@@ -65,6 +65,7 @@ const mocks = vi.hoisted(() => ({
   validateAnthropicSetupToken: vi.fn<() => string | undefined>(() => undefined),
   promoteAuthProfileInOrder: vi.fn(),
   callGateway: vi.fn(),
+  isImplicitLocalGatewayTarget: vi.fn(() => Promise.resolve(true)),
   resolvePluginSetupProviderCore: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
   readSecretStoreValue: vi.fn(() => ({
@@ -180,6 +181,8 @@ vi.mock("../../infra/remote-env.js", () => ({
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  GatewayLocalBackendSharedAuthUnavailableError: class extends Error {},
+  isImplicitLocalGatewayTarget: mocks.isImplicitLocalGatewayTarget,
 }));
 
 vi.mock("../../plugins/provider-oauth-flow.js", () => ({
@@ -596,7 +599,7 @@ describe("modelsAuthLoginCommand", () => {
       }),
     );
     expect(runtime.error).toHaveBeenCalledWith(
-      "Warning: Model auth changes were saved, but the running gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.",
+      "Warning: Model auth changes were saved, but the running Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.",
     );
   });
 
@@ -1297,6 +1300,12 @@ describe("modelsAuthLoginCommand", () => {
 
     expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(mocks.removeProviderAuthProfilesWithLock.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.callGateway.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.callGateway.mock.invocationCallOrder[0]).toBeLessThan(
+      runProviderAuth.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("--force does not purge when omitted", async () => {

@@ -1,19 +1,23 @@
 /** Shared gateway refresh for CLI auth writes made outside the gateway process. */
-import { callGateway } from "../../gateway/call.js";
+import {
+  callGateway,
+  GatewayLocalBackendSharedAuthUnavailableError,
+  isImplicitLocalGatewayTarget,
+} from "../../gateway/call.js";
 import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
-export type GatewayAuthRefreshResult = "refreshed" | "unavailable" | "failed";
+type GatewayAuthRefreshResponse = { unavailable?: unknown };
 
-// The store write remains authoritative when no gateway is running, while a
-// connected gateway failure must remain visible because its runtime is stale.
 export async function refreshRunningGatewayAuthState(
   agentId: string | undefined,
   runtime: Pick<RuntimeEnv, "error">,
-): Promise<GatewayAuthRefreshResult> {
+): Promise<void> {
   let gatewayConnected = false;
+  let localTarget: boolean | undefined;
   try {
-    await callGateway({
+    localTarget = await isImplicitLocalGatewayTarget({});
+    const result = await callGateway<GatewayAuthRefreshResponse>({
       method: "models.authStatus",
       params: { refresh: true, ...(agentId ? { agentId } : {}) },
       timeoutMs: 3000,
@@ -22,22 +26,30 @@ export async function refreshRunningGatewayAuthState(
         gatewayConnected = true;
       },
     });
-    return "refreshed";
+    if (!result.unavailable) {
+      return;
+    }
   } catch (error) {
+    if (error instanceof GatewayLocalBackendSharedAuthUnavailableError && localTarget === false) {
+      runtime.error(
+        "Warning: Model auth changes were saved on this host, but the configured Gateway does not share this auth state. Run the auth command on the Gateway host (the far end of any SSH tunnel).",
+      );
+      return;
+    }
     if (
+      localTarget === true &&
       !gatewayConnected &&
       isGatewayTransportError(error) &&
       error.kind === "closed" &&
       error.code === undefined &&
       error.reason?.includes("ECONNREFUSED")
     ) {
-      return "unavailable";
+      return;
     }
-    runtime.error(
-      gatewayConnected
-        ? "Warning: Model auth changes were saved, but the running gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes."
-        : "Warning: Model auth changes were saved, but the gateway did not confirm the refresh. If a gateway is running, run `openclaw gateway restart` to apply the saved changes.",
-    );
-    return "failed";
   }
+  runtime.error(
+    localTarget === true
+      ? `Warning: Model auth changes were saved, but the ${gatewayConnected ? "running" : "local"} Gateway could not refresh them. Run \`openclaw gateway restart\` to apply the saved changes.`
+      : "Warning: Model auth changes were saved, but the configured Gateway could not be identified or refreshed. Apply the auth change on the Gateway host, or restart it there.",
+  );
 }

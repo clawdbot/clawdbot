@@ -50,29 +50,35 @@ const mocks = vi.hoisted(() => ({
   }),
   listProfilesForProvider: vi.fn((): string[] => []),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async (): Promise<boolean> => true),
-  removeProviderAuthProfilesWithLock: vi.fn(async (): Promise<AuthProfileStore | null> => ({
-    version: 1,
-    profiles: {},
-  })),
+  removeProviderAuthProfilesWithLock: vi.fn(
+    async (): Promise<AuthProfileStore | null> => ({
+      version: 1,
+      profiles: {},
+    }),
+  ),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
     (params: { agentDir?: string }) => params.agentDir,
   ),
-  setAuthProfileOrder: vi.fn(async (): Promise<AuthProfileStore | null> => ({
-    version: 1,
-    profiles: {},
-  })),
+  setAuthProfileOrder: vi.fn(
+    async (): Promise<AuthProfileStore | null> => ({
+      version: 1,
+      profiles: {},
+    }),
+  ),
   refreshActiveProviderAuthRuntimeSnapshot: vi.fn(async () => false),
   prepareModelRuntimeSnapshot: vi.fn(async () => {}),
   clearCurrentProviderAuthState: vi.fn(),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
   loadDeferredCatalog: vi.fn(),
   readPreparedCatalog: vi.fn(),
-  buildAuthHealthSummary: vi.fn<BuildAuthHealthSummary>((): AuthHealthSummary => ({
-    now: 0,
-    warnAfterMs: 0,
-    profiles: [],
-    providers: [],
-  })),
+  buildAuthHealthSummary: vi.fn<BuildAuthHealthSummary>(
+    (): AuthHealthSummary => ({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [],
+      providers: [],
+    }),
+  ),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
   listProviderUsagePluginDescriptors: vi.fn(() => [
     { provider: "anthropic", displayName: "Claude" },
@@ -1553,15 +1559,19 @@ describe("models.authStatus", () => {
     expect(mocks.loadDeferredCatalog).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps last-good secrets runtime snapshots when explicit refresh fails", async () => {
+  it("reports secrets runtime failures during an explicit auth refresh", async () => {
     mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValueOnce(
       new Error("refresh failed"),
     );
 
-    await handler(createOptions({ refresh: true }));
+    const opts = createOptions({ refresh: true });
+    await handler(opts);
 
     expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledTimes(1);
-    expect(mocks.loadDeferredCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.loadDeferredCatalog).not.toHaveBeenCalled();
+    const [ok, , error] = firstRespondCall(opts) ?? [];
+    expect(ok).toBe(false);
+    expect(error?.message).toContain("refresh failed");
   });
 
   it("invalidateModelAuthStatusCache() preserves fresh auth reads", async () => {

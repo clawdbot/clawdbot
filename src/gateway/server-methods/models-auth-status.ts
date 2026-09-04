@@ -133,11 +133,7 @@ export function invalidateModelAuthStatusCache(): void {
 async function refreshModelAuthStatusRuntimeState(): Promise<void> {
   // Durable and CLI auth refresh into the transient prepared owner below. Do not clear the
   // process-wide warmed auth state for a read; mutations still invalidate it explicitly.
-  try {
-    await refreshActiveProviderAuthRuntimeSnapshot();
-  } catch (err) {
-    log.warn(`runtime auth snapshot refresh before auth status failed: ${formatForLog(err)}`);
-  }
+  await refreshActiveProviderAuthRuntimeSnapshot();
 }
 
 function readProviderParam(params: Record<string, unknown>): string | null {

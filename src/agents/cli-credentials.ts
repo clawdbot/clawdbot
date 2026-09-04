@@ -30,14 +30,9 @@ let codexCliCache: CachedValue<CodexCliCredential> | null = null;
 let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 let geminiCliCache: CachedValue<GeminiCliCredential> | null = null;
 
-/** Clears cached Codex credentials after an explicit external login mutation. */
-export function clearCodexCliCredentialCache(): void {
-  codexCliCache = null;
-}
-
 /** Clears in-memory CLI credential caches for isolated tests. */
 function resetCliCredentialCachesForTest(): void {
-  clearCodexCliCredentialCache();
+  codexCliCache = null;
   minimaxCliCache = null;
   geminiCliCache = null;
 }
