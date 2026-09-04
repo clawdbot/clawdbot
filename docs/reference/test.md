@@ -33,6 +33,26 @@ fresh lease. Every run still syncs the current checkout.
 `OPENCLAW_TESTBOX_ALLOW_STALE=1` is only for intentional diagnostics, not
 release proof.
 
+Testbox sync requires **GNU rsync on the caller's `PATH`**. Apple `openrsync`
+reports rsync 2.6.9 compatibility but drops the receiver-side ignore rules used
+by native full sync; ignored runtime directories, including hydrated dependencies,
+can be deleted before source verification. The wrapper checks the implementation
+before acquiring or syncing a Testbox and rejects unavailable or incompatible
+rsync. It does not install tools or change `PATH`; help, warmup, status, and stop
+remain available. Other providers are unaffected.
+
+On macOS, install GNU rsync with Homebrew (`brew install rsync`), then select it
+for the wrapper invocation:
+
+```bash
+env PATH="$(brew --prefix rsync)/bin:$PATH" node scripts/crabbox-wrapper.mjs run --timing-json -- node --version
+```
+
+Replace `node --version` with the proof command. If an earlier native sync already
+deleted the prepared runtime, stop that lease and warm a fresh one; source recovery
+cannot reconstruct ignored runtime data. This prerequisite does not repair upstream
+`openrsync` or make direct native Blacksmith invocations safe with it.
+
 Testbox runs and POSIX remote changed gates freeze source into a Git bundle
 against the pinned base. These runs require Crabbox 0.37.0 or later for
 `sync-plan --json`; upgrade Crabbox before retrying an older binary. This API floor

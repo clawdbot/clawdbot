@@ -3863,6 +3863,21 @@ if (canonicalProvider === "blacksmith-testbox") {
     process.exit(2);
   }
 
+  if (normalizedArgs[0] === "run") {
+    // Native full sync relies on receiver-side dir-merge rules. Apple openrsync
+    // drops them and deletes ignored runtime data before our source receiver runs.
+    const rsync = checkedOutput("rsync", ["--version"]);
+    const gnuRsync = /^rsync\s+version\s+\d+\.\d+\.\d+\s+protocol version\s+\d+\b/u.test(
+      rsync.stdout,
+    );
+    if (rsync.status !== 0 || !gnuRsync) {
+      console.error(
+        "[crabbox] Testbox sync requires GNU rsync on PATH; Apple openrsync can delete ignored runtime directories, including hydrated dependencies. Select GNU rsync on PATH and rerun. No Testbox was acquired or synced.",
+      );
+      process.exit(2);
+    }
+  }
+
   if (isWindowsRemoteTarget(normalizedArgs)) {
     console.error(
       [

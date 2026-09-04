@@ -91,6 +91,13 @@ function makeFakeCrabbox(helpText: string): string {
 function writeFakeCrabbox(binDir: string, helpText: string): string {
   mkdirSync(binDir, { recursive: true });
   const crabboxPath = path.join(binDir, "crabbox");
+  writeNodeCommand(
+    path.join(binDir, "rsync"),
+    `const fs = require("node:fs");
+if (process.env.OPENCLAW_FAKE_RSYNC_LOG) fs.appendFileSync(process.env.OPENCLAW_FAKE_RSYNC_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+process.stdout.write(process.env.OPENCLAW_FAKE_RSYNC_VERSION ?? "rsync  version 3.5.0  protocol version 32\\n");
+process.exit(Number(process.env.OPENCLAW_FAKE_RSYNC_STATUS || "0"));`,
+  );
   const stampClaimScript = [
     "const claimPaths = [process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_PATH, process.env.OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH].filter(Boolean);",
     "for (const claimPath of claimPaths) { const claim = fs.existsSync(claimPath) ? JSON.parse(fs.readFileSync(claimPath, 'utf8')) : { leaseID: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID }; claim.repoRoot = process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT || process.cwd(); fs.mkdirSync(path.dirname(claimPath), { recursive: true }); fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n', 'utf8'); }",
@@ -1636,6 +1643,63 @@ describe("scripts/crabbox-wrapper", () => {
       }
     },
   );
+
+  it.each([
+    ["blacksmith-testbox", "openrsync: protocol version 29\nrsync version 2.6.9 compatible\n", "0"],
+    ["blacksmith", "openrsync: protocol version 29\nrsync version 2.6.9 compatible\n", "0"],
+    ["blacksmith-testbox", "", "0"],
+    ["blacksmith-testbox", "rsync  version 3.5.0  protocol version 32\n", "7"],
+  ])(
+    "rejects unusable Testbox rsync before sync or lease work: %s %j %s",
+    (provider, version, status) => {
+      const log = makeInvocationLog();
+      const result = runDefaultWrapper(["run", "--provider", provider, "--", "echo", "ok"], {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: log,
+          OPENCLAW_FAKE_RSYNC_VERSION: version,
+          OPENCLAW_FAKE_RSYNC_STATUS: status,
+        },
+      });
+      expect(result.status, result.stderr).toBe(2);
+      expect(result.stderr).toContain("Testbox sync requires GNU rsync on PATH");
+      expect(result.stderr).not.toContain("syncing from temporary full checkout");
+      expect(
+        readInvocations(log).filter(
+          ([name]) => name === "sync-plan" || name === "run" || name === "warmup",
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["run", "--provider", "blacksmith-testbox", "--help"],
+    ["warmup", "--provider", "blacksmith-testbox"],
+    ["status", "--provider", "blacksmith-testbox"],
+    ["stop", "--provider", "blacksmith-testbox"],
+    ["run", "--provider", "aws", "--", "echo", "ok"],
+  ])("does not probe rsync without native Testbox sync: %j", (...args) => {
+    const log = makeInvocationLog();
+    const result = runDefaultWrapper(args, {
+      env: { OPENCLAW_FAKE_RSYNC_VERSION: "openrsync\n", OPENCLAW_FAKE_RSYNC_LOG: log },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(log)).toBe(false);
+  });
+
+  it.each(["2.6.9", "3.5.0"])("accepts GNU rsync %s for Testbox sync", (version) => {
+    const log = makeInvocationLog();
+    const result = runDefaultWrapper(
+      ["run", "--provider", "blacksmith-testbox", "--", "echo", "ok"],
+      {
+        env: {
+          OPENCLAW_FAKE_RSYNC_VERSION: `rsync  version ${version}  protocol version 29\n`,
+          OPENCLAW_FAKE_RSYNC_LOG: log,
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(readInvocations(log)).toEqual([["--version"]]);
+  });
 
   it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {
     const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
