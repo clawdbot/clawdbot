@@ -29,6 +29,7 @@ import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environ
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
+import { raiseGatewayReceiverPayloadLimit } from "./request-start.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
 import {
   dispatchWorkerRequest,
@@ -65,13 +66,6 @@ type WorkerWsMessageHandlerParams = {
   logWsControl: WorkerLogger;
   publicAdmission?: PublicWorkerIngressContext;
 };
-
-function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
-  const receiver = (socket as { _receiver?: unknown })["_receiver"];
-  if (receiver) {
-    (receiver as { _maxPayload?: number })["_maxPayload"] = maxPayload;
-  }
-}
 
 /** Dedicated ingress handler: worker frames never enter the generic message handler. */
 export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParams): () => void {
@@ -206,7 +200,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     }
     params.setHandshakeState("connected");
     params.advanceHandshakePhase("session_attached");
-    setSocketMaxPayload(params.socket, workerMaxPayload(admission.identity));
+    raiseGatewayReceiverPayloadLimit(params.socket, workerMaxPayload(admission.identity));
     params.advanceHandshakePhase("hello_payload_prepared");
     params.send({ type: "res", id, ok: true, payload: buildWorkerHello(admission.identity) });
     if (disposed || params.isClosed()) {
