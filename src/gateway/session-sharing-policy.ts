@@ -83,6 +83,9 @@ export function resolveSessionSharingTarget(params: {
     clone: false,
     // Authorization rechecks current metadata; prompt snapshots are not part of that binding.
     projection: "list",
+    // Batch callers reuse one store snapshot; single-target checks must not
+    // materialize unrelated sessions for every task or authorization recheck.
+    exactRead: !params.storeCache,
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
