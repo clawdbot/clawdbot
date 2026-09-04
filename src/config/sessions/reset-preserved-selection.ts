@@ -14,6 +14,11 @@ type ResetPreservedSelectionState = Pick<
   | "authProfileOverrideCompactionCount"
 >;
 
+type ResetPreservedDisplayState = Pick<
+  SessionEntry,
+  "label" | "displayName" | "icon" | "color" | "category" | "boardFace" | "visibility"
+>;
+
 /**
  * Decide which model/provider/auth overrides survive a `/new` or `/reset`.
  *
@@ -53,4 +58,30 @@ export function resolveResetPreservedSelection(params: {
   }
 
   return preserved;
+}
+
+/**
+ * Preserve operator-owned session presentation across reset boundaries.
+ *
+ * `/new` and `/reset` replace run/transcript state, but they should not erase
+ * Control UI choices that describe how an operator recognizes and organizes
+ * the same durable session.
+ */
+export function resolveResetPreservedDisplayState(params: {
+  entry?: SessionEntry;
+}): Partial<ResetPreservedDisplayState> {
+  const { entry } = params;
+  if (!entry) {
+    return {};
+  }
+
+  return {
+    label: entry.label,
+    displayName: entry.displayName,
+    icon: entry.icon,
+    color: entry.color,
+    category: entry.category,
+    boardFace: entry.boardFace,
+    visibility: entry.visibility,
+  };
 }

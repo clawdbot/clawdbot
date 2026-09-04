@@ -4133,6 +4133,11 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       thinkingLevel: "high",
       reasoningLevel: "low",
       label: "telegram-priority",
+      icon: "🛠️",
+      color: "green",
+      category: "Operations",
+      boardFace: "dashboard",
+      visibility: "shared",
     } as const;
     const cases = await runExplicitResetCases({
       storePath,
