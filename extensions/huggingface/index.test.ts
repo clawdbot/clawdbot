@@ -1,98 +1,58 @@
-// Huggingface tests cover index plugin behavior.
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterAll, describe, expect, it, vi } from "vitest";
-
-const buildHuggingfaceProviderMock = vi.hoisted(() =>
-  vi.fn(async () => ({
-    baseUrl: "https://router.huggingface.co/v1",
-    api: "openai-completions",
-    models: [],
-  })),
-);
-
-vi.mock("./provider-catalog.js", () => ({
-  buildHuggingfaceProvider: buildHuggingfaceProviderMock,
-}));
-
-vi.mock("./onboard.js", () => ({
-  applyHuggingfaceConfig: vi.fn((cfg) => cfg),
-  HUGGINGFACE_DEFAULT_MODEL_REF: "huggingface/deepseek-ai/DeepSeek-R1",
-}));
-
+import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
 function registerProvider() {
-  return registerProviderWithPluginConfig({});
-}
-
-function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
-  const registerProviderMock = vi.fn();
-
-  plugin.register(
-    createTestPluginApi({
-      id: "huggingface",
-      name: "Hugging Face",
-      source: "test",
-      config: {},
-      pluginConfig,
-      runtime: {} as never,
-      registerProvider: registerProviderMock,
-    }),
-  );
-
-  expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  const firstCall = registerProviderMock.mock.calls[0];
-  if (!firstCall) {
-    throw new Error("expected huggingface provider registration");
-  }
-  return firstCall[0];
+  const register = vi.fn<NonNullable<TestPluginApiInput["registerProvider"]>>();
+  plugin.register(createTestPluginApi({ registerProvider: register }));
+  return register.mock.calls[0]?.[0];
 }
 
 describe("huggingface plugin", () => {
-  afterAll(() => {
-    vi.doUnmock("./provider-catalog.js");
-    vi.doUnmock("./onboard.js");
-    vi.resetModules();
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("skips catalog discovery when plugin discovery is disabled", async () => {
-    const provider = registerProvider();
-
-    const result = await provider.catalog.run({
+  it.each([
+    { label: "no key is configured", config: {}, apiKey: undefined },
+    {
+      label: "discovery is disabled",
       config: {
         plugins: {
-          entries: {
-            huggingface: {
-              config: {
-                discovery: { enabled: false },
-              },
-            },
-          },
+          entries: { huggingface: { config: { discovery: { enabled: false } } } },
         },
       },
-      resolveProviderApiKey: () => ({
-        apiKey: "hf_test_token",
-        discoveryApiKey: "hf_test_token",
-      }),
-    } as never);
-
-    expect(result).toBeNull();
-    expect(buildHuggingfaceProviderMock).not.toHaveBeenCalled();
-  });
-
-  it("serves the bundled catalog when discovery cannot run", async () => {
-    buildHuggingfaceProviderMock.mockClear();
+      apiKey: "hf_test_token",
+    },
+  ])("keeps the bundled catalog offline when $label", async ({ config, apiKey }) => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const resolveProviderApiKey = vi.fn(() => ({ apiKey, discoveryApiKey: apiKey }));
+    const context: ProviderCatalogContext = {
+      config,
+      env: {},
+      resolveProviderApiKey,
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    };
     const provider = registerProvider();
 
-    expect(provider.staticCatalog).toBeDefined();
-    expect(await provider.staticCatalog.run({} as never)).toEqual({
+    await expect(provider?.catalog?.run(context)).resolves.toBeNull();
+    resolveProviderApiKey.mockClear();
+    const result = await provider?.staticCatalog?.run(context);
+
+    expect(result).toMatchObject({
       provider: {
         baseUrl: "https://router.huggingface.co/v1",
         api: "openai-completions",
-        models: [],
+        models: [
+          { id: "deepseek-ai/DeepSeek-R1", name: "DeepSeek R1", contextWindow: 131072 },
+          { id: "deepseek-ai/DeepSeek-V3.1", name: "DeepSeek V3.1" },
+          { id: "openai/gpt-oss-120b", name: "GPT-OSS 120B" },
+        ],
       },
     });
-    // The static catalog must not reach for a discovery secret.
-    expect(buildHuggingfaceProviderMock).toHaveBeenCalledWith();
+    expect(result).not.toHaveProperty("provider.apiKey");
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

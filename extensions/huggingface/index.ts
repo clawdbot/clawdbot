@@ -1,4 +1,3 @@
-// Huggingface plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyHuggingfaceConfig, HUGGINGFACE_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -26,7 +25,6 @@ export default defineSingleProviderPluginEntry({
       applyConfig: applyHuggingfaceConfig,
     },
     catalog: {
-      order: "simple",
       run: async (ctx) => {
         const pluginEntry = ctx.config?.plugins?.entries?.[PROVIDER_ID];
         const pluginConfig =
@@ -48,9 +46,7 @@ export default defineSingleProviderPluginEntry({
           },
         };
       },
-      // Discovery can be turned off or run before a key resolves. The bundled
-      // catalog is built offline, so keep serving it instead of dropping the
-      // provider from model selection entirely.
+      // Startup and unauthenticated catalog reads must not depend on live discovery.
       staticRun: async () => ({ provider: await buildHuggingfaceProvider() }),
     },
   },
