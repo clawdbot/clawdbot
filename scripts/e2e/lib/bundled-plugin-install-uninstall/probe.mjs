@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const normalizePathForProbe = (value) => String(value ?? "").replace(/\\/g, "/");
@@ -276,8 +277,8 @@ function assertUninstalled(pluginId, pluginDir) {
   if (paths.some((entry) => pathReferencesBundledRuntime(entry, pluginDir))) {
     throw new Error(`load path still present after uninstall for ${pluginId}`);
   }
-  if (config.plugins?.entries?.[pluginId]) {
-    throw new Error(`config entry still present after uninstall for ${pluginId}`);
+  if (!isExplicitPluginDisableMarker(config, pluginId)) {
+    throw new Error(`exact disabled uninstall marker missing for ${pluginId}`);
   }
   if ((config.plugins?.allow || []).includes(pluginId)) {
     throw new Error(`allowlist still contains ${pluginId} after uninstall`);

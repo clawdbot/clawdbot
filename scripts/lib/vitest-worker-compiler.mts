@@ -42,6 +42,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     "scripts/lib/vitest-worker-run.mts",
     "scripts/lib/vitest-worker-compiler.mts",
     "scripts/lib/managed-child-process.mts",
+    "scripts/lib/vitest-resource-ownership.mts",
     "scripts/lib/windows-taskkill.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/runtime-process-build-entries.mts",
@@ -71,7 +72,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     clean: false,
     outExtensions: () => ({ js: ".js" }),
     deps: {
-      neverBundle: true,
+      // Root runtime dependencies stay external; bundled workspace code owns its private deps.
       alwaysBundle: (id) =>
         (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
         id !== "@openclaw/fs-safe" &&
@@ -135,7 +136,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     outputs: sortedOutputs,
     durationMs: performance.now() - started,
   };
-  verifyVitestWorkerArtifacts(directory, manifest);
+  await verifyVitestWorkerArtifacts(directory, manifest);
+  manifest.durationMs = performance.now() - started;
   fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`, {
     flag: "wx",
   });

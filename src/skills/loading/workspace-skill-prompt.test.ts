@@ -401,6 +401,23 @@ describe("compactSkillPaths", () => {
     expect(prompt).toContain("A test skill for path compaction");
   });
 
+  it("refreshes home prefixes for each prompt catalog", () => {
+    const root = path.parse(os.homedir()).root;
+    for (const name of ["first-home", "second-home"]) {
+      const home = path.join(root, "openclaw-compact-test", name);
+      const prompt = withEnv({ HOME: home, OPENCLAW_HOME: undefined }, () =>
+        buildPromptForFixtureSkill({
+          workspaceRoot: home,
+          skillDir: path.join(home, "skills", "dynamic-home"),
+          name: "dynamic-home",
+          description: "Per-catalog home resolution",
+        }),
+      );
+      expect(prompt).toContain("<location>~/skills/dynamic-home/SKILL.md</location>");
+      expect(prompt).not.toContain(home);
+    }
+  });
+
   it("does not compact explicit state-root managed skill paths to OS-home tilde paths", () => {
     const root = path.parse(os.homedir()).root;
     const osHome = path.join(root, "data");

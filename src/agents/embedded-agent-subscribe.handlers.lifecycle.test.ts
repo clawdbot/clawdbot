@@ -89,9 +89,9 @@ function createContext(
     flushBlockReplyBuffer: vi.fn(),
     emitBlockReply,
     emitAssistantStreamData: vi.fn(),
-    flushDeferredAssistantEvents: vi.fn(),
+    flushAssistantStream: vi.fn(),
     flushDeferredBlockReplies: vi.fn(),
-    clearDeferredAssistantEvents: vi.fn(),
+    clearAssistantStream: vi.fn(),
     clearDeferredBlockReplies: vi.fn(),
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
@@ -1096,9 +1096,9 @@ describe("handleAgentEnd", () => {
       expect(logger.error).toHaveBeenCalledWith(
         "[hooks] before_agent_finalize handler from test-plugin failed: timed out after 15000ms",
       );
-      expect(ctx.clearDeferredAssistantEvents).not.toHaveBeenCalled();
+      expect(ctx.clearAssistantStream).not.toHaveBeenCalled();
       expect(ctx.clearDeferredBlockReplies).not.toHaveBeenCalled();
-      expect(ctx.flushDeferredAssistantEvents).toHaveBeenCalledTimes(1);
+      expect(ctx.flushAssistantStream).toHaveBeenCalledTimes(1);
       expect(ctx.flushDeferredBlockReplies).toHaveBeenCalledTimes(1);
       expect(ctx.flushBlockReplyBuffer).toHaveBeenCalledWith({ final: true });
       expect(ctx.resolveCompactionRetry).toHaveBeenCalledTimes(1);

@@ -96,33 +96,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     opacity 100ms ease-out;
 }
 
-/* A session dashboard keeps the board primary on narrow shells. Every desktop
-   edge becomes one bounded bottom sheet; the stored tab preference is left
-   untouched and returns when the viewport widens. */
-.shell--mobile-nav .board-session-surface--dock-bottom {
-  flex-direction: column;
-}
-
-.shell--mobile-nav .board-session-surface__board {
-  order: 1;
-}
-
-.shell--mobile-nav .board-session-surface__divider {
-  display: none;
-}
-
-.shell--mobile-nav .board-session-surface__chat {
-  order: 2;
-  width: 100% !important;
-  height: min(42dvh, 360px) !important;
-  min-width: 0;
-  min-height: 180px;
-  max-width: none;
-  max-height: 48dvh;
-  border-top: 1px solid var(--border);
-  box-shadow: 0 -12px 32px color-mix(in srgb, black 16%, transparent);
-}
-
 .shell--mobile-nav .sidebar-resizer {
   display: none;
 }

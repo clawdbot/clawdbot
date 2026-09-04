@@ -84,7 +84,9 @@ type UserMessagePersistedCallback = (
   message: UserAgentMessage,
   context: {
     anchor?: TranscriptEntryAnchor;
+    appended: boolean;
     entryId: string;
+    persistedMessage: UserAgentMessage;
     sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
   },
 ) => void | Promise<void>;
@@ -705,6 +707,7 @@ export function installSessionToolResultGuard(
     acknowledgementSource: AgentMessage = message,
   ): {
     anchor?: TranscriptEntryAnchor;
+    appended: boolean;
     entryId: string;
     message: AgentMessage;
     messageSeq?: number;
@@ -713,10 +716,10 @@ export function installSessionToolResultGuard(
     const runOwnedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
     copyCodeModeSourceAppend(message, runOwnedMessage, sourceAppend);
     const parentEntryId = sessionManager.getLeafId();
-    const appendParentEntryId = sessionManager.getAppendParentId();
     const {
       entryId,
       anchor,
+      appended,
       message: persistedMessage,
     } = withRuntimeUserTurnTranscriptRecorder(runOwnedMessage, () =>
       originalAppendWithTranscriptAnchor(
@@ -735,16 +738,17 @@ export function installSessionToolResultGuard(
       pendingState.delete(persistedId);
     }
     pendingState.trackToolCalls(extractPendingAssistantToolCalls(persistedMessage));
-    if (sessionManager.getAppendParentId() === appendParentEntryId) {
-      return { entryId, message: persistedMessage, ...(anchor ? { anchor } : {}) };
+    if (!appended) {
+      return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
     }
     void opts?.onMessagePersisted?.(persistedMessage);
     const sessionTarget = sessionManager.getSessionTarget();
     if (!sessionTarget) {
-      return { entryId, message: persistedMessage, ...(anchor ? { anchor } : {}) };
+      return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
     }
     return {
       entryId,
+      appended,
       message: persistedMessage,
       ...(anchor ? { anchor } : {}),
       sessionTarget,
@@ -760,6 +764,8 @@ export function installSessionToolResultGuard(
   const guardedAppendCompaction = ((
     ...args: Parameters<SessionManager["appendCompaction"]>
   ): string => {
+    // Replayed boundaries supply their recorded identity; new ones inherit the owning run.
+    args[5] = { runId: transcriptRunId, ...args[5] };
     const append = () => originalAppendCompaction(...args);
     return opts?.withCompactionPersistence
       ? opts.withCompactionPersistence(append, isExpectedCompactionAppend)
@@ -968,6 +974,7 @@ export function installSessionToolResultGuard(
     }
     const {
       anchor,
+      appended,
       entryId: result,
       message: persistedMessage,
       messageSeq,
@@ -991,10 +998,12 @@ export function installSessionToolResultGuard(
       });
     }
 
-    if (isUserAgentMessage(finalMessage)) {
+    if (isUserAgentMessage(finalMessage) && isUserAgentMessage(persistedMessage)) {
       void opts?.onUserMessagePersisted?.(finalMessage, {
         ...(anchor ? { anchor } : {}),
+        appended,
         entryId: result,
+        persistedMessage,
         ...(sessionTarget ? { sessionTarget } : {}),
       });
     }

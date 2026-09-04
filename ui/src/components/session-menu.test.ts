@@ -2,6 +2,18 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RouteId } from "../app-route-paths.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import { deferred } from "../test-helpers/app-sidebar.ts";
+import {
+  createApplicationContextProvider,
+  type ApplicationContextProvider,
+} from "../test-helpers/application-context.ts";
+import {
+  createSessionOwnerMenuHarness,
+  sessionOwnerProfiles,
+} from "../test-helpers/session-owner-menu.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import "./session-menu.ts";
 import type { SessionMenuData } from "./session-menu-actions.ts";
 import type { SessionMenuAction, SessionMenuActionKind, SessionMenuWork } from "./session-menu.ts";
@@ -11,7 +23,6 @@ type SessionMenuElement = HTMLElement & {
   compact: boolean;
   lastActive: string;
   session: SessionMenuData;
-  ownerOptions: readonly SessionOwnerOption[];
   updateComplete: Promise<boolean>;
 };
 type SessionMenuItem = HTMLElement & { disabled: boolean; updateComplete: Promise<unknown> };
@@ -39,9 +50,8 @@ async function mountMenu(
     selectionCount?: number;
     lastActive?: string;
     groups?: readonly string[];
-    ownerOptions?: readonly SessionOwnerOption[];
-    selfOwner?: SessionOwnerOption | null;
-    currentOwnerId?: string | null;
+    context?: ApplicationContext<RouteId>;
+    currentOwner?: SessionOwnerOption | null;
     trigger?: HTMLElement | null;
     onAction?: (action: SessionMenuAction) => void;
     onClose?: () => void;
@@ -49,7 +59,9 @@ async function mountMenu(
     forkFromLastCompleted?: boolean;
   } = {},
 ): Promise<SessionMenuElement> {
-  const container = document.createElement("div");
+  const container = options.context
+    ? createApplicationContextProvider(options.context)
+    : document.createElement("div");
   containers.push(container);
   document.body.append(container);
   const session: SessionMenuData = {
@@ -81,17 +93,16 @@ async function mountMenu(
       .forkDisabled=${false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
-      .deleteAllowed=${options.deleteAllowed ??
-      (session.archived || (options.archiveAllowed ?? true))}
+      .deleteAllowed=${
+        options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true))
+      }
       .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
       .groups=${options.groups ?? []}
-      .ownerOptions=${options.ownerOptions ?? []}
-      .selfOwner=${options.selfOwner ?? null}
-      .currentOwnerId=${options.currentOwnerId ?? null}
+      .currentOwner=${options.currentOwner ?? null}
       .work=${options.work ?? null}
-      .workboard=${options.workboard === undefined
-        ? { captured: false, busy: false }
-        : options.workboard}
+      .workboard=${
+        options.workboard === undefined ? { captured: false, busy: false } : options.workboard
+      }
       .onAction=${options.onAction ?? (() => {})}
       .onClose=${options.onClose ?? (() => {})}
     ></openclaw-session-menu>`,
@@ -142,57 +153,168 @@ function selectMenuValue(menu: SessionMenuElement, value: string) {
 }
 
 describe("session menu", () => {
-  it("puts the self shortcut first in the owner submenu and dispatches canonical owners", async () => {
-    const onAction = vi.fn<(action: SessionMenuAction) => void>();
-    const onClose = vi.fn();
-    const selfOwner = { type: "human", id: "profile-ada", label: "Ada" } as const;
+  it("keeps self, agents, and the current owner while the directory loads, then retries a visible failure", async () => {
+    const pending = deferred<ReturnType<typeof sessionOwnerProfiles>>();
+    const { context, request } = createSessionOwnerMenuHarness(() => pending.promise);
     const menu = await mountMenu({
-      ownerOptions: [selfOwner, { type: "agent", id: "research:one", label: "Research" }],
-      selfOwner,
-      currentOwnerId: "research:one",
-      onAction,
-      onClose,
+      context,
+      currentOwner: {
+        type: "human",
+        id: "profile-old-bob",
+        identity: { type: "profile", id: "profile-bob" },
+        label: "Bob",
+      },
     });
-    const selected = menuItem(menu, "Research");
-    const submenu = menuItem(menu, "Assign to…");
-    expect(menuItemLabels(menu).filter((label) => label.startsWith("Assign to"))).toEqual([
-      "Assign to…",
-    ]);
-    expect(menuItemLabels(submenu)).toEqual(["Me", "Research"]);
-    expect(selected.getAttribute("role")).toBe("menuitemradio");
-    expect(selected.getAttribute("aria-checked")).toBe("true");
-    expect(selected.disabled).toBe(true);
-    expect(selected.querySelector("[slot='details']")).not.toBeNull();
+    const expectCurrentOwner = () => {
+      expect
+        .soft(menuItemLabels(menuItem(menu, "Assign to…")).slice(0, 3))
+        .toEqual(["Me", "Research", "Bob"]);
+      const selected = menu.querySelector<SessionMenuItem>('wa-dropdown-item[aria-checked="true"]');
+      expect.soft(selected?.getAttribute("value")).toBe("assign-owner:human:profile-bob");
+      expect.soft(selected?.disabled).toBe(true);
+    };
+    await waitForFast(() => expect(request).toHaveBeenCalledWith("users.list", {}));
+    expect(menu.textContent).toContain("Loading");
+    expectCurrentOwner();
 
-    for (const label of ["Me", "Research"]) {
-      const value = menuItem(menu, label).getAttribute("value");
-      menu.querySelector("wa-dropdown")?.dispatchEvent(
-        new CustomEvent("wa-select", {
-          bubbles: true,
-          composed: true,
-          detail: { item: { value } },
-        }),
-      );
-    }
-    expect(onAction.mock.calls).toEqual([
-      [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
-      [{ kind: "assign-owner", owner: { type: "agent", id: "research:one" } }],
-    ]);
-    expect(onClose).toHaveBeenCalledTimes(2);
-    const closeOrder = onClose.mock.invocationCallOrder[0];
-    const actionOrder = onAction.mock.invocationCallOrder[0];
-    if (closeOrder === undefined || actionOrder === undefined) {
-      throw new Error("Expected close and action call order");
-    }
-    expect(closeOrder).toBeLessThan(actionOrder);
-
-    const batch = await mountMenu({
-      selectionCount: 2,
-      ownerOptions: [selfOwner],
-      selfOwner,
-    });
-    expect(batch.textContent).not.toContain("Assign to");
+    pending.reject(new Error("Directory is temporarily unavailable."));
+    await waitForFast(() =>
+      expect(menu.querySelector('[role="alert"]')?.textContent).toContain(
+        "Directory is temporarily unavailable.",
+      ),
+    );
+    expectCurrentOwner();
+    request.mockImplementation(() => sessionOwnerProfiles("Ada", "Bob", "Carol"));
+    selectMenuValue(menu, "reload-owners");
+    await waitForFast(() =>
+      expect(menuItemLabels(menuItem(menu, "Assign to…"))).toEqual([
+        "Me",
+        "Research",
+        "Bob",
+        "Carol",
+      ]),
+    );
+    expect(menu.querySelector('[role="alert"]')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["reconnect", "replace gateway"] as const)(
+    "retires an in-flight directory on %s",
+    async (transition) => {
+      const pending = deferred<ReturnType<typeof sessionOwnerProfiles>>();
+      const first = createSessionOwnerMenuHarness(() => pending.promise);
+      const menu = await mountMenu({ context: first.context });
+      await waitForFast(() => expect(first.request).toHaveBeenCalledWith("users.list", {}));
+      if (transition === "reconnect") {
+        first.request.mockImplementation(() => sessionOwnerProfiles("Carol"));
+        first.publish({ phase: "reconnecting" });
+        first.publish({ phase: "connected" });
+      } else {
+        const next = createSessionOwnerMenuHarness(() => sessionOwnerProfiles("Carol"));
+        (menu.parentElement as ApplicationContextProvider).setContext(next.context);
+      }
+      await waitForFast(() =>
+        expect(menuItemLabels(menuItem(menu, "Assign to…"))).toEqual(["Me", "Research", "Carol"]),
+      );
+      pending.resolve(sessionOwnerProfiles("Bob"));
+      await pending.promise;
+      await menu.updateComplete;
+      expect(menuItemLabels(menuItem(menu, "Assign to…"))).toEqual(["Me", "Research", "Carol"]);
+    },
+  );
+
+  it.each([
+    {
+      name: "agent",
+      currentOwner: { type: "agent", id: "research:one" },
+      selectedLabel: "Research",
+      otherLabel: "Colleague",
+      otherType: "human",
+    },
+    {
+      name: "merged profile",
+      currentOwner: {
+        type: "human",
+        id: "profile-merged-colleague",
+        identity: { type: "profile", id: "research:one" },
+      },
+      selectedLabel: "Colleague",
+      otherLabel: "Research",
+      otherType: "agent",
+    },
+  ] as const)(
+    "selects the canonical $name while distinguishing people and naming blank profiles",
+    async ({ currentOwner, selectedLabel, otherLabel, otherType }) => {
+      const onAction = vi.fn<(action: SessionMenuAction) => void>();
+      const onClose = vi.fn();
+      const profiles = sessionOwnerProfiles("Colleague", "Zed", "Merged colleague").profiles.map(
+        (profile, index) =>
+          Object.assign(
+            profile,
+            index === 0
+              ? { id: "research:one" }
+              : index === 1
+                ? { displayName: "  ", emails: ["zed@example.test"] }
+                : { mergedInto: "research:one" },
+          ),
+      );
+      const { context } = createSessionOwnerMenuHarness(() => ({ profiles }));
+      const menu = await mountMenu({
+        context,
+        currentOwner,
+        onAction,
+        onClose,
+      });
+      const submenu = menuItem(menu, "Assign to…");
+      expect(menuItemLabels(menu).filter((label) => label.startsWith("Assign to"))).toEqual([
+        "Assign to…",
+      ]);
+      await waitForFast(() =>
+        expect(menuItemLabels(submenu)).toEqual([
+          "Me",
+          "Research",
+          "Colleague",
+          "zed@example.test",
+        ]),
+      );
+      const selected = menuItem(menu, selectedLabel);
+      expect(selected.getAttribute("role")).toBe("menuitemradio");
+      expect(selected.getAttribute("aria-checked")).toBe("true");
+      expect(selected.disabled).toBe(true);
+      expect(selected.querySelector("[slot='details']")).not.toBeNull();
+      const other = menuItem(menu, otherLabel);
+      expect(other.getAttribute("aria-checked")).toBe("false");
+      expect(other.disabled).toBe(false);
+
+      for (const label of ["Me", otherLabel]) {
+        const value = menuItem(menu, label).getAttribute("value");
+        menu.querySelector("wa-dropdown")?.dispatchEvent(
+          new CustomEvent("wa-select", {
+            bubbles: true,
+            composed: true,
+            detail: { item: { value } },
+          }),
+        );
+      }
+      expect(onAction.mock.calls).toEqual([
+        [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
+        [{ kind: "assign-owner", owner: { type: otherType, id: "research:one" } }],
+      ]);
+      expect(onClose).toHaveBeenCalledTimes(2);
+      const closeOrder = onClose.mock.invocationCallOrder[0];
+      const actionOrder = onAction.mock.invocationCallOrder[0];
+      if (closeOrder === undefined || actionOrder === undefined) {
+        throw new Error("Expected close and action call order");
+      }
+      expect(closeOrder).toBeLessThan(actionOrder);
+
+      const batch = await mountMenu({
+        selectionCount: 2,
+        context,
+      });
+      expect(batch.textContent).not.toContain("Assign to");
+    },
+  );
 
   it("disables only denied mutation actions and ignores forced selection", async () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
@@ -235,6 +357,7 @@ describe("session menu", () => {
       "Archive session",
       "Icon & color",
       "Move to group",
+      "Assign to…",
       "Add to Workboard",
       "Fork conversation",
       "Copy",
@@ -244,14 +367,12 @@ describe("session menu", () => {
   });
 
   it("drills into compact menu groups without rendering side flyouts", async () => {
-    const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
-    const research = { type: "agent", id: "research:one", label: "Research owner" } as const;
+    const { context } = createSessionOwnerMenuHarness(undefined, "Research owner");
     const menu = await mountMenu({
       compact: true,
       groups: ["Research", "Operations"],
-      ownerOptions: [ada, research],
-      selfOwner: ada,
-      currentOwnerId: research.id,
+      context,
+      currentOwner: { type: "agent", id: "research:one" },
       work: {
         loading: false,
         pullRequestUrl: "https://example.test/pr",
@@ -306,7 +427,7 @@ describe("session menu", () => {
     await menu.updateComplete;
     selectMenuValue(menu, "compact:open-group");
     await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back", "Research", "Operations", "New group…"]);
+    expect(menuItemLabels(menu)).toEqual(["Back", "Research", "Operations", "New group"]);
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
   });
 
@@ -321,6 +442,7 @@ describe("session menu", () => {
       "Mark as unread",
       "Archive session",
       "Icon & color",
+      "Assign to…",
       "Fork conversation",
       "Copy",
       "Open in",
@@ -500,7 +622,7 @@ describe("session menu", () => {
     expect(menuItemLabels(submenu)).toContain("Projects");
     const research = menuItem(submenu, "Research");
     const remove = menuItem(submenu, "Remove from group");
-    const create = menuItem(submenu, "New group…");
+    const create = menuItem(submenu, "New group");
     await Promise.all([research.updateComplete, remove.updateComplete, create.updateComplete]);
     await Promise.resolve();
     expect(research.getAttribute("role")).toBe("menuitemradio");
@@ -514,7 +636,7 @@ describe("session menu", () => {
     menuItem(menu, "Remove from group").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: null });
 
-    menuItem(menu, "New group…").click();
+    menuItem(menu, "New group").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "new-group" });
   });
 
@@ -776,7 +898,7 @@ describe("session menu", () => {
     const menu = await mountMenu({ groups: [] });
 
     const submenu = menuItem(menu, "Move to group");
-    expect(menuItemLabels(submenu)).toEqual(["New group…"]);
+    expect(menuItemLabels(submenu)).toEqual(["New group"]);
     expect(submenu.querySelector("wa-dropdown-item")?.getAttribute("slot")).toBe("submenu");
   });
 
@@ -784,7 +906,7 @@ describe("session menu", () => {
     const menu = await mountMenu({ groups: ["Research"] });
 
     const submenu = menuItem(menu, "Move to group");
-    expect(menuItemLabels(submenu)).toEqual(["Research", "New group…"]);
+    expect(menuItemLabels(submenu)).toEqual(["Research", "New group"]);
   });
 
   it("numbers group submenu entries and dispatches them from digit keys", async () => {
@@ -805,7 +927,7 @@ describe("session menu", () => {
       "Research",
       "Projects",
       "Remove from group",
-      "New group…",
+      "New group",
     ]);
     const shortcuts = Array.from(
       submenu.querySelectorAll<HTMLElement>("wa-dropdown-item[slot='submenu']"),
@@ -826,21 +948,15 @@ describe("session menu", () => {
     expect(keydown.defaultPrevented).toBe(true);
   });
 
-  it("keeps conversation destinations without showing absent workspace actions", async () => {
-    const menu = await mountMenu();
+  it.each([null, { loading: true, pullRequestUrl: null, worktreePath: null }])(
+    "keeps conversation destinations without unresolved workspace actions (work=%j)",
+    async (work) => {
+      const menu = await mountMenu({ work });
 
-    expect(menuItemLabels(menu)).not.toContain("Open PR");
-    expect(menuItemLabels(menuItem(menu, "Open in"))).toEqual(["New tab", "New window"]);
-  });
-
-  it("hides unresolved work actions while keeping conversation destinations available", async () => {
-    const menu = await mountMenu({
-      work: { loading: true, pullRequestUrl: null, worktreePath: null },
-    });
-
-    expect(menuItemLabels(menu)).not.toContain("Open PR");
-    expect(menuItemLabels(menuItem(menu, "Open in"))).toEqual(["New tab", "New window"]);
-  });
+      expect(menuItemLabels(menu)).not.toContain("Open PR");
+      expect(menuItemLabels(menuItem(menu, "Open in"))).toEqual(["New tab", "New window"]);
+    },
+  );
 
   it("dispatches open-pr with the resolved URL from click or the G shortcut", async () => {
     const url = "https://github.com/openclaw/openclaw/pull/12345";

@@ -151,27 +151,33 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
           >
         </button>
         <div class="workboard-card-dashboard__body" ?hidden=${!this.expanded}>
-          ${hasBoard && provider && snapshot && callbacks
-            ? html`
-                <openclaw-board-view
-                  .active=${this.expanded}
-                  .snapshot=${snapshot}
-                  .activeTabId=${this.activeTabId}
-                  .widgetFrameUrl=${(name: string, revision: number) =>
-                    provider.widgetFrameUrl(name, revision)}
-                  .callbacks=${callbacks}
-                  .sessions=${[]}
-                  .canMutate=${this.canMutate}
-                  .canGrant=${this.canGrant}
-                ></openclaw-board-view>
-              `
-            : html`<p class="workboard-card-dashboard__empty">${t("workboard.dashboardEmpty")}</p>`}
+          ${
+            hasBoard && provider && snapshot && callbacks
+              ? html`
+                  <openclaw-board-view
+                    .active=${this.expanded}
+                    .snapshot=${snapshot}
+                    .activeTabId=${this.activeTabId}
+                    .widgetFrameUrl=${(name: string, revision: number) =>
+                      provider.widgetFrameUrl(name, revision)}
+                    .callbacks=${callbacks}
+                    .sessions=${[]}
+                    .canMutate=${this.canMutate}
+                    .canGrant=${this.canGrant}
+                  ></openclaw-board-view>
+                `
+              : html`<p class="workboard-card-dashboard__empty">
+                  ${t("workboard.dashboardEmpty")}
+                </p>`
+          }
         </div>
-        ${!this.expanded && this.expansionInitialized && !hasBoard
-          ? html`<p class="workboard-card-dashboard__collapsed-empty">
-              ${t("workboard.dashboardEmpty")}
-            </p>`
-          : nothing}
+        ${
+          !this.expanded && this.expansionInitialized && !hasBoard
+            ? html`<p class="workboard-card-dashboard__collapsed-empty">
+                ${t("workboard.dashboardEmpty")}
+              </p>`
+            : nothing
+        }
       </section>
     `;
   }

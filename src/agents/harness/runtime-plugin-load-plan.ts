@@ -105,9 +105,12 @@ function resolveSelectedMemoryPluginIds(params: {
 export function resolveAgentRuntimePluginSelections(
   config: OpenClawConfig | undefined,
   selections: readonly AgentHarnessPluginSelection[],
+  configuredHarnessRuntimes: readonly string[] = collectConfiguredAgentHarnessRuntimes(
+    config ?? {},
+  ),
 ): AgentHarnessPluginSelection[] {
   return [
-    ...collectConfiguredAgentHarnessRuntimes(config ?? {}).map((runtime) => ({
+    ...configuredHarnessRuntimes.map((runtime) => ({
       runtime,
       provider: "",
       modelId: "",

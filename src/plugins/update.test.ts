@@ -9,6 +9,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
+import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const APP_ROOT = "/app";
@@ -658,6 +659,9 @@ function expectNpmUpdateCall(params: {
   }
 }
 
+const QQBOT_EXPECTED_INTEGRITY =
+  "sha512-yngu/2cPeZjJfIfHWCXWB2/6KlDHrb9vpOUjKLdQxePLSp6wCn3CFOALcBIVq/9o6jlYz9WTU9idW6nfX1xpFA==";
+
 function createBundledSource(params?: { pluginId?: string; localPath?: string; npmSpec?: string }) {
   const pluginId = params?.pluginId ?? "feishu";
   return {
@@ -776,6 +780,36 @@ function updatePlugin(
   params: Omit<UpdateInstalledPluginParams, "config" | "pluginIds"> = {},
 ) {
   return updateNpmInstalledPlugins({ config, pluginIds: [pluginId], ...params });
+}
+
+function createDuplicateQqbotConfig(
+  params: {
+    canonicalFirst?: boolean;
+    canonicalInstallPath?: string;
+  } = {},
+): OpenClawConfig {
+  const qqbot = {
+    source: "npm",
+    spec: "@openclaw/qqbot@1.9.0",
+    resolvedName: "@openclaw/qqbot",
+    resolvedSpec: "@openclaw/qqbot@1.9.0",
+    installPath: "/tmp/openclaw-qqbot-legacy",
+  } satisfies PluginInstallRecord;
+  const canonical = {
+    source: "npm",
+    spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+    resolvedName: "@tencent-connect/openclaw-qqbot",
+    resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+    installPath: params.canonicalInstallPath ?? "/tmp/openclaw-qqbot-canonical",
+  } satisfies PluginInstallRecord;
+  return {
+    plugins: {
+      entries: { qqbot: { enabled: true } },
+      installs: params.canonicalFirst
+        ? { "openclaw-qqbot": canonical, qqbot }
+        : { qqbot, "openclaw-qqbot": canonical },
+    },
+  };
 }
 
 describe("updateNpmInstalledPlugins", () => {
@@ -1696,44 +1730,66 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "latest",
-      updateChannel: undefined,
-      registrySpec: "@acme/demo",
-      registryVersion: "1.2.4",
-      overrideSpec: "@acme/demo@latest",
-    },
-    {
-      name: "beta",
-      updateChannel: "beta" as const,
-      registrySpec: "@acme/demo@beta",
-      registryVersion: "1.3.0-beta.1",
-      overrideSpec: "@acme/demo@beta",
-    },
-  ])(
-    "reports newer $name releases for exact-pinned installed records instead of claiming up to date",
-    async ({ updateChannel, registrySpec, registryVersion, overrideSpec }) => {
-      const { config } = createNpmUpdateFixture({
+  it.each(
+    [
+      {
+        name: "latest",
+        updateChannel: undefined,
+        registryVersion: "1.2.4",
+      },
+      {
+        name: "beta",
+        updateChannel: "beta" as const,
+        registryVersion: "1.3.0-beta.1",
+      },
+    ].flatMap((release) => [
+      {
+        ...release,
         pluginId: "demo",
         packageName: "@acme/demo",
+        syncOfficialPluginInstalls: false,
+      },
+      {
+        ...release,
+        pluginId: "acpx",
+        packageName: "@openclaw/acpx",
+        syncOfficialPluginInstalls: true,
+      },
+    ]),
+  )(
+    "reports newer $name releases for exact-pinned $pluginId records (official sync=$syncOfficialPluginInstalls)",
+    async ({
+      updateChannel,
+      registryVersion,
+      pluginId,
+      packageName,
+      syncOfficialPluginInstalls,
+    }) => {
+      const registrySpec = updateChannel === "beta" ? `${packageName}@beta` : packageName;
+      const overrideSpec = `${packageName}@${updateChannel === "beta" ? "beta" : "latest"}`;
+      const { config } = createNpmUpdateFixture({
+        pluginId,
+        packageName,
         installedVersion: "1.2.3",
         registryVersion: "1.2.3",
         registryIntegrity: "sha512-same",
         registryShasum: "same",
-        spec: "@acme/demo@1.2.3",
+        spec: `${packageName}@1.2.3`,
         integrity: "sha512-same",
         shasum: "same",
         installedAt: "2026-07-01T00:00:00.000Z",
         resolvedAt: "2026-07-01T00:00:01.000Z",
       });
       mockNpmViewMetadata({
-        name: "@acme/demo",
+        name: packageName,
         version: registryVersion,
       });
       installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
 
-      const result = await updatePlugin(config, "demo", updateChannel ? { updateChannel } : {});
+      const result = await updatePlugin(config, pluginId, {
+        updateChannel,
+        syncOfficialPluginInstalls,
+      });
 
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
       expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(2);
@@ -1752,14 +1808,14 @@ describe("updateNpmInstalledPlugins", () => {
       expect(result.config).toBe(config);
       expect(result.outcomes).toEqual([
         {
-          pluginId: "demo",
+          pluginId,
           status: "unchanged",
           currentVersion: "1.2.3",
           nextVersion: registryVersion,
           message:
-            `demo is pinned to @acme/demo@1.2.3 (installed 1.2.3); ` +
+            `${pluginId} is pinned to ${packageName}@1.2.3 (installed 1.2.3); ` +
             `registry ${updateChannel === "beta" ? "beta" : "latest"} resolves to ${registryVersion}. ` +
-            `Pass \`openclaw plugins update ${overrideSpec}\` to follow that registry line.`,
+            `Pass \`openclaw plugins update ${overrideSpec}\` to replace this version pin.`,
         },
       ]);
     },
@@ -1875,7 +1931,7 @@ describe("updateNpmInstalledPlugins", () => {
         nextVersion: "1.2.4",
         message:
           "demo is pinned to @acme/demo@1.2.3 (installed 1.2.3); registry latest resolves to 1.2.4. " +
-          "Pass `openclaw plugins update @acme/demo@latest` to follow that registry line.",
+          "Pass `openclaw plugins update @acme/demo@latest` to replace this version pin.",
       },
     ]);
   });
@@ -3183,25 +3239,39 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it.each(["@acme/demo@1.2.3", "@acme/demo@v1.2.3"])(
-    "reports newer registry default releases for exact pinned npm dry-runs from %s",
-    async (spec) => {
+  it.each(
+    ["1.2.3", "v1.2.3"].flatMap((version) => [
+      { version, pluginId: "demo", packageName: "@acme/demo", syncOfficialPluginInstalls: false },
+      {
+        version,
+        pluginId: "acpx",
+        packageName: "@openclaw/acpx",
+        syncOfficialPluginInstalls: true,
+      },
+    ]),
+  )(
+    "reports newer registry default releases for exact pinned $pluginId@$version dry-runs (official sync=$syncOfficialPluginInstalls)",
+    async ({ version, pluginId, packageName, syncOfficialPluginInstalls }) => {
+      const spec = `${packageName}@${version}`;
       const { config } = createNpmUpdateFixture({
-        pluginId: "demo",
-        packageName: "@acme/demo",
+        pluginId,
+        packageName,
         installedVersion: "1.2.3",
         registryVersion: "1.2.4",
         spec,
         installerVersion: "1.2.3",
         installerResolvedSpec: spec,
       });
-      const result = await updatePlugin(config, "demo", { dryRun: true });
+      const result = await updatePlugin(config, pluginId, {
+        dryRun: true,
+        syncOfficialPluginInstalls,
+      });
 
       expect(npmInstallCall()?.spec).toBe(spec);
       expect(npmViewCall()?.[0]).toEqual([
         "npm",
         "view",
-        "@acme/demo",
+        packageName,
         "name",
         "version",
         "dist.integrity",
@@ -3210,11 +3280,11 @@ describe("updateNpmInstalledPlugins", () => {
         "--json",
       ]);
       expectRecordFields(result.outcomes[0], {
-        pluginId: "demo",
+        pluginId,
         status: "unchanged",
         currentVersion: "1.2.3",
         nextVersion: "1.2.4",
-        message: `demo is pinned to ${spec} (installed 1.2.3); registry latest resolves to 1.2.4. Pass \`openclaw plugins update @acme/demo@latest\` to follow that registry line.`,
+        message: `${pluginId} is pinned to ${spec} (installed 1.2.3); registry latest resolves to 1.2.4. Pass \`openclaw plugins update ${packageName}@latest\` to replace this version pin.`,
       });
     },
   );
@@ -4575,6 +4645,485 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
+  it("rewrites @openclaw/qqbot under the canonical plugin id", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-qqbot",
+        targetDir: "/tmp/openclaw-qqbot",
+        version: "2.0.3",
+        npmResolution: {
+          name: "@tencent-connect/openclaw-qqbot",
+          version: "2.0.3",
+          resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
+        },
+      }),
+    );
+
+    const result = await updatePlugin(
+      createNpmInstallConfig({
+        pluginId: "openclaw-qqbot",
+        spec: "@openclaw/qqbot@1.9.0",
+        installPath: "/tmp/openclaw-qqbot",
+        resolvedName: "@openclaw/qqbot",
+        resolvedSpec: "@openclaw/qqbot@1.9.0",
+        resolvedVersion: "1.9.0",
+      }),
+      "openclaw-qqbot",
+    );
+
+    expectNpmUpdateCall({
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      expectedIntegrity: QQBOT_EXPECTED_INTEGRITY,
+      expectedPluginId: "openclaw-qqbot",
+    });
+    expect(npmInstallCall()?.expectedReplacementPluginId).toBeUndefined();
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expectRecordFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
+      source: "npm",
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      installPath: "/tmp/openclaw-qqbot",
+      version: "2.0.3",
+    });
+  });
+
+  it("aborts a renamed official package update when its artifact differs from the catalog pin", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/qqbot",
+      version: "1.9.0",
+    });
+    mockNpmViewMetadata({
+      name: "@tencent-connect/openclaw-qqbot",
+      version: "2.0.3",
+      integrity: "sha512-republished",
+    });
+    installPluginFromNpmSpecMock.mockImplementation(
+      async (params: {
+        expectedIntegrity?: string;
+        onIntegrityDrift?: (drift: NpmInstallIntegrityDrift) => boolean | Promise<boolean>;
+        spec: string;
+      }) => {
+        const proceed = await params.onIntegrityDrift?.({
+          spec: params.spec,
+          expectedIntegrity: params.expectedIntegrity!,
+          actualIntegrity: "sha512-republished",
+          resolution: {
+            integrity: "sha512-republished",
+            resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
+            version: "2.0.3",
+          },
+        });
+        return proceed === false
+          ? {
+              ok: false as const,
+              error:
+                "aborted: npm package integrity drift detected for @tencent-connect/openclaw-qqbot@2.0.3",
+            }
+          : createSuccessfulNpmUpdateResult();
+      },
+    );
+    const config = createNpmInstallConfig({
+      pluginId: "qqbot",
+      spec: "@openclaw/qqbot@1.9.0",
+      installPath,
+      resolvedName: "@openclaw/qqbot",
+      resolvedSpec: "@openclaw/qqbot@1.9.0",
+      resolvedVersion: "1.9.0",
+    });
+    const warn = vi.fn();
+
+    const result = await updatePlugin(config, "qqbot", { logger: { warn } });
+
+    expectNpmUpdateCall({
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      expectedIntegrity: QQBOT_EXPECTED_INTEGRITY,
+      expectedPluginId: "qqbot",
+    });
+    expect(npmInstallCall()?.expectedReplacementPluginId).toBe("openclaw-qqbot");
+    expect(warn).toHaveBeenCalledWith(
+      `Integrity drift for "qqbot" (@tencent-connect/openclaw-qqbot@2.0.3): expected ${QQBOT_EXPECTED_INTEGRITY}, got sha512-republished`,
+    );
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "qqbot",
+        status: "error",
+        message:
+          "Failed to update qqbot: aborted: npm package integrity drift detected for @tencent-connect/openclaw-qqbot@2.0.3",
+      },
+    ]);
+  });
+
+  it("does not apply the catalog pin to an explicit renamed-package override", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-qqbot",
+        targetDir: "/tmp/openclaw-qqbot",
+        version: "2.0.4",
+      }),
+    );
+    const config = createNpmInstallConfig({
+      pluginId: "openclaw-qqbot",
+      spec: "@openclaw/qqbot@1.9.0",
+      installPath: "/tmp/openclaw-qqbot",
+      resolvedName: "@openclaw/qqbot",
+      resolvedSpec: "@openclaw/qqbot@1.9.0",
+      resolvedVersion: "1.9.0",
+    });
+
+    await updatePlugin(config, "openclaw-qqbot", {
+      specOverrides: {
+        "openclaw-qqbot": "@tencent-connect/openclaw-qqbot@2.0.4",
+      },
+    });
+
+    expectNpmUpdateCall({
+      spec: "@tencent-connect/openclaw-qqbot@2.0.4",
+      expectedPluginId: "openclaw-qqbot",
+    });
+  });
+
+  it("migrates the qqbot install id and preserves root plus multi-account channel config", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-qqbot",
+        targetDir: "/tmp/openclaw-qqbot",
+        version: "2.0.3",
+        npmResolution: {
+          name: "@tencent-connect/openclaw-qqbot",
+          version: "2.0.3",
+          resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
+        },
+      }),
+    );
+    const qqbotConfig = {
+      enabled: true,
+      appId: "root-app",
+      clientSecret: "root-secret",
+      accounts: {
+        primary: { appId: "primary-app", clientSecret: "primary-secret" },
+        secondary: { appId: "secondary-app", clientSecret: "secondary-secret" },
+      },
+    };
+    const config = createNpmInstallConfig({
+      pluginId: "qqbot",
+      spec: "@openclaw/qqbot@1.9.0",
+      installPath: "/tmp/openclaw-qqbot",
+      resolvedName: "@openclaw/qqbot",
+      resolvedSpec: "@openclaw/qqbot@1.9.0",
+      resolvedVersion: "1.9.0",
+    });
+    config.channels = { qqbot: qqbotConfig };
+
+    const result = await updatePlugin(config, "qqbot");
+
+    expectNpmUpdateCall({
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      expectedIntegrity: QQBOT_EXPECTED_INTEGRITY,
+      expectedPluginId: "qqbot",
+    });
+    expect(npmInstallCall()?.expectedReplacementPluginId).toBe("openclaw-qqbot");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(result.config.channels?.qqbot).toEqual(qqbotConfig);
+    expect(result.config.plugins?.installs?.qqbot).toBeUndefined();
+    expectRecordFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
+      source: "npm",
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      installPath: "/tmp/openclaw-qqbot",
+      version: "2.0.3",
+    });
+  });
+
+  it.each([
+    { name: "npm-pack archive", provenance: { artifactKind: "npm-pack" as const } },
+    { name: "local source path", provenance: { sourcePath: "/tmp/local-openclaw-qqbot" } },
+  ])("does not migrate a legacy $name install into official ownership", async ({ provenance }) => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/qqbot",
+      version: "1.9.0",
+    });
+    mockNpmViewMetadata({ name: "@openclaw/qqbot", version: "1.9.1" });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "qqbot",
+        targetDir: installPath,
+        version: "1.9.1",
+        npmResolution: {
+          name: "@openclaw/qqbot",
+          version: "1.9.1",
+          resolvedSpec: "@openclaw/qqbot@1.9.1",
+        },
+      }),
+    );
+    const config = {
+      plugins: {
+        entries: { qqbot: { enabled: true } },
+        installs: {
+          qqbot: {
+            source: "npm",
+            spec: "@openclaw/qqbot@1.9.0",
+            installPath,
+            resolvedName: "@openclaw/qqbot",
+            resolvedSpec: "@openclaw/qqbot@1.9.0",
+            ...provenance,
+          },
+          "openclaw-qqbot": {
+            source: "npm",
+            spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+            resolvedName: "@tencent-connect/openclaw-qqbot",
+            resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updatePlugin(config, "qqbot");
+
+    expectNpmUpdateCall({
+      spec: "@openclaw/qqbot@1.9.0",
+      expectedPluginId: "qqbot",
+    });
+    expect(npmInstallCall()?.expectedIntegrity).toBeUndefined();
+    expect(npmInstallCall()?.expectedReplacementPluginId).toBeUndefined();
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).not.toBe(true);
+    expect(result.config.plugins?.entries?.qqbot).toEqual({ enabled: true });
+    expect(result.config.plugins?.installs?.qqbot).toBeDefined();
+    expect(result.config.plugins?.installs?.["openclaw-qqbot"]).toEqual(
+      config.plugins.installs["openclaw-qqbot"],
+    );
+    expect(resolvePluginInstallOwnerMigrations(result)).toBeUndefined();
+    expect(result.outcomes).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: expect.stringContaining("Removed duplicate") }),
+      ]),
+    );
+  });
+
+  it.each([false, true])(
+    "drops a duplicate qqbot record after canonical success (canonicalFirst=%s)",
+    async (canonicalFirst) => {
+      const canonicalInstallPath = createInstalledPackageDir({
+        name: "@tencent-connect/openclaw-qqbot",
+        version: "2.0.0",
+        runnable: true,
+      });
+      mockNpmViewMetadata({ name: "@tencent-connect/openclaw-qqbot", version: "2.0.1" });
+      validatePackageExtensionEntriesForInstallMock.mockResolvedValueOnce({ ok: true });
+      installPluginFromNpmSpecMock.mockResolvedValue(
+        createSuccessfulNpmUpdateResult({
+          pluginId: "openclaw-qqbot",
+          targetDir: canonicalInstallPath,
+          version: "2.0.1",
+          npmResolution: {
+            name: "@tencent-connect/openclaw-qqbot",
+            version: "2.0.1",
+            resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+          },
+        }),
+      );
+
+      const result = await updateNpmInstalledPlugins({
+        config: createDuplicateQqbotConfig({ canonicalFirst, canonicalInstallPath }),
+      });
+
+      expectNpmUpdateCall({
+        spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+        expectedPluginId: "openclaw-qqbot",
+      });
+      expect(result.outcomes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            pluginId: "qqbot",
+            status: "skipped",
+            message:
+              'Removed duplicate "qqbot" install record; "openclaw-qqbot" is the canonical plugin id.',
+          }),
+        ]),
+      );
+      expect(result.config.plugins?.installs?.qqbot).toBeUndefined();
+      expectRecordFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
+        source: "npm",
+        spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+        installPath: canonicalInstallPath,
+        version: "2.0.1",
+      });
+      expect(resolvePluginInstallOwnerMigrations(result)).toEqual({
+        qqbot: "openclaw-qqbot",
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "keeps the working qqbot alias after canonical failure (canonicalFirst=%s)",
+    async (canonicalFirst) => {
+      installPluginFromNpmSpecMock.mockResolvedValue({
+        ok: false,
+        error: "canonical package install failed",
+      });
+      const config = createDuplicateQqbotConfig({ canonicalFirst });
+
+      const result = await updateNpmInstalledPlugins({ config });
+
+      expect(result.changed).toBe(false);
+      expect(result.config).toBe(config);
+      expect(result.config.plugins?.entries?.qqbot).toEqual({ enabled: true });
+      expect(result.config.plugins?.installs).toEqual(config.plugins?.installs);
+      expect(resolvePluginInstallOwnerMigrations(result)).toBeUndefined();
+      expect(result.outcomes).toEqual([
+        {
+          pluginId: "openclaw-qqbot",
+          status: "error",
+          message: "Failed to update openclaw-qqbot: canonical package install failed",
+        },
+        {
+          pluginId: "qqbot",
+          status: "skipped",
+          message:
+            'Kept duplicate "qqbot" install record because "openclaw-qqbot" did not complete a runnable canonical update.',
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    { payload: "runnable", removesAlias: true },
+    { payload: "corrupt", removesAlias: false },
+    { payload: "missing", removesAlias: false },
+  ])("handles a skipped canonical $payload payload", async ({ payload, removesAlias }) => {
+    const canonicalInstallPath =
+      payload === "missing"
+        ? path.join(makeTrackedTempDir("openclaw-plugin-update-missing", tempDirs), "missing")
+        : createInstalledPackageDir({
+            name: "@tencent-connect/openclaw-qqbot",
+            version: "2.0.1",
+            runnable: payload === "runnable",
+          });
+    if (payload === "runnable") {
+      validatePackageExtensionEntriesForInstallMock.mockResolvedValueOnce({ ok: true });
+    }
+    const result = await updateNpmInstalledPlugins({
+      config: createDuplicateQqbotConfig({ canonicalInstallPath }),
+      pluginIds: ["qqbot"],
+      skipIds: new Set(["openclaw-qqbot"]),
+    });
+
+    expect(result.changed).toBe(removesAlias);
+    expect(result.config.plugins?.installs?.qqbot === undefined).toBe(removesAlias);
+    expect(resolvePluginInstallOwnerMigrations(result)).toEqual(
+      removesAlias ? { qqbot: "openclaw-qqbot" } : undefined,
+    );
+  });
+
+  it("does not remove the alias when canonical failure disables the canonical plugin", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "canonical package install failed",
+    });
+    const result = await updateNpmInstalledPlugins({
+      config: createDuplicateQqbotConfig(),
+      disableOnFailure: true,
+    });
+
+    expect(result.config.plugins?.installs?.qqbot).toBeDefined();
+    expect(resolvePluginInstallOwnerMigrations(result)).toBeUndefined();
+    expect(result.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "qqbot",
+          message:
+            'Kept duplicate "qqbot" install record because "openclaw-qqbot" did not complete a runnable canonical update.',
+        }),
+      ]),
+    );
+  });
+
+  it("reports duplicate removal without mutating on dry-run", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-qqbot",
+        version: "2.0.3",
+        npmResolution: {
+          name: "@tencent-connect/openclaw-qqbot",
+          version: "2.0.3",
+          resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
+        },
+      }),
+    );
+    const config = {
+      plugins: {
+        installs: {
+          qqbot: {
+            source: "npm",
+            spec: "@openclaw/qqbot@1.9.0",
+            resolvedName: "@openclaw/qqbot",
+            resolvedSpec: "@openclaw/qqbot@1.9.0",
+          },
+          "openclaw-qqbot": {
+            source: "npm",
+            spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+            resolvedName: "@tencent-connect/openclaw-qqbot",
+            resolvedSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updatePlugin(config, "qqbot", { dryRun: true });
+
+    expect(result.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "qqbot",
+          status: "skipped",
+          message:
+            'Would remove duplicate "qqbot" install record; "openclaw-qqbot" is the canonical plugin id.',
+        }),
+      ]),
+    );
+    expect(result.changed).toBe(false);
+    expect(result.config.plugins?.installs).toEqual(config.plugins.installs);
+    expect(resolvePluginInstallOwnerMigrations(result)).toBeUndefined();
+  });
+
+  it("rejects duplicate migration when canonical npm identities disagree", async () => {
+    const config = {
+      plugins: {
+        entries: { qqbot: { enabled: true } },
+        installs: {
+          qqbot: {
+            source: "npm",
+            spec: "@openclaw/qqbot@1.9.0",
+            resolvedName: "@openclaw/qqbot",
+            resolvedSpec: "@openclaw/qqbot@1.9.0",
+          },
+          "openclaw-qqbot": {
+            source: "npm",
+            spec: "@vendor/openclaw-qqbot@1.0.0",
+            resolvedName: "@tencent-connect/openclaw-qqbot",
+            resolvedSpec: "@vendor/openclaw-qqbot@1.0.0",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updatePlugin(config, "qqbot");
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.config.plugins?.entries).toEqual(config.plugins.entries);
+    expect(result.config.plugins?.installs).toEqual(config.plugins.installs);
+    expect(resolvePluginInstallOwnerMigrations(result)).toBeUndefined();
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "qqbot",
+        status: "error",
+        message:
+          'Cannot replace "qqbot" with "openclaw-qqbot" because both plugin install records exist. Remove one of the conflicting installs, then retry the update.',
+      },
+    ]);
+  });
+
   it("rejects legacy id replacement when the canonical install already exists", async () => {
     const config = {
       plugins: {
@@ -5388,7 +5937,7 @@ describe("syncPluginsForUpdateChannel", () => {
         pluginId: "legacy-chat",
         code: "package_not_found",
         message:
-          "Failed to update legacy-chat: Package not found on ClawHub. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+          'Failed to update legacy-chat: Package not found on ClawHub. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).\nBundled relocation did not install the replacement plugin payload; resolve the error above, then run "openclaw update repair".',
       },
     ]);
   });
@@ -5484,7 +6033,7 @@ describe("syncPluginsForUpdateChannel", () => {
         pluginId: "legacy-chat",
         code: "archive_integrity_mismatch",
         message:
-          "Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+          'Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).\nBundled relocation did not install the replacement plugin payload; resolve the error above, then run "openclaw update repair".',
       },
     ]);
   });
@@ -5555,7 +6104,11 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(result.changed).toBe(false);
     expect(result.config).toBe(config);
     expect(result.summary.errors).toEqual([
-      { pluginId: "legacy-chat", message: "Failed to update legacy-chat: package unavailable" },
+      {
+        pluginId: "legacy-chat",
+        message:
+          'Failed to update legacy-chat: package unavailable\nBundled relocation did not install the replacement plugin payload; resolve the error above, then run "openclaw update repair".',
+      },
     ]);
   });
 

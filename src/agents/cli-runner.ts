@@ -230,6 +230,7 @@ async function runCliAgentInternal(
   try {
     context = await prepareCliRunContext(params);
   } catch (error) {
+    params.assertCurrent?.();
     await settleCliPreparationError(error, params);
     throw error;
   }
@@ -543,6 +544,7 @@ export async function runPreparedCliAgent(
           modelId: context.modelId,
           usage: output.usage,
           stopReason: resolveCliAssistantStopReason(output),
+          yielded: output.yielded,
         });
         await finalizeCliContextEngineTurn({
           context,
@@ -715,6 +717,7 @@ export async function runPreparedCliAgent(
   } catch (error) {
     cleanupError = error as Error;
   }
+  params.assertCurrent?.();
   return settleCliBackendOutcome({
     runResult,
     runError,

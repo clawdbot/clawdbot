@@ -2,6 +2,7 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { waitForever } from "../../src/cli/wait.ts";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import {
   resolveTestBrowserCache,
@@ -19,6 +20,12 @@ import {
   createVitestProcessCompletion,
   shouldUseDetachedVitestProcessGroup,
 } from "../vitest-process-group.mts";
+import { runWithFailedTrailer, writeFailedTrailer } from "./failed-trailer.mts";
+import { signalExitCode } from "./managed-child-process.mts";
+import {
+  createVitestResourceOwner,
+  findVitestResourceOwner,
+} from "./vitest-resource-ownership.mts";
 
 /** Own temporary files until the Vitest child, its group, and its pipes have joined. */
 export function spawnOwnedVitestProcess(spec: {
@@ -37,13 +44,31 @@ export function spawnOwnedVitestProcess(spec: {
   const tempDirs = createTempDirTracker();
   const detached = spec.options.detached ?? shouldUseDetachedVitestProcessGroup();
   const verifiedGroup = detached && shouldUseDetachedVitestProcessGroup();
-  const tempRoot = tempDirs.make(
-    "oc-vt-",
-    fs.realpathSync(env.TMPDIR || env.TMP || env.TEMP || tmpdir()),
-  );
+  let tempRoot: string | undefined;
+  let owner: ReturnType<typeof createVitestResourceOwner> | undefined;
+  let parent: { root: string; release: () => void } | undefined;
+  const dispose = () => {
+    owner?.assertReleased();
+    tempDirs.cleanup();
+    parent?.release();
+  };
   let child;
   try {
+    const containingRoot = fs.realpathSync(env.TMPDIR || env.TMP || env.TEMP || tmpdir());
+    // An intermediate runner can die before publishing its own cleanup result.
+    // Its containing owner must already hold the obligation before allocation.
+    const containingOwner = findVitestResourceOwner(containingRoot);
+    if (containingOwner) {
+      parent = { root: containingOwner.root, release: containingOwner.claim() };
+    }
+    tempRoot = tempDirs.make("oc-vt-", containingRoot);
+    owner = createVitestResourceOwner(tempRoot);
     const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
+    if (mode !== "tooling") {
+      // The tooling shim avoids the shared tsx cache. Test children have this owned
+      // temp namespace, so source subprocesses can reuse transforms until cleanup.
+      delete childEnv.TSX_DISABLE_CACHE;
+    }
     if (mode !== "tooling" && !(policy.live && policy.allowRealHome)) {
       const nativeHome = path.join(tempRoot, "home");
       fs.mkdirSync(nativeHome);
@@ -69,31 +94,59 @@ export function spawnOwnedVitestProcess(spec: {
     child = spawn(spec.command, spec.args, options);
   } catch (error) {
     tempDirs.cleanup();
+    parent?.release();
     throw error;
   }
-  const completion = createVitestProcessCompletion({ child, detached }).then(
-    (result) => {
+  const completion = (async () => {
+    try {
+      const result = await createVitestProcessCompletion({ child, detached });
       if (verifiedGroup) {
-        tempDirs.cleanup();
+        dispose();
       } else {
+        // Keep the containing claim too: leader exit cannot certify descendants.
         console.error(
           `[vitest] retained temporary namespace ${tempRoot}; descendant completion is unverified on this non-group launch. Stop the remaining writers before removing this exact directory.`,
         );
       }
       return result;
-    },
-    (error: unknown) => {
+    } catch (error) {
+      // A failed parent receipt can follow successful child disposal. Report
+      // the still-owned ancestor, not a child directory already removed.
+      const retainedRoot = tempRoot && tempDirs.dirs.has(tempRoot) ? tempRoot : parent?.root;
       // No PID means spawn failed; otherwise unverified writers still own the files.
       if (!child.pid) {
-        tempDirs.cleanup();
-      } else {
-        throw new Error(
-          `[vitest] retained temporary namespace ${tempRoot}; child/group completion was not verified. Stop the remaining writers before removing this exact directory.`,
-          { cause: error },
+        dispose();
+      } else if (retainedRoot) {
+        throw Object.assign(
+          new Error(
+            `[vitest] retained temporary namespace ${retainedRoot}; child/group or nested resource completion was not verified. Stop the remaining writers before removing this exact directory.`,
+            { cause: error },
+          ),
+          { processTreeState: "indeterminate" },
         );
       }
       throw error;
-    },
-  );
+    }
+  })();
   return { child, completion };
+}
+
+export async function exitVitestBySignal(signal: NodeJS.Signals): Promise<void> {
+  process.kill(process.pid, signal);
+  // Dependency signal handlers may finish cleanup and re-raise asynchronously.
+  // A numeric return must not win that race.
+  await waitForever();
+}
+
+/** Only public invocations report; internal children propagate their settled outcome. */
+export function runVitestCli(
+  tool: string,
+  run: (exitBySignal: typeof exitVitestBySignal) => Promise<void>,
+): Promise<void> {
+  return runWithFailedTrailer(tool, () =>
+    run(async (signal) => {
+      writeFailedTrailer(tool, signalExitCode(signal));
+      await exitVitestBySignal(signal);
+    }),
+  );
 }

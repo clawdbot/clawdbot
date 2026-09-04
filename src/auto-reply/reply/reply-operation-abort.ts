@@ -1,6 +1,7 @@
 import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
   isAgentRunSupersededAbortReason,
   resolveAgentRunErrorLifecycleFields,
@@ -64,12 +65,13 @@ export function isReplyOperationSuperseded(replyOperation?: ReplyOperation): boo
 
 export function resolveReplyOperationAbortReason(
   replyOperation?: ReplyOperation,
+  error?: unknown,
 ): "user" | "restart" | "superseded" | undefined {
-  return isReplyOperationRestartAbort(replyOperation)
+  return isAgentRunRestartAbortReason(error) || isReplyOperationRestartAbort(replyOperation)
     ? "restart"
     : isReplyOperationSuperseded(replyOperation)
       ? "superseded"
-      : isReplyOperationUserAbort(replyOperation)
+      : isAgentRunDirectAbortReason(error) || isReplyOperationUserAbort(replyOperation)
         ? "user"
         : undefined;
 }

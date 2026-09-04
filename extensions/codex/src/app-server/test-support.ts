@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -108,6 +108,38 @@ export function createCodexTestModel(provider = "openai", input = ["text"]): Mod
   } as Model;
 }
 
+export async function waitForHarnessRequest(
+  harness: ReturnType<typeof createClientHarness>,
+  method: string,
+  startIndex = 0,
+): Promise<{ id: number | string; params?: unknown }> {
+  let request: { id?: number | string; method?: string; params?: unknown } | undefined;
+  await vi.waitFor(
+    () => {
+      request = harness.writes
+        .slice(startIndex)
+        .map(
+          (write) =>
+            JSON.parse(write) as { id?: number | string; method?: string; params?: unknown },
+        )
+        .find((message) => message.method === method);
+      expect(
+        request?.id,
+        `expected ${method} after write ${startIndex}; observed ${JSON.stringify(
+          harness.writes
+            .slice(startIndex)
+            .map((write) => (JSON.parse(write) as { method: string }).method),
+        )}`,
+      ).toBeDefined();
+    },
+    { interval: 1, timeout: 5_000 },
+  );
+  if (request?.id === undefined) {
+    throw new Error(`Codex harness did not write ${method}`);
+  }
+  return { id: request.id, params: request.params };
+}
+
 /** Creates an in-memory Codex app-server client harness with writable stdout frames. */
 export function createClientHarness(
   options: {
@@ -131,6 +163,8 @@ export function createClientHarness(
     stdin: Writable;
     stdout: PassThrough;
     stderr: PassThrough;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
     killed: boolean;
     kill: (signal?: NodeJS.Signals) => unknown;
   };
@@ -159,6 +193,8 @@ export function createClientHarness(
     stdin,
     stdout,
     stderr: new PassThrough(),
+    exitCode: null,
+    signalCode: null,
     killed: false,
     kill: vi.fn((_signal?: NodeJS.Signals) => {
       process.killed = true;
@@ -167,6 +203,21 @@ export function createClientHarness(
   emitProcessExit = () => {
     process.emit("exit", 0, null);
   };
+  // Record terminal state before client observers, including direct error/signal exits.
+  // Otherwise later closeAndWait calls wait for an exit that already happened.
+  process.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    exitEmitted = true;
+    process.exitCode = code;
+    process.signalCode = signal;
+    stdin.destroy();
+    // Let exit observers run before output reaches EOF.
+    queueMicrotask(() => {
+      for (const output of [stdout, process.stderr]) {
+        output.end();
+        output.resume();
+      }
+    });
+  });
   const client = CodexAppServerClient.fromTransportForTests(process);
   return {
     client,

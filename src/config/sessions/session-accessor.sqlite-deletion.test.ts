@@ -20,6 +20,8 @@ import {
   isCompetingSessionWorkAdmissionActive,
   isSessionWorkAdmissionActive,
 } from "../../sessions/session-lifecycle-admission.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import * as personalPublicationLifecycle from "../../state/github-personal-publication-lifecycle.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
@@ -408,6 +410,32 @@ describe("session deletion and native owner state", () => {
 
     expect(read()).toBeUndefined();
     expect(bindings.has(sessionKey)).toBe(false);
+  });
+
+  it("publishes committed deletion when personal publication receipt cleanup fails", async () => {
+    await seed();
+    const owner = nativeOwner();
+    const cleanupError = new Error("injected receipt cleanup failure");
+    vi.spyOn(
+      personalPublicationLifecycle,
+      "deletePersonalGitHubSessionReceipts",
+    ).mockImplementationOnce(() => {
+      throw cleanupError;
+    });
+    const identityListener = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(identityListener);
+
+    try {
+      await expect(owner.run(() => remove())).rejects.toBe(cleanupError);
+
+      expect(read()).toBeUndefined();
+      expect(bindings.has(sessionKey)).toBe(false);
+      expect(identityListener.mock.calls).toEqual([
+        [{ kind: "delete", previous: { sessionId, sessionKeys: [sessionKey] } }],
+      ]);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it.each([false, true])(

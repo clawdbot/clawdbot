@@ -9,16 +9,6 @@ export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 export type ReasoningTagScope = "all" | "leading";
 
-function applyTrim(value: string, mode: ReasoningTagTrim): string {
-  if (mode === "none") {
-    return value;
-  }
-  if (mode === "start") {
-    return value.trimStart();
-  }
-  return value.trim();
-}
-
 /** Detects whether a stray reasoning close tag separates two visible text regions. */
 export function hasOrphanReasoningCloseBoundary(params: {
   before: string;
@@ -34,6 +24,7 @@ export function stripReasoningTagsFromText(
     mode?: ReasoningTagMode;
     trim?: ReasoningTagTrim;
     scope?: ReasoningTagScope;
+    recoverUnclosed?: boolean;
   },
 ): string {
   if (!text) {
@@ -63,5 +54,13 @@ export function stripReasoningTagsFromText(
     cleaned = visible + cleaned.slice(lastIndex);
   }
 
-  return applyTrim(stripReasoningTagsFromMarkdown(cleaned, { mode, scope }), trimMode);
+  const stripped = stripReasoningTagsFromMarkdown(cleaned, {
+    mode,
+    scope,
+    recoverUnclosed: options?.recoverUnclosed,
+  });
+  if (trimMode === "none") {
+    return stripped;
+  }
+  return trimMode === "start" ? stripped.trimStart() : stripped.trim();
 }

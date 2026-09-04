@@ -668,8 +668,28 @@ read -r release < "$OPENCLAW_TEST_FETCH_HOLD"
       "/bin/bash",
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("GitHub CLI auth is not usable");
+    expect(result.stderr).toContain("GitHub API preflight failed");
     expect(f.events().some((e) => e.kind === "main-fetch")).toBe(false);
+  });
+
+  it("stops native merge on viewer quota failure before fetch or dispatch and releases its lock", () => {
+    const f = fixture();
+    f.configure({ viewerRateLimited: true });
+    const result = f.run("merge-run");
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain("GitHub API preflight rate limited");
+    expect(f.events().some((e) => e.kind === "main-fetch")).toBe(false);
+    const ghCalls = f.events().filter((e) => e.kind === "gh");
+    expect(ghCalls.at(-1)?.args).toEqual([
+      "api",
+      "graphql",
+      "-f",
+      "query=query { viewer { login } }",
+      "--include",
+    ]);
+    expect(ghCalls.some((e) => e.args?.includes("merge"))).toBe(false);
+    expect(f.git(f.origin, "rev-parse", "refs/heads/main")).toBe(f.main);
+    expect(f.git(f.canonical, "for-each-ref", "--format=%(refname)", "refs/openclaw")).toBe("");
   });
 
   for (const bash of ["bash", ...(process.platform === "darwin" ? ["/bin/bash"] : [])]) {

@@ -10,6 +10,39 @@ describe.each([
   ["cli", "Use /openclaw to come back."],
   ["gateway", "You can return through Settings → Ask OpenClaw."],
 ] as const)("SystemAgentChatEngine %s handoff", (surface, returnHint) => {
+  it.each(["command", "tool"] as const)(
+    "hands personal accounts to the human from a %s",
+    async (source) => {
+      const runAgentTurn = vi.fn(async () => ({
+        text: "Let’s open your account controls.",
+        directive: { kind: "model-accounts" as const },
+      }));
+      const executeOperation = vi.fn();
+      const engine = new SystemAgentChatEngine({
+        surface,
+        runAgentTurn,
+        executeOperation,
+        deps: { loadOverview: fakeOverviewLoader() },
+      });
+
+      const reply = await engine.handle(
+        source === "command" ? "model accounts" : "Help me sign in to my personal account",
+      );
+
+      expect(reply.action).toBe("none");
+      expect(reply.step).toBeUndefined();
+      expect(reply.text).toContain("Nothing has changed");
+      expect(reply.text).toContain("never paste credentials");
+      expect(reply.handoff).toEqual(surface === "gateway" ? { kind: "model-accounts" } : undefined);
+      expect(reply.text).toContain("Settings → Profile → Connected accounts");
+      if (surface === "cli") {
+        expect(reply.text).toContain("openclaw models accounts login <provider>");
+      }
+      expect(runAgentTurn).toHaveBeenCalledTimes(source === "command" ? 0 : 1);
+      expect(executeOperation).not.toHaveBeenCalled();
+    },
+  );
+
   it("handles the exact agent handoff without consulting a model", async () => {
     const runAgentTurn = vi.fn(async () => ({ text: "model reply without a directive" }));
     const engine = new SystemAgentChatEngine({

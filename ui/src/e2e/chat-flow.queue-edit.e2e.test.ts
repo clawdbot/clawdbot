@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -362,11 +363,34 @@ suite.define(() => {
       await keyboardRow.locator(".chat-queue__remove").focus();
       await page.keyboard.press("Enter");
       await keyboardRow.waitFor({ state: "detached", timeout: 10_000 });
-      const programmaticRow = await queueDisposable("programmatic removal");
-      await programmaticRow
-        .locator(".chat-queue__remove")
-        .evaluate((button: HTMLElement) => button.click());
+      // Remove at the first DOM commit, before yielded delivery can resume.
+      // Programmatic activation must keep cancellation exact even at this boundary.
+      const removal = await page.evaluateHandle(() => {
+        let removed = false;
+        const observer = new MutationObserver(() => {
+          const queuedRow = [...document.querySelectorAll(".chat-queue__item")].find(
+            (item) =>
+              item.querySelector(".chat-queue__text")?.textContent === "programmatic removal",
+          );
+          const button = queuedRow?.querySelector<HTMLButtonElement>(".chat-queue__remove");
+          if (button) {
+            observer.disconnect();
+            button.click();
+            removed = true;
+          }
+        });
+        observer.observe(document, { childList: true, subtree: true });
+        return { wasRemoved: () => removed };
+      });
+      await composer.fill("programmatic removal");
+      await composer.press("Enter");
+      await expect.poll(() => removal.evaluate((proof) => proof.wasRemoved())).toBe(true);
+      await removal.dispose();
+      const programmaticRow = page.locator(".chat-queue__item", {
+        hasText: "programmatic removal",
+      });
       await programmaticRow.waitFor({ state: "detached", timeout: 10_000 });
+      await expectRequestCountStable(gateway, "chat.send", 1);
       await page.getByRole("alert").waitFor({ state: "detached", timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
@@ -431,6 +455,12 @@ suite.define(() => {
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/03-exact-drain.png`, fullPage: true });
       }
+    } catch (error) {
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: error instanceof Error ? error : new Error(String(error)),
+        label: "queue-edit-reconnect",
+      });
+      throw error;
     } finally {
       await suite.closeBrowserContext(context);
     }

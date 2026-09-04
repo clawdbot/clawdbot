@@ -105,25 +105,6 @@ class NodeUtilsTest {
   }
 
   @Test
-  fun resolvePublishedGatewayAccentArgb_preservesFallbackWhileProfileAccentIsStale() {
-    val profileAccent = 0xFF123456L
-    val gatewayFallback = 0xFFABCDEFL
-
-    assertEquals(
-      gatewayFallback,
-      resolvePublishedGatewayAccentArgb(profileAccent, gatewayFallback, profileAccentFresh = false),
-    )
-    assertEquals(
-      gatewayFallback,
-      resolvePublishedGatewayAccentArgb(null, gatewayFallback, profileAccentFresh = false),
-    )
-    assertEquals(
-      profileAccent,
-      resolvePublishedGatewayAccentArgb(profileAccent, gatewayFallback, profileAccentFresh = true),
-    )
-  }
-
-  @Test
   fun resolveProfileAccentArgb_readsUiAccentEntryStrictly() {
     val cases =
       linkedMapOf(

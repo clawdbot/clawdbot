@@ -445,6 +445,17 @@ describe("run-oxlint", () => {
     ).toThrow("OPENCLAW_OXLINT_SHARD_CONCURRENCY must be a positive integer; got: 2x");
   });
 
+  it("keeps explicitly split extension stripes serial on roomy hosts", () => {
+    expect(
+      resolveOxlintShardConcurrency({
+        env: { CI: "true", OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2" },
+        platform: "linux",
+        hostResources: ROOMY_HOST,
+        splitExtensions: true,
+      }),
+    ).toBe(1);
+  });
+
   it("uses a bounded oxlint shard heartbeat by default", () => {
     expect(resolveShardHeartbeatMs({})).toBe(30_000);
     expect(resolveShardHeartbeatMs({ OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0" })).toBe(0);

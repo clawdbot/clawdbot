@@ -13,7 +13,7 @@ import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-f
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import {
   describeFailoverError,
-  findCliMaxTurnsError,
+  findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
@@ -26,6 +26,7 @@ import {
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy,
+  renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
@@ -202,19 +203,21 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
   });
 }
 
-function formatForwardedExternalRunFailureText(message: string): string {
+function resolveExternalRunFailureDetail(message: string): string | undefined {
   const sanitized = message
     .trim()
     .replace(/^⚠️\s*/u, "")
     .replace(/\s+/gu, " ");
-  if (!sanitized) {
-    return GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
-  }
-  const detail =
-    sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
-      : sanitized;
-  return `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`;
+  return sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
+    ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+    : sanitized || undefined;
+}
+
+function formatForwardedExternalRunFailureText(message: string): string {
+  const detail = resolveExternalRunFailureDetail(message);
+  return detail
+    ? `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`
+    : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
 }
 
 export function buildExternalRunFailureReply(
@@ -230,16 +233,16 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
-  // Preflight detail is diagnostic, not provider copy or an assurance that it is
-  // safe to disclose. Verbose opt-in and the shared detail cap still apply.
+  // A preflight refusal is host-authored and names the next step. Heartbeats run
+  // unattended in the owner's session, so they disclose it without the verbose
+  // opt-in; raw thrown detail further below stays verbose-gated.
   if (isAgentHarnessPreflightError(error)) {
+    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
       text: options?.isHeartbeat
-        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+        ? renderHeartbeatRunFailureCopy(resolveExternalRunFailureDetail(sanitizedMessage))
         : options?.includeDetails
-          ? formatForwardedExternalRunFailureText(
-              sanitizeUserFacingText(normalizedMessage, { errorContext: true }),
-            )
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
           : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
       isGenericRunnerFailure: !options?.isHeartbeat,
     };
@@ -292,10 +295,10 @@ export function buildExternalRunFailureReply(
       isGenericRunnerFailure: false,
     };
   }
-  const cliMaxTurnsError = findCliMaxTurnsError(error);
-  if (cliMaxTurnsError) {
+  const cliTerminalStopError = findCliTerminalStopError(error);
+  if (cliTerminalStopError) {
     return {
-      text: renderUserFacingText(cliMaxTurnsError.message, { errorContext: true }),
+      text: renderUserFacingText(cliTerminalStopError.message, { errorContext: true }),
       isGenericRunnerFailure: false,
     };
   }
@@ -326,7 +329,12 @@ export function buildExternalRunFailureReply(
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
-    return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
+    const detail = options.includeDetails
+      ? resolveExternalRunFailureDetail(
+          sanitizeUserFacingText(normalizedMessage, { errorContext: true }),
+        )
+      : undefined;
+    return { text: renderHeartbeatRunFailureCopy(detail), isGenericRunnerFailure: false };
   }
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {

@@ -50,7 +50,8 @@ vi.mock("../infra/clawhub-artifacts.js", async () => {
   };
 });
 
-vi.mock("../version.js", () => ({
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
   resolveCompatibilityHostVersion: (...args: unknown[]) =>
     resolveCompatibilityHostVersionMock(...args),
 }));
@@ -484,6 +485,49 @@ describe("installPluginFromClawHub", () => {
       expect.stringContaining("ClawHub   https://clawhub.ai/plugins/demo"),
     );
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not publish a ClawHub plugin after authority closes during artifact review", async () => {
+    const archive = await mockClawHubFallbackArchive({
+      entries: {
+        "package.json": JSON.stringify({
+          name: "demo",
+          version: "2026.3.22",
+          openclaw: { extensions: ["./index.js"] },
+        }),
+        "openclaw.plugin.json": JSON.stringify({
+          id: "demo",
+          configSchema: { type: "object" },
+        }),
+        "index.js": "export default { register() {} };\n",
+      },
+    });
+    const extensionsDir = path.join(path.dirname(archive.archivePath), "extensions");
+    const { installPluginFromArchive } = await import("./install-package.js");
+    installPluginFromArchiveMock.mockImplementationOnce(installPluginFromArchive);
+    let authorityActive = true;
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      extensionsDir,
+      onBeforePluginArtifactCommit: async () => {
+        authorityActive = false;
+      },
+      beforePersistentApply: () => {
+        if (!authorityActive) {
+          throw new Error("plugin installation authority closed");
+        }
+      },
+    });
+
+    expect(authorityActive).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("plugin installation authority closed"),
+    });
+    await expect(fs.stat(path.join(extensionsDir, "demo"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 

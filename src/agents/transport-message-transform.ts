@@ -79,6 +79,7 @@ export function transformTransportMessages(
     ? "aborted"
     : "No result provided";
   const toolCallIdMap = new Map<string, string>();
+  let hasCrossModelAsyncCalls = false;
   const transformed = messages.map((msg) => {
     if (msg.role === "user") {
       return msg;
@@ -145,6 +146,11 @@ export function transformTransportMessages(
         continue;
       }
       let normalizedToolCall = block;
+      if (!isSameModel && block.async) {
+        hasCrossModelAsyncCalls = true;
+        normalizedToolCall = { ...normalizedToolCall };
+        delete normalizedToolCall.async;
+      }
       if (
         !isSameModel &&
         block.thoughtSignature &&
@@ -170,17 +176,18 @@ export function transformTransportMessages(
   // Pairing-aware transports must let shared repair see errored tool-call frames and
   // their adjacent results together; pre-filtering the call can misattribute its result
   // to an older turn that reused the same provider id.
+  const requiresPairing = allowSyntheticToolResults || hasCrossModelAsyncCalls;
   const replayable = transformed.filter((_, index) => {
     const original = messages[index];
     if (!original) {
       return true;
     }
-    return allowSyntheticToolResults
+    return requiresPairing
       ? !isFailedAssistantTurn(original) || failedAssistantHasToolCalls(original)
       : !isFailedAssistantTurn(original);
   });
 
-  if (!allowSyntheticToolResults) {
+  if (!requiresPairing) {
     return replayable;
   }
 

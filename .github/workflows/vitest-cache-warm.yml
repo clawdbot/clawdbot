@@ -167,6 +167,9 @@ jobs:
           # Only the publisher prunes restored entries before saving a new seed.
           OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "1"
           OPENCLAW_NODE_COMPILE_CACHE_WRITER: "1"
+          # Keep compiled imports and per-file cleanup in the normal runner;
+          # ordinary CI owns test-body validation.
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--testNamePattern=(?!)"]'
         run: node --import tsx scripts/ci-run-node-test-shard.mts
 
       # Let pnpm prune its owned store and record the remaining size; this does

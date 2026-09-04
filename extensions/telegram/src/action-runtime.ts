@@ -403,12 +403,25 @@ async function describeTelegramAllowedReactionSample(params: {
       token: params.token,
       accountId: params.accountId,
     })
-    .catch(() => null);
-  const emojis = reactions
-    ?.filter((reaction) => reaction.type === "emoji")
+    .catch(() => undefined);
+  if (reactions === undefined) {
+    return "";
+  }
+  const allowed =
+    reactions ??
+    TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST.map((emoji) => ({ type: "emoji" as const, emoji }));
+  // Preserve portable alternatives when Telegram returns custom reactions first.
+  const emojis = allowed
+    .filter((reaction) => reaction.type === "emoji")
     .slice(0, TELEGRAM_REACTION_HINT_LIMIT)
     .map((reaction) => reaction.emoji);
-  return emojis?.length ? ` This chat allows: ${emojis.join(" ")}.` : "";
+  const customIds = allowed
+    .filter((reaction) => reaction.type === "custom_emoji")
+    .slice(0, TELEGRAM_REACTION_HINT_LIMIT - emojis.length)
+    .map((reaction) => reaction.custom_emoji_id);
+  const customSample = customIds.length ? `numeric custom IDs ${customIds.join(", ")}` : "";
+  const sample = [emojis.join(" "), customSample].filter(Boolean).join("; ");
+  return sample ? ` This chat allows: ${sample}.` : "";
 }
 
 export async function handleTelegramAction(

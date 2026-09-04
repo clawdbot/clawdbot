@@ -187,6 +187,9 @@ async function readProcessOutput(args: string[], deadline: number): Promise<stri
       Math.max(1, remainingMs),
     );
     timer.unref?.();
+  }).catch((error: unknown) => {
+    // Spawn denial can throw before the inspector or its callback exists.
+    throw inspectionFailure(error);
   });
 }
 

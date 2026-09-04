@@ -89,7 +89,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   });
 
   it("keeps inline nested approval inside the original admitted run beyond the Code Mode budget", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const runId = "run-code-mode-inline-approval";
     const sessionId = "session-inline-approval";
     const sessionKey = "agent:main:inline-approval";

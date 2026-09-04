@@ -217,6 +217,70 @@ describe("ensureOnboardingPluginInstalled", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each(["npm", "clawhub", "npm-pack"] as const)(
+    "reports only installer activity while %s is pending",
+    async (source) => {
+      vi.useFakeTimers();
+      const started = createDeferredCore();
+      const release = createDeferredCore();
+      const update = vi.fn();
+      const stop = vi.fn();
+      const install = async (params: ClawHubInstallCall) => {
+        params.logger?.info?.("Downloading demo-plugin\u001b[31m from registry…");
+        started.resolve();
+        await release.promise;
+        return { ok: false, error: "registry unavailable" };
+      };
+      if (source === "npm-pack") {
+        vi.stubEnv("OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES", "1");
+        vi.stubEnv(
+          "OPENCLAW_PLUGIN_INSTALL_OVERRIDES",
+          JSON.stringify({
+            "demo-plugin": "npm-pack:/tmp/demo-plugin.tgz",
+          }),
+        );
+        installPluginFromNpmPackArchive.mockImplementationOnce(install);
+      } else if (source === "clawhub") {
+        installPluginFromClawHub.mockImplementationOnce(install);
+      } else {
+        installPluginFromNpmSpec.mockImplementationOnce(install);
+      }
+      const pending = ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "demo-plugin",
+          label: "Demo Plugin",
+          install:
+            source === "clawhub"
+              ? { clawhubSpec: "clawhub:demo-plugin@1.0.0" }
+              : { npmSpec: "@demo/plugin@1.0.0" },
+          preferRemoteInstall: true,
+        },
+        prompter: {
+          progress: () => ({ update, stop }),
+          note: vi.fn(async () => {}),
+        } as never,
+        runtime: { log: vi.fn(), error: vi.fn() } as never,
+        promptInstall: false,
+      });
+      try {
+        await started.promise;
+        const updates = [...update.mock.calls];
+        await vi.advanceTimersByTimeAsync(12_000);
+        expect(update.mock.calls).toEqual(updates);
+        expect(update).toHaveBeenLastCalledWith("Downloading demo-plugin from registry…");
+        expect(stop).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await pending;
+        vi.useRealTimers();
+      }
+      expect(stop).toHaveBeenCalledWith("Install failed: Demo Plugin");
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(recordPluginInstall).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     ...(["npm", "clawhub", "npm-pack", "local"] as const).flatMap((source) =>
       [false, true].map((accepted) => ({ source, accepted, promptError: undefined })),
@@ -914,7 +978,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(clawHubCall.expectedPluginId).toBe("demo-plugin");
     expect(clawHubCall.mode).toBe("install");
     expect(clawHubCall.timeoutMs).toBe(300_000);
-    expect(update).toHaveBeenCalledWith("Downloading");
+    expect(update).toHaveBeenCalledWith("Downloading demo-plugin from ClawHub…");
     expect(stop).toHaveBeenCalledWith("Installed Demo Provider plugin");
     const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
       OpenClawConfig,
@@ -1009,7 +1073,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(npmCall.expectedIntegrity).toBe("sha512-wecom");
     expect(npmCall.trustedSourceLinkedOfficialInstall).toBe(true);
     expect(npmCall.timeoutMs).toBe(300_000);
-    expect(update).toHaveBeenCalledWith("Downloading");
+    expect(update).toHaveBeenCalledWith("Downloading demo-plugin…");
     expect(stop).toHaveBeenCalledWith("Installed WeCom plugin");
     expect(buildNpmResolutionInstallFields).toHaveBeenCalledWith(npmResolution);
     const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
@@ -1188,7 +1252,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     },
   );
 
-  it("logs npm install warnings once while shortening the progress label", async () => {
+  it("preserves npm install warnings in progress and logs them once", async () => {
     const warning =
       "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.";
     installPluginFromNpmSpec.mockImplementation(async (params) => {
@@ -1220,8 +1284,8 @@ describe("ensureOnboardingPluginInstalled", () => {
       runtime: { log } as never,
     });
 
-    expect(update).toHaveBeenCalledWith("Retrying");
-    expect(update).not.toHaveBeenCalledWith(warning);
+    expect(update).toHaveBeenCalledWith(warning);
+    expect(log).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenCalledWith(`${warning}\n`);
     expect(stop).toHaveBeenCalledWith("Installed Codex plugin");
     expect(result.status).toBe("installed");

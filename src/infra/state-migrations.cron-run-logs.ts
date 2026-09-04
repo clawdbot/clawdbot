@@ -6,7 +6,7 @@ import {
   cronRunStatusToTaskStatus,
   parseCronRunLogEntryObject,
 } from "../cron/task-run-detail.js";
-import { normalizeSqliteNumber } from "./sqlite-number.js";
+import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "./sqlite-number.js";
 
 type CronRunLogEntry = import("../cron/run-log-types.js").CronRunLogEntry;
 type CronDeliveryStatus = import("../cron/types.js").CronDeliveryStatus;
@@ -104,7 +104,9 @@ function hasMirroredIdentity(
 }
 
 function integerToBoolean(value: number | bigint | null | undefined): boolean | undefined {
-  return value === null || value === undefined ? undefined : Number(value) !== 0;
+  return value === null || value === undefined
+    ? undefined
+    : coerceRequiredSqliteNumber(value) !== 0;
 }
 
 /** Legacy rows trust write-time errorReason and diagnostic redaction without recomputation. */

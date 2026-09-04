@@ -6,6 +6,7 @@ export {
   resolveProcessExitCode,
   runCommandBuffered,
   runCommandWithTimeout,
+  runUtf8CommandWithTimeout,
   runExec,
   shouldSpawnWithShell,
   type SpawnResult,
@@ -13,7 +14,7 @@ export {
 export { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 export type { OomScoreAdjustedSpawn, OomWrapOptions } from "../process/linux-oom-score.js";
 export { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-export { killProcessTree } from "../process/kill-tree.js";
+export { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 export {
   getFileLockProcessStartTime,
   isPidAlive,

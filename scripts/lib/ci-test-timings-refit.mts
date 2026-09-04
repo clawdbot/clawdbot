@@ -36,12 +36,14 @@ function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
   let hasParallelFiles = false;
   for (const line of text.split("\n")) {
     const file =
-      /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s+)?✓\s+(?:(\|ui-e2e(?:-(?:bundled|serial))?\||ui-e2e(?:-(?:bundled|serial))?)\s+)?(\S+\.test\.ts)\s+\((\d+) tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
+      /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s+)?✓\s+(?:(\|ui-e2e(?:-(?:bundled|standalone|serial(?:-standalone)?))?\||ui-e2e(?:-(?:bundled|standalone|serial(?:-standalone)?))?)\s+)?(\S+\.test\.ts)\s+\((\d+) tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
         line,
       );
     if (file) {
       files.set(file[2]!, seconds(file[4]!, file[5]!));
-      hasParallelFiles ||= file[1]?.includes("ui-e2e-bundled") === true;
+      hasParallelFiles ||=
+        file[1]?.includes("ui-e2e-bundled") === true ||
+        file[1]?.includes("ui-e2e-standalone") === true;
     }
     const summary = /\bDuration\s+([\d.]+)(m?s)\s+\([^)]*\btests\s+([\d.]+)(m?s)/u.exec(line);
     if (summary && files.size > 0) {

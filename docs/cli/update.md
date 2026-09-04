@@ -200,6 +200,18 @@ preserves the existing payload and does not publish a new install record.
 Registry verification and any required capability review finish before the
 repaired install record is published.
 
+When a bundled plugin moves to an external package, failed relocation reports
+that the replacement payload was not installed and preserves the underlying error.
+Resolve that error before retrying with `openclaw update repair`.
+Doctor and update repair reinstall configured payloads with missing package files
+or a reported missing runtime entry;
+an empty directory is not a successful installation. Rollback removes empty
+managed npm projects after staged files are cleaned up. Doctor preserves external
+companion packages and their install records even when a source checkout also
+contains a bundled-discovery copy of the same plugin. Repair diagnostics must identify the recorded
+package root; a broken same-ID source copy does not trigger replacement of a
+healthy managed package.
+
 With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.
@@ -388,11 +400,20 @@ Shell installers do not establish the same service ownership proof. If their
 service refresh is denied, they report code installation success, leave the
 service untouched, and print guidance to inspect ownership and restart manually.
 
+On Linux without a service manager, updates proceed when native inspection proves
+the service is absent and the selected Gateway has no active lock or listener.
+The command reports that there is no Gateway to restart. Existing service files,
+manager runtime state, or failed filesystem inspection still require service access.
+
 If service inspection is unavailable, a restart-enabled code update refuses to
 mutate the checkout or package tree; it does not assume that no service exists.
 Run `openclaw gateway status --deep` and retry when access is restored. Use
 `--no-restart` only after manually stopping the Gateway, then restart it
 manually after the update. Services owned by another install remain untouched.
+
+The published 2026.8.2 CLI also refuses updates on service-less Linux installs.
+Use `openclaw update --no-restart` for that upgrade after confirming that no Gateway
+is running; the new CLI cannot fix the old CLI's pre-update inspection.
 
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current
@@ -547,8 +568,16 @@ that skip lifecycle scripts also stop before activation. On npm 12 and newer,
 the updater approves only the candidate OpenClaw lifecycle; transitive
 dependency scripts remain blocked. OpenClaw then swaps the clean package tree
 into the real global prefix. If verification fails, post-update doctor, plugin
-sync, and restart work do not run from the suspect tree. Even when the
-installed version already matches the target, the command refreshes the
+sync, and restart work do not run from the suspect tree.
+
+Staging uses a unique `.openclaw.update-stage-*` directory inside the target
+global `node_modules`, separate from disposable npm rename leftovers. Each
+attempt tries to remove only its own staging prefix; leftover cleanup does not
+reclaim these stages. If an interrupted update leaves one behind, confirm that
+no updater is still using it before removing that exact directory. This separation
+does not make simultaneous package swaps safe.
+
+Even when the installed version already matches the target, the command refreshes the
 global package install, then runs plugin sync, a core-command completion
 refresh, and restart work. This keeps packaged sidecars and channel-owned
 plugin records aligned with the installed OpenClaw build, while leaving full

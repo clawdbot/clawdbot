@@ -12,8 +12,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerTranscriptCacheTest {
   private val gatewayScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
 
@@ -146,30 +149,37 @@ class ChatControllerTranscriptCacheTest {
     )
 
   @Test
-  fun offlineColdOpenShowsCachedTranscriptAndSessionsAndKeepsSendBlocked() =
+  fun offlineColdOpenShowsCachedTranscriptAndSessionsAndQueuesSend() =
     runTest {
-      val cache = FakeTranscriptCache()
-      cache.transcripts[TranscriptKey("gateway-a", "main", "main")] =
-        listOf(cachedMessage("cached hello"), cachedMessage("cached reply"))
-      cache.sessions = listOf(ChatSessionEntry(key = "main", updatedAtMs = 5, displayName = "Main"))
-      val controller =
-        createCachedController(cache) { _, _ -> throw IllegalStateException("offline") }
+      for (mainSessionKey in listOf("main", "agent:main:node-offline")) {
+        val cache = FakeTranscriptCache()
+        cache.transcripts[TranscriptKey("gateway-a", "main", mainSessionKey)] =
+          listOf(cachedMessage("cached hello"), cachedMessage("cached reply"))
+        cache.sessions = listOf(ChatSessionEntry(key = mainSessionKey, updatedAtMs = 5, displayName = "Main"))
+        val controller =
+          createCachedController(cache) { _, _ -> throw IllegalStateException("offline") }
 
-      controller.load("main")
-      advanceUntilIdle()
+        controller.loadCurrent(mainSessionKey)
+        advanceUntilIdle()
 
-      assertEquals(
-        listOf("cached hello", "cached reply"),
-        controller.messages.value.map { it.content.single().text },
-      )
-      assertTrue(controller.messagesFromCache.value)
-      assertEquals(listOf("main"), controller.sessions.value.map { it.key })
-      assertFalse(controller.healthOk.value)
+        assertEquals(mainSessionKey, controller.sessionKey.value)
+        assertEquals(
+          listOf("cached hello", "cached reply"),
+          controller.messages.value.map { it.content.single().text },
+        )
+        assertTrue(controller.messagesFromCache.value)
+        assertEquals(listOf(mainSessionKey), controller.sessions.value.map { it.key })
+        assertFalse(controller.healthOk.value)
 
-      val accepted =
-        controller.sendMessageAwaitAcceptance(message = "hi", thinkingLevel = "off", attachments = emptyList())
-      assertFalse(accepted)
-      assertEquals("Gateway health not OK; cannot send", controller.errorText.value)
+        val accepted =
+          controller.sendMessageAwaitAcceptance(message = "hi", thinkingLevel = "off", attachments = emptyList())
+        assertTrue(accepted)
+        runCurrent()
+        val queued = controller.outboxItems.value.single()
+        assertEquals(ChatOutboxStatus.Queued, queued.status)
+        assertEquals("hi", queued.text)
+        assertEquals(listOf("cached hello", "cached reply"), controller.messages.value.map { it.content.single().text })
+      }
     }
 
   @Test
@@ -293,19 +303,31 @@ class ChatControllerTranscriptCacheTest {
     runTest {
       val cache = FakeTranscriptCache()
       cache.transcripts[TranscriptKey("gateway-a", "main", "main")] = listOf(cachedMessage("cached history"))
+      var historyAvailable = true
       val controller =
         createCachedController(cache) { method, _ ->
           when (method) {
-            "chat.send" -> """{"runId":"run-pending"}"""
-            "health" -> "{}"
-            else -> throw IllegalStateException("offline")
+            "chat.send" -> {
+              """{"runId":"run-pending","status":"started"}"""
+            }
+
+            "chat.history" -> {
+              if (!historyAvailable) throw IllegalStateException("offline")
+              historyResponse("session-main", listOf(ReplayHistoryMessage("assistant", "cached history", 1L)))
+            }
+
+            else -> {
+              emptyChatGatewayResponse(method)
+            }
           }
         }
 
       controller.load("main")
       runCurrent()
-      controller.handleGatewayEvent("health", null)
       assertTrue(controller.sendMessageAwaitAcceptance("pending turn", "off", emptyList()))
+      runCurrent()
+      assertEquals(1, controller.pendingRunCount.value)
+      historyAvailable = false
 
       controller.switchSession("agent:other:main")
       runCurrent()
@@ -346,7 +368,7 @@ class ChatControllerTranscriptCacheTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -423,7 +445,7 @@ class ChatControllerTranscriptCacheTest {
         createCachedController(
           cache,
           onSessionDeleted = deletions::add,
-        ) { _, _ -> "{}" }
+        ) { method, _ -> emptyChatGatewayResponse(method) }
 
       controller.handleGatewayEvent(
         "sessions.changed",
@@ -485,7 +507,7 @@ class ChatControllerTranscriptCacheTest {
               }
 
               else -> {
-                "{}"
+                emptyChatGatewayResponse(method)
               }
             }
           }
@@ -540,7 +562,7 @@ class ChatControllerTranscriptCacheTest {
               """{"sessions":[{"key":"global","sessionId":"$sessionId"}]}"""
             }
           } else {
-            "{}"
+            emptyChatGatewayResponse(method)
           }
         }
       controller.load("global", ownerAgentId = "owner-a")
@@ -622,7 +644,7 @@ class ChatControllerTranscriptCacheTest {
             sessionListRequests += 1
             """{"sessions":[{"key":"custom","label":"Original"}]}"""
           } else {
-            "{}"
+            emptyChatGatewayResponse(method)
           }
         }
       controller.refreshSessions()
@@ -714,7 +736,7 @@ class ChatControllerTranscriptCacheTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -760,7 +782,7 @@ class ChatControllerTranscriptCacheTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -811,7 +833,7 @@ class ChatControllerTranscriptCacheTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -977,7 +999,7 @@ class ChatControllerTranscriptCacheTest {
               }
 
               else -> {
-                "{}"
+                emptyChatGatewayResponse(method)
               }
             }
           }
@@ -1013,7 +1035,7 @@ class ChatControllerTranscriptCacheTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -1039,7 +1061,7 @@ class ChatControllerTranscriptCacheTest {
             historyGate.await()
             """{"sessionId":"old","messages":[{"role":"assistant","content":"old gateway"}]}"""
           } else {
-            "{}"
+            emptyChatGatewayResponse(method)
           }
         }
 
@@ -1071,7 +1093,7 @@ class ChatControllerTranscriptCacheTest {
             sessionsGate.await()
             """{"sessions":[{"key":"old-gateway-session"}]}"""
           } else {
-            "{}"
+            emptyChatGatewayResponse(method)
           }
         }
 
@@ -1191,7 +1213,7 @@ class ChatControllerTranscriptCacheTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -1246,7 +1268,7 @@ class ChatControllerTranscriptCacheTest {
           cache,
           currentDefaultAgentId = { defaultAgentId },
           currentDefaultAgentRevision = { defaultAgentRevision },
-        ) { _, _ -> "{}" }
+        ) { method, _ -> emptyChatGatewayResponse(method) }
 
       controller.onDefaultAgentChanged("agent-a")
       runCurrent()
@@ -1274,7 +1296,7 @@ class ChatControllerTranscriptCacheTest {
         }
       }
       val controller =
-        createCachedController(cache) { _, _ -> "{}" }
+        createCachedController(cache) { method, _ -> emptyChatGatewayResponse(method) }
 
       controller.onDefaultAgentChanged("agent-a")
       runCurrent()
@@ -1309,7 +1331,7 @@ class ChatControllerTranscriptCacheTest {
           cache,
           currentDefaultAgentId = { defaultAgentId },
           currentDefaultAgentRevision = { defaultAgentRevision },
-        ) { _, _ -> "{}" }
+        ) { method, _ -> emptyChatGatewayResponse(method) }
 
       controller.load("custom")
       runCurrent()

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TSDOWN_NON_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
@@ -133,6 +134,13 @@ describe("write-unified-entry-dts", () => {
     }
     write("dist/obsolete.d.ts", "obsolete root declaration");
     write("dist/extensions/removed/api.d.ts", "obsolete plugin declaration");
+    write("dist/extensions/anthropic/api.d.ts", "obsolete plugin API declaration");
+    write(
+      "dist/extensions/anthropic/agent-sdk-generated/old.d.ts",
+      "obsolete generated declaration",
+    );
+    const sdkAssetRoot = "dist/extensions/anthropic/agent-sdk";
+    write(`${sdkAssetRoot}/obsolete.d.ts`, "removed upstream SDK declaration");
     write(
       "consumer.ts",
       [
@@ -187,6 +195,29 @@ describe("write-unified-entry-dts", () => {
     }
     expect(fs.existsSync(path.join(root, "dist/obsolete.d.ts"))).toBe(false);
     expect(fs.existsSync(path.join(root, "dist/extensions/removed/api.d.ts"))).toBe(false);
+    expect(fs.existsSync(path.join(root, "dist/extensions/anthropic/api.d.ts"))).toBe(false);
+    expect(
+      fs.existsSync(path.join(root, "dist/extensions/anthropic/agent-sdk-generated/old.d.ts")),
+    ).toBe(false);
+    const sdkSource = path.dirname(
+      createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"),
+    );
+    const sourceManifest = JSON.parse(
+      fs.readFileSync(path.join(sdkSource, "package.json"), "utf8"),
+    );
+    const sdkFiles: string[] = [...sourceManifest.files, "LICENSE.md", "README.md"];
+    expect(fs.readdirSync(path.join(root, sdkAssetRoot)).toSorted()).toEqual(
+      [...sdkFiles, "package.json"].toSorted(),
+    );
+    for (const file of sdkFiles) {
+      expect(fs.readFileSync(path.join(root, sdkAssetRoot, file))).toEqual(
+        fs.readFileSync(path.join(sdkSource, file)),
+      );
+    }
+    const { optionalDependencies: _nativeCli, ...packagedManifest } = sourceManifest;
+    expect(
+      JSON.parse(fs.readFileSync(path.join(root, sdkAssetRoot, "package.json"), "utf8")),
+    ).toEqual(packagedManifest);
     for (const [file, bytes] of Object.entries(preserved)) {
       expect(fs.readFileSync(path.join(root, file), "utf8")).toBe(bytes);
     }
@@ -205,7 +236,12 @@ describe("write-unified-entry-dts", () => {
     expect(
       records
         .flatMap((record) => Object.keys(record.outputs))
-        .some((file) => file.includes(".app/") || file.includes("control-ui/")),
+        .some(
+          (file) =>
+            file.includes(".app/") ||
+            file.includes("control-ui/") ||
+            file.startsWith(`${sdkAssetRoot}/`),
+        ),
     ).toBe(false);
     const cached = treeHashes(cache);
     const before = treeHashes(path.join(root, "dist"));
@@ -220,6 +256,7 @@ describe("write-unified-entry-dts", () => {
     for (const [file, bytes] of Object.entries(preserved)) {
       write(file, bytes);
     }
+    write(`${sdkAssetRoot}/obsolete.d.ts`, "removed upstream SDK declaration");
     const repeated = runUnifiedBuild(root);
     expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
     expect(
@@ -273,6 +310,11 @@ describe("write-unified-entry-dts", () => {
     const env = { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "fixture-a" };
     const initial = runUnifiedWriter(root, env);
     expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+    for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      expect(initial.stderr).toContain(
+        `[tsdown-unified] ${group}: cache miss (record-unavailable)`,
+      );
+    }
     expect(
       (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/6 finished/gu),
     ).toHaveLength(6);
@@ -281,6 +323,9 @@ describe("write-unified-entry-dts", () => {
     const before = treeHashes(path.join(root, "dist"));
     const repeated = runUnifiedWriter(root, env);
     expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
+    for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      expect(repeated.stderr).toContain(`[tsdown-unified] ${group}: cache hit (fresh-cache)`);
+    }
     expect(repeated.stdout + repeated.stderr).not.toContain("[tsdown-build] invocation");
     expect(treeHashes(path.join(root, "dist"))).toEqual(before);
     expectStagingClean(root);

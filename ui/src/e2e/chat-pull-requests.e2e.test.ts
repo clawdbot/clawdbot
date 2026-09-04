@@ -352,7 +352,7 @@ describeControlUiE2e("session pull request chips", () => {
     await expect.poll(() => row.locator(".chat-pr__deletions").textContent()).toBe("−205");
     // While rate limited "no PR found" is unreliable, so the warning shows.
     await expect.poll(() => row.locator(".chat-pr__warning").count()).toBe(1);
-    const create = row.locator(".chat-pr__create");
+    const create = row.getByRole("button", { name: "Publish PR" });
     await expect.poll(() => create.textContent()).toContain("Publish PR");
     await expect.poll(() => create.getAttribute("href")).toBeNull();
     // No dismiss control: the row reflects the checkout itself.
@@ -805,9 +805,11 @@ describeControlUiE2e("session pull request chips", () => {
     await expect
       .poll(() => page.getByRole("button", { name: "Publish PR" }).isEnabled())
       .toBe(true);
+    await page.getByRole("button", { name: "Publication account" }).click();
     await expect
-      .poll(() => page.locator(".chat-pr__publication-outcome").textContent())
+      .poll(() => page.locator("wa-popover").textContent())
       .toContain("My GitHub requires an idle, reconciled local workspace");
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Publish PR" }).click();
     const request = await gateway.waitForRequest("sessions.github.publish");
     expect(request.params).toMatchObject({

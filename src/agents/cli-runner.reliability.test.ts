@@ -56,7 +56,7 @@ import { createTestAdmittedRunContext } from "./admitted-run-context.test-suppor
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   restoreCliRunnerTestDeps,
-  runPreparedCliAgent,
+  runPreparedCliAgent as runPreparedCliAgentCore,
   setCliRunnerTestDeps,
 } from "./cli-runner.js";
 import {
@@ -66,7 +66,8 @@ import {
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { runCliRecovery } from "./cli-runner/cli-run-recovery.js";
-import { executePreparedCliRun } from "./cli-runner/execute.js";
+import { executePreparedCliRun as executePreparedCliRunCore } from "./cli-runner/execute.js";
+import { wrapPreparedCliRunWithTestAdmission } from "./cli-runner/execute.test-support.js";
 import {
   resolveCliNoOutputTimeoutMs,
   resolveCliRunTimeoutOverrideMs,
@@ -75,12 +76,15 @@ import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+const runPreparedCliAgent = wrapPreparedCliRunWithTestAdmission(runPreparedCliAgentCore);
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunCore);
 
 // Gateway unit coverage owns quiet-admission timing. These reliability cases only
 // need to drain calls already in flight, so skip the repeated 250 ms quiet window.
@@ -2498,6 +2502,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("returns accepted CLI session spawns when sessions_yield pauses the requester", async () => {
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
     const requesterTurnRunId = "run-cli-yield";
     const childRunId = "run-cli-child";
     const childSessionKey = "agent:main:subagent:cli-child";
@@ -2537,24 +2542,44 @@ describe("runCliAgent reliability", () => {
       runId: requesterTurnRunId,
     });
     context.mcpDeliveryCapture = true;
-
-    const result = await runPreparedCliAgent(context);
-
-    expect(result).toMatchObject({
-      acceptedSessionSpawns: [
-        { runId: childRunId, childSessionKey, expectsCompletionMessage: true },
-      ],
-      meta: {
-        yielded: true,
-        livenessState: "paused",
-        stopReason: "end_turn",
-        completion: {
-          finishReason: "end_turn",
-          stopReason: "end_turn",
-          refusal: false,
-        },
-      },
+    Object.assign(context.params, {
+      sessionFile,
+      sessionTarget,
+      storePath,
+      workspaceDir: dir,
+      persistAssistantTranscript: true,
     });
+
+    try {
+      const result = await runPreparedCliAgent(context);
+
+      expect(result).toMatchObject({
+        acceptedSessionSpawns: [
+          { runId: childRunId, childSessionKey, expectsCompletionMessage: true },
+        ],
+        meta: {
+          yielded: true,
+          livenessState: "paused",
+          stopReason: "end_turn",
+          completion: {
+            finishReason: "end_turn",
+            stopReason: "end_turn",
+            refusal: false,
+          },
+        },
+      });
+      const messages = await readTranscriptMessages(sessionTarget);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "yield acknowledged" }],
+          idempotencyKey: `cli-assistant:${requesterTurnRunId}`,
+        }),
+      ]);
+      expect(isIntermediateAssistantTranscriptMessage(messages[0])).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it.each([

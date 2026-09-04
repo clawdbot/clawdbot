@@ -663,93 +663,6 @@ async function installLocalOnboardingPlugin(params: {
   }
 }
 
-type AnimatedProgress = {
-  setLabel: (label: string) => void;
-  stop: () => void;
-};
-
-const PROGRESS_BAR_WIDTH = 16;
-const PROGRESS_BAR_TICK_MS = 200;
-const PROGRESS_BAR_DURATION_MS = 10_000;
-const PROGRESS_BAR_MAX_PERCENT = 99;
-
-/** Shortens known install steps while preserving unfamiliar output verbatim. */
-function shortenInstallLabel(message: string): string {
-  const trimmed = message.trim();
-  const patterns: Array<[RegExp, string]> = [
-    [/^Downloading\b/i, "Downloading"],
-    [/^Extracting\b/i, "Extracting"],
-    [/^Installing\s+to\b/i, "Installing"],
-    [/^Installing\b/i, "Installing"],
-    [/^Resolving\b/i, "Resolving"],
-    [/^Cloning\b/i, "Cloning"],
-    [/^Verifying\b/i, "Verifying"],
-    [/^Preparing\b/i, "Preparing"],
-    [/^Linking\b/i, "Linking"],
-    [/^Linked\b/i, "Linking"],
-    [/^npm rejected managed npm alias overrides\b/i, "Retrying"],
-    [/^Compatibility\b/i, "Resolving"],
-    [/^ClawHub\b/i, "Resolving"],
-  ];
-  for (const [pattern, label] of patterns) {
-    if (pattern.test(trimmed)) {
-      return label;
-    }
-  }
-  return trimmed;
-}
-
-/** Adds a steadily growing, 99%-capped bar between coarse installer updates. */
-function createAnimatedInstallProgress(
-  progress: { update: (message: string) => void },
-  options: { totalMs?: number } = {},
-): AnimatedProgress {
-  const totalMs = options.totalMs ?? PROGRESS_BAR_DURATION_MS;
-  let currentLabel = "";
-  const startedAt = Date.now();
-
-  const computePercent = (): number => {
-    const elapsed = Date.now() - startedAt;
-    const raw = Math.floor((elapsed / totalMs) * 100);
-    return Math.max(0, Math.min(PROGRESS_BAR_MAX_PERCENT, raw));
-  };
-
-  const renderBar = (): string => {
-    const percent = computePercent();
-    const filled = Math.round((percent / 100) * PROGRESS_BAR_WIDTH);
-    const bar = "█".repeat(filled) + "░".repeat(Math.max(0, PROGRESS_BAR_WIDTH - filled));
-    return `[${bar}] ${percent}%`;
-  };
-
-  const decorate = (label: string): string => {
-    if (!label) {
-      return renderBar();
-    }
-    return `${label}  ${renderBar()}`;
-  };
-
-  const timer = setInterval(() => {
-    if (currentLabel) {
-      progress.update(decorate(currentLabel));
-    }
-  }, PROGRESS_BAR_TICK_MS);
-  // Decorative progress must never keep the process alive.
-  if (typeof timer.unref === "function") {
-    timer.unref();
-  }
-
-  return {
-    setLabel: (label: string) => {
-      currentLabel = label;
-      // Emit the bare label before decorated animation frames.
-      progress.update(label);
-    },
-    stop: () => {
-      clearInterval(timer);
-    },
-  };
-}
-
 function logInstallWarningWithSpacing(runtime: RuntimeEnv, message: string): void {
   const sanitized = sanitizeTerminalText(message).trim();
   if (!sanitized) {
@@ -827,14 +740,13 @@ async function runOnboardingPluginInstallWithProgress(params: {
   });
   const safeLabel = sanitizeTerminalText(params.entry.label);
   const progress = params.prompter.progress(formatPluginInstallProgress(safeLabel));
-  const animated = createAnimatedInstallProgress(progress);
-  animated.setLabel(t("wizard.plugins.preparingInstall"));
+  progress.update(t("wizard.plugins.preparingInstall"));
   const updateProgress = (message: string) => {
     const sanitized = sanitizeTerminalText(message).trim();
     if (!sanitized) {
       return;
     }
-    animated.setLabel(shortenInstallLabel(sanitized));
+    progress.update(sanitized);
   };
 
   try {
@@ -877,8 +789,6 @@ async function runOnboardingPluginInstallWithProgress(params: {
         error: error instanceof Error ? error.message : String(error),
       },
     };
-  } finally {
-    animated.stop();
   }
 }
 
@@ -1064,14 +974,13 @@ async function installPluginFromClawHubSpecWithProgress(params: {
   });
   const safeLabel = sanitizeTerminalText(params.entry.label);
   const progress = params.prompter.progress(formatPluginInstallProgress(safeLabel));
-  const animated = createAnimatedInstallProgress(progress);
-  animated.setLabel(t("wizard.plugins.preparingInstall"));
+  progress.update(t("wizard.plugins.preparingInstall"));
   const updateProgress = (message: string) => {
     const sanitized = sanitizeTerminalText(message).trim();
     if (!sanitized) {
       return;
     }
-    animated.setLabel(shortenInstallLabel(sanitized));
+    progress.update(sanitized);
   };
   let renderedTrustWarning = false;
   const renderTrustWarning = (message: string) => {
@@ -1105,7 +1014,6 @@ async function installPluginFromClawHubSpecWithProgress(params: {
         },
       },
     });
-    animated.stop();
     const failureWarning = readInstallFailureWarning(result);
     if (failureWarning && !renderedTrustWarning) {
       progress.stop("Review ClawHub warning");
@@ -1119,7 +1027,6 @@ async function installPluginFromClawHubSpecWithProgress(params: {
     consent.rethrowCallbackError();
     return { result, capabilityConsent };
   } catch (error) {
-    animated.stop();
     progress.stop(formatPluginInstallFailed(safeLabel));
     consent.rethrowCallbackError();
     // The separate ClawHub risk prompt also owns wizard navigation.

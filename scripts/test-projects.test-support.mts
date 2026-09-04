@@ -60,6 +60,7 @@ import {
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
+import { narrowIncludePatternsForCli } from "../test/vitest/vitest.pattern-file.ts";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
@@ -87,6 +88,8 @@ import {
 import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
+  isUnitConfigTestFile,
+  unitTestIncludePatterns,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedLanes,
@@ -106,23 +109,25 @@ import {
   splitTestTargetChunks as splitTargetChunks,
 } from "./lib/gateway-server-test-plan.mts";
 import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
+// CI imports planning before dependency installation; execution owners stay outside this closure.
+import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
+import { resolveBooleanModeFlag, vitestOptionConsumesNextArg } from "./lib/vitest-cli-mode.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
 import {
+  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
+  resolveDefaultVitestNoOutputTimeoutMs,
+  resolveVitestNodeArgs,
+} from "./lib/vitest-process-env.mts";
+import {
   estimateVitestTestFileSeconds,
   estimateVitestToolingFileSeconds,
   resolveShardTimingKey,
   type VitestShardTimingSpec,
 } from "./lib/vitest-shard-metadata.mts";
-import {
-  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
-  resolveDefaultVitestNoOutputTimeoutMs,
-  resolveVitestCliEntry,
-  resolveVitestNodeArgs,
-} from "./run-vitest.mts";
 
 type VitestRunPlan = {
   config: string;
@@ -162,13 +167,12 @@ type VitestSpecShape = Pick<VitestRunSpec, "config" | "env">;
 type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode">;
 type ImportGraph = {
   reverseImports: Map<string, string[]>;
-  reverseReexports: Map<string, string[]>;
   testFiles: Set<string>;
 };
 type ImportGraphEdges = {
   file: string;
+  specifiers: string[];
   imports: Set<string>;
-  reexports: Set<string>;
   references: Set<string>;
 };
 type UnmatchedExplicitTestTarget = {
@@ -210,7 +214,7 @@ const CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG =
   "test/vitest/vitest.contracts-channel-session.config.ts";
 const CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG =
   "test/vitest/vitest.contracts-channel-surface.config.ts";
-const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.config.ts";
+export const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.config.ts";
 const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
@@ -702,6 +706,13 @@ const MERMAID_RENDERER_TEST_TARGETS = [
 ];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  [
+    "extensions/browser/src/browser/chrome-mcp-options.ts",
+    [
+      "extensions/browser/src/browser/chrome-mcp.test.ts",
+      "test/scripts/ci-chrome-mcp-prewarm.test.ts",
+    ],
+  ],
   [
     "scripts/prepare-apple-mermaid.mjs",
     [
@@ -1628,7 +1639,7 @@ function readImportGraphEdges(
     .filter(({ parseImports }) => parseImports || terms.length > 0);
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
   return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES).map(
-    ({ file, imports, reexports, matches, references }) => {
+    ({ file, imports, matches, references }) => {
       const resolve = (specifiers: string[]) =>
         new Set(
           specifiers
@@ -1637,8 +1648,8 @@ function readImportGraphEdges(
         );
       const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
         file,
+        specifiers: imports,
         imports: resolve(imports),
-        reexports: resolve(reexports),
         references: new Set<string>(),
       };
       for (const reference of references) {
@@ -1653,10 +1664,12 @@ function readImportGraphEdges(
 function listImportGraphGrepMatches(
   cwd: string,
   terms: string[],
-  options: ImportGraphOptions = {},
+  options: ImportGraphOptions & { testFilesOnly?: boolean } = {},
 ) {
   const tooling = options.tooling === true;
-  const cacheKey = (term: string) => `${cwd}\0${tooling}\0${term}`;
+  const testFilesOnly = options.testFilesOnly === true;
+  // Narrow reference matches must not satisfy a later full import-frontier query.
+  const cacheKey = (term: string) => `${cwd}\0${tooling}\0${testFilesOnly}\0${term}`;
   const matches = new Map(
     terms.map((term) => [term, cachedImportGraphGrepMatches.get(cacheKey(term)) ?? null]),
   );
@@ -1668,60 +1681,40 @@ function listImportGraphGrepMatches(
   }
   const roots = tooling ? TOOLING_IMPORT_GRAPH_ROOTS : SOURCE_ROOTS_FOR_IMPORT_GRAPH;
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
+  // Literal-reference routing only consumes tests; keep import frontiers on the full scope.
+  const suffixes = testFilesOnly
+    ? extensions.flatMap((ext) => [`.test${ext}`, `.spec${ext}`])
+    : extensions;
+  const grepPaths = roots.flatMap((root) =>
+    suffixes.map((suffix) => `:(glob)${root}/**/*${suffix}`),
+  );
   const spawnOptions: SpawnSyncOptionsWithStringEncoding = {
     cwd,
     encoding: "utf8",
-    // A frontier can exceed the platform argv limit; both search tools accept stdin patterns.
+    // A frontier can exceed the platform argv limit; Git accepts stdin patterns.
     input: missing.join("\n"),
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["pipe", "pipe", "pipe"],
   };
-  let result = spawnSync(
-    "rg",
-    [
-      "--files-with-matches",
-      "--fixed-strings",
-      "--hidden",
-      "--no-ignore",
-      ...extensions.flatMap((ext) => ["--glob", `*${ext}`]),
-      "--glob",
-      "!**/node_modules/**",
-      "--glob",
-      "!**/dist/**",
-      "--glob",
-      "!**/vendor/**",
-      "-f",
-      "-",
-      "--",
-      ...roots,
-    ],
+  const result = spawnSync(
+    "git",
+    ["grep", "-l", "--fixed-strings", "-f", "-", "--", ...grepPaths],
     spawnOptions,
   );
-  if (result.error || (result.status !== 0 && result.status !== 1)) {
-    result = spawnSync(
-      "git",
-      [
-        "grep",
-        "-l",
-        "--fixed-strings",
-        "-f",
-        "-",
-        "--",
-        ...(tooling ? TOOLING_IMPORT_GRAPH_GREP_PATHS : IMPORT_GRAPH_GREP_PATHS),
-      ],
-      spawnOptions,
-    );
-  }
   for (const term of missing) {
-    matches.set(term, result.status === 0 || result.status === 1 ? [] : null);
+    matches.set(term, []);
   }
-  if (result.status === 0) {
+  if (result.status !== 1) {
     const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
-    const candidates = result.stdout
-      .split("\n")
-      .map((line) => normalizePathPattern(line.trim()))
-      .filter((file) => trackedFiles.has(file))
-      .toSorted((left, right) => left.localeCompare(right));
+    // Source archives use the same filesystem inventory and native reader as the full graph.
+    const candidates = (
+      result.status === 0
+        ? result.stdout
+            .split("\n")
+            .map((line) => normalizePathPattern(line.trim()))
+            .filter((file) => trackedFiles.has(file))
+        : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
+    ).toSorted((left, right) => left.localeCompare(right));
     // Per-term membership protects the broad cap and helper first-success rule.
     // Cached edges need only term facts; full-graph acquisition reuses their parsing.
     for (const { edges, matches: fileTerms } of readImportGraphEdges(
@@ -1832,7 +1825,6 @@ function getImportGraph(cwd: string) {
   const files = listImportGraphFilesForCwd(cwd);
   const fileSet = new Set(files);
   const reverseImports = new Map<string, string[]>();
-  const reverseReexports = new Map<string, string[]>();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
@@ -1843,53 +1835,64 @@ function getImportGraph(cwd: string) {
     if (!edges) {
       continue;
     }
-    for (const [imports, reverse] of [
-      [edges.imports, reverseImports],
-      [edges.reexports, reverseReexports],
-    ] as const) {
-      for (const imported of imports) {
-        const importers = reverse.get(imported) ?? [];
-        importers.push(file);
-        reverse.set(imported, importers);
-      }
+    for (const imported of edges.imports) {
+      const importers = reverseImports.get(imported) ?? [];
+      importers.push(file);
+      reverseImports.set(imported, importers);
     }
   }
 
-  cachedImportGraph = { reverseImports, reverseReexports, testFiles };
+  cachedImportGraph = { reverseImports, testFiles };
   cachedImportGraphCwd = cwd;
   return cachedImportGraph;
 }
 
-/** Returns whether any changed path reaches one of the requested import-graph targets. */
+/** Query relative imports/re-exports from targets without scanning unrelated source bodies. */
 export function hasImportGraphImpactOnTargets(
   changedPaths: string[],
-  targetPaths: string[],
+  targetPaths: string[] | ((file: string) => boolean),
   cwd = process.cwd(),
+  options: ImportGraphOptions = {},
 ) {
-  const targets = new Set(targetPaths.map(normalizePathPattern));
-  if (targets.size === 0) {
+  const changed = new Set(changedPaths.map(normalizePathPattern));
+  if (changed.size === 0) {
     return false;
   }
-
-  const { reverseImports, reverseReexports } = getImportGraph(cwd);
-  for (const changedPath of changedPaths) {
-    const queue = [normalizePathPattern(changedPath)];
-    const seen = new Set(queue);
-    for (const current of queue) {
-      if (targets.has(current)) {
-        return true;
-      }
-      const importers = [
-        ...(reverseImports.get(current) ?? []),
-        ...(reverseReexports.get(current) ?? []),
-      ];
-      for (const importer of importers) {
-        if (!seen.has(importer)) {
-          seen.add(importer);
-          queue.push(importer);
+  const files = listImportGraphFilesForCwd(cwd, options);
+  const targets = Array.isArray(targetPaths)
+    ? targetPaths.map(normalizePathPattern)
+    : files.filter(targetPaths);
+  if (targets.some((file) => changed.has(file))) {
+    return true;
+  }
+  // Staged deletions have left the index, but surviving importers still own their edges.
+  const fileSet = new Set([...files, ...changed]);
+  const extensions = options.tooling
+    ? TOOLING_IMPORTABLE_FILE_EXTENSIONS
+    : IMPORTABLE_FILE_EXTENSIONS;
+  const seen = new Set(targets);
+  let frontier = targets;
+  while (frontier.length > 0) {
+    readImportGraphEdges(cwd, frontier, fileSet, options.tooling);
+    const next: string[] = [];
+    for (const file of frontier) {
+      const edges = cachedImportGraphEdges.get(`${cwd}\0${options.tooling === true}\0${file}`);
+      // Resolve raw cached facts against this query's deleted-path identities too.
+      for (const specifier of edges?.specifiers ?? []) {
+        const dependency = resolveImportSpecifier(file, specifier, fileSet, extensions);
+        if (!dependency) {
+          continue;
+        }
+        if (changed.has(dependency)) {
+          return true;
+        }
+        if (!seen.has(dependency)) {
+          seen.add(dependency);
+          next.push(dependency);
         }
       }
     }
+    frontier = next;
   }
   return false;
 }
@@ -2280,6 +2283,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],
   ["scripts/openclaw-npm-prepublish-verify.ts", ["test/openclaw-npm-prepublish-verify.test.ts"]],
   ["scripts/lib/docker-e2e-scenarios.mts", [dockerE2e, pluginPrerelease]],
+  ["scripts/lib/upgrade-survivor-policy.mjs", [dockerE2e]],
   ["scripts/e2e/kitchen-sink-rpc-walk.mts", ["kitchen-sink-rpc-walk", pluginPrerelease]],
   [
     "scripts/e2e/agents-delete-shared-workspace-docker.sh",
@@ -2312,13 +2316,27 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       packageAcceptance,
       "upgrade-survivor-probe-gateway",
       "upgrade-survivor-assertions",
+      "upgrade-survivor-mobile-pairing",
       "upgrade-survivor-recovery-cleanup",
       "openclaw-test-state",
     ],
   ],
   [
     "scripts/e2e/lib/upgrade-survivor/run.sh",
-    ["upgrade-survivor-assertions", "upgrade-survivor-recovery-cleanup"],
+    [
+      "upgrade-survivor-assertions",
+      "upgrade-survivor-mobile-pairing",
+      "upgrade-survivor-recovery-cleanup",
+      "upgrade-survivor-watchos-direct-node",
+    ],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs",
+    ["upgrade-survivor-watchos-direct-node"],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts",
+    ["upgrade-survivor-mobile-pairing"],
   ],
   [
     "scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs",
@@ -2824,6 +2842,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^test\/vitest\/vitest\.contracts-paths\.mjs$/u,
     [
       "test-projects",
+      "test/vitest-projects-config.test.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
       "test/vitest/vitest.contracts-channel-config.config.ts",
       "test/vitest/vitest.contracts-channel-registry.config.ts",
@@ -3100,7 +3119,11 @@ function resolveGithubYamlGuardTargets(changedPath: string) {
 
 function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
   const normalized = normalizePathPattern(changedPath);
-  return (listImportGraphGrepMatches(cwd, [normalized], { tooling: true }).get(normalized) ?? [])
+  return (
+    listImportGraphGrepMatches(cwd, [normalized], { tooling: true, testFilesOnly: true }).get(
+      normalized,
+    ) ?? []
+  )
     .filter(
       ({ file, references }) =>
         file !== "test/scripts/test-projects.test.ts" &&
@@ -3113,7 +3136,7 @@ function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
 
 function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
   if (
-    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-(?:checkout-auth|windows-process-census)\.py))$/u.test(
+    /^test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout|windows-process-census)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-checkout-auth\.py|ci-windows-process-census\.(?:mjs|py)))$/u.test(
       changedPath,
     )
   ) {
@@ -3760,7 +3783,8 @@ function shouldUseWholeConfigTarget(kind: string, targetArg: string, cwd: string
     return false;
   }
   const relative = toRepoRelativeTarget(targetArg, cwd);
-  if (isTestFileTarget(relative)) {
+  // Source files need whole-project coverage; existing directories already define a test scope.
+  if (isTestFileTarget(relative) || isExistingDirectoryTarget(targetArg, cwd)) {
     return false;
   }
   return relative.startsWith("ui/src/");
@@ -3792,36 +3816,42 @@ export function createVitestPreflightPnpmArgs(config: string) {
 }
 
 export function parseTestProjectsArgs(args: string[], cwd = process.cwd()) {
-  const forwardedArgs = [];
-  const targetArgs = [];
+  const forwardedArgs: string[] = [];
+  const nonTargetArgs: string[] = [];
+  const targetArgs: string[] = [];
   let watchMode = false;
   let passthrough = false;
 
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
     if (arg === "--") {
-      if (targetArgs.length > 0) {
-        passthrough = true;
-      }
+      // The project wrapper consumes separators; direct native and batch calls retain theirs.
+      passthrough = targetArgs.length > 0;
       continue;
     }
-    if (passthrough) {
-      if (arg === "--watch") {
-        watchMode = true;
-      }
-      forwardedArgs.push(arg);
-      continue;
+    const watch = resolveBooleanModeFlag(args, index, "watch", "-w");
+    if (watch) {
+      watchMode = watch.value;
     }
-    if (arg === "--watch") {
-      watchMode = true;
+    // Preserve bare wrapper --watch's existing omission of the named run command.
+    const next = args[index + 1];
+    if (!passthrough && arg === "--watch" && next !== "true" && next !== "false") {
       continue;
-    }
-    if (isPathLikeTargetArg(arg, cwd)) {
-      targetArgs.push(arg);
     }
     forwardedArgs.push(arg);
+    if (vitestOptionConsumesNextArg(arg, next)) {
+      forwardedArgs.push(next!);
+      // Preserve operand occurrences even when their value also names a target.
+      nonTargetArgs.push(arg, next!);
+      index++;
+    } else if (!passthrough && isPathLikeTargetArg(arg, cwd)) {
+      targetArgs.push(arg);
+    } else {
+      nonTargetArgs.push(arg);
+    }
   }
 
-  return { forwardedArgs, targetArgs, watchMode };
+  return { forwardedArgs, nonTargetArgs, targetArgs, watchMode };
 }
 
 export function buildVitestRunPlans(
@@ -3830,7 +3860,12 @@ export function buildVitestRunPlans(
   listChangedPaths: (baseRef: string, cwd: string) => string[] = listChangedPathsFromGit,
   options: ChangedTestTargetOptions = {},
 ) {
-  const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
+  const {
+    forwardedArgs,
+    nonTargetArgs: remainingArgs,
+    targetArgs,
+    watchMode,
+  } = parseTestProjectsArgs(args, cwd);
   const changedTargetArgs =
     targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
@@ -3865,7 +3900,7 @@ export function buildVitestRunPlans(
     ];
   }
 
-  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
+  const nonTargetArgs = changedTargetArgs !== null ? activeForwardedArgs : remainingArgs;
   const explicitConfigTargets = activeTargetArgs.map((targetArg) =>
     toRepoRelativeTarget(targetArg, cwd),
   );
@@ -4029,8 +4064,34 @@ export function buildVitestRunPlans(
     const useWholeConfigTarget = grouped.some((targetArg) =>
       shouldUseWholeConfigTarget(kind, targetArg, cwd),
     );
+    const scopedTargetArgs = useCliTargetArgs ? uniqueOrdered(grouped) : [];
+    const forwardedPlanArgs = [...nonTargetArgs, ...scopedTargetArgs];
+    const unitCliIncludes =
+      kind === "default" &&
+      useCliTargetArgs &&
+      !watchMode &&
+      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim()
+        ? narrowIncludePatternsForCli(unitTestIncludePatterns, [
+            "node",
+            "vitest",
+            ...forwardedPlanArgs,
+          ])
+        : null;
+    // CI needs explicit selection metadata. Keep the CLI filters too: the unit
+    // config and runner use them for exclude and empty-selection policy.
+    const scopedUnitIncludes =
+      unitCliIncludes?.length &&
+      grouped.every((targetArg) =>
+        unitCliIncludes.includes(toRepoRelativeTarget(targetArg, cwd)),
+      ) &&
+      unitCliIncludes.every(
+        (file) =>
+          !isGlobTarget(file) && isUnitConfigTestFile(file) && isExistingFileTarget(file, cwd),
+      )
+        ? unitCliIncludes
+        : null;
     const includePatterns = useCliTargetArgs
-      ? null
+      ? scopedUnitIncludes
       : useWholeConfigTarget
         ? null
         : uniqueOrdered(
@@ -4039,8 +4100,6 @@ export function buildVitestRunPlans(
               return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
             }),
           );
-    const scopedTargetArgs = useCliTargetArgs ? uniqueOrdered(grouped) : [];
-    const forwardedPlanArgs = [...nonTargetArgs, ...scopedTargetArgs];
     const broadToolingScriptPlans = createBroadToolingScriptPlans({
       config,
       cwd,

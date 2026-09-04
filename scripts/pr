@@ -242,6 +242,21 @@ is_supervised_pr_process() {
     [ "${OPENCLAW_PR_LOCK_SUPERVISOR_PID:-}" = "$PPID" ]
 }
 
+# The supervisor changes cwd to the canonical repo. Resolve an explicit body
+# relative to the operator's caller before crossing that boundary; do not read it.
+if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ]; then
+  merge_cli_args=() merge_cli_body_next=false
+  for merge_cli_arg in "$@"; do
+    if [ "$merge_cli_body_next" = true ] && [ -n "$merge_cli_arg" ]; then
+      merge_cli_arg=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$merge_cli_arg") || exit 1
+    fi
+    merge_cli_args+=("$merge_cli_arg")
+    merge_cli_body_next=false
+    [ "$merge_cli_arg" != --body-file ] || merge_cli_body_next=true
+  done
+  set -- "${merge_cli_args[@]}"
+fi
+
 if [ "${1-}" = "gc" ] || is_locked_pr_command "${1-}"; then
   if is_supervised_pr_process; then
     # operation-lock.sh consumes the one-shot marker when it installs the
@@ -282,12 +297,14 @@ Usage:
   scripts/pr prepare-run <PR>
   scripts/pr ci-dispatch <PR> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]
   scripts/pr merge-verify <PR>
-  scripts/pr merge-run <PR> [--auto-merge]
+  scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
     --auto-merge selects pinned immediate squash for MERGEABLE/CLEAN, auto for MERGEABLE/BEHIND.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
+    --body-file snapshots a regular UTF-8 file relative to the caller, replacing squash prose.
+    Empty files are valid. Existing source/server co-authors are always retained; queue merges reject it.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
     Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
@@ -381,17 +398,41 @@ main() {
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       ;;
-    merge-run)
-      [ "$#" -ge 1 ] && [ "$#" -le 2 ] || { usage; exit 2; }
-      if [ "$#" -eq 2 ] && [ "$2" != "--auto-merge" ]; then
-        usage
-        exit 2
+    merge-run | merge-recover)
+      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path=""
+      [ -n "$merge_pr" ] || { usage; exit 2; }
+      shift
+      if [ "$cmd" = merge-recover ]; then
+        [ "$#" -ge 2 ] && is_canonical_pr_number "$merge_pr" &&
+          [[ "$1" =~ ^[0-9a-f]{40}$ ]] && [ "$2" = --confirmed-operator-recovery ] || { usage; exit 2; }
+        recovery_oid="$1"
+        shift 2
       fi
-      ;;
-    merge-recover)
-      { [ "$#" -eq 3 ] || { [ "$#" -eq 5 ] && [ "$4" = "--replacement-head" ] && [[ "$5" =~ ^[0-9a-f]{40}$ ]]; }; } &&
-        is_canonical_pr_number "$1" && [[ "$2" =~ ^[0-9a-f]{40}$ ]] &&
-        [ "$3" = "--confirmed-operator-recovery" ] || { usage; exit 2; }
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --auto-merge)
+            [ "$cmd" = merge-run ] && [ "$auto_merge" = false ] || { usage; exit 2; }
+            auto_merge=true
+            shift
+            ;;
+          --body-file)
+            [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$body_path" ] || { usage; exit 2; }
+            body_path="$2"
+            shift 2
+            ;;
+          --replacement-head)
+            [ "$cmd" = merge-recover ] && [ "$#" -ge 2 ] &&
+              [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ -z "$replacement_head" ] || { usage; exit 2; }
+            replacement_head="$2"
+            shift 2
+            ;;
+          *) usage; exit 2 ;;
+        esac
+      done
+      if [ "$cmd" = merge-run ] && [ "${OPENCLAW_PR_AUTO_MERGE:-}" = 1 ]; then
+        auto_merge=true
+      fi
+      set -- "$merge_pr"
       ;;
     review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
@@ -514,17 +555,8 @@ main() {
       [ -n "$pr" ] || { usage; exit 2; }
       merge_verify "$pr"
       ;;
-    merge-run)
-      local pr="${1-}"
-      [ -n "$pr" ] || { usage; exit 2; }
-      local auto_merge=false
-      if [ "${2-}" = "--auto-merge" ] || [ "${OPENCLAW_PR_AUTO_MERGE:-}" = "1" ]; then
-        auto_merge=true
-      fi
-      merge_run "$pr" "$auto_merge"
-      ;;
-    merge-recover)
-      merge_run "$1" false "$2" "${5:-}"
+    merge-run | merge-recover)
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path"
       ;;
     *)
       usage

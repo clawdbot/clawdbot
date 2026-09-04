@@ -19,7 +19,6 @@ type NativeFixtureThread = {
   thread: Record<string, unknown>;
   loaded: boolean;
   subscribed: boolean;
-  items: unknown[];
 };
 
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
@@ -42,10 +41,8 @@ export function createCodexLifecycleHarness(options: {
       thread: response.thread,
       loaded,
       subscribed,
-      items: [],
     };
     threads.set(response.thread.id, entry);
-    return entry;
   };
   for (const threadId of options.persistedThreads ?? []) {
     remember(nativeThreadStartResult(threadId), false, false);
@@ -122,15 +119,13 @@ export function createCodexLifecycleHarness(options: {
         current.subscribed = true;
         return current.response;
       }
-      const resumed = remember(response, true, true);
-      resumed.items = current.items;
+      remember(response, true, true);
       return response;
     }
     if (request.method === "thread/inject_items") {
       if (!current?.loaded || !current.subscribed) {
         throw new Error(`Synthetic injection requires a loaded subscription: ${threadId}`);
       }
-      current.items.push(...(Array.isArray(params.items) ? params.items : []));
       return {};
     }
     return await options.respond(request.method, request.params);
@@ -265,7 +260,6 @@ export function createCodexLifecycleTurnHarness(
     waitForMethod,
     notify,
     handleServerRequest,
-    waitForServerRequestHandler: async () => handleServerRequest,
     completeTurn: async ({ threadId, turnId }: { threadId: string; turnId: string }) => {
       await notify({
         method: "turn/completed",
@@ -418,7 +412,6 @@ export function createAppServerOptions(): CodexAppServerRuntimeOptions {
     codeModeOnly: false,
     loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
-    turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",

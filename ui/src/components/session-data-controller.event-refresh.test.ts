@@ -351,6 +351,9 @@ describe("filtered sidebar session event refresh", () => {
   it("ignores a retired filter's delayed failure after the replacement scope binds", async () => {
     const { controller, list, selectStatusFilter } = createFilteredSessionController("archived");
     controller.hostConnected();
+    // Retire an issued request, not a refresh still queued behind startup.
+    await controller.refreshSidebarSessions();
+    list.mockClear();
     let rejectList!: (error: Error) => void;
     const delayedList = new Promise<Awaited<ReturnType<typeof list>>>((_, reject) => {
       rejectList = reject;
@@ -358,6 +361,7 @@ describe("filtered sidebar session event refresh", () => {
     list.mockImplementationOnce(async () => await delayedList);
 
     const retiredRefresh = controller.refreshSidebarSessions();
+    expect(list).toHaveBeenCalledOnce();
     selectStatusFilter("all");
     rejectList(new Error("Retired archived request failed"));
     await retiredRefresh;

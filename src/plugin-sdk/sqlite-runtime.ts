@@ -1,6 +1,7 @@
 // Narrow SQLite schema, path, and transaction helpers for first-party runtime.
 
 export {
+  borrowOpenClawAgentDatabase,
   ensureOpenClawAgentDatabaseSchema,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,

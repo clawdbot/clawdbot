@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.SessionObserverDigest
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -64,11 +65,13 @@ internal enum class ChatFullMessageUnavailable {
   TooLarge,
 }
 
+@Serializable
 data class ChatMessageProvenance(
   val kind: String,
   val sourceTool: String? = null,
 )
 
+@Serializable
 data class ChatTranscriptMarker(
   val kind: String,
   val id: String? = null,

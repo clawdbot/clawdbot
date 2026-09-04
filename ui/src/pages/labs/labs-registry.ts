@@ -99,7 +99,9 @@ export const LAB_FEATURES = [
     onValue: true,
     offValue: false,
     activeValues: [true],
-    readEnabled: null,
+    // Mirrors resolveSwarmConfig: only an explicit false opts out; limits-only
+    // objects inherit the enabled default without owning the gate.
+    readEnabled: (raw) => raw !== false && (!isRecord(raw) || raw.enabled !== false),
     enableAlso: null,
     resetScope: "gate",
     restartHint: null,

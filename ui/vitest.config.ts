@@ -15,6 +15,7 @@ import { loadVitestExperimentalConfig } from "../test/vitest/vitest.performance-
 import {
   jsdomOptimizedDeps,
   nonIsolatedRunnerPath,
+  preserveIndependentVitestProject,
   resolveDefaultVitestPool,
   sharedVitestConfig,
 } from "../test/vitest/vitest.shared.config.ts";
@@ -108,6 +109,8 @@ function includeUiTests(patterns: string[], env = process.env): string[] {
 
 const sharedUiTestConfig = {
   ...loadVitestExperimentalConfig(process.env, process.platform, here),
+  // Preserve calls recorded during shared setup and beforeAll hooks.
+  clearMocks: false,
   isolate: false,
   pool: resolveDefaultVitestPool(),
   // Real-Chromium layout tests exceed Vitest's 5s default on 4vcpu CI runners;
@@ -158,6 +161,20 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   return defineProject({
     root: here,
     plugins: [controlUiLocaleModulesPlugin()],
+    optimizeDeps: {
+      include: [
+        "@openclaw/uirouter",
+        "dompurify",
+        "highlight.js/lib/core",
+        "highlight.js/lib/languages/{bash,cpp,css,diff,java,javascript,json,markdown,python,rust,typescript,xml,yaml}",
+        "lit/async-directive.js",
+        "lit/directive.js",
+        "lit/directives/unsafe-html.js",
+        "markdown-it",
+        "markdown-it-task-lists",
+        "remend",
+      ],
+    },
     resolve: {
       alias: workspaceSourceAliases,
     },
@@ -189,6 +206,7 @@ export default defineConfig({
     ...sharedUiTestConfig,
     maxWorkers: sharedVitestConfig.test.maxWorkers,
     reporters: sharedVitestConfig.test.reporters,
+    // These projects already own their complete plugins, aliases, and test config.
     projects: [
       defineProject({
         plugins: [controlUiLocaleModulesPlugin()],
@@ -251,6 +269,6 @@ export default defineConfig({
         },
       }),
       createUiBrowserVitestConfig(),
-    ],
+    ].map(preserveIndependentVitestProject),
   },
 });

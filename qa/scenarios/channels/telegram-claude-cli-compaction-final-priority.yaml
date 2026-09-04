@@ -1,0 +1,205 @@
+title: Telegram Claude CLI compaction final priority
+
+scenario:
+  id: telegram-claude-cli-compaction-final-priority
+  surface: channels
+  coverage:
+    primary:
+      - channels.streaming-final-reply
+    secondary:
+      - anthropic.claude-cli-compatibility
+  objective: Verify source-shaped Claude CLI compaction and commentary events stay in one Telegram progress draft and settle before one final reply.
+  successCriteria:
+    - The real Anthropic CLI parser projects a compaction start and completion from source-shaped stream-json records.
+    - Telegram Test Server records commentary and compaction notices on one editable progress message.
+    - The unique final marker is delivered exactly once, after all progress edits.
+  docsRefs:
+    - docs/concepts/compaction.md
+    - docs/concepts/streaming.md
+  codeRefs:
+    - extensions/anthropic/cli-output.ts
+    - src/agents/cli-output-events.ts
+    - src/auto-reply/reply/agent-runner-cli-dispatch.ts
+    - extensions/telegram/src/bot-message-dispatch-delivery.ts
+  execution:
+    kind: flow
+    channel: telegram
+    providerMode: live-frontier
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Replaces the ephemeral gateway model route with a source-shaped Claude CLI fixture and enables session verbose mode.
+    transportPolicy:
+      directMessageOnly: true
+    summary: Run source-shaped Claude compaction and commentary records through the real parser and Telegram Test Server, then prove one bounded progress draft precedes one final.
+    config:
+      modelRef: anthropic/claude-haiku-4-5
+      modelId: claude-haiku-4-5
+      conversationId: telegram-claude-cli-compaction
+      senderId: qa-claude-cli-operator
+      commentaryOne: CLAUDE-COMMENTARY-ONE
+      commentaryTwo: CLAUDE-COMMENTARY-TWO
+      finalMarker: CLAUDE-COMPACTION-TELEGRAM-FINAL-OK
+      fixtureSource: |-
+        #!/usr/bin/env node
+        if (process.argv.includes("auth") && process.argv.includes("status")) {
+          process.stdout.write(`${JSON.stringify({ loggedIn: true, authMethod: "fixture" })}\n`);
+          process.exit(0);
+        }
+        if (process.argv.includes("--version")) {
+          process.stdout.write("2.1.252\n");
+          process.exit(0);
+        }
+        const sessionIndex = process.argv.indexOf("--session-id");
+        const sessionId = sessionIndex >= 0 ? process.argv[sessionIndex + 1] : "00000000-0000-4000-8000-000000000001";
+        const frames = [
+          { type: "init", session_id: sessionId },
+          { type: "assistant", message: { id: "msg-commentary-1", content: [{ type: "text", text: "CLAUDE-COMMENTARY-ONE" }], stop_reason: null } },
+          { type: "assistant", message: { id: "msg-commentary-1", content: [{ type: "text", text: "CLAUDE-COMMENTARY-ONE" }, { type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "fixture-one.txt" } }], stop_reason: null } },
+          { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-1", content: "fixture one", is_error: false }] } },
+          { type: "system", subtype: "status", status: "compacting" },
+          { type: "system", subtype: "status", status: null, compact_result: "success" },
+          { type: "assistant", message: { id: "msg-commentary-2", content: [{ type: "text", text: "CLAUDE-COMMENTARY-TWO" }], stop_reason: null } },
+          { type: "assistant", message: { id: "msg-commentary-2", content: [{ type: "text", text: "CLAUDE-COMMENTARY-TWO" }, { type: "tool_use", id: "tool-2", name: "Read", input: { file_path: "fixture-two.txt" } }], stop_reason: null } },
+          { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-2", content: "fixture two", is_error: false }] } },
+          { type: "assistant", message: { id: "msg-final", content: [{ type: "text", text: "CLAUDE-COMPACTION-TELEGRAM-FINAL-OK" }], stop_reason: "end_turn" } },
+          { type: "result", subtype: "success", session_id: sessionId, result: "CLAUDE-COMPACTION-TELEGRAM-FINAL-OK", is_error: false }
+        ];
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        (async () => {
+          for (const frame of frames) {
+            process.stdout.write(`${JSON.stringify(frame)}\n`);
+            await sleep(frame.type === "system" && frame.status === "compacting" ? 1500 : 250);
+          }
+        })().catch((error) => {
+          process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+          process.exitCode = 1;
+        });
+
+flow:
+  steps:
+    - name: keeps Claude compaction progress ahead of one Telegram final
+      actions:
+        - assert:
+            expr: env.providerMode === "live-frontier" && transport.id === "telegram"
+            message: this proof requires the live Telegram Test Server adapter
+        - set: fixtureDir
+          value:
+            expr: path.join(env.gateway.tempRoot, "claude-cli-fixture")
+        - set: fixturePath
+          value:
+            expr: path.join(fixtureDir, "claude")
+        - call: fs.mkdir
+          args: [{ ref: fixtureDir }, { recursive: true }]
+        - call: fs.writeFile
+          args: [{ ref: fixturePath }, { ref: config.fixtureSource }, utf8]
+        - call: fs.chmod
+          args: [{ ref: fixturePath }, 493]
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: |-
+                  (async () => {
+                    const cfg = JSON.parse(await fs.readFile(ctx.configPath, "utf8"));
+                    ctx.runtimeEnv.PATH = `${fixtureDir}${path.delimiter}${ctx.runtimeEnv.PATH ?? ""}`;
+                    cfg.plugins = cfg.plugins ?? {};
+                    cfg.plugins.allow = [...new Set([...(cfg.plugins.allow ?? []), "anthropic"])];
+                    cfg.plugins.entries = cfg.plugins.entries ?? {};
+                    cfg.plugins.entries.anthropic = { enabled: true };
+                    cfg.models = cfg.models ?? { mode: "merge", providers: {} };
+                    cfg.models.mode = "merge";
+                    cfg.models.providers = cfg.models.providers ?? {};
+                    cfg.models.providers.anthropic = {
+                      models: [{ id: config.modelId, name: "Claude CLI fixture" }],
+                    };
+                    cfg.agents.defaults.model = { primary: config.modelRef };
+                    cfg.agents.defaults.models = {
+                      [config.modelRef]: { agentRuntime: { id: "claude-cli" } },
+                    };
+                    cfg.agents.defaults.modelPolicy = { allow: [config.modelRef] };
+                    cfg.agents.defaults.compaction = {
+                      ...(cfg.agents.defaults.compaction ?? {}),
+                      notifyUser: true,
+                    };
+                    cfg.agents.entries.qa.model = { primary: config.modelRef };
+                    const telegram = cfg.channels.telegram.accounts?.[transport.accountId] ?? cfg.channels.telegram;
+                    telegram.streaming = {
+                      mode: "progress",
+                      progress: { commentary: true },
+                    };
+                    await fs.writeFile(ctx.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+                  })()
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: commandStartIndex
+          value:
+            expr: state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: direct
+            senderId: { ref: config.senderId }
+            senderName: QA Claude CLI Operator
+            text: /verbose on
+            nativeCommand: { name: verbose }
+        - waitForOutbound:
+            sinceIndex: { ref: commandStartIndex }
+            timeoutMs: 60000
+        - set: startCursor
+          value:
+            expr: state.getSnapshot().cursor
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: direct
+            senderId: { ref: config.senderId }
+            senderName: QA Claude CLI Operator
+            text: Exercise the Claude compaction fixture.
+        - waitForOutboundSequence:
+            sinceCursor: { ref: startCursor }
+            finalTextIncludes: { ref: config.finalMarker }
+            finalSettleMs: 1500
+            minimumPreviewEvents: 3
+            timeoutMs: 90000
+          saveAs: sequence
+        - set: turnEvents
+          value:
+            expr: "state.getSnapshot().events.filter((event) => event.cursor > startCursor && ['outbound-message', 'message-edited', 'message-deleted'].includes(event.kind) && event.message?.accountId === transport.accountId)"
+        - set: markerEvents
+          value:
+            expr: "turnEvents.filter((event) => event.kind !== 'message-deleted' && !event.message.deleted && event.message.text.includes(config.finalMarker))"
+        - set: progressEvents
+          value:
+            expr: "turnEvents.filter((event) => event.cursor < markerEvents[0].cursor && event.kind !== 'message-deleted' && !event.message.deleted)"
+        - set: commentaryEvents
+          value:
+            expr: "progressEvents.filter((event) => event.message.text.includes(config.commentaryOne) || event.message.text.includes(config.commentaryTwo))"
+        - assert:
+            expr: markerEvents.length === 1
+            message:
+              expr: "`expected one final marker event, got ${markerEvents.length}: ${JSON.stringify(turnEvents)}`"
+        - assert:
+            expr: "turnEvents.every((event) => event.cursor <= markerEvents[0].cursor)"
+            message:
+              expr: "`progress changed after final delivery: ${JSON.stringify(turnEvents)}`"
+        - assert:
+            expr: "new Set(commentaryEvents.map((event) => event.message.id)).size === 1"
+            message:
+              expr: "`expected one bounded commentary message: ${JSON.stringify(commentaryEvents)}`"
+        - assert:
+            expr: "progressEvents.some((event) => event.message.text.includes(config.commentaryOne)) && progressEvents.some((event) => event.message.text.includes(config.commentaryTwo))"
+            message:
+              expr: "`Claude commentary did not stay in the progress draft: ${JSON.stringify(progressEvents)}`"
+        - assert:
+            expr: "progressEvents.some((event) => event.message.text.includes('Compacting context'))"
+            message:
+              expr: "`Claude compaction was not visible in Telegram progress: ${JSON.stringify(progressEvents)}`"
+        - assert:
+            expr: "progressEvents.some((event) => event.message.text.includes('Compaction complete'))"
+            message:
+              expr: "`Claude compaction completion was not visible in Telegram progress: ${JSON.stringify(progressEvents)}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: scenario.id, providerPath: 'claude-cli-fixture', transport: transport.id, eventKinds: turnEvents.map((event) => event.kind), commentaryMessageId: commentaryEvents[0].message.id, finalMessageId: markerEvents[0].message.id, finalMarkerCount: markerEvents.length, noEventsAfterFinal: true })"

@@ -4,8 +4,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { markGatewaySigusr1RestartHandled } from "../infra/restart.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -24,7 +24,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const INSTANCE_BINDING_PROBE_KEY = Symbol.for("openclaw.test.gatewayInstanceBindingProbe");
 const INSTANCE_BINDING_PROBE_METHOD = "instanceBinding.probe";
-const INSTANCE_BINDING_HOLD_CRON_ADD_METHOD = "instanceBinding.holdCronAdd";
 
 type InstanceBindingProbeResult = {
   registryId: number;
@@ -39,10 +38,6 @@ type InstanceBindingProbeCoordinator = {
   serviceStarts: number;
   serviceStops: number;
   serviceStopFailure?: "rejection" | "timeout";
-  cronAddGate?: {
-    entered: ReturnType<typeof createDeferred<void>>;
-    release: ReturnType<typeof createDeferred<void>>;
-  };
 };
 
 function installInstanceBindingProbeCoordinator(options?: {
@@ -89,16 +84,6 @@ function requestInstanceBindingProbe(runtime: PluginRuntime) {
     INSTANCE_BINDING_PROBE_METHOD,
     {},
     { scopes: ["operator.read"] },
-  );
-}
-
-function holdInstanceBindingCronAdd(runtime: PluginRuntime) {
-  return runtime.gateway.request(
-    INSTANCE_BINDING_HOLD_CRON_ADD_METHOD,
-    {},
-    {
-      scopes: ["operator.admin"],
-    },
   );
 }
 
@@ -157,19 +142,6 @@ async function writeInstanceBindingProbePlugin(): Promise<{ bundledRoot: string 
         placementId: coordinator.identify(context.workerSessionPlacementService),
       });
     }, { scope: "operator.read" });
-    api.registerGatewayMethod("${INSTANCE_BINDING_HOLD_CRON_ADD_METHOD}", ({ context, respond }) => {
-      const gate = coordinator.cronAddGate;
-      if (!gate) {
-        throw new Error("cron add gate is unavailable");
-      }
-      const add = context.cron.add.bind(context.cron);
-      context.cron.add = async (...args) => {
-        gate.entered.resolve();
-        await gate.release.promise;
-        return await add(...args);
-      };
-      respond(true, {});
-    }, { scope: "operator.admin" });
   },
 };
 `,
@@ -212,6 +184,9 @@ describe("gateway plugin instance bindings", () => {
   const sockets: Array<Awaited<ReturnType<typeof connectWebchatClient>>> = [];
 
   afterEach(async () => {
+    // Synthetic recovery emits no signal for a run loop to consume. Reopen admission
+    // before teardown joins background work that may be waiting behind that fence.
+    markGatewaySigusr1RestartHandled();
     for (const socket of sockets.splice(0)) {
       socket.close();
     }
@@ -328,31 +303,12 @@ describe("gateway plugin instance bindings", () => {
         "initial",
       );
       const initialProbe = await requestInstanceBindingProbe(initialRuntime);
-      const initialCron = initialRuntime.gateway.getCron?.();
-      if (!initialCron) {
-        throw new Error("initial runtime did not expose a cron facade");
-      }
 
       const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       sockets.push(socket);
       const currentConfig = await rpcReq<{ hash?: string }>(socket, "config.get", {});
       expect(currentConfig.ok).toBe(true);
       expect(typeof currentConfig.payload?.hash).toBe("string");
-      coordinator.cronAddGate = {
-        entered: createDeferred(),
-        release: createDeferred(),
-      };
-      await expect(holdInstanceBindingCronAdd(initialRuntime)).resolves.toEqual({});
-      const oldGenerationAdd = initialCron.add({
-        name: "retired runtime queued probe",
-        description: "must not commit after plugin reload",
-        enabled: false,
-        schedule: { kind: "cron", expr: "0 0 * * *" },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "retired" },
-      });
-      await coordinator.cronAddGate.entered.promise;
       const reload = await rpcReq(socket, "config.patch", {
         raw: JSON.stringify({
           plugins: {
@@ -383,39 +339,6 @@ describe("gateway plugin instance bindings", () => {
         getGatewayPluginMetadataSnapshot()?.byPluginId.get("instance-binding-probe")?.name,
       ).toBe("Startup plugin");
       expect(hotReloadRecovery).not.toHaveBeenCalled();
-      const reloadedCron = reloadedRuntime.gateway.getCron?.();
-      if (!reloadedCron) {
-        throw new Error("reloaded runtime did not expose a cron facade");
-      }
-      coordinator.cronAddGate.release.resolve();
-      await expect(oldGenerationAdd).rejects.toThrow("plugin runtime has retired");
-      expect(await reloadedCron.list({ includeDisabled: true })).not.toContainEqual(
-        expect.objectContaining({ name: "retired runtime queued probe" }),
-      );
-      expect(reloadedCron).not.toBe(initialCron);
-      expect(initialRuntime.gateway.getCron?.()).toBeUndefined();
-      await expect(initialCron.list()).rejects.toThrow("plugin runtime has retired");
-      await expect(
-        initialCron.add({
-          name: "retired runtime probe",
-          description: "must not reach the scheduler",
-          enabled: false,
-          schedule: { kind: "cron", expr: "0 0 * * *" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "retired" },
-        }),
-      ).rejects.toThrow("plugin runtime has retired");
-      await expect(initialCron.update("retired", {})).rejects.toThrow("plugin runtime has retired");
-      await expect(initialCron.remove("retired")).rejects.toThrow("plugin runtime has retired");
-      await expect(
-        initialCron.removeStaleJobFamily({
-          declarationKey: "retired",
-          name: "retired runtime probe",
-          ownerPluginTag: "instance-binding-probe",
-        }),
-      ).rejects.toThrow("plugin runtime has retired");
-      await expect(reloadedCron.list()).resolves.toBeInstanceOf(Array);
       await expect(requestInstanceBindingProbe(initialRuntime)).rejects.toThrow(
         "In-process gateway dispatch requires a gateway request scope or instance binding",
       );
@@ -448,7 +371,11 @@ describe("gateway plugin instance bindings", () => {
     { timeout: 600_000 },
     async (serviceStopFailure) => {
       const { coordinator } = await prepareInstanceBindingTest({ serviceStopFailure });
-      const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
+      const hotReloadRecovery = vi.fn(() => {
+        // No run loop consumes this synthetic emission, so release its signal-admission lease.
+        markGatewaySigusr1RestartHandled();
+        return { status: "emitted" as const };
+      });
       const port = await getFreePort();
       const server = await startTestGatewayServer(port, {
         auth: { mode: "none" },

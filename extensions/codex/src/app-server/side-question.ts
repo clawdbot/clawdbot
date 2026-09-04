@@ -19,8 +19,13 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  loadCodexBundleMcpApprovalConfig,
+  resolveCodexMcpToolOverridesForAgent,
+} from "openclaw/plugin-sdk/codex-mcp-projection";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -42,6 +47,7 @@ import {
 } from "./client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
+  hasCodexMcpToolApprovalOverrides,
   isCodexPairedNodeRemoteExecPlacementSandbox,
   isCodexRemoteExecPlacementSandbox,
   isCodexSandboxExecServerEnabled,
@@ -51,6 +57,7 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexModelBackedReviewerPolicyContext,
   shouldAutoApproveCodexAppServerApprovals,
+  withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import {
@@ -88,8 +95,8 @@ import {
 } from "./native-hook-relay.js";
 import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import {
-  buildCodexPluginAppsConfigPatchFromPolicyContext,
   mergeCodexThreadConfigs,
+  refreshCodexPluginAppApprovalPolicy,
 } from "./plugin-thread-config.js";
 import {
   assertCodexThreadForkResponse,
@@ -145,6 +152,7 @@ import {
   CodexThreadPolicyHandoffError,
   refreshCodexThreadPolicy,
 } from "./thread-policy.js";
+import { buildCodexTemporalAdditionalContext } from "./turn-params.js";
 import { filterCodexVisionTools } from "./vision-tools.js";
 import {
   resolveCodexWebSearchPlan,
@@ -199,7 +207,7 @@ export async function runCodexAppServerSideQuestion(
     agentId: params.agentId,
     config: params.cfg,
   });
-  const binding = await options.bindingStore.read(bindingIdentity);
+  const binding = options.bindingStore.read(bindingIdentity);
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
@@ -461,6 +469,7 @@ export async function runCodexAppServerSideQuestion(
     params.opts?.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
   let childThreadId: string | undefined;
+  let pluginAppPolicyContext = binding.pluginAppPolicyContext;
   let childClient: CodexAppServerClient | undefined;
   let policyWriteUncertain = false;
   let turnId: string | undefined;
@@ -506,7 +515,22 @@ export async function runCodexAppServerSideQuestion(
   };
 
   try {
-    const approvalPolicy = appServer.approvalPolicy;
+    const autoApproveMcpTools = shouldAutoApproveCodexAppServerApprovals(appServer);
+    const projectedMcpServers = loadCodexBundleMcpApprovalConfig({
+      workspaceDir: agentWorkspaceDir,
+      cfg: params.cfg,
+      toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
+        agentId: sessionAgentId,
+        toolOverrides: params.sessionEntry.toolOverrides,
+      }),
+    });
+    const approvalPolicy = hasCodexMcpToolApprovalOverrides(
+      params.cfg?.mcp?.servers,
+      Object.keys(projectedMcpServers),
+      projectedMcpServers,
+    )
+      ? withMcpElicitationsApprovalPolicy(appServer.approvalPolicy)
+      : appServer.approvalPolicy;
     const sandbox = appServer.sandbox;
     const nativeProviderWebSearchSupport =
       resolveCodexWebSearchPlan({
@@ -558,7 +582,11 @@ export async function runCodexAppServerSideQuestion(
             paramsForRun: sideRunParams,
             threadId: childThreadId,
             turnId,
-            pluginAppPolicyContext: binding.pluginAppPolicyContext,
+            autoApproveMcpTools,
+            projectedMcpServers,
+            getActiveMcpToolCall: (serverName) =>
+              nativeToolLifecycleProjector?.getActiveMcpToolCall(serverName),
+            pluginAppPolicyContext,
             signal: runAbortController.signal,
           });
           return approvalResult.kind === "handled"
@@ -580,11 +608,7 @@ export async function runCodexAppServerSideQuestion(
             threadId: childThreadId,
             turnId,
             nativeHookRelay,
-            autoApprove: shouldAutoApproveCodexAppServerApprovals({
-              approvalPolicy,
-              networkProxy: appServer.networkProxy,
-              sandbox,
-            }),
+            autoApprove: autoApproveMcpTools,
             signal: runAbortController.signal,
             onNativeToolFailureDisposition: (itemId, disposition) =>
               nativeToolLifecycleProjector?.recordApprovalFailureDisposition(itemId, disposition),
@@ -660,7 +684,7 @@ export async function runCodexAppServerSideQuestion(
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
     const nativeHookRelayEvents = resolveCodexSideNativeHookRelayEvents({
       configuredEvents: options.nativeHookRelay?.events,
-      approvalPolicy,
+      approvalPolicy: appServer.approvalPolicy,
     });
     nativeHookRelay = options.nativeHookRelay
       ? registerCodexSideNativeHookRelay({
@@ -670,6 +694,8 @@ export async function runCodexAppServerSideQuestion(
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           config: params.cfg,
+          autoApproveMcpTools,
+          projectedMcpServers,
           runId: sideRunParams.runId,
           channelId: buildAgentHookContextChannelFields({
             sessionKey: params.sessionKey,
@@ -678,10 +704,7 @@ export async function runCodexAppServerSideQuestion(
             currentChannelId: params.currentChannelId,
           }).channelId,
           requestTimeoutMs: appServer.requestTimeoutMs,
-          completionTimeoutMs: Math.max(
-            appServer.turnCompletionIdleTimeoutMs,
-            SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
-          ),
+          completionTimeoutMs: SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
           loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           signal: runAbortController.signal,
           hostCapabilities: sideRunParams.hostCapabilities,
@@ -713,26 +736,21 @@ export async function runCodexAppServerSideQuestion(
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     });
-    // Codex reloads config for thread/fork, so replay the persisted app policy or
-    // app-scoped reviewers disappear while sibling apps inherit the thread reviewer.
-    const pluginAppsConfigPatch = binding.pluginAppPolicyContext
-      ? buildCodexPluginAppsConfigPatchFromPolicyContext(binding.pluginAppPolicyContext)
-      : undefined;
-    const threadConfig =
-      mergeCodexThreadConfigs(
-        nativeHookRelayConfig,
-        runtimeThreadConfig,
-        pluginAppsConfigPatch,
-        appServer.networkProxy?.configPatch,
-      ) ?? runtimeThreadConfig;
     const sideThreadId = await withLeasedCodexAppServerClientStartSelectionRetry({
       lease: clientLease,
       options: clientOptions,
       signal: runAbortController.signal,
       run: async (forkClient, requestOptions) =>
         options.bindingStore.withLease(bindingIdentity, async () => {
-          if (binding.connectionScope === "supervision") {
+          const assertCurrentBinding = () => {
             params.hostCapabilities.assertActive();
+            runAbortController.signal.throwIfAborted();
+            if (!isDeepStrictEqual(options.bindingStore.read(bindingIdentity), binding)) {
+              throw new Error("Codex side-question binding changed before fork");
+            }
+          };
+          assertCurrentBinding();
+          if (binding.connectionScope === "supervision") {
             const { thread } = await forkClient.request(
               "thread/read",
               {
@@ -741,16 +759,38 @@ export async function runCodexAppServerSideQuestion(
               },
               requestOptions(),
             );
-            params.hostCapabilities.assertActive();
-            if (!isDeepStrictEqual(await options.bindingStore.read(bindingIdentity), binding)) {
-              throw new Error("Codex side-question binding changed before fork");
-            }
-            params.hostCapabilities.assertActive();
+            assertCurrentBinding();
             assertCodexSupervisionThreadLineage(binding, thread);
           }
           await ensureSandboxEnvironment(forkClient);
-          params.hostCapabilities.assertActive();
+          assertCurrentBinding();
           const executionCwd = sandboxEnvironment?.cwd ?? cwd;
+          let pluginAppsConfigPatch: JsonObject | undefined;
+          if (binding.pluginAppPolicyContext) {
+            const refreshed = await refreshCodexPluginAppApprovalPolicy({
+              policyContext: binding.pluginAppPolicyContext,
+              configCwd: executionCwd,
+              request: (method, requestParams) => {
+                assertCurrentBinding();
+                return forkClient.request(method, requestParams, requestOptions());
+              },
+            }).finally(assertCurrentBinding);
+            pluginAppPolicyContext = refreshed.policyContext;
+            pluginAppsConfigPatch = refreshed.configPatch;
+            for (const diagnostic of refreshed.diagnostics) {
+              embeddedAgentLog.warn(diagnostic.message);
+            }
+          }
+          assertCurrentBinding();
+          // Fork reloads native config; refresh ask overrides before replaying the
+          // bound app policy, including when /btw is the first run after restart.
+          const threadConfig =
+            mergeCodexThreadConfigs(
+              nativeHookRelayConfig,
+              runtimeThreadConfig,
+              pluginAppsConfigPatch,
+              appServer.networkProxy?.configPatch,
+            ) ?? runtimeThreadConfig;
           const response = assertCodexThreadForkResponse(
             await forkCodexSideThread(
               forkClient,
@@ -836,6 +876,11 @@ export async function runCodexAppServerSideQuestion(
           {
             threadId: sideThreadId,
             input: [{ type: "text", text: params.question.trim(), text_elements: [] }],
+            additionalContext: buildCodexTemporalAdditionalContext(sideRunParams, {
+              sessionStatusAvailable: toolBridge.availableTools.some(
+                (tool) => tool.name === "session_status",
+              ),
+            }),
             ...(sandboxEnvironment
               ? {
                   cwd: sandboxEnvironment.cwd,
@@ -898,10 +943,7 @@ export async function runCodexAppServerSideQuestion(
     try {
       text = await collector.wait({
         signal: runAbortController.signal,
-        timeoutMs: Math.max(
-          appServer.turnCompletionIdleTimeoutMs,
-          SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
-        ),
+        timeoutMs: SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
       });
     } catch (error) {
       if (error instanceof CodexSideQuestionTimeoutError && !runAbortController.signal.aborted) {
@@ -986,6 +1028,8 @@ function registerCodexSideNativeHookRelay(params: {
   sessionId: string;
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParamsV2["config"];
+  autoApproveMcpTools: boolean;
+  projectedMcpServers: Parameters<typeof registerNativeHookRelay>[0]["projectedMcpServers"];
   runId: string;
   channelId?: string;
   requestTimeoutMs: number;
@@ -1004,6 +1048,8 @@ function registerCodexSideNativeHookRelay(params: {
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
+    autoApproveMcpTools: params.autoApproveMcpTools,
+    projectedMcpServers: params.projectedMcpServers,
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents: params.events,
@@ -1144,6 +1190,18 @@ async function createCodexSideToolBridge(input: {
       sandbox,
       input.nativeToolSurfaceEnabled,
     );
+    // A side thread dispatches these tools through the same direct bridge as a normal
+    // Codex turn, so no tool-start handler reserves a blocking question's prompt here
+    // either. Hand the tools this run's own way to show one.
+    const publishSideToolResult = input.params.opts?.onToolResult;
+    const questionPrompt = publishSideToolResult
+      ? {
+          send: async (payload: ReplyPayload) => {
+            await publishSideToolResult(payload);
+          },
+          ...(input.params.messageChannel ? { messageChannel: input.params.messageChannel } : {}),
+        }
+      : undefined;
     const allTools = createOpenClawCodingTools({
       agentId: input.sessionAgentId,
       requesterThinkingLevel: input.params.resolvedThinkLevel ?? "off",
@@ -1220,6 +1278,7 @@ async function createCodexSideToolBridge(input: {
       }).channelId,
       sandbox,
       ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
+      ...(questionPrompt ? { questionPrompt } : {}),
       emitBeforeToolCallDiagnostics: false,
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,

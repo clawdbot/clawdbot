@@ -7,12 +7,12 @@ import { readRestartSentinelReadOnly, writeRestartSentinel } from "../infra/rest
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { triageCommand } from "./triage.js";
+import { createTriageRuntime, withTriageTerminal } from "./triage.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   collectDoctorFindings: vi.fn(),
   writeDiagnosticSupportExport: vi.fn(),
   resolveExecutablePath: vi.fn(),
-  select: vi.fn(),
   spawn: vi.fn(),
 }));
 
@@ -28,7 +28,6 @@ vi.mock("../infra/executable-path.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/executable-path.js")>()),
   resolveExecutablePath: mocks.resolveExecutablePath,
 }));
-vi.mock("./configure.shared.js", () => ({ select: mocks.select }));
 
 const agents = ["claude", "codex", "opencode", "pi"] as const;
 const printOnlyModes = [
@@ -37,30 +36,6 @@ const printOnlyModes = [
   { mode: "non-TTY", json: false, nonInteractive: false, terminal: false },
 ] as const;
 const secret = "sk-test-triage-recovery-secret-1234567890";
-
-function createRuntime() {
-  return { log: vi.fn(), error: vi.fn(), exit: vi.fn(), writeStdout: vi.fn(), writeJson: vi.fn() };
-}
-
-async function withTerminal(interactive: boolean, run: () => Promise<void>) {
-  const streams = [process.stdin, process.stdout];
-  const descriptors = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));
-  for (const stream of streams) {
-    Object.defineProperty(stream, "isTTY", { configurable: true, value: interactive });
-  }
-  try {
-    await run();
-  } finally {
-    streams.forEach((stream, index) => {
-      const descriptor = descriptors[index];
-      if (descriptor) {
-        Object.defineProperty(stream, "isTTY", descriptor);
-      } else {
-        Reflect.deleteProperty(stream, "isTTY");
-      }
-    });
-  }
-}
 
 function failedUpdate(root: string): UpdateRunResult {
   return {
@@ -90,7 +65,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.collectDoctorFindings.mockResolvedValue([]);
   mocks.resolveExecutablePath.mockImplementation((agent: string) => `/usr/local/bin/${agent}`);
-  mocks.select.mockResolvedValue({ kind: "print" });
   mocks.spawn.mockImplementation(() => {
     const child = new EventEmitter();
     queueMicrotask(() => child.emit("exit", 0, null));
@@ -101,46 +75,37 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("triage external recovery handoff", () => {
-  it.each(agents)(
-    "starts the first available agent immediately when that agent is %s",
-    async (agent) => {
-      const available = new Set(agents.slice(agents.indexOf(agent)));
-      mocks.resolveExecutablePath.mockImplementation((binary: typeof agent) =>
-        available.has(binary) ? `/usr/local/bin/${binary}` : undefined,
+  it.each(
+    ["first available", "explicit"].flatMap((selection) =>
+      agents.map((agent) => ({ agent, selection })),
+    ),
+  )("starts the $selection agent $agent immediately", async ({ agent, selection }) => {
+    const explicit = selection === "explicit";
+    const available = new Set(explicit ? agents : agents.slice(agents.indexOf(agent)));
+    mocks.resolveExecutablePath.mockImplementation((binary: typeof agent) =>
+      available.has(binary) ? `/usr/local/bin/${binary}` : undefined,
+    );
+    await withOpenClawTestState({ layout: "split" }, async () => {
+      await withTriageTerminal(true, () =>
+        triageCommand(createTriageRuntime(), {
+          noExport: true,
+          agent: explicit ? agent : undefined,
+        }),
       );
-      await withOpenClawTestState({ layout: "split" }, async () => {
-        await withTerminal(true, () => triageCommand(createRuntime(), { noExport: true }));
-      });
-      expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
-        `/usr/local/bin/${agent}`,
-        agent === "opencode" ? ["--prompt", expect.any(String)] : [expect.any(String)],
-        expect.objectContaining({ stdio: "inherit" }),
-      );
-      expect(mocks.select).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(agents)(
-    "honors explicit --agent %s without selecting another installed agent",
-    async (agent) => {
-      await withOpenClawTestState({ layout: "split" }, async () => {
-        await withTerminal(true, () => triageCommand(createRuntime(), { noExport: true, agent }));
-      });
-      expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
-        `/usr/local/bin/${agent}`,
-        agent === "opencode" ? ["--prompt", expect.any(String)] : [expect.any(String)],
-        expect.objectContaining({ stdio: "inherit" }),
-      );
-      expect(mocks.select).not.toHaveBeenCalled();
-    },
-  );
+    });
+    expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
+      `/usr/local/bin/${agent}`,
+      agent === "opencode" ? ["--prompt", expect.any(String)] : [expect.any(String)],
+      expect.objectContaining({ stdio: "inherit" }),
+    );
+  });
 
   it.each(printOnlyModes)(
     "never launches an explicitly selected agent in $mode mode",
     async ({ json, nonInteractive, terminal }) => {
       await withOpenClawTestState({ layout: "split" }, async () => {
-        const runtime = createRuntime();
-        await withTerminal(terminal, () =>
+        const runtime = createTriageRuntime();
+        await withTriageTerminal(terminal, () =>
           triageCommand(runtime, { json, nonInteractive, noExport: true, agent: "opencode" }),
         );
         if (json) {
@@ -156,7 +121,6 @@ describe("triage external recovery handoff", () => {
           );
         }
         expect(mocks.spawn).not.toHaveBeenCalled();
-        expect(mocks.select).not.toHaveBeenCalled();
       });
     },
   );
@@ -166,32 +130,15 @@ describe("triage external recovery handoff", () => {
       agent === "claude" ? "/usr/local/bin/claude" : undefined,
     );
     await withOpenClawTestState({ layout: "split" }, async () => {
-      const runtime = createRuntime();
+      const runtime = createTriageRuntime();
       await expect(
-        withTerminal(true, () => triageCommand(runtime, { noExport: true, agent: "pi" })),
+        withTriageTerminal(true, () => triageCommand(runtime, { noExport: true, agent: "pi" })),
       ).rejects.toMatchObject({ code: 1 });
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringMatching(/pi.*(?:not found|not installed|unavailable)/iu),
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(mocks.spawn).not.toHaveBeenCalled();
-    });
-  });
-
-  it("does not try another provider after the selected agent fails to start", async () => {
-    mocks.spawn.mockImplementation(() => {
-      const child = new EventEmitter();
-      queueMicrotask(() => child.emit("error", new Error("permission denied")));
-      return child;
-    });
-    await withOpenClawTestState({ layout: "split" }, async () => {
-      const runtime = createRuntime();
-      await expect(
-        withTerminal(true, () => triageCommand(runtime, { noExport: true })),
-      ).rejects.toMatchObject({ code: 1 });
-      expect(mocks.spawn).toHaveBeenCalledOnce();
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.log).toHaveBeenCalledWith(expect.stringMatching(/^Run manually: .*claude /u));
     });
   });
 
@@ -225,8 +172,8 @@ describe("triage external recovery handoff", () => {
           advisory: { kind: "package-post-install-doctor", message: "Recoverable Doctor advice" },
         },
       ];
-      const runtime = createRuntime();
-      await withTerminal(true, () =>
+      const runtime = createTriageRuntime();
+      await withTriageTerminal(true, () =>
         triageCommand(runtime, {
           recovery: { target, cwd: state.workspaceDir, updateFailure: { result: update } },
         }),
@@ -299,9 +246,9 @@ describe("triage external recovery handoff", () => {
           { code: "EACCES" },
         );
         vi.spyOn(fs, operation).mockRejectedValue(artifactError);
-        const runtime = createRuntime();
+        const runtime = createTriageRuntime();
 
-        await withTerminal(true, () =>
+        await withTriageTerminal(true, () =>
           triageCommand(runtime, {
             noExport: true,
             recovery: {
@@ -336,10 +283,10 @@ describe("triage external recovery handoff", () => {
             code: "EACCES",
           }),
         );
-        const runtime = createRuntime();
+        const runtime = createTriageRuntime();
 
         await expect(
-          withTerminal(terminal, () =>
+          withTriageTerminal(terminal, () =>
             triageCommand(runtime, {
               json,
               nonInteractive,
@@ -393,7 +340,7 @@ describe("standalone triage update evidence", () => {
             ],
           },
         });
-        const runtime = createRuntime();
+        const runtime = createTriageRuntime();
         await triageCommand(runtime, { json: true, noExport: true });
         const prompt = await fs.readFile(runtime.writeJson.mock.calls[0]?.[0]?.promptPath, "utf8");
         expect(prompt).toContain(reason);
@@ -426,7 +373,7 @@ describe("standalone triage update evidence", () => {
         ts: 1,
         stats: { reason: "older-pending-failure" },
       });
-      const runtime = createRuntime();
+      const runtime = createTriageRuntime();
       await triageCommand(runtime, {
         json: true,
         noExport: true,
@@ -455,7 +402,7 @@ describe("standalone triage update evidence", () => {
           ts: 1,
           stats: { reason },
         });
-        const runtime = createRuntime();
+        const runtime = createTriageRuntime();
         await triageCommand(runtime, { json: true, noExport: true });
         const prompt = await fs.readFile(runtime.writeJson.mock.calls[0]?.[0]?.promptPath, "utf8");
         expect(prompt).not.toContain(reason);
@@ -467,7 +414,7 @@ describe("standalone triage update evidence", () => {
     await withOpenClawTestState({ layout: "split" }, async (state) => {
       const databasePath = path.join(state.stateDir, "state", "openclaw.sqlite");
       await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await triageCommand(createRuntime(), { json: true, noExport: true });
+      await triageCommand(createTriageRuntime(), { json: true, noExport: true });
       await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });

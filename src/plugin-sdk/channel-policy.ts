@@ -51,6 +51,8 @@ export {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
+  resolveChannelGroups,
+  resolveChannelGroupsConfigPath,
   resolveToolsBySender,
   type ChannelGroupPolicy,
 } from "../config/group-policy.js";

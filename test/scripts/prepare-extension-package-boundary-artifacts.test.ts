@@ -1,5 +1,5 @@
 // Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { getEventListeners, once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,6 +9,8 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
+import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   createPrefixedOutputWriter,
   parseMode,
@@ -58,11 +60,29 @@ async function waitForFile(
 
 describe("prepare-extension-package-boundary-artifacts", () => {
   it.for(["package-boundary", "all"])(
-    "prunes only obsolete native declarations after success and repairs a failed partial emit (%s)",
+    "prepares cold worktrees, prunes obsolete declarations, and repairs failed partial emits (%s)",
     { timeout: 30_000 },
     (mode, { signal }) =>
       fixture.run(async () => {
-        const root = fs.realpathSync(createTempDir("native-preparer-"));
+        const primary = fs.realpathSync(createTempDir("native-preparer-"));
+        const root = path.join(primary, ".worktrees/cold");
+        const git = (...args: string[]) =>
+          execFileSync("git", ["-C", primary, ...args], { timeout: 10_000, stdio: "pipe" });
+        git("init", "-q");
+        git(
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "-qm",
+          "Synthetic fixture",
+          "--allow-empty",
+          "--no-verify",
+        );
+        git("worktree", "add", "-q", "--detach", root);
         const write = (file: string, text: string) => {
           signal.throwIfAborted();
           const target = path.join(root, file);
@@ -108,10 +128,11 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         ]) {
           copy(file);
         }
+        const modulesRoot = path.dirname(path.dirname(resolveRepoToolBinPath("tsgo")));
         for (const name of ["tsx", "typescript", "@typescript", "@openclaw/fs-safe", ".bin/tsgo"]) {
-          const target = path.join(root, "node_modules", name);
+          const target = path.join(primary, "node_modules", name);
           fs.mkdirSync(path.dirname(target), { recursive: true });
-          fs.symlinkSync(path.resolve("node_modules", name), target);
+          fs.symlinkSync(path.join(modulesRoot, name), target);
         }
         fs.symlinkSync(
           path.resolve("packages/normalization-core"),
@@ -123,8 +144,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           '{"name":"fixture-sdk","type":"module","types":"./dist/src/plugin-sdk/core.d.ts"}',
         );
         fs.symlinkSync(
-          "../packages/plugin-sdk",
-          path.join(root, "node_modules/fixture-sdk"),
+          path.join(root, "packages/plugin-sdk"),
+          path.join(primary, "node_modules/fixture-sdk"),
           "dir",
         );
         const plugins = mode === "all" ? BOUNDARY_PLUGIN_UNITS : [];
@@ -133,7 +154,18 @@ describe("prepare-extension-package-boundary-artifacts", () => {
             `extensions/${id}/tsconfig.json`,
             JSON.stringify({ extends: "../../tsconfig.json", files: [`${entry}.ts`] }),
           );
-          write(`extensions/${id}/${entry}.ts`, 'export { value } from "fixture-sdk";');
+          write(
+            `extensions/${id}/node_modules/boundary-private-dep/package.json`,
+            '{"name":"boundary-private-dep","types":"index.d.ts"}',
+          );
+          write(
+            `extensions/${id}/node_modules/boundary-private-dep/index.d.ts`,
+            "export declare function consume(callback: (value: string) => string): void;",
+          );
+          write(
+            `extensions/${id}/${entry}.ts`,
+            'export { value } from "fixture-sdk"; export { consume } from "boundary-private-dep";',
+          );
         }
         const recordPath = path.join(root, ".artifacts/extension-package-boundary/plugin-sdk.json");
         const output = "packages/plugin-sdk/dist";
@@ -159,7 +191,38 @@ describe("prepare-extension-package-boundary-artifacts", () => {
             signal.removeEventListener("abort", abort);
           }
         };
+        // Imports resolve through the primary; preparation owns the worktree's dependency link.
+        expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
         await run();
+        expect(fs.realpathSync(path.join(root, "node_modules"))).toBe(
+          path.join(primary, "node_modules"),
+        );
+        if (mode === "all") {
+          const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
+          if (!slackBoundaryEntry) {
+            throw new Error("Slack extension boundary entry is missing");
+          }
+          write(
+            "consumer.ts",
+            `import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/${slackBoundaryEntry}.js"; consume(value => value.toUpperCase());`,
+          );
+          await runNodeStep(
+            "isolated-boundary-consumer",
+            [
+              path.join(root, "scripts/run-tsgo.mts"),
+              "--ignoreConfig",
+              "--module",
+              "nodenext",
+              "--target",
+              "es2023",
+              "--strict",
+              "--skipLibCheck",
+              "--noEmit",
+              path.join(root, "consumer.ts"),
+            ],
+            30_000,
+          );
+        }
         const first = readArtifactRecord(recordPath)!;
         expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
         write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');
@@ -195,8 +258,10 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         await run();
         expect(readArtifactRecord(recordPath)?.outputs).toEqual(repaired.outputs);
         const unchanged = fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs;
+        const unchangedRecord = fs.statSync(recordPath).mtimeMs;
         await run();
         expect(fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs).toBe(unchanged);
+        expect(fs.statSync(recordPath).mtimeMs).toBe(unchangedRecord);
       }),
   );
   it("prefixes each completed line and flushes the trailing partial line", () => {
@@ -310,7 +375,14 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const signal = AbortSignal.any([contextSignal, controller.signal]);
       const observationFailure = new Error("drain observation failed");
       const originalNow = Date.now;
-      const rootDir = createTempDir("openclaw-boundary-abort-drain-");
+      // Only the injected fixture-write failure owns a separate namespace.
+      // Real step claims and their cleanup failures still belong to the outer fixture.
+      const retainedOwner =
+        mode === "cleanup write failure"
+          ? createVitestResourceOwner(createTempDir("boundary-cleanup-owner-"))
+          : undefined;
+      const driverFixture = retainedOwner ? createFixtureLifetime(retainedOwner.root) : fixture;
+      const rootDir = driverFixture.createTempDir("openclaw-boundary-abort-drain-");
       let descendantPid = 0;
       let command: ReturnType<typeof runNodeStepsInParallel> | undefined;
       let outcome: Promise<unknown> | undefined;
@@ -318,7 +390,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       let joined = false;
       let requiredRescue = false;
       let heldAtRescue = false;
-      const driver = fixture.run(async () => {
+      const driver = driverFixture.run(async () => {
         const readyPath = path.join(rootDir, "descendant.ready");
         const drainedPath = path.join(rootDir, "descendant.drained");
         const failPath = path.join(rootDir, "fail");
@@ -410,7 +482,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
               });
             });
           }
-          await fixture.verifyCleanup(async () => {
+          await driverFixture.verifyCleanup(async () => {
             try {
               fs.writeFileSync(mode === "cleanup write failure" ? rootDir : failPath, "fail");
             } finally {
@@ -434,8 +506,9 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       if (mode === "cleanup write failure") {
         expect(error).toHaveProperty("code", "EISDIR");
         try {
-          await expect(fixture.cleanup()).rejects.toThrow("Fixture cleanup unverified");
+          await expect(driverFixture.cleanup()).rejects.toThrow("Fixture cleanup unverified");
           expect(fs.existsSync(rootDir)).toBe(true);
+          expect(() => retainedOwner!.assertReleased()).toThrow("Unreleased Vitest resource claim");
         } finally {
           // Only the injected filesystem failure is disposable, after the real join.
           fs.rmSync(rootDir, { recursive: true, force: true });

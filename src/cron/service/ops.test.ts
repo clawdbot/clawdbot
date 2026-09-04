@@ -21,7 +21,6 @@ import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import * as runReceiptStore from "../store/run-receipt-store.js";
-import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -95,23 +94,6 @@ describe("scheduled tool policy provenance", () => {
     await expect(removal).rejects.toThrow("authority closed");
     expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(true);
     expect(commitGuard).toHaveBeenCalledTimes(2);
-
-    const staleBlockerEntered = createDeferred();
-    const releaseStaleBlocker = createDeferred();
-    const staleBlocker = updateWithPrecondition(state, job.id, {}, async () => {
-      staleBlockerEntered.resolve();
-      await releaseStaleBlocker.promise;
-    });
-    await staleBlockerEntered.promise;
-    const staleRemoval = removeStaleJobFamily(
-      state,
-      { declarationKey: "guarded", name: "guarded", ownerPluginTag: "test" },
-      { commitGuard },
-    );
-    releaseStaleBlocker.resolve();
-    await staleBlocker;
-    await expect(staleRemoval).rejects.toThrow("authority closed");
-    expect(commitGuard).toHaveBeenCalledTimes(3);
     if (state.timer) {
       clearTimeout(state.timer);
     }
@@ -1037,18 +1019,19 @@ describe("cron service ops seam coverage", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const proposal = proposeCronRunRecovery(state, job.id, undefined, startedAt);
-    await saveCronJobsStoreWithTransactionHooks(
+    await cronStoreModule.saveCronJobsStore(
       storePath,
       { version: 1, jobs: [completedJob] },
-      undefined,
       {
-        afterWrite: (db) => {
-          runReceiptStore.finishCronRunReceiptInDatabase({
-            database: db,
-            handle: receipt,
-            status: "ok",
-            finishedAtMs: now,
-          });
+        transactionHooks: {
+          afterWrite: (db) => {
+            runReceiptStore.finishCronRunReceiptInDatabase({
+              database: db,
+              handle: receipt,
+              status: "ok",
+              finishedAtMs: now,
+            });
+          },
         },
       },
     );
@@ -1311,7 +1294,9 @@ describe("cron service ops seam coverage", () => {
         },
       });
       runOpenClawStateWriteTransaction(({ db }) => {
-        db.prepare("UPDATE task_runs SET ended_at = -1 WHERE run_id = ?").run(taskRunId);
+        db.prepare(
+          "UPDATE task_runs SET created_at = -1, started_at = -1, ended_at = -1, last_event_at = -1 WHERE run_id = ?",
+        ).run(taskRunId);
       });
 
       await start(state);

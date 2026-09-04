@@ -227,15 +227,9 @@ describe("failover-error", () => {
         },
       }),
     ).toBe("format");
-    // Transient server errors (500/502/503/504) should trigger failover as timeout.
-    expect(resolveFailoverReasonFromError({ status: 500 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 503 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 504 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 521 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 522 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
-    expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
+    for (const status of [500, 502, 503, 504, 520, 521, 522, 523, 524]) {
+      expect(resolveFailoverReasonFromError({ status })).toBe("timeout");
+    }
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
   });
 
@@ -879,6 +873,7 @@ describe("failover-error", () => {
         "WorkerWorkspaceReconciliationError",
         "cloud worker workspace result could not be reconciled",
       ],
+      ["active turn claim", "ActiveTurnClaimError", "session already has an active turn claim"],
     ])("returns true for direct and nested runner %s failures", (_label, name, message) => {
       const coordination = new Error(message);
       coordination.name = name;

@@ -1,4 +1,15 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -58,6 +69,63 @@ function step(job: Job | undefined, name: string): Step {
   return found;
 }
 
+function runControlUiArtifactStep(options: { artifactPresent: boolean }) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-npm-preflight-ui-"));
+  const binDir = join(root, "bin");
+  const artifactPath = join(root, "dist", "control-ui", "index.html");
+  const invocationPath = join(root, "pnpm-invocation.txt");
+  mkdirSync(join(root, "scripts"), { recursive: true });
+  mkdirSync(binDir);
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({
+      version: "2026.6.35",
+      scripts: {
+        build: "node scripts/build-all.mjs",
+        "ui:build": "node scripts/ui.js build",
+      },
+    }),
+  );
+  writeFileSync(join(root, "scripts", "build-all.mjs"), "");
+  if (options.artifactPresent) {
+    mkdirSync(join(root, "dist", "control-ui"), { recursive: true });
+    writeFileSync(artifactPath, "<!doctype html>\n");
+  }
+  const fakePnpm = join(binDir, "pnpm");
+  writeFileSync(
+    fakePnpm,
+    `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == "ui:build" ]]
+printf '%s\\n' "$*" > "${invocationPath}"
+mkdir -p "${join(root, "dist", "control-ui")}"
+printf '<!doctype html>\\n' > "${artifactPath}"
+`,
+  );
+  chmodSync(fakePnpm, 0o755);
+
+  const ensureControlUi = step(
+    workflow(preflightWorkflowPath).jobs?.prepare_openclaw_npm,
+    "Ensure Control UI release artifact",
+  );
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", ensureControlUi.run ?? ""], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    },
+  });
+  const invocation = existsSync(invocationPath)
+    ? readFileSync(invocationPath, "utf8").trim()
+    : null;
+  const artifactExists = existsSync(artifactPath);
+  const targetHasTsxLoader = existsSync(join(root, "scripts", "tsx.mjs"));
+  rmSync(root, { force: true, recursive: true });
+  return { artifactExists, invocation, result, targetHasTsxLoader };
+}
+
 describe("minimal npm extended-stable workflow", () => {
   it("bounds every git fetch operation", () => {
     const source = [workflowPath, preflightWorkflowPath]
@@ -70,6 +138,67 @@ describe("minimal npm extended-stable workflow", () => {
     expect(
       gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
     ).toBe(true);
+  });
+
+  it("routes source and Tideclaw history through the trusted ancestry owner", () => {
+    const parsed = workflow(preflightWorkflowPath);
+    const sourceAncestry = step(
+      parsed.jobs?.check_openclaw_npm,
+      "Establish source ancestry with main",
+    );
+    const tideclawAncestry = step(
+      parsed.jobs?.prepare_openclaw_npm,
+      "Establish Tideclaw alpha ancestry",
+    );
+    const sourceCheck = step(
+      parsed.jobs?.check_openclaw_npm,
+      "Check source, test types, and architecture",
+    );
+    const trustedCheckout = step(
+      parsed.jobs?.check_openclaw_npm,
+      "Checkout trusted package source preflight",
+    );
+    const metadata = step(parsed.jobs?.check_dependencies_npm, "Validate release metadata").run;
+
+    expect(trustedCheckout.with?.["sparse-checkout"]).toContain(".github/actions/git-owner");
+    expect(sourceAncestry).toMatchObject({
+      env: {
+        RELEASE_ANCESTRY_MODE: "merge-base",
+        RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
+      },
+    });
+    expect(tideclawAncestry).toMatchObject({
+      env: {
+        RELEASE_ANCESTRY_MODE: "ancestor",
+        RELEASE_ANCESTRY_TARGET_REF: "${{ github.ref }}",
+      },
+    });
+    for (const ancestry of [sourceAncestry, tideclawAncestry]) {
+      expect(ancestry.env).not.toHaveProperty("RELEASE_ANCESTRY_TOTAL_SECONDS");
+      expect(ancestry.run).toContain(
+        "python3 -I -S .release-harness/.github/actions/git-owner/owner.py",
+      );
+      expect(ancestry.run).toContain(
+        "--policy .release-harness/.github/actions/git-owner/release-ancestry.py",
+      );
+    }
+    expect(sourceCheck.run).toBe("pnpm check --include-test-types --include-architecture");
+    expect(metadata).toContain("--unshallow origin");
+    expect(metadata).toContain('"+refs/tags/v*:refs/tags/v*"');
+    const sourceSteps = parsed.jobs?.check_openclaw_npm?.steps ?? [];
+    const prepareSteps = parsed.jobs?.prepare_openclaw_npm?.steps ?? [];
+    expect(sourceSteps.indexOf(trustedCheckout)).toBeLessThan(sourceSteps.indexOf(sourceAncestry));
+    expect(sourceSteps.indexOf(sourceAncestry)).toBeLessThan(sourceSteps.indexOf(sourceCheck));
+    expect(prepareSteps.indexOf(tideclawAncestry)).toBeGreaterThan(
+      prepareSteps.findIndex(
+        (candidate) => candidate.name === "Checkout trusted package source preflight",
+      ),
+    );
+    expect(prepareSteps.indexOf(tideclawAncestry)).toBeLessThan(
+      prepareSteps.findIndex(
+        (candidate) => candidate.name === "Validate npm package source metadata",
+      ),
+    );
   });
 
   it("adds extended-stable without adding policy or verifier contracts", () => {
@@ -104,17 +233,12 @@ describe("minimal npm extended-stable workflow", () => {
     expect(parsed.jobs?.preflight_openclaw_npm?.with?.use_github_hosted_runners).toBe(
       "${{ inputs.use_github_hosted_runners }}",
     );
-    for (const job of Object.values(workflow(preflightWorkflowPath).jobs ?? {})) {
-      expect(job["runs-on"]).toBe(
-        "${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}",
-      );
-    }
   });
 
   it("binds intentional Plugin SDK release changes to the reported digest", () => {
     const parsed = workflow();
     const input = parsed.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
-    const qualification = workflow(preflightWorkflowPath).jobs?.verify_openclaw_npm;
+    const qualification = workflow(preflightWorkflowPath).jobs?.check_sdk_npm;
     const preflightDiff = step(qualification, "Verify Plugin SDK API changes");
     const publishProvenance = step(
       parsed.jobs?.publish_openclaw_npm,
@@ -151,12 +275,19 @@ describe("minimal npm extended-stable workflow", () => {
     expect(preflightDiff.run).not.toContain("--require-acknowledgement");
     expect(preflightDiff.run).not.toContain("--acknowledge");
     expect(preflightDiff.run).toContain(
-      '--evidence "${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-api-release-evidence.json"',
+      '--evidence "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-evidence.json"',
     );
     expect(trustedToolingCheckout.with?.ref).toBe("${{ github.workflow_sha }}");
     expect(preflightDiff.run).toContain('git -C "$tooling_dir" status --porcelain');
     expect(preflightDiff.run).not.toContain('pkg.scripts?.["plugin-sdk:api:diff"]');
-    expect(preflightDiff.run).toContain('pnpm --dir "$tooling_dir" run plugin-sdk:api:diff');
+    // Corepack resolves packageManager from its working directory before pnpm
+    // receives command flags. The trusted tooling checkout must own both calls.
+    expect(preflightDiff.run).toContain('cd "$tooling_dir"');
+    expect(preflightDiff.run).toContain(
+      "pnpm install --frozen-lockfile --ignore-scripts --filter openclaw",
+    );
+    expect(preflightDiff.run).toContain('pnpm run plugin-sdk:api:diff -- "${diff_args[@]}"');
+    expect(preflightDiff.run).not.toContain('pnpm --dir "$tooling_dir"');
     expect(publishProvenanceRun).toContain("plugin-sdk-api-release-evidence.mjs");
     expect(publishProvenanceRun).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
     expect(publishProvenanceRun).toContain('--npm-dist-tag "$RELEASE_NPM_DIST_TAG"');
@@ -287,8 +418,8 @@ describe("minimal npm extended-stable workflow", () => {
 
   it("accepts arbitrary SHA preflight targets and exercises every publishable plugin package", () => {
     const parsed = workflow(preflightWorkflowPath);
-    const preflight = parsed.jobs?.verify_openclaw_npm;
-    const metadata = step(preflight, "Validate release metadata");
+    const preflight = parsed.jobs?.check_contents_npm;
+    const metadata = step(parsed.jobs?.check_dependencies_npm, "Validate release metadata");
     const pack = step(
       parsed.jobs?.prepare_openclaw_npm,
       "Pack and seal publishable npm package set",
@@ -344,10 +475,7 @@ describe("minimal npm extended-stable workflow", () => {
     // Only the build producers skip on a cache hit; every validation step
     // still runs against the restored artifacts.
     const build = step(preflight, "Build");
-    const buildControlUi = step(
-      preflight,
-      "Build Control UI only when the target full build does not own it",
-    );
+    const buildControlUi = step(preflight, "Ensure Control UI release artifact");
     expect(build.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
     expect(build.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
     expect(buildControlUi.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
@@ -356,7 +484,7 @@ describe("minimal npm extended-stable workflow", () => {
       step(parsed.jobs?.check_openclaw_npm, "Check source, test types, and architecture").if,
     ).toBeUndefined();
     const verifyReleaseContents = step(
-      parsed.jobs?.verify_openclaw_npm,
+      parsed.jobs?.check_contents_npm,
       "Verify final npm package bytes and lifecycle",
     );
     expect(verifyReleaseContents.if).toBeUndefined();
@@ -368,6 +496,26 @@ describe("minimal npm extended-stable workflow", () => {
     expect(save.uses).toContain("actions/cache/save@");
     expect(save.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
     expect(save.with?.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
+  });
+
+  it("accepts the historical full-build artifact without a target tsx loader", () => {
+    const { artifactExists, invocation, result, targetHasTsxLoader } = runControlUiArtifactStep({
+      artifactPresent: true,
+    });
+    expect(targetHasTsxLoader).toBe(false);
+    expect(result.status, result.stderr).toBe(0);
+    expect(invocation).toBeNull();
+    expect(artifactExists).toBe(true);
+  });
+
+  it("builds a missing Control UI release artifact through the target package script", () => {
+    const { artifactExists, invocation, result, targetHasTsxLoader } = runControlUiArtifactStep({
+      artifactPresent: false,
+    });
+    expect(targetHasTsxLoader).toBe(false);
+    expect(result.status, result.stderr).toBe(0);
+    expect(invocation).toBe("ui:build");
+    expect(artifactExists).toBe(true);
   });
 
   it("uses the trusted Full Validation evidence verifier", () => {

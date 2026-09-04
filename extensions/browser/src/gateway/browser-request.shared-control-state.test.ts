@@ -1,7 +1,8 @@
 // Browser tests cover browser request.shared control state plugin behavior.
+import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getFreePort } from "../browser/test-port.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
@@ -29,6 +30,11 @@ vi.mock("../browser/control-auth.js", () => ({
   ensureBrowserControlAuth: mocks.ensureBrowserControlAuth,
   resolveBrowserControlAuth: mocks.resolveBrowserControlAuth,
   shouldAutoGenerateBrowserAuth: mocks.shouldAutoGenerateBrowserAuth,
+}));
+
+// This suite tests shared state; server auth/bind suites cover real HTTP listeners.
+vi.mock("../browser/http-listen.js", () => ({
+  listenBrowserHttpServer: vi.fn(async () => createServer()),
 }));
 
 vi.mock("../browser/server-lifecycle.js", () => ({
@@ -109,6 +115,7 @@ async function browserRequestStatus(): Promise<unknown> {
 }
 
 describe("browser.request local control state", () => {
+  const controlPort = 18_791;
   afterEach(async () => {
     await stopBrowserControlService();
     await stopBrowserControlServer();
@@ -117,7 +124,6 @@ describe("browser.request local control state", () => {
   });
 
   it("uses the same resolved browser config as the HTTP control service", async () => {
-    const controlPort = await getFreePort();
     const gatewayPort = controlPort - 2;
 
     mocks.runtimeConfig = browserConfig({
@@ -150,7 +156,6 @@ describe("browser.request local control state", () => {
   });
 
   it("retains port auth until a failed stop is retried successfully", async () => {
-    const controlPort = await getFreePort();
     mocks.runtimeConfig = browserConfig({ gatewayPort: controlPort - 2 });
     mocks.runtimeSourceConfig = mocks.runtimeConfig;
     mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: { token: "test-token" } });
@@ -167,21 +172,20 @@ describe("browser.request local control state", () => {
   });
 
   it("clears auth when a stop queues behind cold startup", async () => {
-    const controlPort = await getFreePort();
     mocks.runtimeConfig = browserConfig({ gatewayPort: controlPort - 2 });
     mocks.runtimeSourceConfig = mocks.runtimeConfig;
-    let releaseAuth!: () => void;
-    const authGate = new Promise<void>((resolve) => {
-      releaseAuth = resolve;
-    });
+    const authStarted = createDeferred<void>();
+    const authGate = createDeferred<void>();
     mocks.ensureBrowserControlAuth.mockImplementationOnce(async () => {
-      await authGate;
+      authStarted.resolve();
+      await authGate.promise;
       return { auth: { token: "test-token" } };
     });
 
     const starting = startBrowserControlServerFromConfig();
+    await authStarted.promise;
     const stopping = stopBrowserControlServer();
-    releaseAuth();
+    authGate.resolve();
     await expect(starting).resolves.toBeTruthy();
     await expect(stopping).resolves.toBeUndefined();
     expect(getBridgeAuthForPort(controlPort)).toBeUndefined();

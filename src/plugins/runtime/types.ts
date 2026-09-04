@@ -5,7 +5,6 @@ import type { NodePluginToolDescriptor } from "../../../packages/gateway-protoco
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
-import type { PluginHookGatewayCronService } from "../hook-types.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLogger };
@@ -33,6 +32,15 @@ type SubagentRunParams = {
   completionDelivery?: "current-requester";
   idempotencyKey?: string;
   cwd?: string;
+};
+
+type SubagentCompleteParams = {
+  agentId: string;
+  message: string;
+  extraSystemPrompt?: string;
+  model?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 type PluginManagedWorktree = {
@@ -127,11 +135,6 @@ export type PluginRuntime = PluginRuntimeCore & {
   gateway: {
     /** Whether this process owns an active Gateway request context. */
     isAvailable: () => Promise<boolean>;
-    /**
-     * Resolve a trusted, lifecycle-revocable facade for the current Gateway cron service.
-     * Every operation rechecks this runtime generation and fails after it retires.
-     */
-    getCron?: () => PluginHookGatewayCronService | undefined;
     /** Dispatch a Gateway method as the current trusted plugin. */
     request: <T = unknown>(
       method: string,
@@ -140,6 +143,8 @@ export type PluginRuntime = PluginRuntimeCore & {
     ) => Promise<T>;
   };
   subagent: {
+    /** Fresh, tool-free background inference under the existing subagent model policy. */
+    complete: (params: SubagentCompleteParams) => Promise<{ text: string }>;
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
     getSessionMessages: (

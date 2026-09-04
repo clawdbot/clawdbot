@@ -284,6 +284,7 @@ outbound policy after DNS resolution.
   32000-10000000) before parsing; oversized responses are truncated with a warning
 - Private/internal hostnames are blocked
 - `tools.web.fetch.ssrfPolicy.allowedHostnames` allows exact trusted hosts while leaving other private/internal targets blocked
+- `tools.web.fetch.ssrfPolicy.blockedHostnames` denies exact hosts and wildcard subdomains before DNS and allow rules, including on redirects and with private-network access enabled. For example, `["tracker.example.com", "*.ads.example.com"]` blocks those hosts without requiring a full allowlist. Wildcards do not match the apex; add `ads.example.com` separately to block it. Matching ignores case and trailing dots; use ASCII/Punycode for internationalized domains. Empty or unset adds no denials
 - `tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork` broadly permits private-network targets; enable it only when model-selected URLs are trusted in this deployment
 - `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
   `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins

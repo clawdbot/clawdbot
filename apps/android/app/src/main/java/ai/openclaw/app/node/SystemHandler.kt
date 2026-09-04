@@ -118,7 +118,7 @@ internal fun buildSystemNotification(
     .build()
 
 /** Handles system-level node.invoke commands implemented by Android services. */
-class SystemHandler private constructor(
+class SystemHandler internal constructor(
   private val poster: SystemNotificationPoster,
 ) {
   constructor(appContext: Context) : this(poster = AndroidSystemNotificationPoster(appContext))
@@ -173,10 +173,5 @@ class SystemHandler private constructor(
       sound = sound?.trim()?.ifEmpty { null },
       priority = priority?.trim()?.ifEmpty { null },
     )
-  }
-
-  companion object {
-    /** Creates a handler with a fake poster for parser and authorization tests. */
-    internal fun forTesting(poster: SystemNotificationPoster): SystemHandler = SystemHandler(poster)
   }
 }

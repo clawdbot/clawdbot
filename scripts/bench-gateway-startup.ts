@@ -133,6 +133,31 @@ const VALUE_FLAGS = new Set([
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
+const LARGE_PLUGIN_MODEL_AGENT_COUNT = 256;
+const LARGE_PLUGIN_MODEL_COUNT = 58;
+const LARGE_PLUGIN_MODEL_PROVIDER_IDS = ["openai", "google", "minimax"] as const;
+
+function buildLargePluginModelAgentEntries() {
+  const model = {
+    primary: `${LARGE_PLUGIN_MODEL_PROVIDER_IDS[0]}/model-01`,
+    fallbacks: Array.from({ length: LARGE_PLUGIN_MODEL_COUNT - 1 }, (_, offset) => {
+      const index = offset + 1;
+      const provider =
+        index % 3 === 0
+          ? LARGE_PLUGIN_MODEL_PROVIDER_IDS[0]
+          : index % 3 === 1
+            ? LARGE_PLUGIN_MODEL_PROVIDER_IDS[1]
+            : LARGE_PLUGIN_MODEL_PROVIDER_IDS[2];
+      return `${provider}/model-${String(index + 1).padStart(2, "0")}`;
+    }),
+  };
+  return Object.fromEntries(
+    Array.from({ length: LARGE_PLUGIN_MODEL_AGENT_COUNT }, (_, index) => [
+      `agent-${String(index + 1).padStart(4, "0")}`,
+      { model },
+    ]),
+  );
+}
 
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
@@ -252,6 +277,24 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     pluginActivationOnStartup: false,
     pluginCount: 50,
     config: BASE_CONFIG,
+  },
+  {
+    id: "largePluginModelConfig",
+    name: `gateway, ${LARGE_PLUGIN_MODEL_AGENT_COUNT} agents with ${LARGE_PLUGIN_MODEL_COUNT} plugin-owned model refs each`,
+    completionTracePhase: "config.snapshot.auto-enable",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    runByDefault: false,
+    config: {
+      ...BASE_CONFIG,
+      agents: {
+        ownership: "explicit",
+        entries: buildLargePluginModelAgentEntries(),
+      },
+      plugins: {
+        enabled: true,
+        allow: [...LARGE_PLUGIN_MODEL_PROVIDER_IDS],
+      },
+    },
   },
   {
     id: "incidentDatabase",

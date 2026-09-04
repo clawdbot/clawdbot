@@ -287,6 +287,8 @@ describe("WebSocket connect suspension admission", () => {
       });
       expect(harness.client).not.toBeNull();
       expect(harness.close).not.toHaveBeenCalled();
+      const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}");
+      expect(response.payload.snapshot.suspension).toEqual({ phase });
       suspension?.release();
     },
   );

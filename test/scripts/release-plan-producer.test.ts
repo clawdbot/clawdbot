@@ -1019,12 +1019,29 @@ produceReleasePlan({
     expect(result.stderr).toContain("verified yaml retained tree digest mismatch");
   });
 
-  it("accepts the complete installed yaml package tree", () => {
-    const { result, tempRoot } = runYamlPackageSubprocess();
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    expect(yamlTempEntries(tempRoot)).toEqual([]);
-  });
+  it.each([false, true])(
+    "accepts pinned yaml package bytes (installer metadata=%s)",
+    (installerMetadata) => {
+      const { result, tempRoot, sentinelPath } = runYamlPackageSubprocess({
+        mutate: ({ packageRoot, sentinelPath }) => {
+          const installedDependencies = join(packageRoot, "node_modules");
+          rmSync(installedDependencies, { recursive: true, force: true });
+          if (installerMetadata) {
+            mkdirSync(join(installedDependencies, ".bin"), { recursive: true });
+            writeFileSync(
+              join(installedDependencies, ".bin/yaml"),
+              `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "executed");\n`,
+            );
+            symlinkSync("must-not-be-read", join(installedDependencies, "foreign-package"));
+          }
+        },
+      });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(yamlTempEntries(tempRoot)).toEqual([]);
+      expect(existsSync(sentinelPath)).toBe(false);
+    },
+  );
 
   it("rejects a changed yaml entry before executing it", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({

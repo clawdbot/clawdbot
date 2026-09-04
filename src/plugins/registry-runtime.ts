@@ -18,21 +18,15 @@ import {
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
   activatePluginRecordLifecycleEpoch,
-  capturePluginLifecycleAuthority,
   isPluginRecordLifecycleEpochActive,
   isPluginRegistryActivated,
   isPluginRegistryRetired,
   revokePluginRecordLifecycleEpoch,
 } from "./registry-lifecycle.js";
-import {
-  createLifecycleBoundPluginCronService,
-  type PluginRuntimeGatewayCronHostService,
-} from "./registry-runtime-gateway-cron.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
   getGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginIdScope,
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
@@ -179,8 +173,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         | "openKeyedStore"
         | "openSyncKeyedStore"
         | "openChannelIngressQueue"
-        | "openChannelIngressDrain"
-        | "getCron",
+        | "openChannelIngressDrain",
     ) => {
       const record =
         pluginRuntimeRecordById.get(pluginId) ??
@@ -191,19 +184,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           `${methodName} is only available for trusted plugins in this release. Plugin "${pluginId}" loaded with origin "${record?.origin ?? "unknown"}"; reinstall it from its official npm package or ClawHub listing to enable trusted plugin state.`,
         );
       }
-    };
-    const resolveGatewayCronService = (
-      gateway: PluginRuntime["gateway"],
-    ): PluginRuntimeGatewayCronHostService | undefined => {
-      const bound = gateway.getCron?.();
-      if (bound) {
-        // SAFETY: The host runtime exposes this service only through the guarded facade below.
-        return bound as PluginRuntimeGatewayCronHostService;
-      }
-      const scope = getPluginRuntimeGatewayRequestScope();
-      const context = scope?.resolveGatewayContext?.() ?? scope?.context;
-      // SAFETY: Gateway owns this scheduler; plugins receive only the guarded facade below.
-      return context?.cron as PluginRuntimeGatewayCronHostService | undefined;
     };
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
@@ -327,29 +307,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           const gateway = getRuntimeProperty();
           return {
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
-            getCron: () => {
-              assertTrustedPluginRuntime("getCron");
-              const record =
-                pluginRuntimeRecordById.get(pluginId) ??
-                registry.plugins.find((entry) => entry.id === pluginId);
-              const isActive = capturePluginLifecycleAuthority(registry, record, {
-                scopedRuntime: true,
-              });
-              if (!isActive || !runWithPluginScope(() => resolveGatewayCronService(gateway))) {
-                return undefined;
-              }
-              const assertActive = () => {
-                if (!isActive()) {
-                  throw new Error(
-                    "Gateway cron is unavailable because this plugin runtime has retired.",
-                  );
-                }
-              };
-              return createLifecycleBoundPluginCronService({
-                assertActive,
-                resolveService: () => runWithPluginScope(() => resolveGatewayCronService(gateway)),
-              });
-            },
             request: async (method, params, options) => {
               const { assertGatewaySessionRequestOwned } = await loadSessionOwnership();
               return await runWithPluginScope(async () => {
@@ -551,9 +508,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["agent"]["session"];
           const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
             const runParams = { ...params, skillWorkshopCollectionReconcile: undefined };
-            const { resolveRunSessionExecutionOwner } = await loadSessionOwnership();
+            const { prepareRunSessionExecution } = await loadSessionOwnership();
             return await runWithPluginScope(async () => {
-              const ownerPluginId = resolveRunSessionExecutionOwner(runParams);
+              const { ownerPluginId, agentHarnessRuntimeOverride } =
+                prepareRunSessionExecution(runParams);
+              if (agentHarnessRuntimeOverride !== undefined) {
+                runParams.agentHarnessRuntimeOverride = agentHarnessRuntimeOverride;
+              }
               if (ownerPluginId) {
                 return await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(runParams);
               }
@@ -624,6 +585,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         const subagent = getRuntimeProperty();
         return {
+          complete: (params) =>
+            withPluginRuntimePluginIdScope(pluginId, () => subagent.complete(params)),
           run: async (params) => {
             const { assertSessionIdentitiesOwned } = await loadSessionOwnership();
             return await withPluginRuntimePluginIdScope(pluginId, async () => {

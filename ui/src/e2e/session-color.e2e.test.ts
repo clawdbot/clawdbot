@@ -291,8 +291,8 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
-      Object.assign(designReview, { label: "Design review refreshed", color: null });
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse(sessions));
+      Object.assign(designReview, { label: "Design review refreshed", color: null, icon: "book" });
+      await gateway.setSessionsListResponse(sessionsListResponse(sessions));
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
       // Only the roster response carries this label; wait for that render so a
       // transient event-only clear cannot hide a stale color restored by refresh.

@@ -240,7 +240,7 @@ export function renderSessionVisibilityDenial(
     case "target_agent_ownership_unavailable":
       return `${actionPrefix(params.action)} denied because target agent ownership is unavailable.`;
     case "cross_agent_visibility_restricted":
-      return `${actionPrefix(params.action)} visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.`;
+      return `${actionPrefix(params.action)} visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.`;
     case "agent_to_agent_disabled":
       if (params.action === "send") {
         return "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.";

@@ -261,11 +261,13 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
       ></button>
       <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
-      ${params.preferencesBrowserOnly
-        ? html`<div class="sidebar-customize-menu__provenance" role="note">
-            ${t("quickSettings.personal.browserOnly")}
-          </div>`
-        : nothing}
+      ${
+        params.preferencesBrowserOnly
+          ? html`<div class="sidebar-customize-menu__provenance" role="note">
+              ${t("quickSettings.personal.browserOnly")}
+            </div>`
+          : nothing
+      }
       ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
         const visible = params.sidebarEntries.includes(
           serializeSidebarEntry({ type: "route", route: routeId }),
@@ -284,9 +286,14 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           </wa-dropdown-item>
         `;
       })}
-      ${params.isRouteEnabled("workboard") && params.workboardBoards.length > 0
-        ? params.workboardRenderers?.renderCustomize(params.workboardBoards, params.sidebarEntries)
-        : nothing}
+      ${
+        params.isRouteEnabled("workboard") && params.workboardBoards.length > 0
+          ? params.workboardRenderers?.renderCustomize(
+              params.workboardBoards,
+              params.sidebarEntries,
+            )
+          : nothing
+      }
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       <wa-dropdown-item class="sidebar-customize-menu__item" value="reset">
         <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>

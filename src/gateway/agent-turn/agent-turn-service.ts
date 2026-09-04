@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
   releaseMainSessionRecoveryOwner,
@@ -254,6 +255,9 @@ export function createAgentTurnService(
         agentDedupeKeys,
         preAcceptedReservedSessionKey,
         expectedSession,
+        ...(isRestartRecoveryResumeRun
+          ? { admissionOwner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER }
+          : {}),
         context,
         io,
         dedupeLifecycle,
@@ -661,8 +665,6 @@ export function createAgentTurnService(
       typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
         ? Math.max(0, Math.floor(params.timeoutMs))
         : 30_000;
-    // Keep the captured entry across the wait so timeout attribution uses the
-    // same owner snapshot that selected the chat-vs-agent observation source.
     const activeChatEntry = context.chatAbortControllers.get(runId);
     const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
     const queuedResult = () =>
@@ -688,12 +690,9 @@ export function createAgentTurnService(
       return queuedAfterWait;
     }
     if (!snapshot) {
-      const activeRunRegistered = activeChatEntry !== undefined;
       return {
         runId,
         status: "timeout" as const,
-        timeoutPhase: activeRunRegistered ? ("gateway_draining" as const) : ("queue" as const),
-        ...(activeRunRegistered ? {} : { providerStarted: false }),
       };
     }
     return {

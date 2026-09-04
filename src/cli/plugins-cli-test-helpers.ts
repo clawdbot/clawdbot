@@ -792,19 +792,17 @@ vi.mock("../hooks/install.js", () => ({
   resolveHookInstallDir: (hookId: string) => `/tmp/hooks/${hookId}`,
 }));
 
-vi.mock("../hooks/installs.js", () => ({
-  readHookInstalls: () => structuredClone(mockHookInstallRecords),
-  recordHookInstall: ((
-    ...args: Parameters<(typeof import("../hooks/installs.js"))["recordHookInstall"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../hooks/installs.js"))["recordHookInstall"]>,
-      ReturnType<(typeof import("../hooks/installs.js"))["recordHookInstall"]>
-    >(
-      recordHookInstallMock,
-      ...args,
-    )) as (typeof import("../hooks/installs.js"))["recordHookInstall"],
-}));
+vi.mock("../hooks/installs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../hooks/installs.js")>();
+  return {
+    ...actual,
+    readHookInstalls: () => structuredClone(mockHookInstallRecords),
+    recordHookInstall: (...args: Parameters<typeof actual.recordHookInstall>) => {
+      recordHookInstallMock(...args);
+      return actual.recordHookInstall(...args);
+    },
+  };
+});
 
 vi.mock("../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
@@ -1125,8 +1123,5 @@ export function resetPluginsCliTestState() {
     ok: false,
     error: "hook npm install disabled in test",
   });
-  recordHookInstallMock.mockImplementation(
-    ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
-  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

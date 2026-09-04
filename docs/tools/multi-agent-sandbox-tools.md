@@ -354,6 +354,8 @@ Legacy `agents.list` rosters and retired per-agent keys (such as `sandbox.perSes
     }
     ```
 
+    Session tools default to Gateway-wide visibility (`all`) with agent-to-agent messaging on; this profile narrows the agent to its own session tree. See [`tools.sessions`](/gateway/config-tools#tools-sessions) and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
+
     `sessions_history` in this profile still returns a bounded, sanitized recall view rather than a raw transcript dump. Assistant recall strips thinking tags, `<relevant-memories>` scaffolding, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), downgraded tool-call scaffolding, leaked ASCII/full-width model control tokens, and malformed MiniMax tool-call XML before redaction/truncation.
 
   </Tab>

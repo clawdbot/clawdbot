@@ -1274,6 +1274,17 @@ export function resolveOfficialExternalPluginLegacyIds(
   );
 }
 
+/** Returns former npm package names accepted only for trusted update migrations. */
+export function resolveOfficialExternalPluginLegacyNpmPackageNames(
+  entry: OfficialExternalPluginCatalogEntry,
+): string[] {
+  return uniqueStrings(
+    (getOfficialExternalPluginCatalogManifest(entry)?.legacyNpmPackageNames ?? [])
+      .map((packageName) => normalizeOptionalString(packageName))
+      .filter((packageName): packageName is string => Boolean(packageName)),
+  );
+}
+
 /** Returns the host-owned setup migration selected for an external channel cutover. */
 export function resolveOfficialExternalChannelCompatibilityMigration(
   channelId: string,
@@ -1616,6 +1627,19 @@ export function getOfficialExternalPluginCatalogEntryForPackage(
   }
   return listOfficialExternalPluginCatalogEntries().find(
     (entry) => normalizeOptionalString(entry.name) === normalized,
+  );
+}
+
+/** Source discovery alone does not make an external package part of the core distribution. */
+export function isExternallyDistributedPlugin(plugin: {
+  pluginId: string;
+  packageName?: string;
+  packageBuild?: { bundledDist?: boolean };
+}): boolean {
+  const entry = getOfficialExternalPluginCatalogEntryForPackage(plugin.packageName);
+  return (
+    plugin.packageBuild?.bundledDist === false ||
+    (entry !== undefined && resolveOfficialExternalPluginId(entry) === plugin.pluginId)
   );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

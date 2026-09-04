@@ -94,7 +94,8 @@ vi.mock("../../infra/wsl.js", () => ({
   isWSLEnv: isWSLEnvMock,
 }));
 
-vi.mock("./shared.js", () => ({
+vi.mock("./shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared.js")>()),
   createCliStatusTextStyles: () => ({
     rich: false,
     label: (text: string) => text,

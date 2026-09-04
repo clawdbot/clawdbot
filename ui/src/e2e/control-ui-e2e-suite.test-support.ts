@@ -1,7 +1,10 @@
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, vi } from "vitest";
+import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
   startControlUiE2eServer,
   type ControlUiE2eServer,
@@ -37,6 +40,7 @@ type ControlUiE2eSuite = {
   withPage: <T>(
     options: Parameters<Browser["newContext"]>[0],
     run: (fixture: ControlUiE2ePage) => Promise<T>,
+    cleanup?: (fixture: ControlUiE2ePage) => Promise<void>,
   ) => Promise<T>;
 };
 
@@ -88,6 +92,17 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
   return { request, release, requests: () => requests };
 }
 
+export async function closeControlUiE2eBrowserContext(context: BrowserContext): Promise<void> {
+  await context.close();
+  // Requests outlive sockets; Gateway cleanup must not retire their admission
+  // roots before pending handlers (including lazy imports) have finished.
+  // waitFor also works in afterAll; retain the UI E2E config's poll budget.
+  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
+    interval: 100,
+    timeout: 15_000,
+  });
+}
+
 export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): ControlUiE2eSuite {
   // Global setup already checked the executable; keep that result across isolated files.
   const { executablePath: chromiumExecutablePath, available: chromiumAvailable } =
@@ -101,11 +116,19 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
   let artifactDir: string | undefined;
 
   const closeBrowserContext = async (context: BrowserContext): Promise<void> => {
+    // Retain failed closes for the final browser teardown owner.
+    await closeControlUiE2eBrowserContext(context);
     openBrowserContexts.delete(context);
-    await context.close().catch(() => {});
   };
   const closeOpenBrowserContexts = async (): Promise<void> => {
-    await Promise.all([...openBrowserContexts].map((context) => closeBrowserContext(context)));
+    const [first, ...remaining] = openBrowserContexts;
+    if (!first) {
+      return;
+    }
+    await runQaGatewayFixture(
+      () => closeBrowserContext(first),
+      ...remaining.map((context) => () => closeBrowserContext(context)),
+    );
   };
   const newBrowserContext = async (
     contextOptions: Parameters<Browser["newContext"]>[0],
@@ -152,33 +175,25 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           const startServer = options.startServer ?? startControlUiE2eServer;
           if (options.startServerBeforeBrowser) {
             server = await startServer();
-            try {
-              browser = await chromium.launch({
-                ...options.browserLaunchOptions,
-                executablePath: chromiumExecutablePath,
-              });
-            } catch (error) {
-              await server.close();
-              throw error;
-            }
+            browser = await chromium.launch({
+              ...options.browserLaunchOptions,
+              executablePath: chromiumExecutablePath,
+            });
           } else {
             browser = await chromium.launch({
               ...options.browserLaunchOptions,
               executablePath: chromiumExecutablePath,
             });
-            try {
-              server = await startServer();
-            } catch (error) {
-              await browser.close();
-              throw error;
-            }
+            server = await startServer();
           }
         });
 
         afterAll(async () => {
-          await closeOpenBrowserContexts();
-          await browser?.close();
-          await server?.close();
+          await runQaGatewayFixture(
+            closeOpenBrowserContexts,
+            () => browser?.close(),
+            () => server?.close(),
+          );
         });
 
         if (options.trackBrowserContexts) {
@@ -189,14 +204,33 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       });
     },
     newBrowserContext,
-    async withPage(contextOptions, run) {
+    async withPage<T>(
+      contextOptions: Parameters<Browser["newContext"]>[0],
+      run: (fixture: ControlUiE2ePage) => Promise<T>,
+      cleanup?: (fixture: ControlUiE2ePage) => Promise<void>,
+    ) {
       const context = await newBrowserContext(contextOptions);
-      try {
-        const page = await context.newPage();
-        return await run({ context, page });
-      } finally {
-        await closeBrowserContext(context);
-      }
+      let result!: T;
+      let fixture: ControlUiE2ePage | undefined;
+      await runQaGatewayFixture(
+        async () => {
+          const page = await context.newPage();
+          fixture = { context, page };
+          try {
+            result = await run(fixture);
+          } catch (error) {
+            await captureControlUiE2eFailureDiagnostics(page, {
+              error: error instanceof Error ? error : new Error(String(error)),
+              label: options.name,
+            });
+            throw error;
+          }
+        },
+        // Capture assertion diagnostics before a test closes its page or drains routes.
+        () => (fixture ? cleanup?.(fixture) : undefined),
+        () => closeBrowserContext(context),
+      );
+      return result;
     },
   };
 }
