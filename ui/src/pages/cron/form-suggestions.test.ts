@@ -125,11 +125,8 @@ describe("resolveConversationTargetSuggestions", () => {
     },
   ];
 
-  it("filters the cached unscoped directory locally and deduplicates target text", () => {
+  it("requires an explicit account before exposing routeable target suggestions", () => {
     expect(resolveConversationTargetSuggestions(conversations, " work ")).toEqual(["-100work"]);
-    expect(resolveConversationTargetSuggestions(conversations, "")).toEqual([
-      "-100personal",
-      "-100work",
-    ]);
+    expect(resolveConversationTargetSuggestions(conversations, "")).toEqual([]);
   });
 });

@@ -361,7 +361,7 @@ describe("CronPage lifecycle", () => {
     expect(page.deliveryConversations).toEqual([]);
   });
 
-  it("keeps directory suggestions target-only instead of inferring account or topic routing", async () => {
+  it("keeps an explicit suggestion account without inferring topic routing", async () => {
     const fallbackRequest = createRequest();
     const request = vi.fn(async (method: string) => {
       if (method === "conversations.list") {
@@ -389,9 +389,10 @@ describe("CronPage lifecycle", () => {
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
 
+    page.patchForm({ deliveryAccountId: "bound-account" });
     page.patchForm({ deliveryTo: "-1009876543210" });
 
-    expect(page.cron.cronForm.deliveryAccountId).toBe("");
+    expect(page.cron.cronForm.deliveryAccountId).toBe("bound-account");
     expect(page.cron.cronForm.deliveryThreadId).toBeUndefined();
   });
 

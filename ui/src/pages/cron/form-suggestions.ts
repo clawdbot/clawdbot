@@ -18,9 +18,12 @@ export function resolveConversationTargetSuggestions(
   accountIdRaw: string,
 ): string[] {
   const accountId = accountIdRaw.trim();
+  if (!accountId) {
+    return [];
+  }
   return normalizeSortedUniqueTrimmedStringList(
     conversations
-      .filter((conversation) => !accountId || conversation.accountId === accountId)
+      .filter((conversation) => conversation.accountId === accountId)
       .map((conversation) => conversation.target),
   );
 }
