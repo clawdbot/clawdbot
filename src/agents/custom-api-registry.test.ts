@@ -1,5 +1,6 @@
 import { createApiRegistry, type ApiRegistry } from "@openclaw/ai";
 import { resetApiProviders } from "@openclaw/ai/providers";
+import { withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 // Covers dynamic registration of custom model API providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -76,24 +77,34 @@ describe("ensureCustomApiRegistered", () => {
     await expect(stream.result()).resolves.toBe(message);
   });
 
-  it("converts async stream factory failures into terminal stream errors", async () => {
-    const streamFn = vi.fn(async () => {
-      throw new Error("factory failed");
-    });
-    ensureCustomApiRegistered(registry, "test-custom-api", streamFn);
+  it.each(["provider", "runtime", "runtime-abort"] as const)(
+    "converts async stream factory failures with %s origin into terminal errors",
+    async (origin) => {
+      const controller = new AbortController();
+      const streamFn = vi.fn(async () => {
+        const failure = new Error("factory failed");
+        if (origin === "runtime-abort") {
+          controller.abort(withRunFailureOrigin(failure, "runtime"));
+          throw new Error("factory failed");
+        }
+        throw origin === "runtime" ? withRunFailureOrigin(failure, "runtime") : failure;
+      });
+      ensureCustomApiRegistered(registry, "test-custom-api", streamFn);
 
-    const provider = getRegisteredTestProvider();
-    const stream = provider.stream(
-      { api: "test-custom-api", provider: "custom", id: "m" } as never,
-      { messages: [] },
-      {},
-    );
+      const provider = getRegisteredTestProvider();
+      const stream = provider.stream(
+        { api: "test-custom-api", provider: "custom", id: "m" } as never,
+        { messages: [] },
+        { signal: controller.signal },
+      );
 
-    await expect(stream.result()).resolves.toMatchObject({
-      stopReason: "error",
-      errorMessage: "factory failed",
-    });
-  });
+      const result = await stream.result();
+      expect(result).toMatchObject({ stopReason: "error", errorMessage: "factory failed" });
+      expect(
+        result.diagnostics?.some((entry) => entry.type === "synthesized_run_failure") ?? false,
+      ).toBe(origin !== "provider");
+    },
+  );
 
   it("keeps plugin api providers when refreshing built-ins", () => {
     // Built-in refresh should preserve plugin-owned API providers while

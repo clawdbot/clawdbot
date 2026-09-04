@@ -22,6 +22,7 @@ function getCustomApiRegistrySourceId(api: Api): string {
 function adaptCustomStream(
   model: Model,
   stream: ReturnType<StreamFn>,
+  signal?: AbortSignal,
 ): AssistantMessageEventStreamContract {
   if (!(stream instanceof Promise)) {
     return stream as AssistantMessageEventStreamContract;
@@ -38,8 +39,7 @@ function adaptCustomStream(
       }
       adapted.end(await resolved.result());
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const message = buildStreamErrorAssistantMessage({ model, errorMessage });
+      const message = buildStreamErrorAssistantMessage({ model, error, signal });
       adapted.push({ type: "error", reason: "error", error: message });
     }
   })();
@@ -60,9 +60,13 @@ export function ensureCustomApiRegistered(
     {
       api,
       stream: (model, context, options) =>
-        adaptCustomStream(model, streamFn(model, context, options)),
+        adaptCustomStream(model, streamFn(model, context, options), options?.signal),
       streamSimple: (model, context, options) =>
-        adaptCustomStream(model, streamFn(model, context, options as StreamOptions)),
+        adaptCustomStream(
+          model,
+          streamFn(model, context, options as StreamOptions),
+          options?.signal,
+        ),
     },
     getCustomApiRegistrySourceId(api),
   );

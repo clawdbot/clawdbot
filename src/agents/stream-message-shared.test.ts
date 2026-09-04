@@ -17,7 +17,7 @@ describe("buildStreamErrorAssistantMessage", () => {
   it("never returns an empty content array", () => {
     const message = buildStreamErrorAssistantMessage({
       model,
-      errorMessage: "stream aborted by upstream host=internal.example.com",
+      error: "stream aborted by upstream host=internal.example.com",
     });
     expect(message.content).toStrictEqual([{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }]);
   });
@@ -25,7 +25,7 @@ describe("buildStreamErrorAssistantMessage", () => {
   it("places only the sentinel in content and never echoes the raw error text", () => {
     const message = buildStreamErrorAssistantMessage({
       model,
-      errorMessage: "stream aborted by upstream host=internal.example.com",
+      error: "stream aborted by upstream host=internal.example.com",
     });
     // Replay-visible content must be the canonical sentinel — replaying raw
     // provider error strings could leak hostnames/metadata to the model and
@@ -38,7 +38,7 @@ describe("buildStreamErrorAssistantMessage", () => {
   });
 
   it("uses the same sentinel when errorMessage is blank", () => {
-    const message = buildStreamErrorAssistantMessage({ model, errorMessage: "   " });
+    const message = buildStreamErrorAssistantMessage({ model, error: "   " });
     expect(message.content).toEqual([{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }]);
     // Original errorMessage is preserved verbatim for clients that surface it.
     expect(message.errorMessage).toBe("   ");

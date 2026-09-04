@@ -30,6 +30,7 @@ import type { DocumentType } from "@smithy/types";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   adjustMaxTokensForThinking,
+  appendRuntimeFailureDiagnostic,
   AssistantMessageEventStream,
   buildBaseOptions,
   calculateCost,
@@ -38,6 +39,7 @@ import {
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
+  unwrapRunFailure,
   type Api,
   type AssistantMessage,
   type AssistantMessageEvent,
@@ -403,7 +405,8 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         output.content = [];
       }
       output.stopReason = options.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = formatBedrockError(error);
+      output.errorMessage = formatBedrockError(unwrapRunFailure(error));
+      appendRuntimeFailureDiagnostic(output, error, options.signal);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
     } finally {

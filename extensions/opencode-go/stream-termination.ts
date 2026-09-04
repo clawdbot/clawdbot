@@ -2,7 +2,11 @@
 // SSE streams at the provider-owned raw boundary, before the shared runtime
 // stuck-session recovery kicks in.
 import type { AssistantMessage, AssistantMessageEvent } from "openclaw/plugin-sdk/llm";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import {
+  appendRuntimeFailureDiagnostic,
+  createAssistantMessageEventStream,
+  unwrapRunFailure,
+} from "openclaw/plugin-sdk/llm";
 import { asPositiveFiniteNumber as validTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 
@@ -115,23 +119,22 @@ function buildCaughtErrorEvent(
   partial: AssistantMessage | undefined,
   error: unknown,
   model: Parameters<ProviderStreamFn>[0],
+  signal: AbortSignal,
 ): AssistantMessageEvent {
-  const message = error instanceof Error ? error.message : String(error);
-  if (partial) {
-    return {
-      type: "error",
-      reason: "error",
-      error: {
+  const cause = unwrapRunFailure(error);
+  const errorMessage = cause instanceof Error ? cause.message : String(cause);
+  const message: AssistantMessage = partial
+    ? {
         ...partial,
         stopReason: "error",
-        errorMessage: message,
-      },
-    };
-  }
+        errorMessage,
+      }
+    : synthesizeMinimalAssistantMessage(errorMessage, "error", model);
+  appendRuntimeFailureDiagnostic(message, error, signal);
   return {
     type: "error",
     reason: "error",
-    error: synthesizeMinimalAssistantMessage(message, "error", model),
+    error: message,
   };
 }
 
@@ -329,7 +332,7 @@ export function createOpencodeGoStalledStreamWrapper(
         }
       } catch (error) {
         if (!settled) {
-          finishWith(buildCaughtErrorEvent(lastSeenPartial, error, model));
+          finishWith(buildCaughtErrorEvent(lastSeenPartial, error, model, signal));
         }
       } finally {
         cleanup();
