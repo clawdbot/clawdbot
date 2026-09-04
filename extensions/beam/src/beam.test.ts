@@ -265,7 +265,7 @@ describe("Beam receiver", () => {
       now: () => receivedAt,
       resolveClient: () => ({ ...writeClient(), profileId }),
     });
-    const updatedAt = "2026-07-20T12:00:00.000Z";
+    const updatedAt = "2026-07-20T12:00:00.000100Z";
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const upload = async (
       overrides: Record<string, unknown>,
@@ -305,14 +305,16 @@ describe("Beam receiver", () => {
         expiresAt: 1_000 + BEAM_RETENTION_MS,
       });
 
-      for (const [candidateUpdatedAt, title, storedAt, candidateReceivedAt] of [
-        ["2026-07-20T11:59:59.999Z", "Stale snapshot", 2_000, 200],
-        ["2026-07-20T08:00:00.000-04:00", "Equal live snapshot", 3_000, 300],
+      for (const [candidateUpdatedAt, title, completed, storedAt, candidateReceivedAt] of [
+        ["2026-07-20T11:59:59.999Z", "Stale snapshot", false, 2_000, 200],
+        ["2026-07-20T12:00:00.000050Z", "Sub-millisecond stale snapshot", true, 2_500, 250],
+        ["2026-07-20T08:00:00.000100-04:00", "Equal live snapshot", false, 3_000, 300],
       ] as const) {
         await upload(
           {
             updatedAt: candidateUpdatedAt,
             title,
+            completed,
             items: [{ type: "agentMessage", text: title }],
           },
           { storedAt, receivedAt: candidateReceivedAt, profileId: "stale-publisher" },
@@ -377,7 +379,7 @@ describe("Beam receiver", () => {
       expect(
         await upload(
           {
-            updatedAt: "2026-07-20T12:00:00.001Z",
+            updatedAt: "2026-07-20T12:00:00.000200Z",
             title: "Reopened snapshot",
             sourceModel: { provider: "openai", model: "gpt-5.6-sol" },
             items: [{ type: "agentMessage", text: "reopened" }],
