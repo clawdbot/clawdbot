@@ -68,6 +68,7 @@ const subagentRegistryBootstrapState: {
 
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 let activeGatewayContextResolver: GatewayContextResolver | undefined;
+let activeLifecycleGatewayContextResolver: GatewayContextResolver | undefined;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 /** Admission pressure for recoverable completion deliveries; rows are never pruned for capacity. */
@@ -330,8 +331,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
   runs: subagentRuns,
   resumedRuns,
   deps: () => subagentRegistryDeps,
-  getGatewayContextResolver: () =>
-    fenceScheduledGatewayContextResolver(activeGatewayContextResolver),
+  getGatewayContextResolver: () => activeLifecycleGatewayContextResolver,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
@@ -479,9 +479,7 @@ export const releaseSubagentRunKillClaim = subagentRunManager.releaseSubagentRun
 export function registerSubagentRun(params: RegisterSubagentRunParams): void {
   subagentRunManager.registerSubagentRun({
     ...params,
-    gatewayContextResolver:
-      params.gatewayContextResolver ??
-      fenceScheduledGatewayContextResolver(activeGatewayContextResolver),
+    gatewayContextResolver: params.gatewayContextResolver ?? activeLifecycleGatewayContextResolver,
   });
 }
 export const startQueuedSubagentRun = subagentRunManager.startQueuedSubagentRun;
@@ -558,6 +556,7 @@ function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentSweeper.reset();
   subagentRestorer.reset();
   activeGatewayContextResolver = undefined;
+  activeLifecycleGatewayContextResolver = undefined;
   subagentListener.reset();
   if (opts?.persist !== false) {
     persistSubagentRuns();
@@ -617,6 +616,7 @@ export function activateSubagentRegistry(resolveGatewayContext: GatewayContextRe
   const lifecycleGatewayContextResolver =
     fenceScheduledGatewayContextResolver(resolveGatewayContext);
   activeGatewayContextResolver = resolveGatewayContext;
+  activeLifecycleGatewayContextResolver = lifecycleGatewayContextResolver;
   for (const entry of subagentRuns.values()) {
     // Deserialized rows have no in-memory owner. The activating Gateway may
     // claim those rows once, but must not replace a live run's exact owner.

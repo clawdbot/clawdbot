@@ -20,7 +20,10 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
-import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  getSharedGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -2067,6 +2070,25 @@ describe("subagent registry seam flow", () => {
     const run = findRequesterRun("run-interrupted-wait");
     expect(run?.execution.endedAt).toBeUndefined();
     expect(run?.execution.outcome).toBeUndefined();
+  });
+
+  it("shares the lifecycle Gateway resolver across fallback sibling registrations", () => {
+    mockPendingAgentWait();
+    const activeGatewayContext = { recoveryRuntime } as never;
+    mod.activateSubagentRegistry(
+      () =>
+        ({
+          recoveryRuntime,
+          resolveGatewayContext: () => activeGatewayContext,
+        }) as never,
+    );
+
+    mod.registerSubagentRun({ runId: "run-sibling-first", task: "first sibling" });
+    mod.registerSubagentRun({ runId: "run-sibling-second", task: "second sibling" });
+
+    const first = expectDefined(mod.getSubagentRunByRunId("run-sibling-first"));
+    const second = expectDefined(mod.getSubagentRunByRunId("run-sibling-second"));
+    expect(getSharedGatewayContextResolver([first, second])?.()).toBe(activeGatewayContext);
   });
 
   it("detaches subagent completion from a disposed requester transcript owner", async () => {
