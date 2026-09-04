@@ -3176,12 +3176,6 @@ describe("config io write", () => {
         ...fsNode,
         promises: {
           ...fsNode.promises,
-          readFile: async (target, options) => {
-            if (committed && target === configPath) {
-              rollbackReadUsedInjectedFs = true;
-            }
-            return await readFile(target, options);
-          },
           rename: async (from, to) => {
             await rename(from, to);
             if (!committed && to === configPath) {
@@ -3190,7 +3184,13 @@ describe("config io write", () => {
             }
           },
         },
-      } as typeof fsNode;
+      } satisfies typeof fsNode;
+      vi.spyOn(injectedFs.promises, "readFile").mockImplementation(async (target, options) => {
+        if (committed && target === configPath) {
+          rollbackReadUsedInjectedFs = true;
+        }
+        return await readFile(target, options);
+      });
       const io = createConfigIO({ env, fs: injectedFs, homedir: () => home, logger: silentLogger });
       const prepared = await io.readConfigFileSnapshotForWrite();
 

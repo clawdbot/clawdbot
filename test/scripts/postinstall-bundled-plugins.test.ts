@@ -335,7 +335,7 @@ describe("bundled plugin postinstall", () => {
       if (String(filePath) !== inventoryPath) {
         throw new Error(`unexpected dist JavaScript read: ${String(filePath)}`);
       }
-      return readFileSyncOriginal(filePath, options);
+      return readFileSyncOriginal(filePath, { encoding: options });
     });
 
     expect(
