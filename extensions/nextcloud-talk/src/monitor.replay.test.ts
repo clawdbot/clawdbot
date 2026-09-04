@@ -540,11 +540,11 @@ describe("createNextcloudTalkWebhookServer pre-authentication concurrency", () =
 
   it("returns an over-limit body's slot, so later deliveries still land", async () => {
     // The 413 answer was moved inside the guarded region so a rejected request keeps its slot
-    // until the shared rejection lifecycle has finished answering. Scope: saturating the budget
-    // with 413s and then getting a 200 proves the release runs on that path, not that all 64
-    // slots returned - one free slot is enough for one delivery. It is all-or-nothing by
-    // construction: the release is a single finally with no branch, so the 64 requests either
-    // all release or none do. The hold itself is bounded by REJECTION_CLOSE_TIMEOUT_MS, a
+    // until the shared rejection lifecycle has finished answering. Scope: the later 200 shows
+    // one slot came back, not 64 - one free slot serves one delivery. What covers the other 63
+    // is that all 64 are asserted to receive their 413 below, the 413 is answered inside the
+    // guarded region, and the release is an unconditional finally on that path, so each of the
+    // 64 released on its own. The hold itself is bounded by REJECTION_CLOSE_TIMEOUT_MS, a
     // wall-clock grace in a shared owner, and any assertion that it is still held would have to
     // win a race against that clock on the runner - so it is deliberately not asserted here.
     const oversized = JSON.stringify({ type: "Create", padding: "x".repeat(70 * 1024) });
