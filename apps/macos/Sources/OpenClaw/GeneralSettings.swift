@@ -607,7 +607,7 @@ struct GeneralSettings: View {
         if let ping = ControlChannel.shared.lastPingMs {
             parts.append("Ping \(Int(ping)) ms")
         }
-        if let hb = HeartbeatStore.shared.lastEvent {
+        if let hb = ControlChannel.shared.lastHeartbeatEvent {
             let ageText = age(from: Date(timeIntervalSince1970: hb.ts / 1000))
             parts.append("Last heartbeat \(hb.status) · \(ageText)")
         }
