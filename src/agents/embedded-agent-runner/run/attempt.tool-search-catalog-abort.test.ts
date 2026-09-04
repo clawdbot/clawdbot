@@ -10,9 +10,10 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
-import { Agent, type AgentTool } from "../../runtime/index.js";
+import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
@@ -84,9 +85,9 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       code: 'return await agents_wait({ ids: ["child"] });',
     },
     {
-      mode: "hidden joined Code Mode",
+      mode: "joined Code Mode",
       toolName: "sessions_spawn",
-      code: "return typeof agents;",
+      code: 'return await agents.run("inspect");',
     },
   ])(
     "does not enter the original preparer or action through denied $mode",
@@ -102,8 +103,7 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       const source = wrapToolWithBeforeToolCallHook(native);
       expect(getInternalToolExecutionPreparer(source)).toBeDefined();
       hoisted.createOpenClawCodingToolsMock.mockReturnValue([source]);
-      const observed: AssistantMessage["content"][] = [];
-      const outcomes: Array<{ toolName: string; isError: boolean }> = [];
+      const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
       await createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
         sessionKey: "agent:main:main",
@@ -120,6 +120,10 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
           let turn = 0;
           const agent = new Agent({
             initialState: { model: options.model, tools: allTools },
+            // AgentSession's result middleware normally classifies structured tool failures.
+            afterToolCall: async ({ result, isError }) => ({
+              isError: isError || isToolResultError(result),
+            }),
             streamFn: () => {
               const content: AssistantMessage["content"] =
                 turn++ === 0
@@ -136,7 +140,6 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
                       },
                     ]
                   : [{ type: "text", text: "Denied as expected." }];
-              observed.push(content);
               const message: AssistantMessage = {
                 role: "assistant",
                 content,
@@ -191,28 +194,18 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
           config: { tools: { codeMode: Boolean(code), toolSearch: false } },
         },
       });
-      expect(observed.length).toBeGreaterThanOrEqual(1);
-      const result = code
-        ? expect.objectContaining({
-            details: expect.objectContaining(
-              mode === "hidden joined Code Mode"
-                ? { status: "completed", value: "undefined" }
-                : {
-                    status: "failed",
-                    error: expect.stringContaining(TOOL_EXECUTION_GATED_MESSAGE),
-                  },
-            ),
-          })
-        : expect.objectContaining({
-            content: expect.arrayContaining([
-              expect.objectContaining({
-                text: expect.stringContaining(TOOL_EXECUTION_GATED_MESSAGE),
-              }),
-            ]),
-          });
       expect(outcomes).toContainEqual(
-        expect.objectContaining({ toolName: code ? "exec" : toolName, isError: !code, result }),
+        expect.objectContaining({ toolName: code ? "exec" : toolName, isError: true }),
       );
+      if (code) {
+        expect(outcomes[0]?.result).toMatchObject({
+          details: {
+            error: expect.stringContaining(
+              mode === "joined Code Mode" ? "agents is not defined" : TOOL_EXECUTION_GATED_MESSAGE,
+            ),
+          },
+        });
+      }
       expect(prepare).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
     },

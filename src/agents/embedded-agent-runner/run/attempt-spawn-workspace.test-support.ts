@@ -69,8 +69,8 @@ function normalizeMockProviderId(providerId?: string): string {
 
 type SessionManagerMocks = {
   getSessionTarget: Mock<() => undefined>;
-  getLeafId: Mock<() => string | null>;
   getAppendParentId: Mock<() => string | null>;
+  getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
   getBoundaryCount: UnknownMock;
@@ -79,8 +79,8 @@ type SessionManagerMocks = {
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
   appendThinkingLevelChange: UnknownMock;
   appendModelChange: UnknownMock;
-  appendMessage: UnknownMock;
   appendCustomEntry: UnknownMock;
+  appendMessage: UnknownMock;
   appendSessionInfo: UnknownMock;
   appendLabelChange: UnknownMock;
   flushPendingPersistence: UnknownMock;
@@ -279,8 +279,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const trajectoryEvents: CapturedTrajectoryEvent[] = [];
   const sessionManager = {
     getSessionTarget: vi.fn(() => undefined),
-    getLeafId: vi.fn<() => string | null>(() => null),
     getAppendParentId: vi.fn<() => string | null>(() => null),
+    getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
     getBoundaryCount: vi.fn(() => 0),
@@ -289,8 +289,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
     appendThinkingLevelChange: vi.fn(),
     appendModelChange: vi.fn(),
-    appendMessage: vi.fn(),
     appendCustomEntry: vi.fn(),
+    appendMessage: vi.fn(),
     appendSessionInfo: vi.fn(),
     appendLabelChange: vi.fn(),
     flushPendingPersistence: vi.fn(),
@@ -796,19 +796,11 @@ vi.mock("../../sandbox/runtime-status.js", () => ({
   }),
 }));
 
-vi.mock("../../tool-call-id.js", async (importOriginal) => {
-  return await importOriginal<typeof import("../../tool-call-id.js")>();
-});
-
 vi.mock("../../tool-fs-policy.js", () => ({
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
     ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
   resolveEffectiveToolFsWorkspaceOnly: () => false,
 }));
-
-vi.mock("../../tool-policy.js", async (importOriginal) => {
-  return await importOriginal<typeof import("../../tool-policy.js")>();
-});
 
 vi.mock("../../transcript-policy.js", () => ({
   resolveTranscriptPolicy: () => ({
@@ -928,13 +920,6 @@ vi.mock("../thinking.js", async (importOriginal) => {
     ...actual,
     dropReasoningFromHistory: <T>(messages: T) => messages,
     dropThinkingBlocks: <T>(messages: T) => messages,
-  };
-});
-
-vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
-  return {
-    ...actual,
   };
 });
 
@@ -1156,8 +1141,8 @@ export function resetEmbeddedAttemptHarness(
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
-  hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getAppendParentId.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
@@ -1169,8 +1154,8 @@ export function resetEmbeddedAttemptHarness(
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
   hoisted.sessionManager.appendThinkingLevelChange.mockReset();
   hoisted.sessionManager.appendModelChange.mockReset();
-  hoisted.sessionManager.appendMessage.mockReset();
   hoisted.sessionManager.appendCustomEntry.mockReset();
+  hoisted.sessionManager.appendMessage.mockReset();
   hoisted.sessionManager.appendSessionInfo.mockReset();
   hoisted.sessionManager.appendLabelChange.mockReset();
   hoisted.sessionManager.flushPendingPersistence.mockReset();
