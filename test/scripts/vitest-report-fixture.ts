@@ -13,6 +13,8 @@ export type ReportFixtureMode =
   | "overlap"
   | "serial"
   | "parallel"
+  | "grouped"
+  | "grouped-conflict"
   | "batch"
   | "batch-real-home"
   | "batch-parallel"
@@ -34,6 +36,9 @@ export type ReportFixtureMode =
   | "final-write"
   | "publish-write"
   | "identity"
+  | "pool-identity"
+  | "config-error"
+  | "suite-error"
   | "metadata"
   | "coverage-missing"
   | "teardown-timeout"
@@ -124,6 +129,7 @@ ${options.crashSignal && index === 0 ? `if(!merging){process.kill(process.pid,${
 const output = process.argv.find(arg => arg.startsWith('--outputFile.json='))?.slice('--outputFile.json='.length);
 ${mode === "coverage-missing" && index === 0 ? `if(!merging)process.once('exit',()=>{const dir=process.argv.find(arg=>arg.startsWith('--coverage.reportsDirectory='))?.split('=').slice(1).join('=');if(dir&&fs.existsSync(dir+'/lcov.info')){fs.copyFileSync(dir+'/lcov.info',dir+'/lcov.info.native-original');fs.unlinkSync(dir+'/lcov.info');}});` : ""}
 ${mode === "merge-failure" ? `if(merging)throw new Error('owned native merge failure');` : ""}
+${mode === "config-error" && index === 1 ? "throw new Error('owned configuration failure');" : ""}
 ${mode === "final-write" ? `if(merging&&output)fs.mkdirSync(output);` : ""}
 ${mode === "child-write" && index === 0 ? `if(!merging&&output)fs.mkdirSync(output);` : ""}
 ${mode === "watchdog" && index === 0 ? `if(!merging&&!fs.existsSync(${JSON.stringify(ready)})){fs.writeFileSync(${JSON.stringify(ready)},'started');await new Promise(()=>setInterval(()=>{},1000));}` : ""}
@@ -132,12 +138,12 @@ ${["missing", "corrupt"].includes(mode) && index === 0 ? `if(!merging)process.on
       write(
         path.join(root, configs[index]!),
         prelude +
-          `export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "vite-" + name))},test:{name:${mode === "identity" ? `merging?'changed-${name}':'${name}'` : JSON.stringify(name)},include:[${mode === "empty" ? "'absent.test.ts'" : JSON.stringify(name + ".test.ts")}],${mode === "empty" ? "passWithNoTests:true," : ""}${mode === "ignored-unhandled" ? "dangerouslyIgnoreUnhandledErrors:true," : ""}pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,experimental:{fsModuleCache:false},teardownTimeout:1000,${["metadata", "coverage-missing"].includes(mode) ? "coverage:{provider:'v8',include:['covered.ts'],reporter:['json','lcov']}," : ""}${mode === "tuple" ? `reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "tuple.json"))}}]],` : ""}}};`,
+          `export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "vite-" + name))},test:{name:${mode === "identity" ? `merging?'changed-${name}':'${name}'` : JSON.stringify(name)},include:[${mode === "empty" ? "'absent.test.ts'" : JSON.stringify(name + ".test.ts")}],${mode === "empty" ? "passWithNoTests:true," : ""}${mode === "ignored-unhandled" ? "dangerouslyIgnoreUnhandledErrors:true," : ""}pool:${mode === "pool-identity" ? "merging?'threads':'forks'" : "'forks'"},maxWorkers:1,fileParallelism:false,cache:false,experimental:{fsModuleCache:false},teardownTimeout:1000,${["metadata", "coverage-missing"].includes(mode) ? "coverage:{provider:'v8',include:['covered.ts'],reporter:['json','lcov']}," : ""}${mode === "tuple" ? `reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "tuple.json"))}}]],` : ""}}};`,
       );
       const failure =
         (["failure", "batch-failure"].includes(mode) && index === 1) ||
         (["fail-fast", "batch-fail-fast"].includes(mode) && index === 0);
-      const body = `import fs from 'node:fs';import {test,expect} from 'vitest';
+      const body = `import fs from 'node:fs';import {test,expect,describe,afterAll} from 'vitest';
 ${realHomeReplay ? "import {homedir} from 'node:os';" : ""}
 ${["metadata", "coverage-missing"].includes(mode) ? "import {classify} from './covered';" : ""}
 let attempt=0;
@@ -152,12 +158,33 @@ test('${name}/one',${mode === "retry" && index === 0 ? "{retry:1}," : ""}async()
 });
 ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/skip',()=>{});test.todo('beta/todo');"}`;
       write(path.join(root, `${name}.test.ts`), body);
+      if (mode === "suite-error" && index === 1) {
+        fs.appendFileSync(
+          path.join(root, `${name}.test.ts`),
+          "\ndescribe('broken suite',()=>{test('body',()=>{});afterAll(()=>{throw new Error('owned suite failure')});});",
+        );
+      }
     }
     write(
       path.join(root, "covered.ts"),
       "export function classify(n:number){return n===0?'zero':'one'}",
     );
     let targets = mode === "single" ? [configs[0]!] : [...configs];
+    if (mode === "grouped" || mode === "grouped-conflict") {
+      const leaf = "test/vitest/vitest.alpha.config.ts";
+      write(
+        path.join(root, leaf),
+        `export default {test:{name:'alpha',include:[${JSON.stringify(path.join(root, "alpha.test.ts"))}],pool:'threads',maxWorkers:1,cache:false,experimental:{fsModuleCache:false}}};`,
+      );
+      write(
+        path.join(root, configs[1]!),
+        `export default {test:{name:'beta',include:[${JSON.stringify(mode === "grouped-conflict" ? path.join(root, "beta.test.ts") : "beta.test.ts")}],pool:'forks',maxWorkers:1,cache:false,experimental:{fsModuleCache:false}}};`,
+      );
+      write(
+        path.join(root, configs[0]!),
+        `export default {root:${JSON.stringify(root)},test:{projects:${JSON.stringify([leaf, configs[1]])}}};`,
+      );
+    }
     if (mode === "chunks") {
       const files = [
         "extensions/telegram/src/owned-one.test.ts",
@@ -196,7 +223,17 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
     if (mode === "publish-write") {
       fs.mkdirSync(output);
       write(path.join(output, "old"), "old");
-    } else if (["missing", "corrupt", "merge-failure", "final-write", "identity"].includes(mode)) {
+    } else if (
+      [
+        "missing",
+        "corrupt",
+        "merge-failure",
+        "final-write",
+        "identity",
+        "pool-identity",
+        "config-error",
+      ].includes(mode)
+    ) {
       write(output, "old report");
     }
     let command = [path.join(repoRoot, "scripts/run-vitest.mjs"), "run", ...targets, ...args];

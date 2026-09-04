@@ -111,10 +111,7 @@ export type ChatPageHost = ChatHost &
     chatModelsLoading: boolean;
     sessionsLoading: boolean;
     lastErrorCode: string | null;
-    chatScrollCommitCleanup: (() => void) | null;
     chatStreamRenderFrame: number | null;
-    chatScrollFrame: number | null;
-    chatScrollGeneration: number;
     chatLastScrollTop: number;
     chatLastScrollHeight: number;
     chatHasAutoScrolled: boolean;

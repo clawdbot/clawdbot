@@ -424,6 +424,7 @@ openclaw gateway status --port 19001
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.
+    - Install and reinstall guidance follows the invoking shell's installation rules, not the stored service environment or probe target. Nix mode, external supervision, noncanonical installation identity, and Linux sudo/user-manager mismatches show the install refusal instead of an unusable command. A diagnostic-only target is not itself a refusal. Nix mode blocks installation, not starting an existing service.
     - Human output includes `Gateway heap:` with configured service heap controls and a separate install-time recommendation based on memory visible to the CLI. JSON output exposes the same report as `service.gatewayHeap`. Neither is a measurement of the running Gateway's V8 heap ceiling; use runtime memory diagnostics for that.
 
   </Accordion>
@@ -604,6 +605,47 @@ openclaw gateway stop
 openclaw gateway restart
 openclaw gateway uninstall
 ```
+
+### Lifecycle requests from Gateway chat
+
+Gateway-hosted OpenClaw chat controls the exact Gateway serving that session.
+An approved start request reports **Gateway already running** without discovering
+or starting another service. Restart keeps the safe local restart behavior.
+
+An approved stop reports **Scheduled Gateway stop** after the host has prepared
+the stop for its exact instance. This acknowledges scheduling, not completed
+termination. An exclusive foreground host drains work, finishes teardown, and
+exits successfully without discovering or changing an installed service. A host
+managed by launchd or systemd verifies native ownership and prepares an executor,
+then drains work and finishes teardown before asking the native manager to stop
+the service. The requesting operation can finish its audit, history, and response
+submission during that drain;
+this does not guarantee that the client receives the response before disconnecting.
+
+Ownership or preparation failures leave the Gateway serving and return an error.
+Linux uses an independent transient control scope, in the owning systemd manager,
+so the stop command survives service cgroup termination. On macOS, hosted stop
+requests ordinary `launchctl bootout` without changing persistent enablement.
+If the native manager sends `SIGTERM` during the final stop handoff, the host
+finishes its graceful exit after joining cleanup, including the owned stop client.
+
+On Windows, a run loop that exclusively owns the Gateway process also uses
+graceful process exit under Task Scheduler. It does not select or stop a task by
+name. The generated task supervisor waits for the child process tree to exit and
+propagates the child exit result through the launcher. Its
+[`RestartOnFailure` policy](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskschedulerschema-restartonfailure-settingstype-element)
+does not restart a successful task exit. Custom wrappers can have different exit
+or restart behavior; check their policy separately. This stop path does not change
+the task definition or its restart policy. Externally supervised Gateways direct
+stop requests to their supervisor.
+
+If systemd definitively refuses a stop after teardown and the same native instance
+remains active with no pending job, the host logs the failed stop and starts a fresh
+Gateway generation in the same process. An uncertain native result is recorded as
+a failed shutdown, without claiming success or starting an in-process replacement.
+After an unexpected disconnect, check `openclaw gateway status` and the native
+service logs from an external shell before retrying. Standalone CLI lifecycle
+commands retain their service-management behavior.
 
 ### Install with a wrapper
 

@@ -134,7 +134,10 @@ const {
         return undefined;
       },
     ),
-    createAudioResourceMock: vi.fn() as Mock,
+    createAudioResourceMock: vi.fn(() => ({
+      playbackDuration: 0,
+      read: vi.fn(() => null),
+    })) as Mock,
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn() as Mock,
       off: vi.fn() as Mock,
@@ -163,9 +166,10 @@ const {
         warnings: [],
       },
     })),
-    textToSpeechStreamMock: vi.fn(
-      async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
-    ),
+    textToSpeechStreamMock: vi.fn(async (): Promise<unknown> => ({
+      success: false,
+      error: "stream unavailable",
+    })),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
     logVerboseMock: vi.fn() as Mock,
     loggerWarnMock: vi.fn() as Mock,

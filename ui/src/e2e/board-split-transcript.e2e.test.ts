@@ -14,7 +14,11 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import {
+  focusChatSidePanel,
+  openChatSidePanelType,
+  restoreChatAsMain,
+} from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -74,9 +78,10 @@ async function firstSidebarResizeFrame(page: Page, resize: () => Promise<void>) 
   const firstFrame = page.evaluate(
     () =>
       new Promise<TranscriptGeometry>((resolve, reject) => {
-        const panel = document.querySelector<HTMLElement>(".side-panel");
+        const panel = document.querySelector<HTMLElement>('[data-region="side"]:not([hidden])');
+        const region = panel?.closest(".sidebar-region");
         const transcript = document.querySelector<HTMLElement>(".sidebar-region__primary");
-        if (!panel) {
+        if (!panel || !region) {
           throw new Error("Dashboard side panel is missing");
         }
         if (!transcript) {
@@ -104,7 +109,7 @@ async function firstSidebarResizeFrame(page: Page, resize: () => Promise<void>) 
             });
           });
         });
-        observer.observe(panel, { attributes: true, attributeFilter: ["style"] });
+        observer.observe(region, { attributes: true, attributeFilter: ["style"] });
       }),
   );
   await resize();
@@ -127,12 +132,37 @@ async function showDashboard(page: Page) {
   await page.goto(controlUiSessionUrl(controlUi.baseUrl, sessionKey, "dashboard"));
 }
 
-async function expectSidePanelTabs(page: Page, expected: string[]) {
-  const labels = page.locator(".side-panel > .side-panel__header .tabstrip-tab__label");
+async function expectSidePanelTabs(page: Page, expected: string[], visible = true) {
+  const labels = page.locator('[data-region-header="side"] .tabstrip-tab__label');
   await expect
     .poll(() => labels.allTextContents().then((values) => values.toSorted()))
     .toEqual(expected.toSorted());
-  await labels.first().waitFor({ state: "visible" });
+  await labels.first().waitFor({ state: visible ? "visible" : "hidden" });
+}
+
+async function expectMinimizedDashboard(page: Page) {
+  await page.locator('[data-region-header="side"]').waitFor({ state: "hidden" });
+  await expect
+    .poll(() =>
+      page.locator(".board-session-surface").evaluate((panel) => ({
+        hidden: panel.hasAttribute("hidden"),
+        inert: panel.hasAttribute("inert"),
+        width: panel.getBoundingClientRect().width,
+        height: panel.getBoundingClientRect().height,
+      })),
+    )
+    .toEqual({ hidden: true, inert: true, width: 0, height: 0 });
+  expect(await page.getByRole("separator", { name: "Resize side panel" }).count()).toBe(0);
+  expect(
+    await page
+      .locator(".sidebar-region__primary")
+      .evaluate((primary) =>
+        Math.abs(
+          primary.getBoundingClientRect().width -
+            primary.parentElement!.getBoundingClientRect().width,
+        ),
+      ),
+  ).toBeLessThan(1);
 }
 
 describeControlUiE2e("Board split transcript restore", () => {
@@ -172,12 +202,12 @@ describeControlUiE2e("Board split transcript restore", () => {
     await page.getByText("Message number 39:").first().waitFor({ timeout: 15_000 });
 
     const sidePanel = page.locator(".side-panel");
-    await sidePanel.getByRole("button", { name: "Expand side panel" }).click();
+    await focusChatSidePanel(page);
     await expect
       .poll(async () => (await visibleTranscriptState(page)).intersectingRows, { timeout: 5_000 })
       .toBe(0);
 
-    await sidePanel.getByRole("button", { name: "Collapse" }).click();
+    await sidePanel.getByRole("button", { name: "Restore split", exact: true }).click();
 
     // The transcript must repaint promptly from the collapse render itself,
     // without waiting for an unrelated state change to re-render the pane.
@@ -222,7 +252,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       });
 
       await showDashboard(page);
-      const sidePanel = page.locator(".side-panel");
+      const sidePanel = page.locator('[data-panel-slot="dashboard"]');
       await page.getByText("Source: project-board.html", { exact: false }).waitFor();
       await page.getByText("Please use the existing work board feature.").waitFor();
       const initialWidth = await sidePanel.evaluate(
@@ -286,7 +316,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       },
     });
     await showDashboard(page);
-    await page.locator(".side-panel").waitFor();
+    await page.locator('[data-region-header="side"]').waitFor();
     await openChatSidePanelType(page, "Browser");
     await openChatSidePanelType(page, "Terminal");
 
@@ -299,41 +329,51 @@ describeControlUiE2e("Board split transcript restore", () => {
       await page.screenshot({ path: path.join(proofDir, `${name}.png`) });
       await page.waitForTimeout(500);
     };
-    await sidePanel.waitFor();
+    await sidePanel.locator('[data-region-header="side"]').waitFor();
     const expectedTabLabels = ["Dashboard", "Browser", "Terminal"];
     await expectSidePanelTabs(page, expectedTabLabels);
     await sidePanel
       .locator(".side-panel-type-menu wa-dropdown-item")
       .first()
       .waitFor({ state: "hidden" });
-    const widthBeforeExpand = await sidePanel.evaluate(
+    const terminalPanel = page.locator('[data-panel-slot="terminal"]');
+    const widthBeforeExpand = await terminalPanel.evaluate(
       (element) => element.getBoundingClientRect().width,
     );
 
-    await sidePanel.getByRole("button", { name: "Expand side panel" }).click();
+    await focusChatSidePanel(page);
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
     await expect.poll(() => chat.isHidden()).toBe(true);
     await expect
-      .poll(() => sidePanel.evaluate((element) => element.getBoundingClientRect().width))
+      .poll(() => terminalPanel.evaluate((element) => element.getBoundingClientRect().width))
       .toBeGreaterThan(widthBeforeExpand);
-    await expectSidePanelTabs(page, expectedTabLabels);
+    await expectSidePanelTabs(page, ["Dashboard", "Browser", "Chat"], false);
     await recordStep("transition-01-expanded");
 
-    await sidePanel.getByRole("button", { name: "Collapse" }).click();
+    await sidePanel.getByRole("button", { name: "Restore split", exact: true }).click();
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
     await expect.poll(() => chat.isVisible()).toBe(true);
+    await restoreChatAsMain(page);
     await expectSidePanelTabs(page, expectedTabLabels);
     expect(await sidePanel.locator('[data-panel-slot="dashboard"]').count()).toBe(1);
+    const dashboard = await page.locator("openclaw-board-view").elementHandle();
+    expect(dashboard).not.toBeNull();
     await recordStep("transition-02-split");
 
     await sidePanel.getByRole("button", { name: "Close", exact: true }).click();
-    await expect.poll(() => sidePanel.count()).toBe(0);
+    await expectMinimizedDashboard(page);
+    expect(await dashboard!.evaluate((element) => element.isConnected)).toBe(true);
     await expect.poll(() => chat.isVisible()).toBe(true);
     await recordStep("transition-03-chat-only");
 
-    await page.getByRole("button", { name: "Side panel", exact: true }).click();
-    await sidePanel.waitFor();
+    await page.locator(".chat-side-panel-toggle").click();
+    await sidePanel.locator('[data-region-header="side"]').waitFor();
     await expectSidePanelTabs(page, expectedTabLabels);
+    expect(
+      await page
+        .locator("openclaw-board-view")
+        .evaluate((element, previous) => element === previous, dashboard),
+    ).toBe(true);
     await expect.poll(() => chat.isVisible()).toBe(true);
     expect(await gateway.getRequests("board.update")).toHaveLength(0);
     await recordStep("transition-04-split-reopened");
@@ -378,7 +418,7 @@ describeControlUiE2e("Board split transcript restore", () => {
     try {
       await showDashboard(page);
       const sidePanel = page.locator(".side-panel");
-      await sidePanel.waitFor();
+      await sidePanel.locator('[data-region-header="side"]').waitFor();
       await openChatSidePanelType(page, "Side chat");
       await expectSidePanelTabs(page, ["Dashboard", "Side chat"]);
       if (recordProof) {
@@ -429,7 +469,7 @@ describeControlUiE2e("Board split transcript restore", () => {
     try {
       await showDashboard(page);
       const sidePanel = page.locator(".side-panel");
-      await sidePanel.waitFor();
+      await sidePanel.locator('[data-region-header="side"]').waitFor();
       await expect
         .poll(() =>
           gateway.getRequests("session.discussion.info").then((requests) => requests.length),
@@ -467,32 +507,46 @@ describeControlUiE2e("Board split transcript restore", () => {
 
     const sidePanel = page.locator(".side-panel");
     const headerToggle = page.locator(".chat-side-panel-toggle").first();
-    await sidePanel.waitFor();
+    await sidePanel.locator('[data-region-header="side"]').waitFor();
     await expectSidePanelTabs(page, ["Dashboard"]);
+    const dashboard = await page.locator("openclaw-board-view").elementHandle();
+    expect(dashboard).not.toBeNull();
     await expect.poll(() => headerToggle.getAttribute("aria-expanded")).toBe("true");
     await expect.poll(() => headerToggle.getAttribute("aria-label")).toBe("Minimize side panel");
 
     await sidePanel.getByRole("button", { name: "Close", exact: true }).click();
 
-    await expect.poll(() => sidePanel.count()).toBe(0);
+    await expectMinimizedDashboard(page);
+    expect(await dashboard!.evaluate((element) => element.isConnected)).toBe(true);
     expect(await headerToggle.getAttribute("aria-expanded")).toBe("false");
     expect(await headerToggle.getAttribute("aria-label")).toBe("Side panel");
     expect(await gateway.getRequests("board.update")).toHaveLength(0);
 
     await headerToggle.click();
-    await sidePanel.waitFor();
+    await sidePanel.locator('[data-region-header="side"]').waitFor();
     await expectSidePanelTabs(page, ["Dashboard"]);
+    expect(
+      await page
+        .locator("openclaw-board-view")
+        .evaluate((element, previous) => element === previous, dashboard),
+    ).toBe(true);
     expect(await headerToggle.getAttribute("aria-expanded")).toBe("true");
     expect(await gateway.getRequests("board.update")).toHaveLength(0);
 
     await headerToggle.click();
-    await expect.poll(() => sidePanel.count()).toBe(0);
+    await expectMinimizedDashboard(page);
+    expect(await dashboard!.evaluate((element) => element.isConnected)).toBe(true);
     expect(await headerToggle.getAttribute("aria-expanded")).toBe("false");
     expect(await gateway.getRequests("board.update")).toHaveLength(0);
 
     await headerToggle.click();
-    await sidePanel.waitFor();
+    await sidePanel.locator('[data-region-header="side"]').waitFor();
     await expectSidePanelTabs(page, ["Dashboard"]);
+    expect(
+      await page
+        .locator("openclaw-board-view")
+        .evaluate((element, previous) => element === previous, dashboard),
+    ).toBe(true);
     expect(await gateway.getRequests("board.update")).toHaveLength(0);
   }, 120_000);
 });

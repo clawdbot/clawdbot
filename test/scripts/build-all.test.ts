@@ -28,6 +28,7 @@ import {
   finalizeBuildStepCache,
 } from "../../scripts/lib/build-artifact-cache.mts";
 import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runNodeMain } from "../../scripts/run-node.mts";
 
@@ -37,6 +38,17 @@ function getBuildAllStep(label: string) {
     throw new Error(`Missing build-all step ${label}`);
   }
   return step;
+}
+
+function buildMemoryLimit(cgroupGiB: number) {
+  // A cgroup-only fixture still reads Linux MemAvailable. Pin the host facts so
+  // concurrent CI work cannot change the admission this scenario exercises.
+  return {
+    platform: "linux",
+    availableMemoryBytes: 16 * 1024 ** 3,
+    procMemTotalBytes: 16 * 1024 ** 3,
+    cgroupMemoryLimitBytes: cgroupGiB * 1024 ** 3,
+  };
 }
 
 function withBuildCacheFixture(
@@ -217,7 +229,30 @@ describe("resolveBuildAllStep", () => {
       options: {
         stdio: "inherit",
         env: { FOO: "bar" },
+        shell: false,
       },
+    });
+  });
+
+  it("passes encoded import URLs literally to managed Node on Windows", () => {
+    const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
+    const result = resolveBuildAllStep(
+      { label: "tsdown-unified", args: ["--import", importUrl, "scripts/tsdown-build.mts"] },
+      { platform: "win32", nodeExecPath: "C:\\Program Files\\nodejs\\node.exe", env: {} },
+    );
+
+    expect(
+      createManagedCommandInvocation({
+        bin: result.command,
+        args: result.args,
+        ...result.options,
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["--import", importUrl, "scripts/tsdown-build.mts"],
+      shell: false,
+      windowsVerbatimArguments: undefined,
     });
   });
 
@@ -256,41 +291,44 @@ describe("resolveBuildAllStep", () => {
       options: {
         stdio: "inherit",
         env: expectedEnv,
+        shell: false,
       },
     });
   });
 
-  it("can route pnpm script steps through direct node entrypoints", () => {
-    const step = getBuildAllStep("plugins:assets:build");
-
-    const result = resolveBuildAllStep(step, {
-      nodeExecPath: "/custom/node",
+  it.each([
+    {
+      label: "plugins:assets:build",
+      args: ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"],
+    },
+    {
+      label: "plugins:assets:copy",
+      args: ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "copy"],
+    },
+    { label: "ui:build", args: ["scripts/ui.js", "build"] },
+  ])("runs the $label native fallback through managed Node on Windows", ({ label, args }) => {
+    const result = resolveBuildAllStep(getBuildAllStep(label), {
+      platform: "win32",
+      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
       env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
     });
-
-    expect(result).toEqual({
-      command: "/custom/node",
-      args: ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"],
-      options: {
-        stdio: "inherit",
-        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
-      },
-    });
-  });
-
-  it("routes no-pnpm UI builds through the canonical validation wrapper", () => {
     expect(
-      resolveBuildAllStep(getBuildAllStep("ui:build"), {
-        nodeExecPath: "/custom/node",
-        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      createManagedCommandInvocation({
+        bin: result.command,
+        args: result.args,
+        ...result.options,
+        platform: "win32",
       }),
     ).toEqual({
-      command: "/custom/node",
-      args: ["scripts/ui.js", "build"],
-      options: {
-        stdio: "inherit",
-        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
-      },
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args,
+      shell: false,
+      windowsVerbatimArguments: undefined,
+    });
+    expect(result.options).toEqual({
+      stdio: "inherit",
+      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      shell: false,
     });
   });
 
@@ -407,7 +445,7 @@ describe("resolveBuildAllSteps", () => {
       const result = await runBuildAllSteps(profile, {
         env: {},
         logger,
-        memoryLimit: { cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(4),
         resolveCacheState,
         restoreCache,
         finalizeCache,
@@ -440,7 +478,7 @@ describe("resolveBuildAllSteps", () => {
         env: {},
         finalizeCache: vi.fn(() => true),
         logger: { error: vi.fn(), warn: vi.fn() },
-        memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(5),
         now: () => 0,
         resolveCacheState(step) {
           executionOrder.push(`cache:${step.label}`);
@@ -493,7 +531,7 @@ describe("resolveBuildAllSteps", () => {
       const cacheDisabledRunner = vi.fn(() => ({ status: 0 }));
       await runBuildAllSteps("ciArtifacts", {
         env: { OPENCLAW_BUILD_CACHE: "0" },
-        memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(5),
         finalizeCache: vi.fn(() => true),
         logger: { error: vi.fn(), warn: vi.fn() },
         now: () => 0,
@@ -522,18 +560,17 @@ describe("resolveBuildAllSteps", () => {
     "skips heap admission for partial profile %s",
     async (profile) => {
       const partialEnv = { MARKER: "unchanged", NODE_OPTIONS: "--max-old-space-size=256" };
-      expect(
-        resolveBuildAllTsdownPlan(profile, partialEnv, {
-          cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
-        }),
-      ).toEqual({ env: partialEnv, heapShortfall: null });
+      expect(resolveBuildAllTsdownPlan(profile, partialEnv, buildMemoryLimit(4))).toEqual({
+        env: partialEnv,
+        heapShortfall: null,
+      });
       const runStep = vi.fn<
         (invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number }
       >(() => ({ status: 0 }));
       const result = await runBuildAllSteps(profile, {
         env: partialEnv,
         logger: { error: vi.fn(), warn: vi.fn() },
-        memoryLimit: { cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(4),
         resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
         runStep,
       });
@@ -582,12 +619,7 @@ describe("resolveBuildAllSteps", () => {
       const result = await runBuildAllSteps("ciArtifacts", {
         env,
         logger,
-        memoryLimit: {
-          platform: "linux",
-          availableMemoryBytes: 16 * 1024 ** 3,
-          procMemTotalBytes: 16 * 1024 ** 3,
-          cgroupMemoryLimitBytes: cgroupGiB * 1024 ** 3,
-        },
+        memoryLimit: buildMemoryLimit(cgroupGiB),
         resolveCacheState: () => ({ cacheable: true, fresh: false, reason: "missing-inputs" }),
         finalizeCache: vi.fn(() => true),
         runStep(invocation) {
@@ -940,7 +972,7 @@ describe("resolveBuildAllSteps", () => {
           cacheEnabled: false,
           env,
           logger: { error: vi.fn(), warn: vi.fn() },
-          memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+          memoryLimit: buildMemoryLimit(5),
           now: () => 0,
           resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
           runStep(invocation) {

@@ -9,6 +9,9 @@ vi.mock("matrix-js-sdk/lib/matrix.js", () => {
 vi.mock("fake-indexeddb", () => {
   throw new Error("IndexedDB runtime loaded without a legacy snapshot");
 });
+vi.mock("openclaw/plugin-sdk/doctor-repair-runtime", () => {
+  throw new Error("Schema repair runtime loaded without an account database");
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -26,6 +29,7 @@ it("completes absent legacy-state checks without loading client runtimes", async
     context: { openPluginStateKeyedStore },
   };
   for (const id of [
+    "matrix-account-sqlite-schema",
     "matrix-sync-cache-json-to-plugin-state",
     "matrix-legacy-crypto-migration-json-to-plugin-state",
   ]) {

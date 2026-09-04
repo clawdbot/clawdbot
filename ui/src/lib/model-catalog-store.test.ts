@@ -393,9 +393,9 @@ describe("loadModels", () => {
     const client = { request } as unknown as GatewayBrowserClient;
 
     expect(await loadModels(client, { agentId: "main" })).toEqual(initial);
-    await expect(
-      loadModels(client, { agentId: "main", refreshIfDue: true, rejectOnFailure: true }),
-    ).rejects.toThrow("probe timed out");
+    await expect(loadModels(client, { agentId: "main", refreshIfDue: true })).rejects.toThrow(
+      "probe timed out",
+    );
     expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(recovered);
     expect(request).toHaveBeenCalledTimes(3);
   });

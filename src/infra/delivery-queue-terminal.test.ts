@@ -48,6 +48,18 @@ describe("delivery queue pending terminal transition", () => {
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
+  it("rejects mismatched terminal custody before creating state", () => {
+    expect(() =>
+      terminalizePendingDeliveryQueueEntry({
+        queueName,
+        id: "requested-owner",
+        entry: { id: "different-owner", enqueuedAt: 1, retryCount: 0 },
+        stateDir,
+      }),
+    ).toThrow("Delivery queue entry id mismatch");
+    expect(fs.readdirSync(stateDir)).toEqual([]);
+  });
+
   it("expires a bounded failed fence during its exact replay lookup", () => {
     vi.useFakeTimers();
     try {

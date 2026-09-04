@@ -393,5 +393,12 @@ const server = http.createServer((request, response) => {
 const bindHost = process.env.OPENCLAW_NPM_REGISTRY_BIND_HOST || "127.0.0.1";
 const requestedPort = Number(process.env.OPENCLAW_NPM_REGISTRY_PORT || 0);
 server.listen(requestedPort, bindHost, () => {
-  fs.writeFileSync(portFile, String(server.address().port));
+  // Callers use file existence as readiness; publish only the complete port.
+  const tempFile = `${portFile}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tempFile, String(server.address().port));
+    fs.renameSync(tempFile, portFile);
+  } finally {
+    fs.rmSync(tempFile, { force: true });
+  }
 });

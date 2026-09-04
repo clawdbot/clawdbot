@@ -21,9 +21,11 @@ export function renderCapacityMeter(options: CapacityMeterOptions) {
         { length: options.total },
         (_, index) => html`
           <span
-            class="capacity-meter-pips__pip ${options.used !== null && index < options.used
-              ? "capacity-meter-pips__pip--filled"
-              : ""}"
+            class="capacity-meter-pips__pip ${
+              options.used !== null && index < options.used
+                ? "capacity-meter-pips__pip--filled"
+                : ""
+            }"
           ></span>
         `,
       )}

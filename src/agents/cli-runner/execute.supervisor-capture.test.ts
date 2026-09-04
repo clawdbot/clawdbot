@@ -26,6 +26,7 @@ import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-tra
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
 import { findCliTerminalStopError } from "../failover-error.js";
+import { buildCliDeliveredFailure, buildCliRunResult } from "./cli-run-settlement.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
@@ -2632,6 +2633,87 @@ describe("executePreparedCliRun supervisor output capture", () => {
     ]);
   });
 
+  it.each(
+    ["send", "reply", "thread-reply", "poll"].flatMap((action) =>
+      [0, 1].map((exitCode) => ({ action, exitCode })),
+    ),
+  )(
+    "retains source $action delivery and suppresses assistant output through CLI exit $exitCode",
+    async ({ action, exitCode }) => {
+      const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
+      context.mcpDeliveryCapture = true;
+      context.params.sourceReplyDeliveryMode = "message_tool_only";
+      context.params.messageChannel = "webchat";
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        recordMcpLoopbackToolCallResult({
+          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+          toolName: "message",
+          args: { action, channel: TEST_MESSAGE_CHANNEL, message: "implicit source reply" },
+          result: {
+            content: [{ type: "text", text: "sent" }],
+            details: {
+              messageDelivery: {
+                status: "settled",
+                partialDelivery: false,
+                createdThreadIds: [],
+                sourceReplyDelivered: true,
+              },
+            },
+          },
+          isError: false,
+        });
+        input.onStdout?.("done");
+        return createManagedRun({
+          reason: "exit",
+          exitCode,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "",
+          stderr: exitCode === 0 ? "" : "CLI failed after delivery",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      });
+
+      let result: ReturnType<typeof buildCliRunResult>;
+      if (exitCode === 0) {
+        const output = await executePreparedCliRun(context);
+        expect(output.messagingToolSentTargets).toBeUndefined();
+        result = buildCliRunResult({
+          context,
+          output,
+          usedHistoryPrompt: false,
+          userTurnHandled: true,
+          sessionBindingDisabled: true,
+          preparedContextAgentMeta: {},
+        });
+      } else {
+        let failure: unknown;
+        try {
+          await executePreparedCliRun(context);
+        } catch (error) {
+          failure = error;
+        }
+        const evidence = getCliMessagingDeliveryEvidence(failure);
+        expect(evidence?.messagingToolSentTargets).toBeUndefined();
+        if (!evidence) {
+          throw new Error("expected CLI failure to retain confirmed delivery evidence");
+        }
+        result = buildCliDeliveredFailure({
+          error: failure,
+          evidence,
+          context,
+          preparedContextAgentMeta: {},
+          sessionBindingDisabled: true,
+        });
+      }
+      expect(result.sourceReplyDelivered).toBe(true);
+      expect(result.messagingToolSentTargets).toBeUndefined();
+      expect(result.payloads).toBeUndefined();
+    },
+  );
+
   it("preserves text and media evidence for confirmed implicit message sends", async () => {
     const context = buildPreparedCliRunContext({ output: "text", provider: "google-gemini-cli" });
     context.mcpDeliveryCapture = true;
@@ -2700,6 +2782,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.messagingToolSentMediaUrls).toEqual(["https://example.com/implicit.png"]);
     expect(result.messagingToolSentTargets).toBeUndefined();
     expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.sourceReplyDelivered).toBeUndefined();
     expect(result.messagingToolSourceReplyPayloads).toEqual([
       {
         text: "implicit reply",

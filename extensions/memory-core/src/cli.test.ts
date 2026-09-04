@@ -803,6 +803,13 @@ describe("memory cli", () => {
           files: 2,
           chunks: 5,
           sourceCounts: [{ source: "memory", files: 2, chunks: 5, chunkBytes: 2048 }],
+          storage: {
+            databaseBytes: 1048576,
+            walBytes: 2048,
+            reusableBytes: 524288,
+            embeddingCacheBytes: 4096,
+            embeddingCacheEntries: 123,
+          },
           cache: { enabled: true, entries: 123, maxEntries: 50000 },
           fts: { enabled: true, available: true },
           vector: {
@@ -830,6 +837,8 @@ describe("memory cli", () => {
     expectLogged(log, "FTS: ready");
     expectLogged(log, "2.0 KiB text + embeddings");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
+    expectLogged(log, "Agent database: 1.0 MiB · WAL 2.0 KiB · reusable 512.0 KiB");
+    expectLogged(log, "Stored embedding cache: 4.0 KiB · 123 entries");
     expect(close).toHaveBeenCalled();
   });
 

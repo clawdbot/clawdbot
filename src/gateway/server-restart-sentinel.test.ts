@@ -79,23 +79,21 @@ const mocks = vi.hoisted(() => {
         deliveryStatus: { status: "sent" },
       },
     })),
-    readRestartSentinel: vi.fn(
-      async (): Promise<RestartSentinel> => ({
-        version: 1,
-        revision: 123,
-        payload: {
-          kind: "restart",
-          status: "ok",
-          ts: 123,
-          sessionKey: "agent:main:main",
-          deliveryContext: {
-            channel: "whatsapp",
-            to: "+15550002",
-            accountId: "acct-2",
-          },
+    readRestartSentinel: vi.fn(async (): Promise<RestartSentinel> => ({
+      version: 1,
+      revision: 123,
+      payload: {
+        kind: "restart",
+        status: "ok",
+        ts: 123,
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
         },
-      }),
-    ),
+      },
+    })),
     finalizeUpdateRestartSentinelRunningVersion: vi.fn(async () => null),
     clearRestartSentinelIfRevision: vi.fn(async () => true),
     formatRestartSentinelMessage: vi.fn(() => "restart message"),

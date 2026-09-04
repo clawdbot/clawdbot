@@ -54,6 +54,7 @@ import {
   consumeComposerInputIntent,
   getChatComposerState,
   hasTerminalRunStatus,
+  isChatRunWorking,
   isCurrentSessionSubmittedProgress,
   markComposerInputIntent,
   suppressStaleSubmittedDraftReplay,
@@ -99,10 +100,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   );
   const sendingForCurrentSession =
     props.sending && (!hasSubmittedProgress || submittedProgress !== undefined);
+  const runWorking = isChatRunWorking(props);
   const composerRunStatus =
-    sendingForCurrentSession || showAbortableUi || Boolean(submittedProgress)
-      ? { phase: "in-progress" as const }
-      : props.runStatus;
+    sendingForCurrentSession || runWorking ? { phase: "in-progress" as const } : props.runStatus;
   const draftKey = composerDraftKey(props);
   if (state.composerDraftScopeKey !== null && state.composerDraftScopeKey !== draftKey) {
     state.dictation?.dispose();
@@ -200,7 +200,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     getTextarea: () => state.composerTextarea,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
     runCommand: () => props.onSend(),
-    canRunInlineCommand: () => state.slashCommandDispatchConnected && Boolean(props.onSlashCommand),
+    canRun: (inline) => state.slashCommandDispatchConnected && !(inline && !props.onSlashCommand),
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     refreshCommands: props.onSlashIntent,
     activateComposerMode: (command) => goalComposer.activateCommand(command),

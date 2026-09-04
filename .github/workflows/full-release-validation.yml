@@ -804,7 +804,7 @@ jobs:
             # fresh run id (read-after-write lag) and can briefly report the default
             # display_title before run-name evaluates. Both are retryable; a REAL run
             # object with mismatched identity fields still refuses immediately.
-            for attempt in $(seq 1 12); do
+            for attempt in $(seq 1 60); do
               if ! candidate_run_json="$(
                 gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate_run_id}"
               )" || ! jq -e --argjson id "$candidate_run_id" '.id == $id' \

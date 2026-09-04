@@ -12,10 +12,7 @@ import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import {
-  createPreparedModelCatalogWorker,
-  createPreparedModelCatalogWorkerInput,
-} from "./prepared-model-catalog-worker.js";
+import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
 import {
   getPreparedModelFullCatalogAuth,
   setPreparedModelFullCatalogAuth,
@@ -188,11 +185,10 @@ function createFullModelCatalogAccess(params: {
   // Construction is lazy: automatic prepared reads do not start a thread. The first explicit
   // request initializes one registry and reuses that exact plugin generation until retirement.
   const worker = createPreparedModelCatalogWorker({
-    input: createPreparedModelCatalogWorkerInput({
-      agentFacts: params.agentFacts,
-      pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
-      preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
-    }),
+    pluginRegistry: params.pluginGeneration.pluginRegistry,
+    agentFacts: params.agentFacts,
+    pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+    preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
     isCurrent: params.isCurrent,
   });
   return {

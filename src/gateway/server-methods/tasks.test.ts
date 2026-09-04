@@ -39,6 +39,11 @@ import type { GatewayClient, RespondFn } from "./types.js";
 
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const cancelSessionMock = vi.fn();
+const mainSessionTaskScope = {
+  requesterSessionKey: "agent:main:main",
+  ownerKey: "agent:main:main",
+  scopeKind: "session",
+} as const;
 type TaskResponsePayload = {
   tasks?: Array<Record<string, unknown>>;
   task?: Record<string, unknown>;
@@ -642,9 +647,7 @@ describe("tasks gateway handlers", () => {
   it("gets completed tasks with stable completed status", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       runId: "run-completed",
       task: "Done task",
       status: "succeeded",
@@ -657,6 +660,8 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.title).toBe("Done task");
     expect(payload?.task?.prompt).toBe("Done task");
   });
+
+  const cliStaleResult = { runtime: "cli", progressSummary: "CLI stale progress" } as const;
 
   it.each([
     {
@@ -682,17 +687,21 @@ describe("tasks gateway handlers", () => {
     },
     {
       label: "CLI completion",
-      runtime: "cli",
-      progressSummary: "CLI stale progress",
+      ...cliStaleResult,
       terminalSummary: "CLI canonical result",
       expected: "CLI canonical result",
     },
     {
       label: "CLI sanitized terminal result",
-      runtime: "cli",
-      progressSummary: "CLI stale progress",
+      ...cliStaleResult,
       terminalSummary: "Exec denied (gateway id=req-1, approval-timeout): bash -lc ls",
       expected: "Command did not run: approval timed out.",
+    },
+    {
+      label: "CLI blocked media references",
+      ...cliStaleResult,
+      terminalSummary: 'Delivery failed.\nRetained media: path="/tmp/proof.png"',
+      expected: 'Delivery failed. Retained media: path="/tmp/proof.png"',
     },
     {
       label: "cron progress fallback",
@@ -749,9 +758,7 @@ describe("tasks gateway handlers", () => {
   it("keeps bounded prompts lookup-only", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       task: `Inspect the task prompt ${"x".repeat(5_000)}`,
       status: "running",
       deliveryStatus: "pending",
@@ -777,9 +784,7 @@ describe("tasks gateway handlers", () => {
     ].join("\n");
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
       status: "running",
       deliveryStatus: "pending",
@@ -793,9 +798,7 @@ describe("tasks gateway handlers", () => {
   it("sanitizes task text before exposing SDK summaries", async () => {
     const task = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       runId: "run-sanitized",
       label:
         "Compile artifact\nOpenClaw runtime context (internal): Keep internal details private.",

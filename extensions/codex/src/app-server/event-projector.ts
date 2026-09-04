@@ -14,7 +14,6 @@ import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.j
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection, emitCodexAgentEvent } from "./event-projector-events.js";
 import {
-  itemName,
   itemStatus,
   matchesCodexSnapshotTurn,
   shouldClearTerminalPresentationForNativeItem,
@@ -64,8 +63,6 @@ export class CodexAppServerEventProjector {
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
-  private readonly terminalPresentationClearedItemIds = new Set<string>();
-  private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
   private readonly diagnostics: CodexProjectionDiagnostics;
   private readonly generatedMediaProjection: CodexGeneratedMediaProjection;
   private readonly eventProjection: CodexEventProjection;
@@ -199,17 +196,7 @@ export class CodexAppServerEventProjector {
 
   /** Resolves the shared model-order position for a native tool item. */
   recordNativeToolOutcome(item: CodexThreadItem | undefined): void {
-    if (
-      !item ||
-      this.nativeToolOutcomeOrdinals.has(item.id) ||
-      !shouldClearTerminalPresentationForNativeItem(item)
-    ) {
-      return;
-    }
-    const ordinal = this.params.allocateToolOutcomeOrdinal?.(item.id);
-    if (ordinal !== undefined) {
-      this.nativeToolOutcomeOrdinals.set(item.id, ordinal);
-    }
+    this.nativeToolLifecycleProjector.recordNativeToolOutcome(item);
   }
 
   recordNativeToolApprovalFailure(
@@ -459,6 +446,11 @@ export class CodexAppServerEventProjector {
     return this.activeCompactionItemIds.size > 0;
   }
 
+  private isCompactionProjectionActive(): boolean {
+    // History reads and hooks can settle after their projector closes or aborts.
+    return !this.projectionClosed && !this.aborted && !this.options.runAbortSignal?.aborted;
+  }
+
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId");
@@ -468,12 +460,24 @@ export class CodexAppServerEventProjector {
     }
     this.recordNativeToolOutcome(item);
     if (item?.type === "contextCompaction" && itemId) {
+      if (!this.isCompactionProjectionActive()) {
+        return;
+      }
       this.activeCompactionItemIds.add(itemId);
+      const messages = await this.toolTranscriptProjection.readMirroredSessionMessages(
+        this.options.runAbortSignal,
+      );
+      if (!this.isCompactionProjectionActive()) {
+        return;
+      }
       await runAgentHarnessBeforeCompactionHook({
         sessionFile: this.params.sessionFile,
-        messages: await this.toolTranscriptProjection.readMirroredSessionMessages(),
+        messages,
         ctx: this.options.agentHookContext ?? {},
       });
+      if (!this.isCompactionProjectionActive()) {
+        return;
+      }
       this.emitAgentEvent({
         stream: "compaction",
         data: {
@@ -503,7 +507,7 @@ export class CodexAppServerEventProjector {
     const item = readItem(params.item);
     this.diagnostics.warnUnknownItemStatus(item);
     this.recordNativeToolOutcome(item);
-    this.clearTerminalPresentationForNativeItem(item);
+    this.nativeToolLifecycleProjector.clearTerminalPresentationForNativeItem(item);
     const itemId = item?.id ?? readString(params, "itemId");
     if (itemId) {
       this.activeItemIds.delete(itemId);
@@ -529,19 +533,28 @@ export class CodexAppServerEventProjector {
       return;
     }
     if (item?.type === "contextCompaction" && itemId) {
+      if (!this.isCompactionProjectionActive()) {
+        return;
+      }
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
       await this.options.onContextCompacted?.();
-      if (this.projectionClosed) {
+      if (!this.isCompactionProjectionActive()) {
+        return;
+      }
+      const messages = await this.toolTranscriptProjection.readMirroredSessionMessages(
+        this.options.runAbortSignal,
+      );
+      if (!this.isCompactionProjectionActive()) {
         return;
       }
       await runAgentHarnessAfterCompactionHook({
         sessionFile: this.params.sessionFile,
-        messages: await this.toolTranscriptProjection.readMirroredSessionMessages(),
+        messages,
         compactedCount: -1,
         ctx: this.options.agentHookContext ?? {},
       });
-      if (this.projectionClosed) {
+      if (!this.isCompactionProjectionActive()) {
         return;
       }
       await persistCodexContextCompactionActivity({
@@ -554,6 +567,9 @@ export class CodexAppServerEventProjector {
         itemId,
         timestamp: this.transcriptCheckpoint.nextTimestamp(),
       });
+      if (!this.isCompactionProjectionActive()) {
+        return;
+      }
       this.eventProjection.emitCompactionEnd(itemId, true);
     }
     this.toolProgressProjection.recordToolMeta(item);
@@ -564,10 +580,11 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolTranscriptProjection.recordNativeToolCall(item);
-    await this.toolTranscriptProjection.recordNativeToolResultWithDetails(item);
+    const details = await this.toolTranscriptProjection.prepareNativeToolResultDetails(item);
     if (this.projectionClosed) {
       return;
     }
+    this.toolTranscriptProjection.recordNativeToolResult(item, details);
     this.toolProgressProjection.emitToolResultSummary(item);
     this.toolProgressProjection.emitToolResultOutput(item);
     this.emitAgentEvent({
@@ -623,7 +640,7 @@ export class CodexAppServerEventProjector {
         (item.type === "dynamicToolCall" || shouldClearTerminalPresentationForNativeItem(item)),
     );
     if (lastToolItem?.type !== "dynamicToolCall") {
-      this.clearTerminalPresentationForNativeItem(lastToolItem);
+      this.nativeToolLifecycleProjector.clearTerminalPresentationForNativeItem(lastToolItem);
     }
     for (const item of turnItems) {
       if (!this.asyncDeliveryProjection.allows(item)) {
@@ -649,10 +666,11 @@ export class CodexAppServerEventProjector {
         return;
       }
       this.toolTranscriptProjection.recordNativeToolCall(item);
-      await this.toolTranscriptProjection.recordNativeToolResultWithDetails(item);
+      const details = await this.toolTranscriptProjection.prepareNativeToolResultDetails(item);
       if (this.projectionClosed) {
         return;
       }
+      this.toolTranscriptProjection.recordNativeToolResult(item, details);
       this.toolTranscriptProjection.emitAfterToolCallObservation(item);
       this.toolProgressProjection.emitToolResultSummary(item);
       this.toolProgressProjection.emitToolResultOutput(item);
@@ -705,26 +723,6 @@ export class CodexAppServerEventProjector {
     // so delayed image I/O must not consume assistant-echo state from a newer item.
     this.assistantProjection.handleRawResponseItemCompleted(item, this.activeItemIds);
     await this.generatedMediaProjection.recordRaw(item);
-  }
-
-  private clearTerminalPresentationForNativeItem(item: CodexThreadItem | undefined): void {
-    if (
-      !item ||
-      this.terminalPresentationClearedItemIds.has(item.id) ||
-      !shouldClearTerminalPresentationForNativeItem(item)
-    ) {
-      return;
-    }
-    const toolCallOrdinal = this.nativeToolOutcomeOrdinals.get(item.id);
-    this.terminalPresentationClearedItemIds.add(item.id);
-    this.params.onToolOutcome?.({
-      toolName: itemName(item) ?? item.type,
-      argsHash: "",
-      resultHash: "",
-      ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
-      terminalPresentation: undefined,
-      presentationOnly: true,
-    });
   }
 
   private emitAgentEvent(

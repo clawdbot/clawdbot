@@ -109,33 +109,36 @@ describe("readMemoryFile", () => {
     }
   });
 
-  it("enforces configured extra path glob patterns through agent reads", async () => {
-    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));
-    try {
-      const workspaceDir = path.join(tmpRoot, "workspace");
-      const extraDir = path.join(tmpRoot, "extra");
-      const allowedPath = path.join(extraDir, "runbooks", "team", "allowed.md");
-      const excludedPath = path.join(extraDir, "private.md");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.mkdir(path.dirname(allowedPath), { recursive: true });
-      await fs.writeFile(allowedPath, "allowed", "utf-8");
-      await fs.writeFile(excludedPath, "private", "utf-8");
+  it.each(["runbooks", "..notes", "...notes"])(
+    "enforces %s glob patterns through agent reads",
+    async (directory) => {
+      const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));
+      try {
+        const workspaceDir = path.join(tmpRoot, "workspace");
+        const extraDir = path.join(tmpRoot, "extra");
+        const allowedPath = path.join(extraDir, directory, "team", "allowed.md");
+        const excludedPath = path.join(extraDir, "private.md");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(path.dirname(allowedPath), { recursive: true });
+        await fs.writeFile(allowedPath, "allowed", "utf-8");
+        await fs.writeFile(excludedPath, "private", "utf-8");
 
-      const extraPaths = [{ path: extraDir, pattern: "runbooks/**/*.md" }];
-      const cfg = {
-        agents: { entries: { main: { workspace: workspaceDir } } },
-        memory: { search: { extraPaths } },
-      };
-      await expect(
-        readAgentMemoryFile({ cfg, agentId: "main", relPath: allowedPath }),
-      ).resolves.toMatchObject({ text: "allowed" });
-      await expect(
-        readAgentMemoryFile({ cfg, agentId: "main", relPath: excludedPath }),
-      ).rejects.toThrow("path required");
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
-  });
+        const extraPaths = [{ path: extraDir, pattern: `${directory}/**/*.md` }];
+        const cfg = {
+          agents: { entries: { main: { workspace: workspaceDir } } },
+          memory: { search: { extraPaths } },
+        };
+        await expect(
+          readAgentMemoryFile({ cfg, agentId: "main", relPath: allowedPath }),
+        ).resolves.toMatchObject({ text: "allowed" });
+        await expect(
+          readAgentMemoryFile({ cfg, agentId: "main", relPath: excludedPath }),
+        ).rejects.toThrow("path required");
+      } finally {
+        await fs.rm(tmpRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("retries transient read errors for workspace memory files", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));
