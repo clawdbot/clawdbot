@@ -121,7 +121,8 @@ export function resolveOpenAIModelReasoningEfforts(
   }
 
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
-  if (id === "gpt-6-astra") {
+  // Azure deployment capabilities must be declared until its Astra contract is verified.
+  if (id === "gpt-6-astra" && model.api !== "azure-openai-responses") {
     return GPT_6_ASTRA_REASONING_EFFORTS;
   }
   if (/^gpt-5\.6(?:-|$)/u.test(id)) {
@@ -167,7 +168,10 @@ export function supportsOpenAITemperature(model: OpenAIReasoningModel): boolean 
     }
   }
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
-  return id !== "gpt-6-astra" && !/^gpt-5\.6(?:-|$)/u.test(id);
+  return (
+    (id !== "gpt-6-astra" || model.api === "azure-openai-responses") &&
+    !/^gpt-5\.6(?:-|$)/u.test(id)
+  );
 }
 
 /** Return whether a model accepts a requested reasoning effort. */

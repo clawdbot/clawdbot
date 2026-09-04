@@ -79,6 +79,7 @@ An existing `minimal` setting maps to `low`. Astra cannot disable reasoning;
 Temperature and `top_p` are not sent.
 These defaults also apply to configured Astra model entries without explicit
 reasoning or temperature compatibility metadata.
+Azure Responses deployments continue to use their configured capabilities.
 
 Standard pricing per million tokens is $10 input, $1 cache reads, $12.50 cache
 writes, and $50 output. Requests above 272K input tokens have higher rates.
