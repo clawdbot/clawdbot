@@ -275,22 +275,30 @@ describe("gateway presence audience", () => {
               "sessions.describe",
               { key: draftKey },
             );
-            expect(described, `${scenario.name} sessions.describe visibility`).toMatchObject({
-              ok: true,
-              payload: {
-                session: canReadDraft ? { sessionId: draftSessionId } : null,
-              },
-            });
+            if (scenario.name === "restricted") {
+              expect(described.ok, `${scenario.name} sessions.describe scope`).toBe(false);
+            } else {
+              expect(described, `${scenario.name} sessions.describe visibility`).toMatchObject({
+                ok: true,
+                payload: {
+                  session: canReadDraft ? { sessionId: draftSessionId } : null,
+                },
+              });
+            }
             const transcript = await rpcReq<{ messages: Array<{ content?: unknown }> }>(
               recipient.ws,
               "sessions.get",
               { key: draftKey },
             );
-            expect(transcript.ok, `${scenario.name} sessions.get visibility`).toBe(true);
-            expect(
-              transcript.payload?.messages.map((message) => message.content),
-              `${scenario.name} sessions.get transcript`,
-            ).toEqual(canReadDraft ? ["foreign draft transcript"] : []);
+            if (scenario.name === "restricted") {
+              expect(transcript.ok, `${scenario.name} sessions.get scope`).toBe(false);
+            } else {
+              expect(transcript.ok, `${scenario.name} sessions.get visibility`).toBe(true);
+              expect(
+                transcript.payload?.messages.map((message) => message.content),
+                `${scenario.name} sessions.get transcript`,
+              ).toEqual(canReadDraft ? ["foreign draft transcript"] : []);
+            }
           }
           const presence = await rpcReq(recipient.ws, "system-presence");
           expect(presence.ok, `${scenario.name} system-presence scope`).toBe(canRead);

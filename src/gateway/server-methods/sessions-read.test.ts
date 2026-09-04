@@ -27,6 +27,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as sessionTranscriptReaders from "../session-transcript-readers.js";
 import { testState } from "../test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -35,7 +36,6 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import { agentsHandlers } from "./agents.js";
-<<<<<<< HEAD
 import {
   identifiedClient,
   listSessions,
@@ -548,6 +548,51 @@ test("sessions.describe and sessions.get hide foreign drafts at operator role bo
       transcript.payload?.messages.map((message) => message.content),
       name,
     ).toEqual(hidden ? [] : ["foreign draft transcript"]);
+  }
+
+  const originalRead = sessionTranscriptReaders.readRecentSessionMessagesWithStatsAsync;
+  for (const mutation of [
+    { name: "visibility change", sessionId, visibility: "draft" as const },
+    {
+      name: "session replacement",
+      sessionId: `${sessionId}-replacement`,
+      visibility: "shared" as const,
+    },
+  ]) {
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId,
+        updatedAt: 42,
+        createdActor: { type: "human", source: "profile", id: ownerId },
+        visibility: "shared",
+      },
+    );
+    const readSpy = vi
+      .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
+      .mockImplementationOnce(async (...args) => {
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey, storePath },
+          {
+            sessionId: mutation.sessionId,
+            updatedAt: 43,
+            createdActor: { type: "human", source: "profile", id: ownerId },
+            visibility: mutation.visibility,
+          },
+        );
+        return await originalRead(...args);
+      });
+    try {
+      const transcript = await directSessionReq<{ messages: Array<{ content?: unknown }> }>(
+        "sessions.get",
+        { key: sessionKey },
+        { client: cases[0].client, context: { getRuntimeConfig: () => cases[0].cfg } },
+      );
+      expect(transcript.ok, mutation.name).toBe(true);
+      expect(transcript.payload?.messages, mutation.name).toEqual([]);
+    } finally {
+      readSpy.mockRestore();
+    }
   }
 });
 
