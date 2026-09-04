@@ -94,6 +94,16 @@ describe("CLI runtime admission", () => {
       "Gateway scoped exclusion",
       ["--config", "test/vitest/vitest.gateway-core.config.ts", "--exclude", "gateway-*.test.ts"],
     ],
+    [
+      "root scoped exclusion",
+      [
+        "--config",
+        "vitest.config.ts",
+        "suite-process-lifecycle",
+        "--exclude",
+        lifecycle.replace("extensions/", ""),
+      ],
+    ],
     ["scoped exclusion", ["--exclude", lifecycle.replace("extensions/", "")]],
     ["absolute exclusion", ["--exclude", path.resolve(lifecycle)]],
     ["alternate root", ["--root", "."]],

@@ -89,11 +89,12 @@ export function resolveVitestRuntimeCliSelections(
   args: string[],
   env: NodeJS.ProcessEnv,
 ): TestSelection[] {
-  return runtimeConsumers
-    .filter((consumer) =>
-      consumer.configs.some((candidate) => includesRuntimeConfig([config], candidate)),
-    )
-    .map((consumer) => ({ configs: consumer.configs, cli: { args, dir: consumer.dir, env } }));
+  return runtimeConsumers.flatMap(({ configs, dir }) => {
+    // Preserve the matched project scope; broad roots must not apply another
+    // consumer's directory to scoped exclusions.
+    const selected = configs.filter((candidate) => includesRuntimeConfig([config], candidate));
+    return selected.length ? [{ configs: selected, cli: { args, dir, env } }] : [];
+  });
 }
 
 /**
