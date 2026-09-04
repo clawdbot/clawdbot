@@ -19,6 +19,7 @@ import {
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
@@ -71,6 +72,7 @@ type SettingsSidebarProps = {
   preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   saveIndicator: SettingsSaveIndicatorProps;
   canAdmin?: boolean;
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 };
 
 type SettingsNavigationGroupView = {
@@ -97,10 +99,11 @@ function filterSettingsNavigationGroups(
   searchQuery: string,
   blockMatches: readonly SettingsSearchBlock[],
   canAdmin: boolean,
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null,
 ): readonly SettingsNavigationGroupView[] {
-  const navigationGroups = visibleSettingsNavigationGroups(canAdmin);
+  const navigationGroups = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings);
   const visibleBlockMatches = blockMatches.filter((block) =>
-    isSettingsNavigationRouteVisible(block.routeId, canAdmin),
+    isSettingsNavigationRouteVisible(block.routeId, canAdmin, nativeDeviceSettings),
   );
   const query = normalizeLowercaseStringOrEmpty(searchQuery);
   if (!query) {
@@ -114,7 +117,7 @@ function filterSettingsNavigationGroups(
     ...new Set([
       ...sidebarRoutes,
       ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES.filter((routeId) =>
-        isSettingsNavigationRouteVisible(routeId, canAdmin),
+        isSettingsNavigationRouteVisible(routeId, canAdmin, nativeDeviceSettings),
       ),
       ...visibleBlockMatches.map((block) => block.routeId),
     ]),
@@ -258,6 +261,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
     props.searchQuery,
     searchBlockMatches,
     props.canAdmin !== false,
+    props.nativeDeviceSettings ?? null,
   );
   return html`
     <aside class="settings-sidebar">

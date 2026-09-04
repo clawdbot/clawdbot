@@ -2,7 +2,7 @@
 import { once } from "node:events";
 import http from "node:http";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { downloadVydraAsset } from "./shared.js";
 
 describe("downloadVydraAsset", () => {
@@ -18,6 +18,7 @@ describe("downloadVydraAsset", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     for (const timer of dripTimers) {
       clearTimeout(timer);
     }
@@ -113,7 +114,9 @@ describe("downloadVydraAsset", () => {
     expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
   });
 
+  // Completed-response semantics must not race host time; real drip tests above own deadlines.
   it("preserves normalized and redacted provider errors after the bounded read", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const result = await downloadVydraAsset({
       url: "https://cdn.vydra.example/generated/test.png",
       kind: "image",
@@ -129,6 +132,7 @@ describe("downloadVydraAsset", () => {
       maxBytes: 1024 * 1024,
       requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
+    expect(vi.getTimerCount()).toBe(0);
 
     expect(result).toMatchObject({
       name: "ProviderHttpError",
@@ -142,6 +146,7 @@ describe("downloadVydraAsset", () => {
   });
 
   it("normalizes null-body HTTP errors after the bounded read", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const result = await downloadVydraAsset({
       url: "https://cdn.vydra.example/generated/test.png",
       kind: "image",
@@ -150,11 +155,13 @@ describe("downloadVydraAsset", () => {
       maxBytes: 1024 * 1024,
       requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
+    expect(vi.getTimerCount()).toBe(0);
 
     expect(result).toMatchObject({ name: "ProviderHttpError", status: 304, statusCode: 304 });
   });
 
   it("preserves HTTP metadata when the error body stream fails", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const result = await downloadVydraAsset({
       url: "https://cdn.vydra.example/generated/test.png",
       kind: "image",
@@ -174,6 +181,7 @@ describe("downloadVydraAsset", () => {
       maxBytes: 1024 * 1024,
       requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
+    expect(vi.getTimerCount()).toBe(0);
 
     expect(result).toMatchObject({
       name: "ProviderHttpError",
@@ -184,6 +192,7 @@ describe("downloadVydraAsset", () => {
   });
 
   it("preserves successful response body errors before the deadline", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const result = await downloadVydraAsset({
       url: "https://cdn.vydra.example/generated/test.png",
       kind: "image",
@@ -200,6 +209,7 @@ describe("downloadVydraAsset", () => {
       maxBytes: 1024 * 1024,
       requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
+    expect(vi.getTimerCount()).toBe(0);
 
     expect(result).toBeInstanceOf(Error);
     expect(result).toMatchObject({ message: "broken success body" });

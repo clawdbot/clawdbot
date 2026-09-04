@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createTicket: vi.fn(),
@@ -17,7 +17,10 @@ vi.mock("./mcp-app-standalone.js", () => ({
 }));
 
 import { materializeMcpAppChannelPresentation } from "./mcp-app-channel-action.js";
-import { getMcpAppChannelOrigin, prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
+import {
+  getTailscalePublishedOrigin,
+  prepareTailscalePublishedOrigin,
+} from "./tailscale-published-origin.js";
 
 const nowMs = 1_800_000_000_000;
 const runtime = { sessionId: "runtime-session", mcpAppsEnabled: true };
@@ -30,13 +33,13 @@ const view = {
   toolResult: { privateResult: "do-not-emit-result" },
 };
 
-function resetMcpAppChannelOrigin() {
-  prepareMcpAppChannelOrigin({ origin: "https://reset.test", reachability: "tailnet" })();
+function resetTailscalePublishedOrigin() {
+  prepareTailscalePublishedOrigin({ origin: "https://reset.test", mode: "serve" })();
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  resetMcpAppChannelOrigin();
+  resetTailscalePublishedOrigin();
   mocks.peekRuntime.mockReturnValue(runtime);
   mocks.getView.mockReturnValue(view);
   mocks.createTicket.mockReturnValue({
@@ -46,31 +49,33 @@ beforeEach(() => {
   });
 });
 
-describe("MCP App channel origin", () => {
+afterEach(resetTailscalePublishedOrigin);
+
+describe("Tailscale published origin", () => {
   it("stores one lifecycle-owned Serve or Funnel snapshot", () => {
-    const clearServe = prepareMcpAppChannelOrigin({
+    const clearServe = prepareTailscalePublishedOrigin({
       origin: "https://node.tailnet.ts.net",
-      reachability: "tailnet",
+      mode: "serve",
     });
-    const clearFunnel = prepareMcpAppChannelOrigin({
+    const clearFunnel = prepareTailscalePublishedOrigin({
       origin: "https://public.example.ts.net/",
-      reachability: "internet",
+      mode: "funnel",
     });
 
-    expect(getMcpAppChannelOrigin()).toEqual({
+    expect(getTailscalePublishedOrigin()).toMatchObject({
       origin: "https://public.example.ts.net",
-      reachability: "internet",
+      mode: "funnel",
     });
     clearServe();
-    expect(getMcpAppChannelOrigin()).toBeDefined();
+    expect(getTailscalePublishedOrigin()).toBeDefined();
     clearFunnel();
-    expect(getMcpAppChannelOrigin()).toBeUndefined();
+    expect(getTailscalePublishedOrigin()).toBeUndefined();
   });
 
   it.each(["http://node.test", "https://%75@node.test", "https://node.test/path"])(
     "rejects unsafe origin %s",
     (origin) => {
-      expect(() => prepareMcpAppChannelOrigin({ origin, reachability: "tailnet" })).toThrow(
+      expect(() => prepareTailscalePublishedOrigin({ origin, mode: "serve" })).toThrow(
         "absolute HTTPS origin",
       );
     },
@@ -79,9 +84,9 @@ describe("MCP App channel origin", () => {
 
 describe("materializeMcpAppChannelPresentation", () => {
   it("mints late and emits only one typed action with an opaque ticket", () => {
-    prepareMcpAppChannelOrigin({
+    prepareTailscalePublishedOrigin({
       origin: "https://node.tailnet.ts.net",
-      reachability: "tailnet",
+      mode: "serve",
     });
 
     const presentation = materializeMcpAppChannelPresentation({
@@ -121,14 +126,14 @@ describe("materializeMcpAppChannelPresentation", () => {
   });
 
   it.each([
-    ["missing origin", resetMcpAppChannelOrigin],
+    ["missing origin", resetTailscalePublishedOrigin],
     ["missing view", () => mocks.getView.mockReturnValue(undefined)],
     ["expired view", () => mocks.getView.mockReturnValue({ ...view, expiresAtMs: nowMs })],
     ["ticket capacity", () => mocks.createTicket.mockReturnValue(undefined)],
   ])("omits the action for %s", (_name, arrange) => {
-    prepareMcpAppChannelOrigin({
+    prepareTailscalePublishedOrigin({
       origin: "https://node.tailnet.ts.net",
-      reachability: "tailnet",
+      mode: "serve",
     });
     arrange();
 

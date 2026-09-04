@@ -2874,6 +2874,7 @@ describe("config io write", () => {
         OPENCLAW_CONFIG_PATH: configPath,
       } as NodeJS.ProcessEnv;
       let observedSource: OpenClawConfig | undefined;
+      const beforeCommit = vi.fn();
 
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, initialRaw, "utf-8");
@@ -2888,18 +2889,103 @@ describe("config io write", () => {
         });
 
         await expect(
-          createConfigIO({ env, logger: silentLogger }).writeConfigFile({
-            gateway: { mode: "local", port: 19001 },
-          }),
+          createConfigIO({ env, logger: silentLogger }).writeConfigFile(
+            { gateway: { mode: "local", port: 19001 } },
+            { beforeCommit },
+          ),
         ).rejects.toThrow(/active SecretRef resolution failed: missing direct IO secret/);
 
         expect(observedSource?.gateway?.port).toBe(19001);
+        expect(beforeCommit).not.toHaveBeenCalled();
         await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
       } finally {
         setRuntimeConfigSnapshotRefreshHandler(null);
       }
     },
   );
+
+  for (const writer of ["direct", "runtime"] as const) {
+    itWithHome(`rechecks ${writer} publication authority after backup work`, async (home) => {
+      const { configPath, raw } = await writeConfigFixture(home, {
+        gateway: { mode: "local", port: 18789 },
+      });
+      const events: string[] = [];
+      let active = true;
+      setRuntimeConfigSnapshotRefreshHandler({
+        preflight: () => {
+          events.push("preflight");
+        },
+        refresh: () => true,
+      });
+      mockMaintainConfigBackups.mockImplementationOnce(async () => {
+        await Promise.resolve();
+        events.push("backup");
+        active = false;
+      });
+      await withEnvAsync(
+        { OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_TEST_FAST: "1" },
+        async () => {
+          const write =
+            writer === "runtime"
+              ? writeConfigFile
+              : createFastConfigIO(home, { configPath }).writeConfigFile;
+          await expect(
+            write(
+              { gateway: { mode: "local", port: 19001 } },
+              {
+                beforeCommit: async () => {
+                  events.push("commit");
+                  if (!active) {
+                    throw new Error("approval expired");
+                  }
+                },
+              },
+            ),
+          ).rejects.toThrow("approval expired");
+        },
+      );
+      expect(events).toEqual(["preflight", "backup", "commit"]);
+      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+    });
+  }
+
+  for (const guarded of [false, true]) {
+    itWithHome(
+      `${guarded ? "rejects" : "preserves"} copy fallback for ${guarded ? "guarded" : "ordinary"} publication`,
+      async (home) => {
+        const { configPath, raw } = await writeConfigFixture(home, {
+          gateway: { mode: "local", port: 18789 },
+        });
+        const denied = Object.assign(new Error("rename denied"), { code: "EPERM" });
+        const io = createFastConfigIO(home, {
+          configPath,
+          fs: {
+            ...fsNode,
+            promises: {
+              ...fsNode.promises,
+              rename: async () => {
+                throw denied;
+              },
+            },
+          },
+        });
+        const beforeCommit = vi.fn();
+        const write = io.writeConfigFile(
+          { gateway: { mode: "local", port: 19001 } },
+          guarded ? { beforeCommit } : {},
+        );
+        if (guarded) {
+          await expect(write).rejects.toBe(denied);
+          expect(beforeCommit).toHaveBeenCalledOnce();
+          expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+        } else {
+          await write;
+          expect(beforeCommit).not.toHaveBeenCalled();
+          expect(await readPersistedConfig(configPath)).toMatchObject({ gateway: { port: 19001 } });
+        }
+      },
+    );
+  }
 
   itWithHome(
     "restores config env vars when post-write runtime refresh rollback succeeds",

@@ -229,16 +229,14 @@ export function createRequestGatewayMethodRegistry(
       coreDescriptorHandlers[method] = extraHandler;
     }
   }
-  const coreDescriptors = createCoreGatewayMethodDescriptors(coreDescriptorHandlers);
-  const coreMethodNames = new Set(coreDescriptors.map((descriptor) => descriptor.name));
   const auxHandlers = Object.fromEntries(
     extraHandlerEntries.filter(
-      ([method]) => !pluginMethodNames.has(method) && !coreMethodNames.has(method),
+      ([method]) => !pluginMethodNames.has(method) && !isCoreGatewayMethodClassified(method),
     ),
   );
   return createGatewayMethodRegistry(
     [
-      ...coreDescriptors,
+      ...createCoreGatewayMethodDescriptors(coreDescriptorHandlers),
       ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
       ...createGatewayMethodDescriptorsFromHandlers({
         handlers: auxHandlers,

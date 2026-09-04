@@ -26,13 +26,13 @@ import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
+import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
@@ -265,13 +265,13 @@ export function bootstrapApplication(): ApplicationRuntime {
   const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const config = createApplicationConfigCapability({
     resourceBasePath,
-    auth: {
-      settings: { token: settings.token },
-      password: startup.password ?? "",
-    },
+    getAuth: () => ({
+      hello: gateway.snapshot.hello,
+      settings: { token: gateway.connection.token },
+      password: gateway.connection.password,
+    }),
   });
-  const sessions = createSessionCapability(gateway);
-  const workboard = createWorkboardCapability();
+  const sessions = createSessionCapability(gateway, agentSelection);
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
@@ -321,6 +321,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       isBrowserPanelAvailable(gateway.snapshot) &&
       document.querySelector("openclaw-app-shell")?.isConnected === true,
   });
+  let nativeDeviceSettings: ApplicationContext["nativeDeviceSettings"] = null;
   const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway, { connectionBootstrap });
   const chatSubmissions = createChatSubmissions();
@@ -387,15 +388,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     const client = snapshot.client;
     if (lastPostConnectClient !== client) {
       lastPostConnectClient = client;
-      void connectionBootstrap.run("config", () =>
-        config.refresh({
-          auth: {
-            hello: snapshot.hello,
-            settings: { token: gateway.connection.token },
-            password: gateway.connection.password,
-          },
-        }),
-      );
+      void connectionBootstrap.run("config", () => config.refresh());
       void connectionBootstrap.run("session-observer", () =>
         sendSessionObserverVisibility(client, loadChatObserverDisplayPreference() !== "off"),
       );
@@ -472,6 +465,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   };
   const navigateAndWait = (routeId: RouteId, options?: ApplicationNavigationOptions) =>
     navigateWithMode(routeId, options, "push");
+  const plugins = new ControlUiPluginRuntime(() => context);
   const context: ApplicationContext<RouteId> = {
     basePath,
     resourceBasePath,
@@ -488,11 +482,14 @@ export function bootstrapApplication(): ApplicationRuntime {
     runtimeConfig,
     sessions,
     placementStartup,
-    workboard,
+    plugins,
     overlays,
     navigation,
     theme,
     nativeChatDrafts,
+    get nativeDeviceSettings() {
+      return nativeDeviceSettings;
+    },
     nativeNotifications,
     webPush,
     chatSubmissions,
@@ -528,11 +525,35 @@ export function bootstrapApplication(): ApplicationRuntime {
           return () => gateway.stop();
         },
         () => startGatewayPageActivation(gateway, document, window),
+        () => {
+          plugins.start();
+          return () => plugins.dispose();
+        },
       ];
       if (startsApplicationRouter && !firstRunDefaultLanding) {
         // Download explicit-route chunks alongside startup. Default landing must
         // wait for setup's decision before fetching the Chat workspace graph.
         steps.unshift(() => warmApplicationRouteModule(router, applicationLocation, basePath));
+      }
+      // Only the native host needs the bridge parser. Initialize before routing,
+      // and fence the import so a stopped application cannot install listeners.
+      // SAFETY: WebKit adds this optional host field; its callable handler is checked below.
+      const nativeWindow = window as Window & {
+        webkit?: { messageHandlers?: { openclawDeviceSettings?: { postMessage?: unknown } } };
+      };
+      if (
+        typeof nativeWindow.webkit?.messageHandlers?.openclawDeviceSettings?.postMessage ===
+        "function"
+      ) {
+        steps.unshift(async () => {
+          const { createNativeDeviceSettingsCapability } =
+            await import("./native-device-settings.ts");
+          if (!startupLifecycle.signal.aborted) {
+            nativeDeviceSettings = createNativeDeviceSettingsCapability();
+            return () => nativeDeviceSettings?.dispose();
+          }
+          return undefined;
+        });
       }
       // Resolve first-run setup before routing: the default Chat route owns the
       // workspace graph, which setup users would otherwise fetch and discard.
@@ -613,7 +634,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       sidebarAttention.dispose();
       placementStartup.dispose();
       sessions.dispose();
-      workboard.dispose();
       stopConfigWriteSuspension();
       runtimeConfig.dispose();
       overlays.dispose();

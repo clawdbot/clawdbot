@@ -667,7 +667,7 @@ describe("Slack live QA runtime helpers", () => {
         id: "slack-progress-commentary-omitted",
         commentaryTs: "1.500000",
         commentaryStyle: "headline",
-        toolProgress: "absent",
+        toolProgress: "draft",
       },
       {
         id: "slack-progress-commentary-verbose-dedupe",
@@ -695,7 +695,8 @@ describe("Slack live QA runtime helpers", () => {
       if (!commentaryMarker || !toolMarker || !outputMarker || !finalMarker || !verifyObserved) {
         throw new Error(`missing Slack progress verifier: ${testCase.id}`);
       }
-      // The command marker detects accidental tool detail disclosure in quiet drafts.
+      // Progress cards compact command details from the middle, so the QA marker
+      // stays at the command suffix where the real Slack presentation preserves it.
       expect(input).toContain(`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}`);
       const messages = [
         {
@@ -723,8 +724,10 @@ describe("Slack live QA runtime helpers", () => {
                 text:
                   testCase.toolProgress === "standalone-redacted"
                     ? "🛠️ Exec"
-                    : `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``,
-                ts: "1.750000",
+                    : testCase.toolProgress === "standalone"
+                      ? `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``
+                      : `🛠️ Exec ${toolMarker}`,
+                ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
               },
             ]),
       ];
@@ -858,12 +861,8 @@ describe("Slack live QA runtime helpers", () => {
       ).toThrow("tool progress to stay out");
     }
     expect(
-      verify("slack-progress-commentary-omitted", ([commentary, tool, final]) => [
-        commentary,
-        tool,
-        final,
-      ]),
-    ).toThrow("tool progress to stay out");
+      verify("slack-progress-commentary-omitted", ([commentary, , final]) => [commentary, final]),
+    ).toThrow("tool progress on the draft");
     expect(
       verify(
         "slack-progress-commentary-true",
