@@ -6,7 +6,12 @@ import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { modelKey } from "../../shared/model-key.js";
-import { resolveResponsesServerCompactionThreshold } from "./memory-flush.js";
+import {
+  CLI_MEMORY_FLUSH_REARM_BYTES,
+  hasAlreadyFlushedForCliRearmBucket,
+  resolveCliMemoryFlushRearmBucket,
+  resolveResponsesServerCompactionThreshold,
+} from "./memory-flush.js";
 
 const TEST_MODEL_ID = "gpt-5.4";
 const TEST_CONTEXT_WINDOW = 200_000;
@@ -277,5 +282,51 @@ describe("Anthropic server compaction host threshold", () => {
         modelId,
       }),
     ).toBe(expected);
+  });
+});
+
+describe("CLI memory-flush re-arm bucket", () => {
+  it("buckets transcript growth for CLI backends", () => {
+    expect(resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize: 0 })).toBe(0);
+    expect(
+      resolveCliMemoryFlushRearmBucket({
+        isCli: true,
+        transcriptByteSize: CLI_MEMORY_FLUSH_REARM_BYTES - 1,
+      }),
+    ).toBe(0);
+    expect(
+      resolveCliMemoryFlushRearmBucket({
+        isCli: true,
+        transcriptByteSize: CLI_MEMORY_FLUSH_REARM_BYTES,
+      }),
+    ).toBe(1);
+    expect(
+      resolveCliMemoryFlushRearmBucket({
+        isCli: true,
+        transcriptByteSize: CLI_MEMORY_FLUSH_REARM_BYTES * 3 + 10,
+      }),
+    ).toBe(3);
+  });
+
+  it("keeps the compaction watermark when the byte anchor cannot apply", () => {
+    // Not a CLI backend: compactionCount advances there, so it stays authoritative.
+    expect(resolveCliMemoryFlushRearmBucket({ isCli: false, transcriptByteSize: 1_000 })).toBeUndefined();
+    // No transcript size to anchor on.
+    expect(resolveCliMemoryFlushRearmBucket({ isCli: true })).toBeUndefined();
+    expect(
+      resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize: Number.NaN }),
+    ).toBeUndefined();
+    // A non-positive window would make every bucket zero and lock the dedup.
+    expect(
+      resolveCliMemoryFlushRearmBucket({ isCli: true, transcriptByteSize: 1_000, rearmBytes: 0 }),
+    ).toBeUndefined();
+  });
+
+  it("re-arms only once the transcript reaches the next bucket", () => {
+    const entry = { memoryFlush: { kind: "succeeded" as const, compactionCount: 2 } };
+    expect(hasAlreadyFlushedForCliRearmBucket(entry, 2)).toBe(true);
+    expect(hasAlreadyFlushedForCliRearmBucket(entry, 3)).toBe(false);
+    expect(hasAlreadyFlushedForCliRearmBucket(undefined, 0)).toBe(false);
+    expect(hasAlreadyFlushedForCliRearmBucket({}, 0)).toBe(false);
   });
 });
