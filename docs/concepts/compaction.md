@@ -210,7 +210,7 @@ Before compaction, OpenClaw can run a **silent memory flush** turn to store dura
 
 Memory flush is optional maintenance: a failure, including exhausted retries, does not reset the session or discard conversation history. If compaction is unnecessary or succeeds, OpenClaw continues the reply; with `notifyUser` enabled, exhausted flush retries also produce a degraded notice. If required compaction fails, OpenClaw reports that failure and keeps the conversation intact instead of starting over automatically.
 
-The memory-flush model override is exact and does not inherit the active session fallback chain. See [Memory](/concepts/memory) for details and config.
+The memory-flush model override is exact and does not inherit the active session fallback chain, so an unreachable maintenance model never silently bills the paid conversation model. Set `agents.defaults.compaction.memoryFlush.fallbacks` to waive that deliberately by naming the replacements you accept. See [Memory](/concepts/memory) for details and config.
 
 ## Pluggable compaction providers
 

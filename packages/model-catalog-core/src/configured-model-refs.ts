@@ -82,10 +82,19 @@ export function collectConfiguredModelRefs(
     );
     if (isRecord(agent.compaction)) {
       pushModelRef(`${path}.compaction.model`, agent.compaction.model);
-      pushModelRef(
-        `${path}.compaction.memoryFlush.model`,
-        isRecord(agent.compaction.memoryFlush) ? agent.compaction.memoryFlush.model : undefined,
-      );
+      const memoryFlush = isRecord(agent.compaction.memoryFlush)
+        ? agent.compaction.memoryFlush
+        : undefined;
+      pushModelRef(`${path}.compaction.memoryFlush.model`, memoryFlush?.model);
+      // These refs are dispatchable once memoryFlush.model is set, so a provider
+      // named only here still needs validation, plugin auto-enable, and prepared
+      // catalog setup — otherwise the fallback fails exactly when the primary is
+      // unavailable, which is the case it exists for.
+      if (Array.isArray(memoryFlush?.fallbacks)) {
+        memoryFlush.fallbacks.forEach((fallbackRef, index) => {
+          pushModelRef(`${path}.compaction.memoryFlush.fallbacks.${index}`, fallbackRef);
+        });
+      }
     }
     if (isRecord(agent.models)) {
       for (const modelRef of Object.keys(agent.models)) {
