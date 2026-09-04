@@ -196,6 +196,10 @@ Gateway responds with `hello-ok`:
 reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
+`controlUiUrl` optionally advertises the Gateway's configured public Control UI
+origin and base path for shareable links, independent of the client's tunnel or
+development-server address. It is omitted when `gateway.publicOrigin` is unset
+or the Control UI is disabled. It contains no credentials and grants no access.
 `policy.attachments` is optional (older gateways omit it) and advertises
 the decoded-size ceilings chat attachments face on `chat.send`, `sessions.send`,
 and session-creation initial turns:
@@ -436,6 +440,8 @@ method scope (`operator.pairing`), based on the pending request's declared
 In this table, `fs.listDir` is the node command relayed through `node.invoke`.
 The top-level Gateway `fs.listDir` RPC needs `operator.write` for
 workspace-contained host browsing and `operator.admin` when `nodeId` is present.
+Pass directory paths exactly as returned by `fs.listDir`: whitespace in directory
+names, including trailing spaces, is significant.
 
 ### Caps/commands/permissions (node)
 

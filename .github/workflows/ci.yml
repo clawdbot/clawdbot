@@ -1924,7 +1924,7 @@ jobs:
       - name: Audit production dependencies
         run: |
           audit_exit=0
-          node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high || audit_exit=$?
+          node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high --ci || audit_exit=$?
           if [ "$audit_exit" -eq 2 ]; then
             echo "::warning::npm advisory service unavailable; production dependency audit incomplete. CI is continuing without full advisory coverage."
           else

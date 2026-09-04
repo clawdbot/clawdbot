@@ -266,8 +266,11 @@ async function createOpenAIRealtimeBrowserSession(
               onReady: gatewayControl.onReady,
               onError: gatewayControl.onError,
               onClose: (reason) => {
-                gatewayControl.onClose?.(reason);
-                onTerminal();
+                try {
+                  gatewayControl.onClose?.(reason);
+                } finally {
+                  onTerminal();
+                }
               },
               logger,
             });

@@ -1352,14 +1352,25 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     {
       error: new Error("private upstream failure"),
       message: "profile verification is unavailable",
+      retryAfterMs: 1_000,
     },
     {
       error: new ControlUiGitHubError(429, "private upstream failure"),
       message: "GitHub is rate limiting profile verification",
+      retryAfterMs: 1_000,
+    },
+    {
+      error: new ControlUiGitHubError(429, "private upstream failure", {
+        retryAtMs: 1_800_000_090_000,
+      }),
+      message: "GitHub is rate limiting profile verification",
+      retryAfterMs: 90_000,
     },
   ])(
     "rejects unavailable configured-role identity with actionable guidance ($message)",
-    async ({ error, message }) => {
+    async ({ error, message, retryAfterMs }) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      onTestFinished(() => clock.mockRestore());
       await withOpenClawTestState(
         { label: "gateway-github-role-verification-failure" },
         async () => {
@@ -1422,6 +1433,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
                   code: ErrorCodes.UNAVAILABLE,
                   message: expect.stringContaining(message),
                   retryable: true,
+                  retryAfterMs,
                   details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
                 }),
               }),

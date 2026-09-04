@@ -43,8 +43,11 @@ export async function captureUiProof(
   });
 }
 
-export function createChatFlowE2eSuite() {
+export function createChatFlowE2eSuite(
+  browserLaunchOptions?: Parameters<typeof createControlUiE2eSuite>[0]["browserLaunchOptions"],
+) {
   return createControlUiE2eSuite({
+    browserLaunchOptions,
     name: "Control UI mocked Gateway E2E",
     trackBrowserContexts: true,
     unavailableMessage: (executablePath) =>

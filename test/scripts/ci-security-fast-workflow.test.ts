@@ -227,6 +227,19 @@ describe("security-fast workflow", () => {
       if (auditExit === 2) {
         expect(result.stdout).toContain("incomplete");
       }
+      const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
+        jobs: { audit: { steps: WorkflowStep[] } };
+      };
+      const strictStep = scheduled.jobs.audit.steps.find(
+        (step) => step.name === "Audit production dependencies",
+      );
+      if (!strictStep) {
+        throw new Error("scheduled production audit step is missing");
+      }
+      const summary = join(repo, "summary.md");
+      const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
+      expect(strict.status).toBe(auditExit);
+      expect(readFileSync(summary, "utf8")).toContain("Triage owner: @steipete");
     },
   );
 

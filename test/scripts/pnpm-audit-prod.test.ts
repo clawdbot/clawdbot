@@ -1,5 +1,5 @@
 // Pnpm Audit Prod tests cover pnpm audit prod script behavior.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -67,6 +67,7 @@ snapshots:
   it("parses explicit audit severity flags", () => {
     expect(parseArgs(["--min-severity", "critical"])).toEqual({ minSeverity: "critical" });
     expect(parseArgs(["--audit-level=moderate"])).toEqual({ minSeverity: "moderate" });
+    expect(parseArgs(["--ci"])).toEqual({ minSeverity: "high", budgetMs: 30_000 });
   });
 
   it("rejects missing audit severity flag values", () => {
@@ -76,6 +77,10 @@ snapshots:
     );
     expect(() => parseArgs(["--min-severity", "-h"])).toThrow("--min-severity requires a value");
     expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
+  });
+
+  it.each(["constructor", "toString", "unknown"])("rejects unsupported audit level %s", (level) => {
+    expect(() => filterFindingsBySeverity({}, level)).toThrow("Unsupported audit level");
   });
 
   it("parses scoped snapshot keys with peer suffixes", () => {
@@ -590,6 +595,79 @@ snapshots:
     await expect(request).rejects.toThrow(/Bulk advisory response body was empty/u);
   });
 
+  it.each(
+    [
+      null,
+      [],
+      { axios: {} },
+      { axios: [null] },
+      { axios: [[]] },
+      { axios: [{ id: 1, vulnerable_versions: "<2" }] },
+      { axios: [{ id: 1, severity: "unknown", vulnerable_versions: "<2" }] },
+      { axios: [{ id: 1, severity: "constructor", vulnerable_versions: "<2" }] },
+      { axios: [{ id: {}, severity: "high", vulnerable_versions: "<2" }] },
+      { axios: [{ id: 1, severity: "high", vulnerable_versions: null }] },
+    ].map((body) => ({ body })),
+  )("rejects malformed advisory data without retry: $body", async ({ body }) => {
+    const fetchImpl = vi.fn(async () => Response.json(body));
+    await expect(fetchBulkAdvisories({ payload: { axios: ["1.0.0"] }, fetchImpl })).rejects.toThrow(
+      "Invalid bulk advisory response",
+    );
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([200, 503, 403])("bounds stalled HTTP %s bodies by the total budget", async (status) => {
+    const timers =
+      await vi.importActual<typeof import("node:timers/promises")>("node:timers/promises");
+    // Real backoff consumes the remaining budget; the suite's instant mock does not.
+    vi.mocked(delay).mockImplementation(timers.setTimeout);
+    let cancelled = false;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            pull: () => new Promise(() => {}),
+            cancel() {
+              cancelled = true;
+            },
+          }),
+          { status },
+        ),
+    );
+    try {
+      await expect(
+        fetchBulkAdvisories({
+          payload: { axios: ["1.0.0"] },
+          fetchImpl,
+          timeoutMs: 1000,
+          budgetMs: 20,
+        }),
+      ).rejects.toThrow(status === 403 ? "failed (403" : "timeout");
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(cancelled).toBe(true);
+    } finally {
+      vi.mocked(delay).mockImplementation(async () => {});
+    }
+  });
+
+  it("includes retry backoff in the total budget", async () => {
+    const fetchImpl = vi.fn(async () => new Response("unavailable", { status: 503 }));
+    vi.mocked(delay).mockImplementationOnce(async (ms) => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, Number(ms) + 2);
+      });
+    });
+    await expect(
+      fetchBulkAdvisories({
+        payload: { axios: ["1.0.0"] },
+        fetchImpl,
+        timeoutMs: 1000,
+        budgetMs: 20,
+      }),
+    ).rejects.toThrow("failed (503");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it.each([
     {
       name: "HTTP 503",
@@ -645,14 +723,8 @@ snapshots:
       exit: 2,
     },
     { name: "invalid JSON", response: () => new Response("{"), exit: null },
-    {
-      name: "known vulnerability before outage",
-      attempts: 3,
-      response: () => new Response("unavailable", { status: 503 }),
-      exit: 1,
-    },
   ])(
-    "preserves audit outcomes when a later chunk fails: $name",
+    "preserves whole-graph audit failure outcomes: $name",
     async ({ response, exit, attempts = 1 }) => {
       const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-partial-"));
       const packages = Array.from({ length: 401 }, (_, index) => `pkg-${index}`);
@@ -670,26 +742,20 @@ snapshots:
       );
       const stdout: string[] = [];
       const stderr: string[] = [];
+      const summaryPath = path.join(tempDir, "summary.md");
       let requests = 0;
       vi.stubEnv("OPENCLAW_PNPM_AUDIT_BULK_TIMEOUT_MS", "10");
+      vi.stubEnv("GITHUB_STEP_SUMMARY", summaryPath);
       try {
         const audit = runPnpmAuditProd({
           rootDir: tempDir,
-          fetchImpl: async () => {
-            if (requests++ > 0) {
-              return await response();
+          fetchImpl: async (_input, init) => {
+            requests++;
+            if (typeof init?.body !== "string") {
+              throw new Error("Expected a JSON request body");
             }
-            return new Response(
-              JSON.stringify(
-                exit === 1
-                  ? {
-                      "pkg-0": [
-                        { id: "GHSA-test", severity: "high", title: "known vulnerability" },
-                      ],
-                    }
-                  : {},
-              ),
-            );
+            expect(Object.keys(JSON.parse(init.body))).toHaveLength(401);
+            return await response();
           },
           stdout: {
             write: (chunk: string) => {
@@ -709,12 +775,14 @@ snapshots:
         } else {
           await expect(audit).resolves.toBe(exit);
           expect(stderr.join("")).toContain("incomplete");
-          if (exit === 1) {
-            expect(stderr.join("")).toContain("known vulnerability");
-          }
         }
         expect(stdout).toEqual([]);
-        expect(requests).toBe(1 + attempts);
+        expect(requests).toBe(attempts);
+        const summary = await readFile(summaryPath, "utf8");
+        expect(summary).toContain(`Outcome: **${exit === null ? "error" : "unavailable"}**`);
+        expect(summary).toContain("Packages: 401");
+        expect(summary).toContain("Duration:");
+        expect(summary).toContain("no clearance");
       } finally {
         vi.unstubAllEnvs();
         await rm(tempDir, { recursive: true, force: true });
@@ -723,9 +791,13 @@ snapshots:
   );
 
   it.each([false, true])(
-    "reports npm-only coverage with the audit outcome (blocked %s)",
+    "submits one complete graph and reports npm-only coverage (blocked %s)",
     async (blocked) => {
       const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-audit-prod-"));
+      const packageNames = [
+        "axios",
+        ...Array.from({ length: 400 }, (_, index) => `fixture-${index}`),
+      ];
       await writeFile(
         path.join(tempDir, "pnpm-lock.yaml"),
         `lockfileVersion: '9.0'
@@ -733,21 +805,27 @@ snapshots:
 importers:
   .:
     dependencies:
-      axios:
-        version: 1.0.0
+${packageNames.map((name) => `      ${name}: {version: 1.0.0}`).join("\n")}
 
 snapshots:
-  axios@1.0.0: {}
+${packageNames.map((name) => `  ${name}@1.0.0: {}`).join("\n")}
 `,
         "utf8",
       );
 
       try {
+        const summaryPath = path.join(tempDir, "summary.md");
+        vi.stubEnv("GITHUB_STEP_SUMMARY", summaryPath);
         const stdoutChunks: string[] = [];
         const stderrChunks: string[] = [];
+        const payloads: unknown[] = [];
         const exitCode = await runPnpmAuditProd({
           rootDir: tempDir,
-          fetchImpl: async (input) => {
+          fetchImpl: async (input, init) => {
+            if (typeof init?.body !== "string") {
+              throw new Error("Expected a JSON request body");
+            }
+            payloads.push(JSON.parse(init.body));
             const url =
               input instanceof URL ? input.href : input instanceof Request ? input.url : input;
             expect(url).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
@@ -790,6 +868,12 @@ snapshots:
         });
 
         expect(exitCode).toBe(blocked ? 1 : 0);
+        const summary = await readFile(summaryPath, "utf8");
+        expect(summary).toContain(`Outcome: **${blocked ? "findings" : "complete"}**`);
+        expect(summary).toContain("Packages: 401");
+        expect(payloads).toEqual([
+          Object.fromEntries(packageNames.map((name) => [name, ["1.0.0"]])),
+        ]);
         if (blocked) {
           expect(stdoutChunks).toStrictEqual([]);
           expect(stderrChunks.join("")).toContain(
@@ -807,6 +891,7 @@ snapshots:
           expect(stdoutChunks.join("")).toContain("not comprehensive vulnerability clearance");
         }
       } finally {
+        vi.unstubAllEnvs();
         await rm(tempDir, { recursive: true, force: true });
       }
     },
