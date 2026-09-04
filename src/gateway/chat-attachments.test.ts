@@ -49,6 +49,11 @@ import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attac
 
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+// ISO-BMFF's generic brand identifies the container, not its audio/video tracks.
+const GENERIC_MP4 = Buffer.from(
+  "0000001c6674797069736f6d0000020069736f6d69736f326d70343100000008",
+  "hex",
+).toString("base64");
 
 type ParsedAttachments = Awaited<ReturnType<typeof parseMessageWithAttachments>>;
 
@@ -470,20 +475,23 @@ describe("parseMessageWithAttachments", () => {
     );
   });
 
-  it("accepts zip attachments via workspace offload", async () => {
-    const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
-    const { parsed } = await parseWithWarnings("x", [
-      {
-        type: "file",
-        mimeType: "application/zip",
-        fileName: "bundle.zip",
-        content: zip,
-      },
-    ]);
-    expect(parsed.offloadedRefs).toHaveLength(1);
-    expect(parsed.offloadedRefs[0]?.label).toBe("bundle.zip");
-    expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/zip");
-  });
+  it.each(["application/zip", "application/pdf"])(
+    "keeps ZIP bytes as an archive with %s metadata",
+    async (mimeType) => {
+      const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
+      const { parsed } = await parseWithWarnings("x", [
+        {
+          type: "file",
+          mimeType,
+          fileName: "bundle.zip",
+          content: zip,
+        },
+      ]);
+      expect(parsed.offloadedRefs).toHaveLength(1);
+      expect(parsed.offloadedRefs[0]?.label).toBe("bundle.zip");
+      expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/zip");
+    },
+  );
 
   it("does not let image filenames override generic non-image byte sniffing", async () => {
     const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
@@ -669,27 +677,59 @@ describe("parseMessageWithAttachments validation errors", () => {
       kind: "video",
       mimeType: "video/mp4",
       fileName: "clip.mp4",
-      content: Buffer.from([
-        0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32,
-      ]).toString("base64"),
+      content: GENERIC_MP4,
     },
-  ])("surfaces structured inbound $kind facts", async ({ kind, mimeType, fileName, content }) => {
-    const parsed = await parseMessageWithAttachments(
-      "play this",
-      [{ type: kind, mimeType, fileName, content, durationMs: 1_500 }],
-      { log: { warn: () => {} } },
-    );
+    ...["audio/mp4", "audio/x-m4a", "audio/m4a", undefined].map((mimeType) => ({
+      kind: "audio",
+      mimeType,
+      expectedMimeType: mimeType ?? "audio/x-m4a",
+      fileName: "voice.m4a",
+      content: GENERIC_MP4,
+    })),
+    {
+      kind: "audio",
+      mimeType: undefined,
+      expectedMimeType: "audio/x-m4a",
+      fileName: "voice.m4a",
+      content: Buffer.from(
+        "0000001c667479704d344120000002004d34412069736f6d69736f3200000008",
+        "hex",
+      ).toString("base64"),
+    },
+    {
+      kind: "audio",
+      mimeType: "audio/webm",
+      fileName: "voice.webm",
+      content: Buffer.from("1a45dfa3874282847765626d", "hex").toString("base64"),
+    },
+    {
+      kind: "video",
+      mimeType: "audio/aac",
+      expectedMimeType: "video/mp4",
+      fileName: "clip.mp4",
+      content: GENERIC_MP4,
+    },
+  ])(
+    "surfaces structured inbound $kind facts %#",
+    async ({ kind, mimeType, expectedMimeType = mimeType, fileName, content }) => {
+      const parsed = await parseMessageWithAttachments(
+        "play this",
+        [{ type: kind, mimeType, fileName, content, durationMs: 1_500 }],
+        { log: { warn: () => {} } },
+      );
 
-    expect(parsed.offloadedRefs).toEqual([
-      expect.objectContaining({
-        kind,
-        mimeType,
-        label: fileName,
-        durationMs: 1_500,
-        mediaRef: expect.stringMatching(/^media:\/\/inbound\//u),
-      }),
-    ]);
-  });
+      expect(parsed.offloadedRefs).toEqual([
+        expect.objectContaining({
+          kind,
+          mimeType: expectedMimeType,
+          label: fileName,
+          durationMs: 1_500,
+          mediaRef: expect.stringMatching(/^media:\/\/inbound\//u),
+        }),
+      ]);
+      expect(parsed.media[0]).toMatchObject({ kind, contentType: expectedMimeType });
+    },
+  );
 
   it("keeps image sniff fallback for generic image attachments", async () => {
     const { parsed, logs } = await parseWithWarnings("see this", [
