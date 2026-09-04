@@ -12,19 +12,34 @@ export async function waitForControlUiProofSurface(
   await surface.evaluate(async (element) => {
     await element.ownerDocument.fonts.ready;
   });
-  // Visibility ignores opacity. Settle only the owner's finite entrance/resize
-  // motion; perpetual descendant activity must not hold up retained proof.
+  // Ancestor transforms affect captured pixels even when the surface has no animation.
+  // Settle that presentation chain, including shadow hosts, without waiting on descendants.
   await expect
     .poll(() =>
-      surface.evaluate(
-        (element) =>
-          element.checkVisibility({ checkOpacity: true }) &&
-          getComputedStyle(element).opacity === "1" &&
-          element
-            .getAnimations()
-            .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
-            .every((animation) => animation.playState === "finished"),
-      ),
+      surface.evaluate((element) => {
+        if (
+          !element.checkVisibility({ checkOpacity: true }) ||
+          getComputedStyle(element).opacity !== "1"
+        ) {
+          return false;
+        }
+        for (let owner: Element | null = element; owner;) {
+          if (
+            owner
+              .getAnimations()
+              .some(
+                (animation) =>
+                  Number.isFinite(animation.effect?.getComputedTiming().endTime) &&
+                  animation.playState !== "finished",
+              )
+          ) {
+            return false;
+          }
+          const root = owner.getRootNode();
+          owner = owner.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+        }
+        return true;
+      }),
     )
     .toBe(true);
 }

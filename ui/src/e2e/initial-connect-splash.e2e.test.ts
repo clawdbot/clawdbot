@@ -426,7 +426,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await captureProof(page, "07b-first-run-model-setup-ready-mobile", [setupHeading]);
   });
 
-  it.each(["entrance", "lazy content"] as const)(
+  it.each(["entrance", "ancestor entrance", "lazy content"] as const)(
     "captures recovery pixels after %s readiness despite perpetual descendant animation",
     async (pending) => {
       const page = await createPage();
@@ -463,7 +463,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         });
         // Explicit scheduling perturbations widen the unsafe capture window;
         // they do not change the application's wait budgets or capture policy.
-        if (pendingPresentation === "entrance") {
+        if (pendingPresentation !== "lazy content") {
           card.style.animationName = "none";
           void getComputedStyle(card).animationName;
           card.style.animationDelay = "1s";
@@ -500,7 +500,11 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         });
       }, pending);
 
-      const proof = await takeControlUiViewportScreenshot(page, surface, [recovery]);
+      const proof = await takeControlUiViewportScreenshot(
+        page,
+        pending === "ancestor entrance" ? recoveryTitle : surface,
+        [recovery],
+      );
       if (artifactDir) {
         await writeFile(
           path.join(artifactDir, `capture-readiness-${pending.replaceAll(" ", "-")}.png`),
@@ -517,6 +521,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
           .locator("[data-proof-activity]")
           .evaluate((element) => element.getAnimations()[0]?.playState),
       ).toBe("running");
+      expect(await surface.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
       expect(pageErrors).toEqual([]);
     },
   );
@@ -539,12 +544,49 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       #pulse { position: fixed; left: 400px; top: 300px; width: 20px; height: 20px;
         background: white; animation: pulse .1s infinite alternate; }
       @keyframes pulse { to { opacity: .2; } }
-      </style><div id="scene"></div><div id="row"></div><div id="pulse"></div>`);
+      </style><div id="scene"></div><div id="presentation"></div>`);
+    await page.locator("#presentation").evaluate((host) => {
+      // Capture consumers also select Web Awesome shadow parts. Their host's
+      // presentation affects the pixels even though parentElement stops at the root.
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = '<div id="row"><div id="pulse"></div></div>';
+      root.prepend(document.querySelector("style")!.cloneNode(true));
+      // A delayed entrance can pass Playwright's consecutive-frame geometry check.
+      host.animate(
+        [
+          { transform: "translateY(8px)", opacity: 0.4 },
+          { transform: "none", opacity: 1 },
+        ],
+        {
+          delay: 1_000,
+          duration: 1_000,
+          fill: "both",
+        },
+      );
+    });
     const row = page.locator("#row");
     await row.waitFor();
+    const activity = await page.locator("#pulse").evaluateHandle((element) => {
+      const animation = element.getAnimations()[0]!;
+      const interruptions: string[] = [];
+      for (const type of ["cancel", "finish"]) {
+        animation.addEventListener(type, () => interruptions.push(type));
+      }
+      return { animation, interruptions };
+    });
     // Give the recorder a readable lead/tail; assertions below inspect every encoded frame.
     await page.waitForTimeout(300);
     const crop = await takeControlUiElementScreenshot(page, row, [row]);
+    const presentationState = await page
+      .locator("#presentation")
+      .evaluate((element) => element.getAnimations()[0]?.playState);
+    expect(
+      await activity.evaluate(({ animation, interruptions }) => ({
+        state: animation.playState,
+        interruptions,
+      })),
+    ).toEqual({ state: "running", interruptions: [] });
+    await activity.dispose();
     await writeFile(path.join(proofDir, "row.png"), crop);
     await writeFile(
       path.join(proofDir, "viewport.png"),
@@ -629,6 +671,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       frames.corrupt,
       "every frame after scene appearance must preserve viewport pixels",
     ).toEqual([]);
+    expect(presentationState, "capture waits for the shadow host entrance").toBe("finished");
     const { data, ...info } = decodeProofPng(crop);
     expect([info.width, info.height]).toEqual([302, 29]);
     expect([...data.subarray(0, 3)]).toEqual([160, 48, 176]);
