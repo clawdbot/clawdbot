@@ -77,6 +77,19 @@ export function normalizeReservedToolNames(names?: Iterable<string>): Set<string
   );
 }
 
+// Normalized-name view of `buildSafeToolName`: the suffix keeps a letter first
+// (`sanitizeToolFragment` prefixes anything else) inside the total budget.
+const MATERIALIZED_TOOL_SUFFIX_RE = /^[a-z][a-z0-9_-]*$/;
+
+/** Whether a normalized name under `serverPrefix` could come out of `buildSafeToolName`. */
+export function couldMaterializeToolName(name: string, serverPrefix: string): boolean {
+  return (
+    name.startsWith(serverPrefix) &&
+    name.length <= TOOL_NAME_MAX_TOTAL &&
+    MATERIALIZED_TOOL_SUFFIX_RE.test(name.slice(serverPrefix.length))
+  );
+}
+
 /** Build a safe model-facing tool name from server and tool fragments. */
 export function buildSafeToolName(params: {
   serverName: string;

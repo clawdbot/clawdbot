@@ -474,6 +474,26 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: false,
     },
     {
+      label: "an allow glob whose memos suffix starts with a digit",
+      tools: { allow: ["memos__1*"] },
+      visible: false,
+    },
+    {
+      label: "an allow entry whose memos suffix starts with a dash",
+      tools: { allow: ["memos__-note"] },
+      visible: false,
+    },
+    {
+      label: "an allow entry longer than any materialized tool name",
+      tools: { allow: [`memos__${"n".repeat(60)}`] },
+      visible: false,
+    },
+    {
+      label: "a deny glob whose memos suffix starts with a digit",
+      tools: { profile: "coding", deny: ["memos__1*"] },
+      visible: true,
+    },
+    {
       label: "an allow and a deny naming the same memos tool",
       tools: { allow: ["memos__read_note"], deny: ["memos__read_note"] },
       visible: false,

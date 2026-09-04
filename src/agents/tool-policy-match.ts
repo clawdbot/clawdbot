@@ -2,6 +2,7 @@
  * Runtime matcher for sandbox tool policies. Deny patterns always win, then
  * an empty allow list means "allow everything not denied".
  */
+import { couldMaterializeToolName } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
@@ -99,8 +100,10 @@ export function isToolAllowedByPolicies(
 
 // Outside the sanitized tool-name alphabet (`[A-Za-z0-9_-]`), so a policy entry
 // can cover a witness only through a wildcard, never by a literal that happens
-// to spell the placeholder while missing the server's real tools.
+// to spell the placeholder while missing the server's real tools. It stands for
+// one safe letter when the witness is checked against the name grammar.
 const NAMESPACE_WITNESS = "~";
+const NAMESPACE_WITNESS_LETTER = "a";
 // Entries a provider-safe tool name could ever match once `expandToolGroups`
 // has trimmed and lowercased them; anything else (including one spelling the
 // placeholder) authorizes or denies no real tool.
@@ -201,10 +204,10 @@ export function policiesAdmitToolNamespace(
         continue;
       }
       reached = true;
-      if (typeof reach === "string") {
-        names.add(reach);
-      } else {
+      if (typeof reach !== "string") {
         shapes.push(reach);
+      } else if (couldMaterializeToolName(reach, namespace)) {
+        names.add(reach);
       }
     }
     if (!reached) {
@@ -214,6 +217,13 @@ export function policiesAdmitToolNamespace(
       globLayers.push(shapes);
     }
   }
-  const witnesses = [...names, ...intersectGlobWitnesses(globLayers, namespace)];
+  // Each placeholder counts as one letter, so `memos__1*` (no tool starts with a
+  // digit) and literals past the name budget yield no witness and fall closed.
+  const witnesses = [...names, ...intersectGlobWitnesses(globLayers, namespace)].filter((name) =>
+    couldMaterializeToolName(
+      name.replaceAll(NAMESPACE_WITNESS, NAMESPACE_WITNESS_LETTER),
+      namespace,
+    ),
+  );
   return witnesses.some((name) => isToolAllowedByPolicies(name, judged));
 }

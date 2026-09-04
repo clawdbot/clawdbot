@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSafeToolName,
+  couldMaterializeToolName,
   normalizeReservedToolNames,
   sanitizeNodeIdFragment,
   sanitizeServerName,
@@ -79,5 +80,16 @@ describe("agent bundle MCP names", () => {
 
     expect(safeToolName.startsWith(`memory${TOOL_NAME_SEPARATOR}`)).toBe(true);
     expect(safeToolName.length).toBeLessThanOrEqual(64);
+  });
+
+  it("recognizes the normalized names buildSafeToolName can emit", () => {
+    const reservedNames = new Set<string>();
+    for (const toolName of ["read_note", "1note", "-note", "n".repeat(80)]) {
+      const emitted = buildSafeToolName({ serverName: "memos", toolName, reservedNames });
+      expect(couldMaterializeToolName(emitted.toLowerCase(), "memos__")).toBe(true);
+    }
+    for (const name of ["memos__1note", "memos__-note", `memos__${"n".repeat(60)}`, "memos__"]) {
+      expect(couldMaterializeToolName(name, "memos__")).toBe(false);
+    }
   });
 });
