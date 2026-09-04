@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
@@ -13,6 +12,11 @@ import {
   readControlPlaneUpdateSentinelMeta,
   resolveManagedServiceUpdateFailureExitCode,
 } from "../../infra/update-control-plane-sentinel.js";
+import {
+  getUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -46,6 +50,7 @@ import {
   UpdateCommandFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 import {
   resolveServiceRefreshEnv,
   stripGatewayServiceMarkerEnv,
@@ -67,7 +72,7 @@ import {
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
-import { resolveUnsafeUpdateRecoveryGuidance } from "./update-recovery-guidance.js";
+import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const CLI_NAME = resolveCliName();
 
@@ -84,7 +89,6 @@ export async function finishUpdate(params: {
   downgradeRisk: boolean;
   shouldRestart: boolean;
   opts: UpdateCommandOptions;
-  showProgress: boolean;
   preManagedServiceStop?: PreManagedServiceStop;
   ownedManagedUpdateEnv?: NodeJS.ProcessEnv;
   controlPlaneUpdateSentinelMeta: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
@@ -99,13 +103,33 @@ export async function finishUpdate(params: {
     ...result,
     durationMs: Math.max(0, Date.now() - params.startedAt),
   });
-  const printFinalResult = (result: UpdateRunResult) => {
-    printResult(result, { ...params.opts, hideSteps: params.showProgress });
-    if (result.status === "error" && !params.opts.json) {
-      const reason =
-        result.recovery?.serviceRestartSafe === false ? result.recovery.reason : undefined;
-      defaultRuntime.log(theme.muted(resolveUnsafeUpdateRecoveryGuidance(reason)));
+  const recordNextAction = (result: UpdateRunResult) => {
+    const run = params.opts.run;
+    const nextAction = resolveUpdateResultNextAction({
+      result,
+      managedGatewayStopped: params.preManagedServiceStop?.stopped === true,
+      env: run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
+    });
+    const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
+    if (run && active?.status === "running" && active.origin.nextAction !== nextAction) {
+      recordUpdateRunPhase(run.runId, active.phase, { origin: { nextAction } }, { env: run.env });
     }
+    return nextAction;
+  };
+  // Restart can let the new Gateway finish the row before CLI finalization resumes.
+  // Store the next action before that handoff, and refresh it if recovery changes the outcome.
+  recordNextAction(params.result);
+  const printFinalResult = (input: UpdateRunResult) => {
+    const nextAction = recordNextAction(input);
+    const run = params.opts.run;
+    const verifiedAtMs = run ? getUpdateRun(run.runId, { env: run.env })?.confirmedAtMs : null;
+    const stoppedAtMs =
+      params.preManagedServiceStop?.stoppedAtMs ??
+      params.controlPlaneUpdateSentinelMeta?.serviceStoppedAtMs;
+    const downtimeMs =
+      verifiedAtMs && stoppedAtMs ? Math.max(0, verifiedAtMs - stoppedAtMs) : undefined;
+    const result = completeUpdateCommandRun(input, run, downtimeMs);
+    printResult(result, params.opts, { nextAction });
     return result;
   };
   const reportResult = async (
@@ -148,6 +172,7 @@ export async function finishUpdate(params: {
       finalResult.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
       params.preManagedServiceStop?.windowsTaskAutoStartRecovery?.complete(false);
     }
+    recordNextAction(finalResult);
     await writeControlPlaneUpdateRestartSentinelBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
       result: finalResult,
@@ -172,8 +197,9 @@ export async function finishUpdate(params: {
       }
     }
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
-    const reportedResult = recoverService ? completedResult(finalResult) : finalResult;
-    printFinalResult(reportedResult);
+    const reportedResult = printFinalResult(
+      recoverService ? completedResult(finalResult) : finalResult,
+    );
     if (restoreFailure) {
       // Persist the unsafe outcome before unwinding. Keep both failures for
       // recovery diagnostics, with the failed compensation as the primary cause.
@@ -210,22 +236,6 @@ export async function finishUpdate(params: {
         { ...params.result, status: "error" },
         params.result.recovery?.serviceRestartSafe === true,
       );
-      if (params.result.recovery?.serviceRestartSafe !== true) {
-        const recoveryReason = params.result.recovery?.reason ?? "runtime-verification-failed";
-        if (!params.opts.json) {
-          const managedGatewayStopped = params.preManagedServiceStop?.stopped === true;
-          defaultRuntime.log(
-            theme.warn(
-              managedGatewayStopped
-                ? `Managed gateway remains stopped because update recovery could not prove a runnable installation (${recoveryReason}).`
-                : `Update recovery could not prove a runnable installation (${recoveryReason}).`,
-            ),
-          );
-          if (managedGatewayStopped) {
-            defaultRuntime.log(theme.muted("Keep the gateway stopped until the update succeeds."));
-          }
-        }
-      }
       throw new UpdateCommandFailure(
         reported,
         resolveManagedServiceUpdateFailureExitCode(reported),
@@ -239,31 +249,6 @@ export async function finishUpdate(params: {
         params.result,
         params.result.recovery?.serviceRestartSafe === true,
       );
-      if (params.result.reason === "dirty") {
-        defaultRuntime.error(
-          theme.error("Update blocked: local files are edited in this checkout."),
-        );
-        defaultRuntime.log(
-          theme.warn(
-            "Git-based updates need a clean working tree before they can switch commits, fetch, or rebase.",
-          ),
-        );
-        defaultRuntime.log(
-          theme.muted("Commit, stash, or discard the local changes, then rerun `openclaw update`."),
-        );
-      }
-      if (params.result.reason === "not-git-install") {
-        defaultRuntime.log(
-          theme.warn(
-            `Skipped: this OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\` and \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`.`,
-          ),
-        );
-        defaultRuntime.log(
-          theme.muted(
-            `Examples: \`${replaceCliName("npm i -g openclaw@latest", CLI_NAME)}\` or \`${replaceCliName("pnpm add -g openclaw@latest", CLI_NAME)}\``,
-          ),
-        );
-      }
       throw new UpdateCommandFailure(
         reported,
         classifyUpdateOutcome(reported) === "failed"
@@ -298,6 +283,22 @@ export async function finishUpdate(params: {
     }
 
     const postUpdateRoot = params.result.root ?? params.root;
+    if (params.opts.run) {
+      // Older installs validate after replacement. Record the check without
+      // moving the active phase backward from the already-issued activation.
+      recordUpdateRunPhase(
+        params.opts.run.runId,
+        "validating",
+        {
+          step: {
+            step: "post-update verification",
+            status: "in_progress",
+            startedAtMs: Date.now(),
+          },
+        },
+        { env: params.opts.run.env },
+      );
+    }
 
     let postCorePluginUpdate;
     let pluginsUpdatedInFreshProcess = false;
@@ -435,6 +436,17 @@ export async function finishUpdate(params: {
           },
         }
       : params.result;
+    if (params.opts.run) {
+      recordUpdateRunStep(
+        params.opts.run.runId,
+        {
+          step: "post-update verification",
+          status: postCorePluginUpdate?.status === "error" ? "failed" : "completed",
+          endedAtMs: Date.now(),
+        },
+        { env: params.opts.run.env },
+      );
+    }
 
     if (postCorePluginUpdate?.status === "error") {
       // Post-core validation can mutate config and state. Only its complete success
@@ -669,14 +681,6 @@ export async function finishUpdate(params: {
     }
 
     await reportResult(resultWithPostUpdate);
-    if (!params.opts.json) {
-      const recoveryEnv = params.ownedManagedUpdateEnv ?? process.env;
-      defaultRuntime.log(
-        theme.muted(
-          `After verifying your history, preview recovery rollback retirement with ${formatCliCommand("openclaw update cleanup --dry-run", recoveryEnv)} for state ${resolveStateDir(recoveryEnv)}. Keep the same state/config overrides.`,
-        ),
-      );
-    }
   } catch (error) {
     if (error instanceof UpdateCommandFailure) {
       throw error;

@@ -2,13 +2,7 @@
 // sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  validateUpdateHoldParams,
-  validateUpdateHoldResult,
-  validateUpdateRunParams,
-  validateUpdateStatusParams,
-  validateUpdateStatusResult,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { validateUpdateRunParams } from "../../../packages/gateway-protocol/src/index.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
@@ -21,7 +15,11 @@ import {
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
+import {
+  type RestartSentinelPayload,
+  writeRestartSentinel,
+  formatDoctorNonInteractiveHint,
+} from "../../infra/restart-sentinel.js";
 import {
   normalizeGatewayRestartDelayMs,
   resolveGatewayRestartDeferralTimeoutMs,
@@ -52,32 +50,36 @@ import {
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
 import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+  recordUpdateRunVerification,
+} from "../../infra/update-run-ledger.js";
+import { summarizeUpdateStepFailure } from "../../infra/update-run-record.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import {
   resolveUpdateInstallSurface,
   runGatewayUpdate,
   runGatewayUpdatePreflight,
 } from "../../infra/update-runner.js";
-import {
-  getUpdateAvailable,
-  getUpdateEffectiveChannel,
-  getUpdateSchedule,
-  initializeGatewayUpdateStatus,
-  refreshGatewayUpdateStatus,
-} from "../../infra/update-startup.js";
+import { getUpdateAvailable, initializeGatewayUpdateStatus } from "../../infra/update-startup.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import {
+  isBrowserOperatorUiClient,
+  isInternalMessageChannel,
+} from "../../utils/message-channel.js";
 import { VERSION } from "../../version.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   resolveGatewayLifecycleNoticeRoute,
   sendGatewayLifecycleNotice,
 } from "../server-restart-sentinel-notice.js";
-import {
-  getLatestUpdateRestartSentinel,
-  recordLatestUpdateRestartSentinel,
-  refreshLatestUpdateRestartSentinel,
-} from "../server-restart-sentinel.js";
+import { recordLatestUpdateRestartSentinel } from "../server-restart-sentinel.js";
+import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { updateStatusHandlers } from "./update-status.js";
 import { assertValidParams } from "./validation.js";
 
 const MANAGED_HANDOFF_RESTART_DELAY_MS = 2000;
@@ -99,92 +101,7 @@ async function readPreUpdateConfigForPostCoreFinalize(): Promise<
 }
 
 export const updateHandlers: GatewayRequestHandlers = {
-  "update.status": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
-      return;
-    }
-    let sentinel: RestartSentinelPayload | null;
-    try {
-      sentinel = await refreshLatestUpdateRestartSentinel();
-    } catch (err) {
-      context?.logGateway?.warn(
-        `update.status sentinel refresh failed: ${formatErrorMessage(err)}`,
-      );
-      sentinel = getLatestUpdateRestartSentinel();
-    }
-    const config = context?.getRuntimeConfig?.();
-    const configChannel = normalizeUpdateChannel(config?.update?.channel);
-    if (params.refreshCheckout === true && config) {
-      try {
-        await refreshGatewayUpdateStatus(config);
-      } catch (err) {
-        context?.logGateway?.warn(
-          `update.status checkout refresh failed: ${formatErrorMessage(err)}`,
-        );
-      }
-    }
-    const schedule = getUpdateSchedule();
-    let effectiveChannel = configChannel ?? normalizeUpdateChannel(schedule?.channel);
-    if (!effectiveChannel) {
-      try {
-        effectiveChannel = await getUpdateEffectiveChannel();
-      } catch (err) {
-        context?.logGateway?.warn(
-          `update.status install identity failed: ${formatErrorMessage(err)}`,
-        );
-      }
-    }
-    const result = {
-      sentinel,
-      updateAvailable: getUpdateAvailable(),
-      ...(effectiveChannel ? { effectiveChannel } : {}),
-      ...(schedule ? { schedule } : {}),
-    };
-    if (!validateUpdateStatusResult(result)) {
-      respond(false, undefined, {
-        code: "UNAVAILABLE",
-        message: "update status is temporarily unavailable",
-      });
-      return;
-    }
-    respond(true, result);
-  },
-  "update.hold": ({ params, respond, client, context }) => {
-    if (!assertValidParams(params, validateUpdateHoldParams, "update.hold", respond)) {
-      return;
-    }
-    const actor = resolveControlPlaneActor(client);
-    const campaignBeforeHold = gatewayUpdateCampaign.getState();
-    const ok = gatewayUpdateCampaign.hold();
-    const schedule = getUpdateSchedule();
-    if (ok) {
-      const heldCampaign = gatewayUpdateCampaign.getState();
-      context?.logGateway?.info(
-        `update.hold granted ${formatControlPlaneActor(actor)} holdUntilMs=${heldCampaign?.holdUntilMs} forceAtMs=${heldCampaign?.forceAtMs}`,
-      );
-    } else {
-      const reason = !campaignBeforeHold
-        ? "no campaign"
-        : campaignBeforeHold.state === "applying"
-          ? "applying"
-          : "already held";
-      context?.logGateway?.info(`update.hold refused ${formatControlPlaneActor(actor)}`, {
-        reason,
-      });
-    }
-    const result = {
-      ok,
-      ...(schedule ? { schedule } : {}),
-    };
-    if (!validateUpdateHoldResult(result)) {
-      respond(false, undefined, {
-        code: "UNAVAILABLE",
-        message: "update hold status is temporarily unavailable",
-      });
-      return;
-    }
-    respond(true, result);
-  },
+  ...updateStatusHandlers,
   "update.run": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
@@ -209,6 +126,45 @@ export const updateHandlers: GatewayRequestHandlers = {
         ? Math.max(1000, Math.floor(timeoutMsRaw))
         : undefined;
 
+    const requesterChannel = params.requester?.channel;
+    const trigger =
+      requesterChannel && !isInternalMessageChannel(requesterChannel)
+        ? "chat"
+        : isBrowserOperatorUiClient(client?.connect.client) ||
+            (sessionKey && isInternalMessageChannel(requesterChannel ?? deliveryContext?.channel))
+          ? "control-ui"
+          : "api";
+    const origin = {
+      doctorHint: formatDoctorNonInteractiveHint(),
+      ...(params.requester ? { requester: params.requester } : {}),
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(deliveryContext
+        ? {
+            deliveryContext: {
+              channel: deliveryContext.channel,
+              to: deliveryContext.to,
+              accountId: deliveryContext.accountId,
+              threadId:
+                threadId ??
+                (deliveryContext.threadId != null ? String(deliveryContext.threadId) : undefined),
+            },
+          }
+        : {}),
+    };
+    const run = createUpdateRun({
+      trigger,
+      origin,
+      before: { version: VERSION },
+      ...(params.target ? { target: { kind: "git", sha: params.target.upstreamSha } } : {}),
+    });
+    const runId = run.runId;
+    recordUpdateRunVerification(runId, {
+      runningVersion: VERSION,
+      serviceRunning: true,
+      pid: process.pid,
+    });
+    wakeUpdateRunWatcher();
+
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     let handoff:
       | { status: "started"; pid?: number; command: string }
@@ -217,7 +173,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       | null = null;
     let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
     let ackDelivered = false;
-    const noticeAttemptId = randomUUID();
+    const noticeAttemptId = runId;
     let ownsUpdateOutcome = false;
     let adoptedCampaignId: string | undefined;
     const ownerRequiredMessage = () =>
@@ -236,7 +192,10 @@ export const updateHandlers: GatewayRequestHandlers = {
       if (adoptedCampaignId && gatewayUpdateCampaign.getState()?.id === adoptedCampaignId) {
         gatewayUpdateCampaign.clear();
       }
+      recordUpdateRunPhase(runId, "requested", { origin: { nextAction: ownerRequiredMessage() } });
+      finishUpdateRun(runId, { status: "failed", reason: "owner_required" });
       respond(true, {
+        runId,
         ok: false,
         code: "owner_required",
         message: ownerRequiredMessage(),
@@ -262,6 +221,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           })
         : false;
     const sentinelMeta: UpdateRestartSentinelMeta = {
+      runId,
       ...(sessionKey ? { sessionKey } : {}),
       ...(deliveryContext ? { deliveryContext } : {}),
       ...(threadId ? { threadId } : {}),
@@ -343,6 +303,17 @@ export const updateHandlers: GatewayRequestHandlers = {
         );
       }
       const devTarget = explicitDevTarget ?? adoptedDevTarget;
+      recordUpdateRunPhase(runId, "requested", {
+        ...(adoptedCampaign
+          ? { trigger: "campaign", origin: { campaignId: adoptedCampaign.campaignId } }
+          : {}),
+        target: {
+          channel: effectiveChannel,
+          kind: installSurface.kind === "git" ? "git" : "package",
+          ...(devTarget ? { sha: devTarget.upstreamSha } : {}),
+          ...(adoptedPackageTargetVersion ? { version: adoptedPackageTargetVersion } : {}),
+        },
+      });
       const acknowledgeUpdate = async (beforeVersion: string | null) => {
         if (refuseNonOwner()) {
           return false;
@@ -433,6 +404,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               return;
             }
             const started = await startManagedServiceUpdateHandoff({
+              runId,
               requester: params.requester,
               root: installRoot,
               timeoutMs,
@@ -471,6 +443,12 @@ export const updateHandlers: GatewayRequestHandlers = {
                   clientIp: actor.clientIp,
                   changedPaths: [],
                 },
+              });
+              recordUpdateRunStep(runId, {
+                step: "managed-service update handoff",
+                status: "completed",
+                startedAtMs: startedAt,
+                endedAtMs: Date.now(),
               });
             } else {
               // A restart sentinel has one continuation owner. Reject this RPC
@@ -539,7 +517,26 @@ export const updateHandlers: GatewayRequestHandlers = {
           }
           return;
         }
+        recordUpdateRunPhase(runId, "staging");
         result = await runGatewayUpdate({
+          runId,
+          progress: {
+            onStepStart: (step) =>
+              recordUpdateRunStep(runId, {
+                step: step.name,
+                status: "in_progress",
+                startedAtMs: Date.now(),
+              }),
+            onStepComplete: (step) =>
+              recordUpdateRunStep(runId, {
+                step: step.name,
+                status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
+                endedAtMs: Date.now(),
+                ...(step.exitCode !== 0
+                  ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
+                  : {}),
+              }),
+          },
           timeoutMs,
           cwd: installSurface.root,
           channel:
@@ -554,6 +551,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           allowGatewayActivation: false,
         });
         // Match CLI post-core convergence so official plugins do not remain stale.
+        recordUpdateRunPhase(runId, "validating");
         const finalizeOutcome = await runPostCoreFinalizeAfterGatewayUpdate({
           result,
           channel: configChannel ?? undefined,
@@ -579,6 +577,38 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
 
     result = normalizeControlPlaneUpdateResult(result);
+    let outcomeRun = recordUpdateRunPhase(
+      runId,
+      result.status === "ok" ? "restarting" : "requested",
+      {
+        before: result.before,
+        after: result.after,
+        ...(handoff && "message" in handoff ? { origin: { nextAction: handoff.message } } : {}),
+      },
+    );
+    for (const step of result.steps) {
+      recordUpdateRunStep(runId, {
+        step: step.name,
+        status:
+          step.exitCode === 0 ||
+          step.advisory ||
+          (step.exitCode === null && result.status !== "error")
+            ? "completed"
+            : "failed",
+        ...(step.exitCode !== 0
+          ? { detail: step.advisory?.message ?? summarizeUpdateStepFailure(step) }
+          : {}),
+      });
+    }
+    // A managed orchestrator or the replacement Gateway owns terminal success;
+    // refusals and synchronous failures have no later process to finish the run.
+    if (result.status !== "ok" && handoff?.status !== "started") {
+      outcomeRun = finishUpdateRun(runId, {
+        status: result.status === "skipped" ? "skipped" : "failed",
+        reason: result.reason,
+        after: result.after,
+      });
+    }
 
     const payload: RestartSentinelPayload = buildUpdateRestartSentinelPayload({
       result,
@@ -590,13 +620,25 @@ export const updateHandlers: GatewayRequestHandlers = {
       ownsUpdateOutcome = gatewayUpdateCampaign.getState()?.id === adoptedCampaignId;
     }
     let sentinelPersisted = false;
+    let noticeFailureMessage: string | undefined;
     if (ownsUpdateOutcome) {
       try {
         await writeRestartSentinel(payload);
         sentinelPersisted = true;
         recordLatestUpdateRestartSentinel(payload);
       } catch {
-        // Best effort: the response still reports the update outcome.
+        if (result.status === "ok" && handoff?.status !== "started") {
+          noticeFailureMessage =
+            "The update was installed, but its restart notice could not be saved. Run openclaw update status after the gateway restarts.";
+          recordUpdateRunPhase(runId, "restarting", {
+            origin: { nextAction: noticeFailureMessage },
+          });
+          outcomeRun = finishUpdateRun(runId, {
+            status: "failed",
+            reason: "unexpected-error",
+            after: result.after,
+          });
+        }
       }
     }
 
@@ -636,10 +678,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           })
         : null);
     if (ackDelivered && result.status !== "ok" && !restart) {
-      await notify(
-        "failed",
-        `⚠️ Update did not start: ${result.reason ?? result.status}. ${handoff && "message" in handoff ? handoff.message : ""}`,
-      );
+      await notify("failed", renderUpdateRunReport(outcomeRun).markdown);
     }
     context?.logGateway?.info(
       `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
@@ -653,8 +692,10 @@ export const updateHandlers: GatewayRequestHandlers = {
     respond(
       true,
       {
+        runId,
         ok: result.status === "ok" || handoff?.status === "started",
         ackDelivered,
+        ...(noticeFailureMessage ? { message: noticeFailureMessage } : {}),
         result,
         ...(handoff ? { handoff } : {}),
         restart,

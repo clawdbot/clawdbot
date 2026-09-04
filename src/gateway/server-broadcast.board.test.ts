@@ -89,6 +89,26 @@ describe("read-capable operator event scope guards", () => {
   );
 });
 
+describe("update run event scope guards", () => {
+  it("delivers run identities only to administrators", () => {
+    const read = makeClient("read", "operator", ["operator.read"]);
+    const admin = makeClient("admin", "operator", ["operator.admin"]);
+    const node = makeClient("node", "node", ["operator.admin"]);
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new Set([read.client, admin.client, node.client]),
+    });
+    broadcast("update.run.changed", {
+      runId: "run",
+      phase: "staging",
+      status: "running",
+      updatedAtMs: 1,
+    });
+    expect(read.socket.events).toEqual([]);
+    expect(node.socket.events).toEqual([]);
+    expect(admin.socket.events).toEqual(["update.run.changed"]);
+  });
+});
+
 describe("device setup event scope guards", () => {
   it("delivers exact setup completion only to pairing-capable operators", () => {
     const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
