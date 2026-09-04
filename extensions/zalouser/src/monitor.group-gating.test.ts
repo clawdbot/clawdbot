@@ -992,33 +992,22 @@ describe("zalouser monitor group mention gating", () => {
     expect(callArg?.ctx?.ReplyToIsQuote).toBe(true);
   });
 
-  it("skips pairing store read for open DM control commands", async () => {
-    const { readAllowFromStore } = installRuntime({
-      commandAuthorized: false,
-    });
-    await processMessageThroughMonitor({
-      message: createDmMessage({ content: "/new", commandContent: "/new" }),
-      account: createAccount(),
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
-    });
+  it.each([{ content: "/new", commandContent: "/new" }, { content: "hello there" }])(
+    "skips pairing store read for open DM message: $content",
+    async (message) => {
+      const { readAllowFromStore } = installRuntime({
+        commandAuthorized: false,
+      });
+      await processMessageThroughMonitor({
+        message: createDmMessage(message),
+        account: createAccount(),
+        config: createConfig(),
+        runtime: createRuntimeEnv(),
+      });
 
-    expect(readAllowFromStore).not.toHaveBeenCalled();
-  });
-
-  it("skips pairing store read for open DM non-command messages", async () => {
-    const { readAllowFromStore } = installRuntime({
-      commandAuthorized: false,
-    });
-    await processMessageThroughMonitor({
-      message: createDmMessage({ content: "hello there" }),
-      account: createAccount(),
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
-    });
-
-    expect(readAllowFromStore).not.toHaveBeenCalled();
-  });
+      expect(readAllowFromStore).not.toHaveBeenCalled();
+    },
+  );
 
   it("includes skipped group messages as InboundHistory on the next processed message", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({

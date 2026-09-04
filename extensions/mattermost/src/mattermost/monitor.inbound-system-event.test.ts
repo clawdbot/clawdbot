@@ -1350,7 +1350,11 @@ describe("mattermost inbound user posts", () => {
       { message: "@openclaw.", expectedBody: "." },
       { message: "@openclaw-", expectedBody: "-" },
       { message: "@openclaw: hello", expectedBody: ": hello" },
-    ].map((testCase, index) => ({ ...testCase, channelId: `mention-boundary-${index}` })),
+    ].map(({ message, expectedBody }, index) => ({
+      message,
+      expectedBody,
+      channelId: `mention-boundary-${index}`,
+    })),
   )(
     "dispatches only genuine mention-required posts: $message",
     async ({ message, expectedBody, channelId }) => {
