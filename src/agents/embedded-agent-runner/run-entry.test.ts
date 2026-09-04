@@ -954,6 +954,24 @@ describe("runEmbeddedAgentEntry", () => {
       expected: { disposition: "visible", text: "visible" },
     },
     {
+      name: "CLI delivered source reply",
+      meta: { finalAssistantRawText: "NO_REPLY" },
+      sourceReplyDelivered: true as const,
+      expected: { disposition: "silent" },
+    },
+    {
+      name: "final internal source reply after silence",
+      meta: { finalAssistantRawText: "NO_REPLY" },
+      sourceReplies: [{ text: "forward this reply", sourceReplyFinal: true }],
+      expected: { disposition: "visible", text: "forward this reply" },
+    },
+    {
+      name: "progress internal reply before final assistant text",
+      meta: { finalAssistantVisibleText: "completed answer" },
+      sourceReplies: [{ text: "working", sourceReplyFinal: false }],
+      expected: { disposition: "visible", text: "completed answer" },
+    },
+    {
       name: "CLI exact silence",
       meta: { finalAssistantVisibleText: "NO_REPLY", finalAssistantRawText: "NO_REPLY" },
       expected: { disposition: "silent" },
@@ -973,57 +991,72 @@ describe("runEmbeddedAgentEntry", () => {
       meta: {},
       expected: { disposition: "empty" },
     },
-  ])("records the producer-owned terminal snapshot for $name", async ({ name, meta, expected }) => {
-    const runId = `terminal-${name}`;
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      outcome: "completed" as const,
-      result: await params.run(params.provider, params.model, initialAttemptOptions(params)),
-      provider: params.provider,
-      model: params.model,
-      attempts: [],
-    }));
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
-    const result = await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "provider", model: "model" },
-      identity: { runId, agentId: "main", sessionId: "session-1" },
-      harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-      },
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model) => ({
-        ...makeResult({ provider, model }),
-        meta: {
-          ...makeResult({ provider, model }).meta,
-          ...meta,
-          agentMeta: Object.assign(
-            {
-              sessionId: "session-1",
-              provider,
-              model,
-            },
-            {
-              terminalReceipt: {
-                runId,
-                sessionId: "session-1",
-                turnId: "turn-1",
-                requested: { provider, model },
-                effective: { provider, model, responseModel: model },
-                successfulToolNames: ["read"],
-                rerouted: false,
-              },
-            },
-          ),
+  ])(
+    "records the producer-owned terminal snapshot for $name",
+    async ({ name, meta, expected, sourceReplies, sourceReplyDelivered }) => {
+      const runId = `terminal-${name}`;
+      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+        outcome: "completed" as const,
+        result: await params.run(params.provider, params.model, initialAttemptOptions(params)),
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      }));
+      const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+      const result = await runEmbeddedAgentEntry({
+        selection: { cfg: {}, provider: "provider", model: "model" },
+        identity: { runId, agentId: "main", sessionId: "session-1" },
+        harness: {
+          workspaceDir: "/tmp/workspace",
+          preparation: { kind: "direct" },
+          resolveRuntimeOverride: () => undefined,
         },
-      }),
-    });
+        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+        sessionOverride: { kind: "preserve" },
+        runCandidate: async (provider, model) => ({
+          ...makeResult({ provider, model }),
+          messagingToolSourceReplyPayloads: sourceReplies,
+          sourceReplyDelivered,
+          meta: {
+            ...makeResult({ provider, model }).meta,
+            ...meta,
+            agentMeta: Object.assign(
+              {
+                sessionId: sourceReplyDelivered ? "native-cli-session" : "session-1",
+                provider,
+                model,
+              },
+              sourceReplyDelivered
+                ? {}
+                : {
+                    terminalReceipt: {
+                      runId,
+                      sessionId: "session-1",
+                      turnId: "turn-1",
+                      requested: { provider, model },
+                      effective: { provider, model, responseModel: model },
+                      successfulToolNames: ["read"],
+                      rerouted: false,
+                    },
+                  },
+            ),
+          },
+        }),
+      });
 
-    expect(result.terminal.metadata.terminalReply).toEqual(expected);
-    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
-      runId,
-      terminalDisposition: expected.disposition === "visible" ? "visible" : "not-visible",
-    });
-  });
+      expect(result.terminal.metadata.terminalReply).toEqual(expected);
+      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+        runId,
+        terminalDisposition: expected.disposition === "visible" ? "visible" : "not-visible",
+      });
+      if (sourceReplyDelivered) {
+        expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+          sourceReplyDelivered: true,
+          sessionId: "session-1",
+          requested: { provider: "provider", model: "model" },
+          successfulToolNames: ["message"],
+        });
+      }
+    },
+  );
 });

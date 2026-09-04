@@ -2489,6 +2489,7 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
     expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.sourceReplyDelivered).toBeUndefined();
     expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([
       {
         text: "visible reply",
@@ -2575,49 +2576,54 @@ describe("createCodexDynamicToolBridge", () => {
     expect(Object.keys(result)).not.toContain("terminate");
   });
 
-  it("keeps message-tool-only source replies terminal when middleware redacts receipt details", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.agentToolResultMiddlewares.push({
-      pluginId: "receipt-redactor",
-      pluginName: "Receipt redactor",
-      rawHandler: () => undefined,
-      handler: (event: { result: AgentToolResult<unknown> }) => ({
-        result: {
-          content: event.result.content,
-          details: { redacted: true },
-        },
-      }),
-      runtimes: ["codex"],
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
-    const bridge = createBridgeWithToolResult(
-      "message",
-      textToolResult("Sent.", {
-        messageDelivery: {
-          status: "settled",
-          primaryPlatformMessageId: "imessage-6264",
-          partialDelivery: false,
-          createdThreadIds: [],
-        },
-        receipt: {
-          primaryPlatformMessageId: "imessage-6264",
-          platformMessageIds: ["imessage-6264"],
-        },
-      }),
-      { sourceReplyDeliveryMode: "message_tool_only" },
-    );
+  it.each([undefined, "message_tool_only"] as const)(
+    "preserves implicit source delivery when middleware redacts details in %s mode",
+    async (sourceReplyDeliveryMode) => {
+      const registry = createEmptyPluginRegistry();
+      registry.agentToolResultMiddlewares.push({
+        pluginId: "receipt-redactor",
+        pluginName: "Receipt redactor",
+        rawHandler: () => undefined,
+        handler: (event: { result: AgentToolResult<unknown> }) => ({
+          result: {
+            content: event.result.content,
+            details: { redacted: true },
+          },
+        }),
+        runtimes: ["codex"],
+        source: "test",
+      });
+      setActivePluginRegistry(registry);
+      const bridge = createBridgeWithToolResult(
+        "message",
+        textToolResult("Sent.", {
+          messageDelivery: {
+            status: "settled",
+            primaryPlatformMessageId: "imessage-6264",
+            partialDelivery: false,
+            createdThreadIds: [],
+            sourceReplyDelivered: true,
+          },
+          receipt: {
+            primaryPlatformMessageId: "imessage-6264",
+            platformMessageIds: ["imessage-6264"],
+          },
+        }),
+        { sourceReplyDeliveryMode },
+      );
 
-    const result = await handleMessageToolCall(bridge, {
-      action: "send",
-      message: "visible reply",
-      final: true,
-    });
+      const result = await handleMessageToolCall(bridge, {
+        action: "send",
+        message: "visible reply",
+        final: true,
+      });
 
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
-  });
+      expect(result).toEqual(expectInputText("Sent."));
+      expect(result.terminate).toBe(sourceReplyDeliveryMode ? true : undefined);
+      expect(bridge.telemetry.sourceReplyDelivered).toBe(true);
+      expect(Object.keys(result)).not.toContain("terminate");
+    },
+  );
 
   it("does not treat target telemetry alone as delivered message-tool-only source reply evidence", async () => {
     const bridge = createBridgeWithToolResult("message", textToolResult("Sent."), {

@@ -269,19 +269,50 @@ function buildTerminal(params: {
   outcome: EmbeddedAgentRunEntryTerminal["outcome"];
   behavior: RunEntryBehavior;
   runId: string;
+  requested: { provider: string; model: string };
+  sessionId: string;
 }): EmbeddedAgentRunEntryTerminal {
   const meta = params.result.meta;
   const outcome = params.outcome;
+  const internalReply = params.result.messagingToolSourceReplyPayloads?.findLast(
+    (payload) => payload.sourceReplyFinal === true,
+  );
   let terminalReply =
     normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ??
-    buildAgentRunTerminalReplySnapshot({
-      visibleText: meta.finalAssistantVisibleText,
-      rawText: meta.finalAssistantRawText,
-      terminalReplyKind: meta.terminalReplyKind,
-    });
-  const normalizedTerminalReceipt = normalizeAgentRunTerminalReceipt(
-    meta.agentMeta?.terminalReceipt,
-  );
+    buildAgentRunTerminalReplySnapshot(
+      // Internal UI delivery still needs forwarding by A2A. Its final payload
+      // owns that reply even when the model subsequently emits NO_REPLY.
+      internalReply
+        ? { visibleText: internalReply.text }
+        : {
+            visibleText: meta.finalAssistantVisibleText,
+            rawText: meta.finalAssistantRawText,
+            terminalReplyKind: meta.terminalReplyKind,
+          },
+    );
+  const agentMeta = meta.agentMeta;
+  const normalizedTerminalReceipt =
+    normalizeAgentRunTerminalReceipt(agentMeta?.terminalReceipt) ??
+    // CLI backends report delivery without an embedded model-turn receipt.
+    // The entry owner supplies run identity; the tool supplied the send fact.
+    (params.result.sourceReplyDelivered && agentMeta?.provider && agentMeta.model
+      ? {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          turnId: params.runId,
+          requested: params.requested,
+          effective: {
+            provider: agentMeta.provider,
+            model: agentMeta.model,
+            responseModel: agentMeta.model,
+          },
+          successfulToolNames: ["message"],
+          sourceReplyDelivered: true as const,
+          rerouted:
+            agentMeta.provider !== params.requested.provider ||
+            agentMeta.model !== params.requested.model,
+        }
+      : undefined);
   const terminalReceipt =
     normalizedTerminalReceipt?.runId === params.runId
       ? {
@@ -570,6 +601,8 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       outcome: terminalOutcome,
       behavior: params.behavior,
       runId: params.identity.runId,
+      requested: { provider: params.selection.provider, model: params.selection.model },
+      sessionId: params.identity.sessionId,
     });
     const acceptedTerminal =
       !params.abortSignal?.aborted &&

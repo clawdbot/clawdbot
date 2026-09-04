@@ -1921,7 +1921,7 @@ src/agents/provider-transport-fetch.ts	4
 src/agents/replay-turn-classification.ts	1
 src/agents/run-termination.ts	3
 src/agents/run-timeout-attribution.ts	1
-src/agents/run-wait.ts	8
+src/agents/run-wait.ts	2
 src/agents/runtime-plan/build.ts	4
 src/agents/runtime-plan/tools.ts	3
 src/agents/runtime/proxy.ts	7
@@ -3620,7 +3620,7 @@ src/shared/pid-alive.ts	2
 src/shared/runtime-import.ts	1
 src/shared/safe-record.ts	2
 src/shared/store-writer-queue.ts	1
-src/shared/transcript-only-openclaw-assistant.ts	6
+src/shared/transcript-only-openclaw-assistant.ts	4
 src/shared/worker-bundle-archive.ts	1
 src/skills/lifecycle/clawhub-install-core.ts	2
 src/skills/lifecycle/clawhub-store.ts	12
