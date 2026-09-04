@@ -20,6 +20,34 @@ export function createDiagnosticsMetrics(
     meter.createHistogram(resolveMetricName(name), options);
 
   return {
+    gatewayRpcRequestsCounter: createCounter("openclaw.gateway.rpc.requests", {
+      unit: "1",
+      description: "Authenticated Gateway WebSocket requests received",
+    }),
+    gatewayRpcOutcomesCounter: createCounter("openclaw.gateway.rpc.outcomes", {
+      unit: "1",
+      description: "Gateway RPC observations by phase and outcome",
+    }),
+    gatewayRpcFirstResponseHistogram: createHistogram("openclaw.gateway.rpc.first_response_ms", {
+      unit: "ms",
+      description: "Elapsed time until the first Gateway RPC response is sent",
+      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
+    }),
+    gatewayRpcHandlerHistogram: createHistogram("openclaw.gateway.rpc.handler_ms", {
+      unit: "ms",
+      description: "Gateway RPC handler duration until return or throw",
+      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
+    }),
+    gatewayRpcAdmissionHistogram: createHistogram("openclaw.gateway.rpc.admission_ms", {
+      unit: "ms",
+      description: "Elapsed time from Gateway RPC receipt until handler invocation",
+      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
+    }),
+    gatewayRpcQueueWaitHistogram: createHistogram("openclaw.gateway.rpc.queue_wait_ms", {
+      unit: "ms",
+      description: "Gateway operator request start queue wait",
+      advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
+    }),
     tokensCounter: createCounter("openclaw.tokens", {
       unit: "1",
       description: "Token usage by type",

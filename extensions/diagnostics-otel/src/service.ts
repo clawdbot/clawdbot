@@ -1,5 +1,5 @@
 // Diagnostics Otel plugin module implements service behavior.
-import { diag, metrics, trace, type SpanContext } from "@opentelemetry/api";
+import { createNoopMeter, diag, metrics, trace, type SpanContext } from "@opentelemetry/api";
 import * as otelCore from "@opentelemetry/core";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
@@ -553,9 +553,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ctx.logger.info("diagnostics-otel: using preloaded OpenTelemetry SDK");
       }
 
-      const meter = meterProvider
-        ? meterProvider.getMeter("openclaw")
-        : metrics.getMeter("openclaw");
+      const meter = !metricsActive
+        ? createNoopMeter()
+        : meterProvider
+          ? meterProvider.getMeter("openclaw")
+          : metrics.getMeter("openclaw");
       const tracer = traceProvider
         ? traceProvider.getTracer("openclaw")
         : trace.getTracer("openclaw");
@@ -601,6 +603,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           recordLogRecord,
           recordSecurityEvent,
         }),
+        !tracesActive && !metricsActive ? { include: ["log.record", "security.event"] } : undefined,
       );
       if (tracesActive) {
         // Model/tool starts are queued while their lifecycle parents dispatch

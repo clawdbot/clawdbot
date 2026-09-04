@@ -212,6 +212,34 @@ function prepareConfig(
 }
 
 describe("security-fast workflow", () => {
+  it.each([0, 1, 2, 3, 130])(
+    "propagates audit exit %s in ordinary and scheduled CI",
+    (auditExit) => {
+      const repo = tempDirs.make("openclaw-audit-ci-");
+      mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
+      writeFileSync(
+        join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
+        `process.exit(${auditExit});\n`,
+      );
+      const result = runStep(securityStep("Audit production dependencies"), repo, {});
+      expect(result.status).toBe(auditExit);
+      expect(result.stdout).toBe("");
+      const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
+        jobs: { audit: { steps: WorkflowStep[] } };
+      };
+      const strictStep = scheduled.jobs.audit.steps.find(
+        (step) => step.name === "Audit production dependencies",
+      );
+      if (!strictStep) {
+        throw new Error("scheduled production audit step is missing");
+      }
+      const summary = join(repo, "summary.md");
+      const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
+      expect(strict.status).toBe(auditExit);
+      expect(readFileSync(summary, "utf8")).toContain("Triage owner: @steipete");
+    },
+  );
+
   it("generates the exact local-only scanner contract from trusted policy", () => {
     const job = securityJob();
     const checkoutHarness = securityStep("Checkout trusted CI harness");

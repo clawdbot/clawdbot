@@ -30,6 +30,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
+import { nodeFilePath } from "../test-utils/node-file-path.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgent } from "./agent-create.js";
 import { beginAgentDeletion } from "./agent-lifecycle-registry.js";
@@ -134,7 +135,13 @@ it.each(["workspace", "workspace-write", "config"] as const)(
     const realWrite = fs.writeFile.bind(fs);
     const write = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
       await realWrite(file, data, options);
-      if (phase === "workspace-write" && file === path.join(workspace, "AGENTS.md")) {
+      const filePath = nodeFilePath(file);
+      if (
+        phase === "workspace-write" &&
+        filePath &&
+        path.basename(filePath) === "AGENTS.md" &&
+        path.basename(path.dirname(filePath)).startsWith("openclaw-bootstrap-")
+      ) {
         await pause();
       }
     });
@@ -169,9 +176,7 @@ it.each(["workspace", "workspace-write", "config"] as const)(
       expect.soft(rollback).toHaveBeenCalledTimes(phase === "config" ? 1 : 0);
       expect.soft(await fs.stat(stagedFile).catch(() => null)).toBeNull();
       if (phase !== "config") {
-        expect
-          .soft(await fs.readdir(workspace))
-          .toEqual(phase === "workspace" ? [] : ["AGENTS.md"]);
+        expect.soft(await fs.readdir(workspace)).toEqual([]);
         expect.soft(readWorkspaceStateSnapshot(workspace).setupExists).toBe(false);
         expect.soft(prepareConfigCommit).not.toHaveBeenCalled();
         expect.soft(await fs.stat(state.sessionsDir("prepared")).catch(() => null)).toBeNull();

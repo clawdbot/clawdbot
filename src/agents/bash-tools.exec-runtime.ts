@@ -388,10 +388,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
-  const eventRouting = session.eventRouting ?? {
-    mainKey: session.mainKey,
-    sessionScope: session.sessionScope,
-  };
+  const eventRouting = session.eventRouting ?? {};
   const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
   const eventOptions = {
     sessionKey: eventSessionKey,
@@ -683,15 +680,6 @@ export async function runExecProcess({
   scopeKey?: string;
   sessionKey?: string;
   agentId?: string;
-  /** `session.mainKey` from the runtime config; snapshotted onto the
-   *  ProcessSession so background-exit notifications can remap cron-run
-   *  keys without an ambient config load. Long-running background exits use
-   *  this start-time value even if config changes while the process runs. */
-  mainKey?: string;
-  /** `session.scope` from the runtime config; snapshotted alongside
-   *  `mainKey` so the cron-run remap can route global-scope agents to
-   *  the "global" queue instead of agent-main. */
-  sessionScope?: "per-sender" | "global";
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
@@ -722,8 +710,6 @@ export async function runExecProcess({
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
-    mainKey: opts.mainKey,
-    sessionScope: opts.sessionScope,
     eventRouting: opts.eventRouting,
     notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
@@ -881,8 +867,6 @@ export async function runExecProcess({
         // retain it, including when a task callback or notification throws.
         delete session.sessionKey;
         delete session.agentId;
-        delete session.mainKey;
-        delete session.sessionScope;
         delete session.eventRouting;
         delete session.notifyDeliveryContext;
         delete session.notifyOnExit;

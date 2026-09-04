@@ -156,7 +156,7 @@ async function loadPackageIcon(params: {
       maxBytes: PLUGIN_ICON_MAX_BYTES,
       rejectHardlinks: true,
     });
-    if (!opened.ok || opened.stat.size < 1) {
+    if (!opened.ok) {
       return null;
     }
     try {

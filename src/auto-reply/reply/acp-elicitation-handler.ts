@@ -5,7 +5,6 @@ import type {
   AcpJsonRpcId,
 } from "@openclaw/acp-core/runtime/types";
 import { runStructuredInput } from "../../agents/harness/structured-input-execution.js";
-import { callGatewayTool } from "../../agents/tools/gateway.js";
 import type { ReplyPayload } from "../types.js";
 import { parseAcpElicitationRequest } from "./acp-elicitation.js";
 
@@ -78,7 +77,6 @@ export function createAcpElicitationHandler(
       agentId: params.agentId,
       runId: params.runId,
       timeoutMs: DEFAULT_ELICITATION_TIMEOUT_MS,
-      gatewayCall: callGatewayTool,
       delivery,
       signal: context.signal,
       isActive: params.isActive,

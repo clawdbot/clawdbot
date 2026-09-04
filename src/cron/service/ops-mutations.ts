@@ -611,7 +611,7 @@ export async function remove(
       postPersistNotifications,
       suppressScheduledJobId: id,
     });
-    const activeMarker = noteActiveCronJobRemoval(id);
+    const activeMarker = noteActiveCronJobRemoval(id, opts?.commitGuard);
     const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
     const sessionStorePath =
       state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;

@@ -2872,8 +2872,8 @@ struct GatewayNodeSessionTests {
             task.hasPendingReceiveHandler()
         }
         task.emitReceiveFailure()
-        try await waitUntil("ownerless reconnect socket created") {
-            session.snapshotMakeCount() == 2
+        try await waitUntil("ownerless reconnect sends connect frame") {
+            session.snapshotMakeCount() == 2 && session.latestTask()?.latestConnectAuth() != nil
         }
         let reconnectAuth = try #require(session.latestTask()?.latestConnectAuth())
         #expect(reconnectAuth["token"] == nil)

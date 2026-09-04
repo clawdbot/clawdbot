@@ -256,7 +256,8 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
           `export default ${JSON.stringify({
             root: cwd,
             test: {
-              projects: projectConfigs,
+              // An omitted list lets native Vitest host a wholly empty blob replay.
+              projects: projectConfigs.length ? projectConfigs : undefined,
               coverage: { enabled: false },
               passWithNoTests: captures.every((capture) => capture.passWithNoTests),
               dangerouslyIgnoreUnhandledErrors: captures.every(

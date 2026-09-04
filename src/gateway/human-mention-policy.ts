@@ -31,8 +31,8 @@ import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   createProfileSessionEntryFilter,
-  createSessionListEntryFilter,
   isSessionVisibilityAllowed,
+  prepareSessionSharing,
   resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "./session-sharing.js";
@@ -45,6 +45,7 @@ type MentionTarget = {
   sessionKey?: string;
   entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">;
 };
+type MentionReader = { profile: MentionProfile; canRead: (target: MentionTarget) => boolean };
 
 function scopesAllowRead(scopes: readonly string[]): boolean {
   return roleScopesAllow({
@@ -97,7 +98,7 @@ export function createHumanMentionPolicy(params: {
   function identify(
     client: GatewayClient | null,
     cfg: OpenClawConfig,
-  ): Result<{ client: GatewayClient; profile: MentionProfile }, ErrorShape> {
+  ): Result<MentionReader, ErrorShape> {
     if (
       !client?.connect ||
       client.invalidated === true ||
@@ -126,32 +127,21 @@ export function createHumanMentionPolicy(params: {
     if (policy && !scopesAllowRead(policy.scopes)) {
       return err(errorShape(ErrorCodes.FORBIDDEN, "Your operator role cannot read mentions."));
     }
-    const scopes: string[] = [READ_SCOPE];
-    if (
+    const admin =
       client.connect.scopes?.includes(ADMIN_SCOPE) &&
-      (!policy || policy.scopes.includes(ADMIN_SCOPE))
-    ) {
-      scopes.push(ADMIN_SCOPE);
-    }
-    return ok({
-      profile,
+      (!policy || policy.scopes.includes(ADMIN_SCOPE));
+    // The reader lives for one synchronous projection, never across an await.
+    const { entryFilter } = prepareSessionSharing({
+      cfg,
       client: {
-        ...client,
-        connect: { ...client.connect, scopes },
-        authenticatedUserProfile: {
-          ...verifiedProfile,
-          profileId: profile.profileId,
-        },
-        internal: {
-          ...client.internal,
-          operatorRoleActor: { kind: "operator", profileId: profile.profileId },
-        },
+        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [READ_SCOPE] },
+        internal: { operatorRoleActor: { kind: "operator", profileId: profile.profileId } },
       },
     });
-  }
-
-  function canRead(client: GatewayClient, target: MentionTarget, cfg: OpenClawConfig): boolean {
-    return createSessionListEntryFilter({ cfg, client })?.(target.sessionKey, target.entry) ?? true;
+    return ok({
+      profile,
+      canRead: (target) => entryFilter?.(target.sessionKey, target.entry) ?? true,
+    });
   }
 
   function recipientProfile(
@@ -208,7 +198,7 @@ export function createHumanMentionPolicy(params: {
           incognito: resolved.entry.incognito,
         },
       };
-      if (!target || !canRead(requester.client, target, cfg)) {
+      if (!target || !requester.canRead(target)) {
         return err(errorShape(ErrorCodes.INVALID_REQUEST, "Session was not found."));
       }
       return ok({ target, profile: requester.profile });
@@ -219,7 +209,7 @@ export function createHumanMentionPolicy(params: {
     }
     const creationError = authorizeGatewaySessionCreation({
       cfg,
-      client: requester.client,
+      profileId: requester.profile.profileId,
       agentId: agent.agentId,
     });
     if (creationError) {
@@ -233,7 +223,12 @@ export function createHumanMentionPolicy(params: {
       profile: requester.profile,
       target: {
         agentId: agent.agentId,
-        entry: { visibility, createdActor: resolveOperatorSessionCreation(requester.client).actor },
+        entry: {
+          visibility,
+          createdActor: resolveOperatorSessionCreation({
+            authenticatedUserProfile: requester.profile,
+          }).actor,
+        },
       },
     });
   }
@@ -241,7 +236,6 @@ export function createHumanMentionPolicy(params: {
   return {
     identify,
     readProfile,
-    canRead,
     recipientProfile,
     invalidateDirectory(): void {
       eligibleDirectory = undefined;

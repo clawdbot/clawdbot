@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
+import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
 import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
 import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
@@ -29,6 +30,7 @@ const sourceFiles = [
   "en-agents.ts",
   "en-activity.ts",
   "en-debug.ts",
+  "en-desktop.ts",
   "en-devices.ts",
   "en-meetings.ts",
   "en-memory-import.ts",
@@ -46,8 +48,12 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   // en.ts's empty anchors retain source order for extracted whole subtrees.
   return mergeControlUiTranslationMaps(
     registerSkillLibraryEnglish.catalog,
-    // Preserve Debug key order while keeping only its title eager.
-    { ...en, debug: registerDebugEnglish.catalog.debug },
+    // Preserve partial-fragment key order while keeping shared labels eager.
+    {
+      ...en,
+      debug: registerDebugEnglish.catalog.debug,
+      desktop: registerDesktopEnglish.catalog.desktop,
+    },
     registerActivityEnglish.catalog,
     registerDevicesEnglish.catalog,
     registerMeetingsEnglish.catalog,

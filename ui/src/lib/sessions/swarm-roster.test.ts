@@ -39,6 +39,41 @@ afterEach(() => {
 });
 
 describe("isSwarmEnabledInConfig", () => {
+  it.each([
+    { label: "unloaded config", config: undefined },
+    { label: "omitted tools", config: {} },
+    { label: "omitted swarm", config: { tools: {} } },
+    { label: "empty swarm", config: { tools: { swarm: {} } } },
+    { label: "limits-only swarm", config: { tools: { swarm: { maxConcurrent: 3 } } } },
+    {
+      label: "limits-only agent swarm",
+      config: { agents: { entries: { worker: { tools: { swarm: { maxConcurrent: 3 } } } } } },
+    },
+  ])("defaults to enabled with $label", ({ config }) => {
+    expect(isSwarmEnabledInConfig(config, "worker")).toBe(true);
+  });
+
+  it.each([
+    { globalSwarm: false, agentSwarm: {}, expected: false },
+    { globalSwarm: { enabled: false }, agentSwarm: { maxConcurrent: 3 }, expected: false },
+    { globalSwarm: true, agentSwarm: { enabled: false }, expected: false },
+    { globalSwarm: { enabled: true }, agentSwarm: false, expected: false },
+    { globalSwarm: false, agentSwarm: { enabled: true }, expected: true },
+    { globalSwarm: { enabled: false }, agentSwarm: true, expected: true },
+    { globalSwarm: undefined, agentSwarm: false, expected: false },
+    { globalSwarm: undefined, agentSwarm: { enabled: false }, expected: false },
+  ])("resolves global $globalSwarm and agent $agentSwarm as $expected", (testCase) => {
+    expect(
+      isSwarmEnabledInConfig(
+        {
+          tools: { swarm: testCase.globalSwarm },
+          agents: { entries: { WORKER: { tools: { swarm: testCase.agentSwarm } } } },
+        },
+        "worker",
+      ),
+    ).toBe(testCase.expected);
+  });
+
   it("accepts both the boolean and object configuration forms", () => {
     expect(isSwarmEnabledInConfig({ tools: { swarm: true } })).toBe(true);
     expect(isSwarmEnabledInConfig({ tools: { swarm: { enabled: true } } })).toBe(true);
@@ -110,22 +145,29 @@ describe("SwarmRosterHydrator", () => {
     vi.useFakeTimers();
     const running = { ...row(0), status: "running" as const, updatedAt: 5 };
     const done = { ...row(0), status: "done" as const, updatedAt: 5 };
+    let currentRows: GatewaySessionRow[] = [running];
     const hydrator = new SwarmRosterHydrator();
     const sessions = {
       canonicalListRevision: 0,
       list: vi.fn(async () => result([done], 0, 1)),
     } as unknown as SessionCapability;
 
-    hydrator.update({
+    const params = {
       sessions,
       parentKey: "agent:main:parent",
       sourceEpoch: 1,
-      currentRows: () => [running],
+      currentRows: () => currentRows,
       onRows: () => undefined,
-    });
+    };
+    hydrator.update(params);
     await vi.runAllTimersAsync();
 
     expect(hydrator.rows).toEqual([expect.objectContaining({ status: "done" })]);
+    hydrator.update(params);
+    expect(hydrator.rows).toEqual([expect.objectContaining({ status: "done" })]);
+    currentRows = [{ ...running, status: "failed" }];
+    hydrator.update(params);
+    expect(hydrator.rows).toEqual([expect.objectContaining({ status: "failed" })]);
     hydrator.dispose();
   });
 

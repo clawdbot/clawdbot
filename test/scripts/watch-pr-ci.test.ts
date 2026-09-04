@@ -77,12 +77,12 @@ if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/wa
             },
           },
           (error, stdout, stderr) => {
-            const exitCode = error ? error.code : 0;
-            if (typeof exitCode !== "number") {
-              reject(error);
+            const status = error ? error.code : 0;
+            if (typeof status !== "number") {
+              reject(new Error("watcher process did not report an exit code", { cause: error }));
               return;
             }
-            resolve({ status: exitCode, stdout, stderr });
+            resolve({ status, stdout, stderr });
           },
         );
       },
@@ -108,7 +108,9 @@ function replayPlaceholder(
     const payload = join(root, "payload.json");
     const calls = join(root, "calls.jsonl");
     // The live capture is merged. Only lifecycle is reopened for the historical watch.
-    if (!evidence.merged) fixture.graphql.data.repository.pullRequest.state = "OPEN";
+    if (!evidence.merged) {
+      fixture.graphql.data.repository.pullRequest.state = "OPEN";
+    }
     writeFileSync(payload, JSON.stringify({ ...fixture, ...evidence }));
     writeFileSync(calls, "");
     const result = await runWatcher(
@@ -284,6 +286,70 @@ esac
     },
   );
 
+  it.skipIf(process.platform === "win32").each([
+    { status: "queued", conclusion: null, exitCode: 16, output: "TIMEOUT" },
+    { status: "in_progress", conclusion: null, exitCode: 16, output: "TIMEOUT" },
+    { status: "completed", conclusion: "success", exitCode: 0, output: "GREEN" },
+    {
+      status: "completed",
+      conclusion: "failure",
+      exitCode: 15,
+      output: "FAILING checks=CI workflow (failure)",
+    },
+  ])(
+    "uses attached $status/$conclusion CI instead of a prior pull-request failure",
+    async ({ status, conclusion, exitCode, output }) => {
+      const run = { id: 201, workflow_id: 10, status, conclusion };
+      const pr = {
+        state: "OPEN",
+        mergeable: true,
+        headRefOid: sha,
+        statusCheckRollup: {
+          state: "FAILURE",
+          contexts: {
+            totalCount: 1,
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                kind: "CheckRun",
+                databaseId: 1_000,
+                name: "old matrix shard",
+                status: "COMPLETED",
+                conclusion: "FAILURE",
+                checkSuite: {
+                  workflowRun: {
+                    databaseId: 100,
+                    event: "pull_request",
+                    workflow: { databaseId: 10 },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      };
+      const result = await runWatcher(
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const pr = ${JSON.stringify(pr)};
+const run = ${JSON.stringify(run)};
+let value;
+if (args[0] === "pr" && args[1] === "view") value = pr;
+else if (args[0] === "run" && args[1] === "view") value = run;
+else if (args[0] === "api" && args[1] === "graphql") value = { data: { repository: { pullRequest: pr } } };
+else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { workflow_runs: [run] };
+else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
+console.log(JSON.stringify(value));
+`,
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+      expect(result.stdout).toContain("ATTACHED run=201");
+      expect(result.stdout).toContain(output);
+      expect(result.stdout).not.toContain("FAILING checks=old matrix shard");
+    },
+  );
+
   describe.skipIf(process.platform === "win32")("queued placeholder CLI evidence", () => {
     it.each([
       { state: "FAILURE", observed: 1 },
@@ -316,9 +382,11 @@ esac
           .map((line) => JSON.parse(line));
         expect(calls.filter((call) => call[1]?.includes("/attempts/"))).toHaveLength(1);
         const directReads = calls.filter((call) => call[1]?.includes("/actions/jobs/"));
-        expect(directReads.map((call) => Number(call[1]?.split("/").at(-1))).toSorted()).toEqual(
-          fixture.directJobs.map((job) => job.id).toSorted(),
-        );
+        expect(
+          directReads
+            .map((call) => Number(call[1]?.split("/").at(-1)))
+            .toSorted((left, right) => left - right),
+        ).toEqual(fixture.directJobs.map((job) => job.id).toSorted((left, right) => left - right));
         const finalEvidenceRead = calls.findLastIndex(
           (call) => call[1] === "repos/openclaw/openclaw/actions/runs/33155056361",
         );
@@ -456,7 +524,7 @@ esac
         { status: "IN_PROGRESS", conclusion: null, exitCode: 16 },
         { status: "COMPLETED", conclusion: "FAILURE", exitCode: 15 },
       ].flatMap((outcome) =>
-        [false, true].map((initiallyVisible) => ({ ...outcome, initiallyVisible })),
+        [false, true].map((initiallyVisible) => Object.assign({}, outcome, { initiallyVisible })),
       ),
     )(
       "keeps a changed lower-ID alias blocking ($status, initially visible: $initiallyVisible)",
@@ -565,7 +633,7 @@ esac
       const result = await replayPlaceholder(fixture, {
         watchTimeout: 5,
         directJobs: fixture.directJobs.map((job) =>
-          job.id === 98802098786 ? { ...job, ...patch } : job,
+          job.id === 98802098786 ? Object.assign({}, job, patch) : job,
         ),
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
@@ -582,7 +650,7 @@ esac
       const fixture = structuredClone(placeholderFixture);
       const result = await replayPlaceholder(fixture, {
         directJobs: fixture.directJobs.map((job) =>
-          job.id === 98802098559 ? { ...job, ...patch } : job,
+          job.id === 98802098559 ? Object.assign({}, job, patch) : job,
         ),
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
@@ -711,7 +779,9 @@ esac
       const result = await replayPlaceholder(fixture, { watchTimeout: 5 });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
       expect(result.stdout).not.toContain("GREEN");
-      if (exitCode === 16) expect(result.stdout).toContain("superseded=1");
+      if (exitCode === 16) {
+        expect(result.stdout).toContain("superseded=1");
+      }
     });
 
     it.concurrent.each(["unknown", "truncated", "unfinished pagination", "missing count"])(
@@ -719,11 +789,15 @@ esac
       async (scenario) => {
         const fixture = structuredClone(placeholderFixture);
         const rollup = fixture.graphql.data.repository.pullRequest.statusCheckRollup;
-        if (scenario === "unknown") rollup.state = "UNKNOWN";
-        else if (scenario === "truncated") rollup.contexts.totalCount += 1;
-        else if (scenario === "missing count")
+        if (scenario === "unknown") {
+          rollup.state = "UNKNOWN";
+        } else if (scenario === "truncated") {
+          rollup.contexts.totalCount += 1;
+        } else if (scenario === "missing count") {
           Object.assign(rollup.contexts, { totalCount: undefined });
-        else rollup.contexts.pageInfo.hasNextPage = true;
+        } else {
+          rollup.contexts.pageInfo.hasNextPage = true;
+        }
         const result = await replayPlaceholder(fixture);
         expect(result.status, `${result.stdout}\n${result.stderr}`).not.toBe(0);
         expect(result.stdout).not.toContain("GREEN");
@@ -766,9 +840,15 @@ esac
         const firstPage = { total_count: 100 + fixture.jobs.total_count, jobs: padding };
         const lastPage = { total_count: firstPage.total_count, jobs: fixture.jobs.jobs };
         const jobPages = [firstPage, lastPage];
-        if (scenario === "missing page") jobPages.pop();
-        if (scenario === "changed count") lastPage.total_count += 1;
-        if (scenario === "over limit") firstPage.total_count = 1_001;
+        if (scenario === "missing page") {
+          jobPages.pop();
+        }
+        if (scenario === "changed count") {
+          lastPage.total_count += 1;
+        }
+        if (scenario === "over limit") {
+          firstPage.total_count = 1_001;
+        }
         const result = await replayPlaceholder(fixture, {
           jobPages,
           watchTimeout: scenario === "complete" ? 5 : 1,
@@ -776,7 +856,9 @@ esac
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(
           scenario === "complete" ? 0 : 16,
         );
-        if (scenario === "complete") expect(result.calls).toContain("per_page=100&page=2");
+        if (scenario === "complete") {
+          expect(result.calls).toContain("per_page=100&page=2");
+        }
       },
     );
   });
@@ -1253,38 +1335,107 @@ esac
     });
   });
 
-  it("keeps an older run's unique failing job visible", () => {
-    expect(
-      classifyRollup({
-        state: "FAILURE",
-        contexts: {
-          nodes: [
-            {
-              kind: "CheckRun",
-              databaseId: 1_000,
-              name: "nightly-special",
-              status: "COMPLETED",
-              conclusion: "FAILURE",
-              checkSuite: { workflowRun: { databaseId: 300, workflow: { databaseId: 20 } } },
+  it.each<{
+    label: string;
+    event?: string;
+    workflowId?: number;
+    attachedRun?: { id: number; workflow_id?: number };
+    superseded?: boolean;
+  }>([
+    { label: "no attached run", event: "pull_request", workflowId: 20 },
+    {
+      label: "newer attached pull-request run",
+      event: "pull_request",
+      workflowId: 20,
+      attachedRun: { id: 400, workflow_id: 20 },
+      superseded: true,
+    },
+    {
+      label: "manual invocation",
+      event: "workflow_dispatch",
+      workflowId: 20,
+      attachedRun: { id: 400, workflow_id: 20 },
+    },
+    {
+      label: "unknown event",
+      workflowId: 20,
+      attachedRun: { id: 400, workflow_id: 20 },
+    },
+    {
+      label: "unknown check workflow",
+      event: "pull_request",
+      attachedRun: { id: 400, workflow_id: 20 },
+    },
+    {
+      label: "unknown attached workflow",
+      event: "pull_request",
+      workflowId: 20,
+      attachedRun: { id: 400 },
+    },
+    {
+      label: "different workflow",
+      event: "pull_request",
+      workflowId: 20,
+      attachedRun: { id: 400, workflow_id: 30 },
+    },
+    {
+      label: "current run",
+      event: "pull_request",
+      workflowId: 20,
+      attachedRun: { id: 300, workflow_id: 20 },
+    },
+    {
+      label: "newer run",
+      event: "pull_request",
+      workflowId: 20,
+      attachedRun: { id: 200, workflow_id: 20 },
+    },
+  ])(
+    "keeps unique older failures unless replaced: $label",
+    ({ event, workflowId, attachedRun, superseded = false }) => {
+      expect(
+        classifyRollup(
+          {
+            state: "FAILURE",
+            contexts: {
+              nodes: [
+                {
+                  kind: "CheckRun",
+                  databaseId: 1_000,
+                  name: "nightly-special",
+                  status: "COMPLETED",
+                  conclusion: "FAILURE",
+                  checkSuite: {
+                    workflowRun: {
+                      databaseId: 300,
+                      event,
+                      workflow: { databaseId: workflowId },
+                    },
+                  },
+                },
+                {
+                  kind: "CheckRun",
+                  databaseId: 2_000,
+                  name: "unit",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                  checkSuite: { workflowRun: { databaseId: 400, workflow: { databaseId: 20 } } },
+                },
+              ],
             },
-            {
-              kind: "CheckRun",
-              databaseId: 2_000,
-              name: "unit",
-              status: "COMPLETED",
-              conclusion: "SUCCESS",
-              checkSuite: { workflowRun: { databaseId: 400, workflow: { databaseId: 20 } } },
-            },
-          ],
-        },
-      }),
-    ).toEqual({
-      verdict: "FAILING",
-      pendingCount: 0,
-      failingNames: ["nightly-special"],
-      supersededCount: 0,
-    });
-  });
+          },
+          [],
+          undefined,
+          attachedRun,
+        ),
+      ).toEqual({
+        verdict: superseded ? "GREEN" : "FAILING",
+        pendingCount: 0,
+        failingNames: superseded ? [] : ["nightly-special"],
+        supersededCount: superseded ? 1 : 0,
+      });
+    },
+  );
 
   it("supersedes same-name checks across runs of the same workflow", () => {
     expect(

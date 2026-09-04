@@ -285,6 +285,19 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (parseErrorText) {
       return;
     }
+    if (
+      claudeStreamJson &&
+      parsed.type === "system" &&
+      parsed.subtype === "init" &&
+      !isClaudeSubagentRecord(parsed)
+    ) {
+      try {
+        params.onNativeTools?.(parsed.tools);
+      } catch (error) {
+        parseErrorText = truncateUtf16Safe(formatErrorMessage(error), 500);
+        return;
+      }
+    }
     if (parsed.type === "result" && isStreamJsonDialect(params)) {
       sawTerminalResult = true;
     }

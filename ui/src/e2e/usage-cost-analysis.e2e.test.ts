@@ -462,7 +462,12 @@ suite.define(() => {
                     ...totals,
                     activityDates: [selectedDay],
                     dailyBreakdown: [
-                      { date: selectedDay, cost: totals.totalCost, tokens: totals.totalTokens },
+                      {
+                        ...totals,
+                        date: selectedDay,
+                        cost: totals.totalCost,
+                        tokens: totals.totalTokens,
+                      },
                     ],
                   },
                 },
@@ -546,7 +551,7 @@ suite.define(() => {
       usage: {
         ...totals,
         activityDates: [date],
-        dailyBreakdown: [{ date, cost: totals.totalCost, tokens: totals.totalTokens }],
+        dailyBreakdown: [{ ...totals, date, cost: totals.totalCost, tokens: totals.totalTokens }],
       },
     }));
     const empty = emptyUsageResponses();
@@ -675,7 +680,7 @@ suite.define(() => {
                     ...totals,
                     activityDates: daily.map((entry) => entry.date),
                     dailyBreakdown: daily.map((entry) => ({
-                      date: entry.date,
+                      ...entry,
                       cost: entry.totalCost,
                       tokens: entry.totalTokens,
                     })),
