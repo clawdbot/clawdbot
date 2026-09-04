@@ -1,6 +1,7 @@
 // Models CLI tests cover model listing command registration and provider output.
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerModelsCli } from "./models-cli.js";
 import { isModelsPlainMachineOutput, isModelsStatusJsonOutput } from "./models-output-mode.js";
@@ -27,6 +28,10 @@ const mocks = vi.hoisted(() => ({
   modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAccountsListCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAccountsLoginCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAccountsUseCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAccountsClearDefaultCommand: vi.fn().mockResolvedValue(undefined),
 }));
 
 const {
@@ -66,6 +71,12 @@ vi.mock("../commands/models/auth.js", () => ({
 vi.mock("../commands/models/auth-list.js", () => ({
   modelsAuthListCommand: mocks.modelsAuthListCommand,
 }));
+vi.mock("../commands/models/accounts.js", () => ({
+  modelsAccountsListCommand: mocks.modelsAccountsListCommand,
+  modelsAccountsLoginCommand: mocks.modelsAccountsLoginCommand,
+  modelsAccountsUseCommand: mocks.modelsAccountsUseCommand,
+  modelsAccountsClearDefaultCommand: mocks.modelsAccountsClearDefaultCommand,
+}));
 vi.mock("../commands/models/auth-logout.js", () => ({
   modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
 }));
@@ -99,6 +110,10 @@ vi.mock("../commands/models/refresh.js", () => ({
 }));
 
 describe("models cli", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     mocks.modelsListCommand.mockClear();
     modelsAliasesAddCommand.mockClear();
@@ -119,6 +134,10 @@ describe("models cli", () => {
     modelsSetCommand.mockClear();
     modelsSetImageCommand.mockClear();
     modelsStatusCommand.mockClear();
+    mocks.modelsAccountsListCommand.mockClear();
+    mocks.modelsAccountsLoginCommand.mockClear();
+    mocks.modelsAccountsUseCommand.mockClear();
+    mocks.modelsAccountsClearDefaultCommand.mockClear();
   });
 
   function createProgram() {
@@ -625,4 +644,118 @@ describe("models cli", () => {
       expect(error.exitCode).toBe(0);
     }
   });
+
+  const accountCommands = [
+    {
+      args: ["list", "--cursor", "after-account"],
+      command: mocks.modelsAccountsListCommand,
+      expected: { cursor: "after-account" },
+    },
+    {
+      args: ["login", "openai"],
+      command: mocks.modelsAccountsLoginCommand,
+      expected: { provider: "openai" },
+    },
+    {
+      args: ["use", "personal-account"],
+      command: mocks.modelsAccountsUseCommand,
+      expected: { authProfileId: "personal-account" },
+    },
+    {
+      args: ["clear-default", "anthropic"],
+      command: mocks.modelsAccountsClearDefaultCommand,
+      expected: { provider: "anthropic" },
+    },
+  ];
+
+  it.each(
+    accountCommands.flatMap(({ args, command, expected }) =>
+      ["before", "after"].map((position) => ({ args, command, expected, position })),
+    ),
+  )(
+    "resolves personal-account Gateway options $position $args",
+    async ({ args, command, expected, position }) => {
+      const flags = [
+        "--url",
+        "wss://accounts.example",
+        "--token-file",
+        "/tmp/gateway-token",
+        "--password-file",
+        "/tmp/gateway-password",
+        "--timeout",
+        "45000",
+        "--json",
+      ];
+      await runModelsCommand([
+        "models",
+        "accounts",
+        ...(position === "before" ? [...flags, ...args] : [...args, ...flags]),
+      ]);
+      expectCommandOptions(command, {
+        ...expected,
+        url: "wss://accounts.example",
+        tokenFile: "/tmp/gateway-token",
+        passwordFile: "/tmp/gateway-password",
+        timeout: "45000",
+        json: true,
+      });
+    },
+  );
+
+  it.each(accountCommands)(
+    "rejects agent identity for personal-account $args",
+    async ({ args, command }) => {
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new ExitError(code);
+      });
+      await expect(
+        runModelsCommand(["models", "--agent", "other-person", "accounts", ...args]),
+      ).rejects.toMatchObject({ code: 1 });
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("does not support --agent"));
+      expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(command).not.toHaveBeenCalled();
+    },
+  );
+
+  it("lets explicit leaf options override the account group and inherits models JSON", async () => {
+    await runModelsCommand([
+      "models",
+      "--json",
+      "accounts",
+      "--port",
+      "19001",
+      "--timeout",
+      "45000",
+      "list",
+      "--port",
+      "19002",
+      "--timeout",
+      "9000",
+    ]);
+    expectCommandOptions(mocks.modelsAccountsListCommand, {
+      port: "19002",
+      timeout: "9000",
+      json: true,
+    });
+  });
+
+  it.each(["--token", "--redirect-input", "--profile-id"])(
+    "does not accept personal secret or identity option %s",
+    async (flag) => {
+      const writeErr = vi.fn();
+      const program = new Command()
+        .enablePositionalOptions()
+        .exitOverride()
+        .configureOutput({ writeErr });
+      registerModelsCli(program);
+      await expect(
+        program.parseAsync(["models", "accounts", "login", "openai", flag, "not-an-input"], {
+          from: "user",
+        }),
+      ).rejects.toMatchObject({ code: "commander.unknownOption", exitCode: 1 });
+      expect(writeErr).toHaveBeenCalledWith(expect.stringContaining(`unknown option '${flag}'`));
+      expect(mocks.modelsAccountsLoginCommand).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -146,6 +146,7 @@ export async function moveMigrationArtifact(
   sourcePath: string,
   targetPath: string,
   expected: MigrationArtifactIdentity,
+  onPublished?: () => undefined,
 ): Promise<void> {
   if (!fs.lstatSync(targetPath, { bigint: true, throwIfNoEntry: false })) {
     if (!sameMigrationArtifact(readMigrationArtifactIdentity(sourcePath), expected)) {
@@ -159,8 +160,19 @@ export async function moveMigrationArtifact(
       onSyncFailure: "preserve",
     });
     requireDirectorySync(published.directorySync, "Recovery artifact publication");
+  } else {
+    // A preserved link may have outlived a failed directory sync. Make its name durable
+    // before an interrupted move can remove the original name.
+    requireDirectorySync(
+      await syncDirectory(path.dirname(targetPath)),
+      "Recovery artifact publication",
+    );
   }
   assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+  if (onPublished) {
+    onPublished();
+    assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+  }
   fs.unlinkSync(sourcePath);
   requireDirectorySync(await syncDirectory(path.dirname(sourcePath)), "Recovery artifact source");
   if (!sameMigrationArtifact(readMigrationArtifactIdentity(targetPath), expected)) {
@@ -169,7 +181,7 @@ export async function moveMigrationArtifact(
 }
 
 /** Only the recorded exact two-name inode can finish or undo an interrupted publication. */
-export function assertMigrationArtifactPublication(
+function assertMigrationArtifactPublication(
   sourcePath: string,
   targetPath: string,
   expected: MigrationArtifactIdentity,

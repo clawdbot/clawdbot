@@ -12,8 +12,14 @@ import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { getRuntimeConfig, parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
+import {
+  getRuntimeConfig,
+  parseConfigJson5,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { resolveSystemMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -22,6 +28,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -38,7 +45,7 @@ import {
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -50,6 +57,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -61,6 +69,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import type { GatewayServerOptions } from "./server.js";
 import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
@@ -145,6 +154,15 @@ function hasUnsyncedGatewayTestSessionConfig(): boolean {
   );
 }
 
+function publishGatewayTestConfig(
+  config: OpenClawConfig = loadGatewayTestConfig(),
+): OpenClawConfig {
+  // Publish the caller's complete snapshot or the current fixture composition.
+  // Keep overrides runtime-only; real and mocked IO must agree before an await.
+  setRuntimeConfigSnapshot(config);
+  return config;
+}
+
 async function persistTestSessionConfig(): Promise<void> {
   const configPaths = new Set<string>();
   if (process.env.OPENCLAW_CONFIG_PATH) {
@@ -207,7 +225,7 @@ async function persistTestSessionConfig(): Promise<void> {
     // Suite servers may still read config from pending session-change callbacks.
     await writeJsonAtomic(configPath, config, { durable: false, trailingNewline: true });
   }
-  resetConfigRuntimeState();
+  publishGatewayTestConfig();
   lastSyncedSessionStorePath = testState.sessionStorePath;
   lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
 }
@@ -362,6 +380,7 @@ function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: bool
 function resetGatewayMutableTestFixtures(): void {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
+  testTailscaleWhois.calls.length = 0;
   agentDiscoveryMock.enabled = false;
   agentDiscoveryMock.discoverCalls = 0;
   agentDiscoveryMock.models = [];
@@ -479,9 +498,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
   resetGatewayMutableTestFixtures();
-  for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
-    drainSystemEvents(sessionKey);
-  }
+  resetSystemEventsForTest();
   resetAgentEventsForTest();
   const mod = await getServerModule();
   await mod.resetPreparedModelCatalogForTest();
@@ -494,6 +511,10 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   resetLogger();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
+  if (tempHome && activeSuiteGatewayServerCount === 0) {
+    // Release fixture-owned handles while their lease environment still exists.
+    closeOpenClawAgentDatabases(tempHome);
+  }
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
     gatewayEnvSnapshot = undefined;
@@ -526,15 +547,14 @@ async function resetGatewayTestRuntimeOnly() {
   resetGatewayMutableTestFixtures();
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
-  for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
-    drainSystemEvents(sessionKey);
-  }
+  resetSystemEventsForTest();
   resetAgentEventsForTest({ preserveListeners: true });
   gatewayReplyRuntimePrepared = false;
 }
 
 export async function prepareGatewayReplyRuntimeForTest(options?: {
   force?: boolean;
+  config?: OpenClawConfig;
 }): Promise<void> {
   if (
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1" ||
@@ -542,11 +562,9 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
   ) {
     return;
   }
-  const [preparedRuntime, configRuntime] = await Promise.all([
-    import("../agents/prepared-model-runtime.js"),
-    import("../config/io.js"),
-  ]);
-  await preparedRuntime.refreshPreparedModelRuntimeSnapshots(configRuntime.getRuntimeConfig(), {
+  const config = publishGatewayTestConfig(options?.config);
+  const preparedRuntime = await import("../agents/prepared-model-runtime.js");
+  await preparedRuntime.refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
     catalogMode: agentDiscoveryMock.enabled ? "live" : "static",
     allowGatewaySubagentBinding: true,
@@ -771,44 +789,17 @@ export async function startGatewayServerWithRetries(params: {
   throw new Error("failed to start gateway server after retries");
 }
 
-async function waitForWebSocketOpen(ws: WebSocket, timeoutMs = 10_000): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), timeoutMs);
-    const cleanup = () => {
-      clearTimeout(timer);
-      ws.off("open", onOpen);
-      ws.off("error", onError);
-      ws.off("close", onClose);
-    };
-    const onOpen = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = (err: unknown) => {
-      cleanup();
-      reject(err instanceof Error ? err : new Error(String(err)));
-    };
-    const onClose = (code: number, reason: Buffer) => {
-      cleanup();
-      reject(new Error(`closed ${code}: ${reason.toString()}`));
-    };
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-    ws.once("close", onClose);
-  });
-}
-
 async function openTrackedWebSocket(params: {
   port: number;
   headers?: Record<string, string>;
+  authenticate?: (ws: WebSocket) => Promise<unknown>;
 }): Promise<WebSocket> {
   const ws = new WebSocket(
     `ws://127.0.0.1:${params.port}`,
     params.headers ? { headers: params.headers } : undefined,
   );
   trackConnectChallengeNonce(ws);
-  await waitForWebSocketOpen(ws);
-  return ws;
+  return await acquireGatewayTestWebSocket(ws, 10_000, params.authenticate);
 }
 
 export async function withGatewayServer<T>(
@@ -858,7 +849,7 @@ export async function createGatewaySuiteHarness(opts?: {
 }
 
 export async function startServer(token?: string, opts?: GatewayServerOptions) {
-  let port = await getGatewayTestPort();
+  const port = await getGatewayTestPort();
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (typeof token === "string") {
@@ -883,31 +874,56 @@ export async function startServer(token?: string, opts?: GatewayServerOptions) {
         }
       : (opts ?? {});
 
-  const started = await startGatewayServerWithRetries({ port, opts: resolvedGatewayOpts });
-  port = started.port;
-  const server = started.server;
+  try {
+    const started = await startGatewayServerWithRetries({ port, opts: resolvedGatewayOpts });
+    return { ...started, prevToken: prev, envSnapshot };
+  } catch (error) {
+    envSnapshot.restore();
+    throw error;
+  }
+}
 
-  return { server, port, prevToken: prev, envSnapshot };
+async function acquireGatewayServerClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+  authenticate?: (ws: WebSocket) => Promise<unknown>,
+) {
+  const { wsHeaders, ...gatewayOpts } = opts ?? {};
+  const started = await startServer(token, gatewayOpts);
+  try {
+    const ws = await openTrackedWebSocket({
+      port: started.port,
+      headers: wsHeaders,
+      authenticate,
+    });
+    return { ...started, ws };
+  } catch (error) {
+    await runQaGatewayFixture(
+      async () => {
+        throw error;
+      },
+      async () => {
+        // A failed server close still owns its startup environment.
+        await started.server.close();
+        started.envSnapshot.restore();
+      },
+    );
+    throw error;
+  }
 }
 
 export async function startServerWithClient(
   token?: string,
   opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
 ) {
-  const { wsHeaders, ...gatewayOpts } = opts ?? {};
-  const started = await startServer(token, gatewayOpts);
-  const { server, port, prevToken, envSnapshot } = started;
-  const ws = await openTrackedWebSocket({ port, headers: wsHeaders });
-  return { server, ws, port, prevToken, envSnapshot };
+  return await acquireGatewayServerClient(token, opts);
 }
 
 export async function startConnectedServerWithClient(
   token?: string,
   opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
 ) {
-  const started = await startServerWithClient(token, opts);
-  await connectOk(started.ws);
-  return started;
+  return await acquireGatewayServerClient(token, opts, connectOk);
 }
 
 type ConnectResponse = {
@@ -1238,37 +1254,17 @@ export async function connectWebchatClient(params: {
   scopes?: string[];
 }): Promise<WebSocket> {
   const origin = params.origin ?? `http://127.0.0.1:${params.port}`;
-  const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
+  const client = params.client ?? {
+    id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+    version: "1.0.0",
+    platform: "test",
+    mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+  };
+  return await openTrackedWebSocket({
+    port: params.port,
     headers: { origin },
+    authenticate: (ws) => connectOk(ws, { scopes: params.scopes, client }),
   });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
-    const onOpen = () => {
-      clearTimeout(timer);
-      ws.off("error", onError);
-      resolve();
-    };
-    const onError = (err: Error) => {
-      clearTimeout(timer);
-      ws.off("open", onOpen);
-      reject(err);
-    };
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-  });
-  await connectOk(ws, {
-    scopes: params.scopes,
-    client:
-      params.client ??
-      ({
-        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
-        version: "1.0.0",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      } as NonNullable<Parameters<typeof connectReq>[1]>["client"]),
-  });
-  return ws;
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Gateway test RPC helper lets callers ascribe response payload shape.
@@ -1278,12 +1274,11 @@ export async function rpcReq<T extends Record<string, unknown>>(
   params?: unknown,
   timeoutMs?: number,
 ) {
+  // Config publication leaves in-flight session writers owned by the Gateway.
+  publishGatewayTestConfig();
   if (hasUnsyncedGatewayTestSessionConfig()) {
     await persistTestSessionConfig();
   }
-  // Refresh mutable config fixtures, but leave in-flight session writers owned
-  // by the running Gateway; their producers publish SQLite cache updates.
-  resetConfigRuntimeState();
   if (method === "agent" || method === "chat.send") {
     await prepareGatewayReplyRuntimeForTest();
   }

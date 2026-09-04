@@ -1,15 +1,10 @@
 import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
-import { fetchGraphJson } from "./graph.js";
+import { fetchAllGraphPages } from "./graph.js";
 
 type MSTeamsConversationMember = {
   id?: string;
   userId?: string;
   email?: string;
-};
-
-type GraphConversationMembersPage = {
-  value?: MSTeamsConversationMember[];
-  "@odata.nextLink"?: string;
 };
 
 const MAX_CONVERSATION_MEMBER_PAGES = 100;
@@ -29,28 +24,19 @@ export async function findMSTeamsConversationMember(params: {
     conversation.kind === "channel" && params.includeIndirectChannelMembers
       ? "allMembers"
       : "members";
-  let nextPath: string | undefined = `${conversation.basePath}/${collection}`;
-  let pages = 0;
-  let member: MSTeamsConversationMember | undefined;
-
-  while (nextPath && pages < MAX_CONVERSATION_MEMBER_PAGES && !member) {
-    const response: GraphConversationMembersPage =
-      await fetchGraphJson<GraphConversationMembersPage>({
-        token: params.token,
-        path: nextPath,
-      });
-    const userId = params.userId.trim().toLowerCase();
-    member = (response.value ?? []).find(
-      (candidate) =>
-        candidate.userId?.trim().toLowerCase() === userId ||
-        candidate.email?.trim().toLowerCase() === userId,
-    );
-    nextPath = response["@odata.nextLink"]?.replace("https://graph.microsoft.com/v1.0", "");
-    pages += 1;
-  }
-  if (nextPath && !member) {
+  const userId = params.userId.trim().toLowerCase();
+  const result = await fetchAllGraphPages<MSTeamsConversationMember>({
+    token: params.token,
+    path: `${conversation.basePath}/${collection}`,
+    maxPages: MAX_CONVERSATION_MEMBER_PAGES,
+    collectItems: false,
+    findOne: (candidate) =>
+      candidate.userId?.trim().toLowerCase() === userId ||
+      candidate.email?.trim().toLowerCase() === userId,
+  });
+  if (result.truncated) {
     throw new Error("MS Teams conversation member pagination limit exceeded");
   }
 
-  return { conversationId, member };
+  return { conversationId, member: result.found };
 }

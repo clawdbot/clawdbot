@@ -70,6 +70,7 @@ export function buildWatchedSessionsHarnessContext(params: {
 }
 
 export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export { buildTemporalContextText } from "../agents/date-time.js";
 export {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -119,6 +120,7 @@ export const agentHarnessAttemptTerminal = {
   setFailure: setAgentRunAttemptTerminalFailure,
 };
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
+export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
   AgentHarnessUserInputAnswers,
@@ -126,12 +128,11 @@ export type {
   AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
-export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
+export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question-dispatch.js";
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
   | "admittedRunContext"
   | "authoredContextTokenCap"
-  | "codeModeRecovery"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "pluginHarnessToolPolicySafeDeniedTools"
@@ -213,6 +214,7 @@ export { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js"
 export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
+export { hasGatewayToolRoutingContext } from "../agents/tools/in-process-gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
 export {
   listNodes,
@@ -317,6 +319,7 @@ export function queueAgentHarnessMessage(
 ): boolean {
   return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
 }
+export { finalizeAgentToolAvailability } from "../agents/agent-tool-availability.js";
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {
   logAgentRuntimeToolDiagnostics,

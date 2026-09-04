@@ -637,7 +637,10 @@ describe("isMaintainerTeamMember", () => {
         timeoutMs: 5,
         token: "t",
       }),
-    ).rejects.toThrow(/maintainer membership lookup for u timed out after 5ms/);
+    ).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: "maintainer membership lookup for u timed out after 5ms",
+    });
   });
 
   it("times out stalled membership response bodies", async () => {

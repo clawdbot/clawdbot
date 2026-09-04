@@ -8,6 +8,7 @@ import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session
 import {
   appendSqliteSessionTranscriptEventForTest,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
@@ -28,6 +29,7 @@ afterEach(async () => {
   await stopGateway?.();
   stopGateway = undefined;
   closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -212,6 +214,7 @@ describe("dreaming gateway restart cleanup", () => {
     expect(hasSession(interrupted)).toBe(true);
 
     await vi.advanceTimersByTimeAsync(1);
+    await gateway.stop();
 
     expect(hasSession(interrupted)).toBe(false);
     expect(hasSession(newlyStarted)).toBe(true);
@@ -241,6 +244,7 @@ describe("dreaming gateway restart cleanup", () => {
     // Wall-clock stalls can outlive agent.wait; that wait never cancels the agent run.
     vi.setSystemTime(Date.now() + ORPHAN_AGE_MS + 1);
     await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS);
+    await gateway.stop();
 
     expect(Date.now() - postStartupUpdatedAt).toBeGreaterThan(ORPHAN_AGE_MS);
     expect(hasSession(interruptedAtStartup)).toBe(false);
@@ -344,6 +348,7 @@ describe("dreaming gateway restart cleanup", () => {
     expect(hasSession(interrupted)).toBe(true);
 
     await vi.advanceTimersByTimeAsync(120_000);
+    await gateway.stop();
 
     expect(hasSession(interrupted)).toBe(false);
   });

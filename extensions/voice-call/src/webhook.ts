@@ -22,6 +22,7 @@ import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
+  sendHttpRequestRejection,
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
@@ -672,14 +673,18 @@ export class VoiceCallWebhookServer {
     res: http.ServerResponse,
     webhookPath: string,
   ): Promise<void> {
-    const payload = await this.runWebhookPipeline(req, webhookPath);
-    this.writeWebhookResponse(res, payload);
+    const payload = await this.runWebhookPipeline(req, webhookPath, res);
+    // A body-limit rejection already wrote its answer through the transport owner.
+    if (payload) {
+      this.writeWebhookResponse(res, payload);
+    }
   }
 
   private async runWebhookPipeline(
     req: http.IncomingMessage,
     webhookPath: string,
-  ): Promise<WebhookResponsePayload> {
+    res: http.ServerResponse,
+  ): Promise<WebhookResponsePayload | null> {
     const url = buildRequestUrl(req.url);
 
     if (url.pathname === "/voice/hold-music") {
@@ -729,10 +734,17 @@ export class VoiceCallWebhookServer {
         body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES, WEBHOOK_BODY_TIMEOUT_MS);
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-          return { statusCode: 413, body: "Payload Too Large" };
+          await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
+          return null;
         }
         if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-          return { statusCode: 408, body: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") };
+          await sendHttpRequestRejection(
+            req,
+            res,
+            408,
+            requestBodyErrorToText("REQUEST_BODY_TIMEOUT"),
+          );
+          return null;
         }
         throw err;
       }
@@ -1047,9 +1059,10 @@ export class VoiceCallWebhookServer {
   private readBody(
     req: http.IncomingMessage,
     maxBytes: number,
-    timeoutMs = WEBHOOK_BODY_TIMEOUT_MS,
+    timeoutMs: number,
   ): Promise<string> {
-    return readRequestBodyWithLimit(req, { maxBytes, timeoutMs });
+    // Defer destruction so a limit rejection can be answered before the close.
+    return readRequestBodyWithLimit(req, { maxBytes, timeoutMs, destroyOnLimit: false });
   }
 
   /**

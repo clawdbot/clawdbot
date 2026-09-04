@@ -13,7 +13,6 @@
       "hasSubcommands": true
     }
   ],
-  "icon": "https://cdn.simpleicons.org/matrix",
   "commandAliases": [{ "name": "matrix" }],
   "activation": {
     "onStartup": false,

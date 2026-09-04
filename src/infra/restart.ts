@@ -671,7 +671,7 @@ async function emitPreparedGatewayRestart(
         }
         setFenceRollback?.(null);
       }
-    });
+    }, "restart:delayed");
   } catch (err) {
     if (!isGatewayRestartDraining()) {
       throw err;

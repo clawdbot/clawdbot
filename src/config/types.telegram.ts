@@ -13,6 +13,7 @@ import type {
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
 import type { ProviderCommandsConfig } from "./types.messages.js";
+import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
@@ -88,7 +89,7 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     commands?: ProviderCommandsConfig;
     /** Custom commands to register in Telegram's command menu (merged with native). */
     customCommands?: TelegramCustomCommand[];
-    botToken?: string;
+    botToken?: SecretInput;
     /** Path to a regular file containing the bot token; symlinks are rejected. */
     tokenFile?: string;
     groups?: Record<string, TelegramGroupConfig>;

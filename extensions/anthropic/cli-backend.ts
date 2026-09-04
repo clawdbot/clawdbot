@@ -8,8 +8,7 @@ import type {
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
-import { resolveClaudeCliContextWindowModelId } from "./cli-catalog.js";
-import { parseClaudeCliJsonlEvent } from "./cli-output.js";
+import { parseClaudeCliJsonlEvent, parseClaudeCliJsonlLifecycleEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -58,6 +57,30 @@ const CLAUDE_CLI_DEFAULT_ARGS = [
   "--disallowedTools",
   "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
 ] as const;
+
+// Only equivalent bare tools confer general capabilities; Glob and notebook-cell
+// edits do not. Bash is foreground-only at launch, so it never grants `process`.
+const CLAUDE_NATIVE_TOOL_CAPABILITIES: Readonly<Record<string, string>> = {
+  read: "read",
+  grep: "read",
+  write: "write",
+  edit: "edit",
+  bash: "exec",
+  webfetch: "web_fetch",
+  websearch: "web_search",
+};
+
+function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): readonly string[] {
+  const selected = new Set(nativeTools.map((name) => name.trim().toLowerCase()));
+  // Mapping order keeps persisted caps deterministic across native initialization events.
+  return [
+    ...new Set(
+      Object.entries(CLAUDE_NATIVE_TOOL_CAPABILITIES)
+        .filter(([name]) => selected.has(name))
+        .map(([, capability]) => capability),
+    ),
+  ];
+}
 
 function createClaudeCliAuthInput(params: {
   envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" | "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR";
@@ -163,6 +186,7 @@ export function buildAnthropicCliBackend(
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
     toolAvailabilityEnforcement: "execution-args",
+    projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     manualCompaction: {
@@ -229,8 +253,10 @@ export function buildAnthropicCliBackend(
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    // Bare ids keep the CLI default; an explicit 1M selection must override
+    // Claude's settings.json 200K limit. The 200K choice is enforced by env below.
     resolveModelId: ({ modelId, contextWindow }) =>
-      resolveClaudeCliContextWindowModelId(modelId, contextWindow),
+      contextWindow === "1m" ? `${modelId}[1m]` : modelId,
     authEpochMode: "profile-only",
     autoSelectAuthProfile: false,
     prepareExecution: (context) => {
@@ -247,6 +273,7 @@ export function buildAnthropicCliBackend(
             ? {
                 async *execute(executionContext: CliBackendExecuteContext) {
                   const { executeClaudeAgentSdk } = await import("./agent-sdk.runtime.js");
+                  executionContext.assertCurrent?.();
                   yield* executeClaudeAgentSdk(executionContext, authInput?.secretInput);
                 },
               }
@@ -275,6 +302,7 @@ export function buildAnthropicCliBackend(
       return supportProbe ? supportProbe.then(prepare) : prepare();
     },
     parseJsonlEvent: parseClaudeCliJsonlEvent,
+    parseJsonlLifecycleEvent: parseClaudeCliJsonlLifecycleEvent,
     resolveExecutionArgs: (context) =>
       resolveClaudeCliExecutionArgs(context, {
         excludeDynamicSystemPromptSections: options.supportsDynamicSystemPromptSections?.(),

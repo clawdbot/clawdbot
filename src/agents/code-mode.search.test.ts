@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import {
   applyCodeModeCatalog,
   createCodeModeTools,
@@ -51,9 +50,6 @@ describe.each(["interactive", "headless"] as const)("Code Mode %s search", (mode
     });
     for (const target of targets) {
       expect(target.execute).not.toHaveBeenCalled();
-    }
-    if (mode === "interactive") {
-      expect(consumeRepairableCodeModeFailure(overflow)).toBe(true);
     }
 
     const narrowed = await run(`

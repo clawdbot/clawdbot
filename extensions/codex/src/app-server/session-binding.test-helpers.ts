@@ -120,7 +120,7 @@ export async function readCodexAppServerBinding(
   sessionId: string,
   _lookup?: unknown,
 ): Promise<CodexAppServerThreadBinding | undefined> {
-  return await testCodexAppServerBindingStore.read(testIdentity(sessionId));
+  return testCodexAppServerBindingStore.read(testIdentity(sessionId));
 }
 
 export async function writeCodexAppServerBinding(

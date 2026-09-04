@@ -18,7 +18,7 @@ import {
   type CronRunReceiptHandle,
   type CronRunReceiptStatus,
 } from "../store/run-receipt-store.js";
-import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
+import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import type { CronServiceState } from "./state.js";
 

@@ -171,11 +171,31 @@ export function normalizeRealtimeVoiceResponseOutcome(params: {
 
 export type RealtimeVoiceAudioClearReason = "barge-in";
 
+export type RealtimeVoiceAudioChunkMetadata = {
+  itemId: string;
+};
+
+export type RealtimeVoicePlaybackItem = {
+  itemId: string;
+  audioEndMs: number;
+};
+
 export type RealtimeVoiceBridgeCallbacks = {
-  onAudio: (audio: Buffer) => void;
+  onAudio: (audio: Buffer, metadata?: RealtimeVoiceAudioChunkMetadata) => void;
+  /** Retained native items in playback order; queued items have zero consumed duration.
+   * An empty snapshot is authoritative. Omit when the transport cannot measure playback.
+   */
+  getPlaybackState?: () => readonly RealtimeVoicePlaybackItem[];
   onClearAudio: (reason?: RealtimeVoiceAudioClearReason) => void;
-  onMark?: (markName: string) => void;
+  /** Scoped acknowledgments are valid only for the provider connection that emitted the mark. */
+  onMark?: (markName: string, acknowledge?: () => void) => void;
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
+  /** Synchronously admits native control; only consult permits task fallthrough. Respond is call-bound. */
+  handleDelegationInput?: (
+    text: string,
+    respond: (message: string) => void,
+  ) => "control" | "consult";
+  /** Diagnostic observation; returning from this callback cannot veto an event. */
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   onToolCall?: (event: RealtimeVoiceToolCallEvent) => void;
@@ -246,15 +266,26 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   reasoningEffort?: string;
   /** Host-injected agent delegation runner for provider-owned realtime control channels. */
   runAgentConsult?: RealtimeVoiceAgentConsultRunner;
-  /** Host-owned control callbacks for browser media sessions whose provider wire stays server-side. */
-  gatewayControl?: RealtimeVoiceGatewayControl;
-};
+} & (
+  | { clientControl?: undefined; gatewayControl?: RealtimeVoiceGatewayControl }
+  | {
+      /** Explicit ownership requires command binding; lifecycle callbacks alone do not select it. */
+      clientControl: { owner: "gateway" };
+      gatewayControl: RealtimeVoiceGatewayControl &
+        Required<Pick<RealtimeVoiceGatewayControl, "bindControl">>;
+    }
+);
 
 /** Narrow host/plugin seam for Gateway-owned control of a client-owned media session. */
 export type RealtimeVoiceGatewayControl = Omit<
   RealtimeVoiceBridgeCallbacks,
-  "onAudio" | "onClearAudio" | "onMark"
+  "onAudio" | "onClearAudio" | "onMark" | "getPlaybackState"
 > & {
+  /** Bind only supported sideband commands; client-owned media needs no audio bridge. */
+  bindControl?: (
+    control: Partial<Pick<RealtimeVoiceBridge, "submitToolResult" | "sendUserMessage">>,
+  ) => void;
+  /** @deprecated Stable 2026.8.1 SDK contract; remove only with a versioned SDK break. */
   bindBridge: (bridge: RealtimeVoiceBridge) => void;
 };
 

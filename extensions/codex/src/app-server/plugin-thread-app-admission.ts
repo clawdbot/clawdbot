@@ -5,9 +5,10 @@ import {
   type CodexAppInventoryRequest,
   type CodexAppInventorySnapshot,
 } from "./app-inventory-cache.js";
+import { CODEX_SESSION_OVERRIDABLE_LAYER_TYPES } from "./config-layer-policy.js";
 import type { ResolvedCodexPluginsPolicy } from "./config.js";
 import {
-  resolveOwnedAppReadOnlyToolConfigKeys,
+  resolveOwnedAppApprovalOverrideKeys,
   type CodexPluginInventory,
   type CodexPluginInventoryRecord,
   type CodexPluginOwnedApp,
@@ -188,7 +189,7 @@ export function toCodexPluginOwnedAccountApp(app: v2.AppInfo): CodexPluginOwnedA
     accessible: app.isAccessible,
     enabled: app.isEnabled,
     needsAuth: !app.isAccessible,
-    ...resolveOwnedAppReadOnlyToolConfigKeys(app),
+    ...resolveOwnedAppApprovalOverrideKeys(app),
   };
 }
 
@@ -232,7 +233,7 @@ function resolveCodexInstalledAppThreadAdmission(
 
 export async function readCodexConfigForAppAdmission(
   params: CodexPluginThreadAppAdmissionParams,
-): Promise<CodexPluginThreadAppAdmissionConfig | undefined> {
+): Promise<CodexPluginThreadAppAdmissionConfig> {
   try {
     const response = await params.request("config/read", {
       includeLayers: true,
@@ -260,14 +261,27 @@ export async function readCodexConfigForAppAdmission(
         if (!isJsonObject(layer.config)) {
           throw new Error("Codex config/read returned an invalid layer config");
         }
+        if (!isJsonObject(layer.name) || typeof layer.name.type !== "string") {
+          throw new Error("Codex config/read returned an invalid config layer source");
+        }
+        if (
+          layer.config.apps !== undefined &&
+          !CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(layer.name.type)
+        ) {
+          throw new Error(
+            `Codex app policy cannot override ${layer.name.type}; move app settings to a supported user or project config layer before exposing native apps`,
+          );
+        }
         return [layer.config];
       }),
     };
   } catch (error) {
-    embeddedAgentLog.warn("codex plugin app admission config read failed", {
-      error: serializeCodexAppInventoryError(error),
-    });
-    return undefined;
+    const details = serializeCodexAppInventoryError(error);
+    embeddedAgentLog.warn("codex plugin app admission config read failed", { error: details });
+    throw new Error(
+      `Could not verify the Codex app allowlist: ${String(details.message)}. No native thread was started; resolve the native configuration error and retry.`,
+      { cause: error },
+    );
   }
 }
 

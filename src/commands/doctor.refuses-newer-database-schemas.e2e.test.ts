@@ -26,7 +26,7 @@ describe("doctor database schema preflight", () => {
   it("lets a successful interactive update replace the stale doctor", async () => {
     writeStateSchemaVersion(OPENCLAW_STATE_SCHEMA_VERSION + 1);
     mockDoctorConfigSnapshot();
-    mockInteractiveGitUpdate("ok");
+    mockInteractiveGitUpdate({ status: "ok" });
 
     await expect(doctorCommand(createDoctorRuntime())).resolves.toBeUndefined();
 
@@ -35,10 +35,10 @@ describe("doctor database schema preflight", () => {
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
 
-  it("refuses after an interactive update does not handle doctor", async () => {
+  it("refuses after an interactive update reports already-current", async () => {
     writeStateSchemaVersion(OPENCLAW_STATE_SCHEMA_VERSION + 1);
     mockDoctorConfigSnapshot();
-    mockInteractiveGitUpdate("skipped");
+    mockInteractiveGitUpdate({ status: "skipped", reason: "already-current" });
 
     await expect(doctorCommand(createDoctorRuntime())).rejects.toThrow(
       /Doctor refused to continue.*database schema.*newer than this build/iu,
@@ -91,7 +91,9 @@ describe("doctor database schema preflight", () => {
   });
 });
 
-function mockInteractiveGitUpdate(status: "ok" | "skipped"): void {
+function mockInteractiveGitUpdate(
+  outcome: { status: "ok" } | { status: "skipped"; reason: "already-current" },
+): void {
   delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   resolveOpenClawPackageRoot.mockResolvedValue("/repo");
   runCommandWithTimeout.mockResolvedValue({
@@ -102,7 +104,7 @@ function mockInteractiveGitUpdate(status: "ok" | "skipped"): void {
     killed: false,
   });
   runGatewayUpdate.mockResolvedValue({
-    status,
+    ...outcome,
     mode: "git",
     root: "/repo",
     steps: [],

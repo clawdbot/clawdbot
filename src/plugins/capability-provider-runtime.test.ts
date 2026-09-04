@@ -473,6 +473,7 @@ describe("resolvePluginCapabilityProviders", () => {
         setupProviders: new Map(),
         commandAliases: new Map(),
         contracts: new Map(),
+        modelIdNormalizationPolicies: new Map(),
       },
       metrics: {
         registrySnapshotMs: 0,
@@ -822,6 +823,7 @@ describe("resolvePluginCapabilityProviders", () => {
         setupProviders: new Map(),
         commandAliases: new Map(),
         contracts: new Map(),
+        modelIdNormalizationPolicies: new Map(),
       },
       metrics: {
         registrySnapshotMs: 0,
@@ -852,6 +854,36 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     expectInitialRuntimeRegistryLookup();
   });
+
+  it.each(["active", "manifest"] as const)(
+    "applies current normalized policy to every %s provider lookup",
+    (source) => {
+      const registry = createEmptyPluginRegistry();
+      addSpeechProvider(registry, "first");
+      addSpeechProvider(registry, "second");
+      setCapabilityManifestPlugins([
+        { id: "first", contracts: { speechProviders: ["first"] } },
+        { id: "second", contracts: { speechProviders: ["second"] } },
+      ]);
+      mocks.resolveRuntimePluginRegistry.mockImplementation((options?: unknown) =>
+        source === "active" || options !== undefined ? registry : undefined,
+      );
+      const plugins = {
+        allow: [" FIRST ", "second"],
+        deny: [] as string[],
+        entries: { " FIRST ": { enabled: true }, second: { enabled: false } },
+      };
+      const cfg: OpenClawConfig = { plugins };
+      const resolve = () => resolvePluginCapabilityProviders({ key: "speechProviders", cfg });
+
+      expect(resolve()).toEqual([registry.speechProviders[0]?.provider]);
+      plugins.entries[" FIRST "].enabled = false;
+      plugins.entries.second.enabled = true;
+      expect(resolve()).toEqual([registry.speechProviders[1]?.provider]);
+      plugins.deny.push(" SECOND ");
+      expect(resolve()).toEqual([]);
+    },
+  );
 
   it("targets enabled external capability plugins without bundled fallback capture", () => {
     const loaded = createEmptyPluginRegistry();

@@ -3,16 +3,25 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { completePendingPackageLifecycle } from "./package-lifecycle.js";
 
+async function markModernLifecyclePending(packageRoot: string): Promise<string> {
+  const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+  const contractPath = path.join(packageRoot, PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH);
+  await fs.mkdir(path.dirname(contractPath), { recursive: true });
+  await fs.writeFile(contractPath, "export {};\n");
+  await fs.writeFile(markerPath, "pending\n");
+  return markerPath;
+}
+
 describe("package lifecycle completion", () => {
   it("runs preinstall and postinstall once before releasing concurrent callers", async () => {
     await withTestDir({ prefix: "openclaw-package-lifecycle-" }, async (packageRoot) => {
-      const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
-      await fs.writeFile(markerPath, "pending\n");
+      const markerPath = await markModernLifecyclePending(packageRoot);
       const calls: string[] = [];
       let releasePreinstall: (() => void) | undefined;
       const preinstallBlocked = new Promise<void>((resolve) => {
@@ -44,24 +53,30 @@ describe("package lifecycle completion", () => {
     });
   });
 
-  it("retains pending state when postinstall fails", async () => {
-    await withTestDir({ prefix: "openclaw-package-lifecycle-failure-" }, async (packageRoot) => {
-      const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
-      await fs.writeFile(markerPath, "pending\n");
+  it.each(["throws", "leaves the marker"])(
+    "retains pending state when modern postinstall %s",
+    async (failure) => {
+      await withTestDir({ prefix: "openclaw-package-lifecycle-failure-" }, async (packageRoot) => {
+        const markerPath = await markModernLifecyclePending(packageRoot);
 
-      await expect(
-        completePendingPackageLifecycle({
-          packageRoot,
-          runScript: (script) => {
-            if (script.name === "postinstall") {
-              throw new Error("postinstall failed");
-            }
-          },
-        }),
-      ).rejects.toThrow("postinstall failed");
-      await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("pending\n");
-    });
-  });
+        await expect(
+          completePendingPackageLifecycle({
+            packageRoot,
+            runScript: (script) => {
+              if (script.name === "postinstall" && failure === "throws") {
+                throw new Error("postinstall failed");
+              }
+            },
+          }),
+        ).rejects.toThrow(
+          failure === "throws"
+            ? "postinstall failed"
+            : "postinstall did not complete its lifecycle marker",
+        );
+        await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("pending\n");
+      });
+    },
+  );
 
   it.each([
     ["default update", 30 * 60_000],
@@ -69,8 +84,7 @@ describe("package lifecycle completion", () => {
     ["explicit longer update", 75 * 60_000],
   ])("records the %s lifecycle budget on its lock", async (_name, scriptTimeoutMs) => {
     await withTestDir({ prefix: "openclaw-package-lifecycle-lock-" }, async (packageRoot) => {
-      const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
-      await fs.writeFile(markerPath, "pending\n");
+      const markerPath = await markModernLifecyclePending(packageRoot);
       let releasePreinstall: (() => void) | undefined;
       let preinstallCalls = 0;
       const preinstallBlocked = new Promise<void>((resolve) => {
@@ -122,26 +136,42 @@ describe("package lifecycle completion", () => {
     });
   });
 
-  it("migrates the shipped dist guard before retrying the complete lifecycle", async () => {
-    await withTestDir({ prefix: "openclaw-package-lifecycle-legacy-" }, async (packageRoot) => {
-      const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
-      const legacyGuardPath = path.join(packageRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH);
-      await fs.mkdir(path.dirname(legacyGuardPath), { recursive: true });
-      await fs.writeFile(legacyGuardPath, "pending\n");
-
-      await expect(
-        completePendingPackageLifecycle({
-          packageRoot,
-          runScript: async (script) => {
-            await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("pending\n");
-            if (script.name === "preinstall") {
-              await fs.rm(legacyGuardPath);
-            } else {
-              await fs.rm(markerPath);
-            }
-          },
-        }),
-      ).resolves.toBe(true);
-    });
-  });
+  it.each(["none", "preinstall", "postinstall"])(
+    "completes the shipped dist guard after %s interruption",
+    async (failedScript) => {
+      await withTestDir({ prefix: "openclaw-package-lifecycle-legacy-" }, async (packageRoot) => {
+        const markerPath = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+        const legacyGuardPath = path.join(packageRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH);
+        await fs.mkdir(path.dirname(legacyGuardPath), { recursive: true });
+        await fs.writeFile(legacyGuardPath, "pending\n");
+        let interrupted = failedScript !== "none";
+        const runScript = vi.fn(async (script: { name: string }) => {
+          await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("pending\n");
+          if (script.name === "preinstall") {
+            await fs.rm(legacyGuardPath, { force: true });
+          }
+          if (interrupted && script.name === failedScript) {
+            throw new Error("lifecycle interrupted");
+          }
+        });
+        if (interrupted) {
+          await expect(completePendingPackageLifecycle({ packageRoot, runScript })).rejects.toThrow(
+            "lifecycle interrupted",
+          );
+          await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("pending\n");
+          interrupted = false;
+          runScript.mockClear();
+        }
+        await expect(completePendingPackageLifecycle({ packageRoot, runScript })).resolves.toBe(
+          true,
+        );
+        expect(runScript.mock.calls.map(([script]) => script.name)).toEqual([
+          "preinstall",
+          "postinstall",
+        ]);
+        await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(legacyGuardPath)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
 });

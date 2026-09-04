@@ -113,10 +113,9 @@ export function sanitizeEnvVars(
 
   const blockedPatterns = [...BLOCKED_ENV_VAR_PATTERNS, ...(options.customBlockedPatterns ?? [])];
   const allowedPatterns = [...ALLOWED_ENV_VAR_PATTERNS, ...(options.customAllowedPatterns ?? [])];
-  // Sandbox launches consume the Gateway-owned metadata snapshot so configured
-  // plugin paths cannot bypass manifest-declared credential scrubbing.
+  // Credential metadata belongs to the host; the candidate container environment
+  // must not redirect discovery to another state directory or plugin inventory.
   const metadataSnapshot = getCurrentPluginMetadataSnapshot({
-    env: envVars,
     allowScopedSnapshot: true,
     allowWorkspaceScopedSnapshot: true,
   });
@@ -129,8 +128,8 @@ export function sanitizeEnvVars(
       }
     : undefined;
   const knownSecretNames = new Set(
-    listKnownSecretEnvVarNames({ env: envVars, metadataSnapshot: activeMetadataSnapshot }).map(
-      (name) => name.trim().toUpperCase(),
+    listKnownSecretEnvVarNames({ metadataSnapshot: activeMetadataSnapshot }).map((name) =>
+      name.trim().toUpperCase(),
     ),
   );
 

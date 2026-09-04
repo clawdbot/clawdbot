@@ -1,6 +1,6 @@
 // Terminal Core tests cover ansi behavior.
 import { describe, expect, it } from "vitest";
-import { AnsiSequenceStripper } from "./ansi-sequences.js";
+import { AnsiSequenceStripper, iterateAnsiSegments } from "./ansi-sequences.js";
 import {
   sanitizeForLog,
   splitGraphemes,
@@ -278,6 +278,7 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("abc", 2)).toBe("ab");
     expect(truncateToVisibleWidth("abc", 5)).toBe("abc");
     expect(truncateToVisibleWidth("anything", 0)).toBe("");
+    expect(truncateToVisibleWidth("abc", Number.NaN)).toBe("");
     // A wide grapheme that cannot fit the remaining budget is dropped whole,
     // never emitted half-width, so the result never exceeds the budget.
     expect(truncateToVisibleWidth("表文", 2)).toBe("表");
@@ -308,6 +309,19 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("\u200Babc", 2)).toBe("\u200Bab");
   });
 
+  it.each([
+    ["表".repeat(16) + "a".repeat(16), 40, "表".repeat(16) + "a".repeat(8)],
+    ["a".repeat(16) + "表".repeat(16), 20, "a".repeat(16) + "表".repeat(2)],
+    ["a" + "\u200B".repeat(64) + "表b", 1, "a" + "\u200B".repeat(64)],
+    ["表" + "\u200B".repeat(64) + "b", 1, ""],
+    ["a" + "\u0300".repeat(64) + "表b", 1, "a" + "\u0300".repeat(64)],
+    ["🇬🇧".repeat(32) + "a", 63, "🇬🇧".repeat(31)],
+    ["a" + "\u093e".repeat(40) + "\u0300".repeat(32768), 40, ""],
+  ])("fits uneven and invisible grapheme runs (case %#)", (input, width, expected) => {
+    expect(truncateToVisibleWidth(input, width)).toBe(expected);
+    expect(visibleWidth(expected)).toBeLessThanOrEqual(width);
+  });
+
   it("preserves ANSI sequences when truncating styled text", () => {
     // Trailing reset is retained even when its grapheme is dropped, so the cell
     // does not bleed styling into surrounding padding.
@@ -335,5 +349,20 @@ describe("terminal ansi helpers", () => {
       truncateToVisibleWidth("\u001B]8;;https://openclaw.ai\u001B\\link\u001B]8;;\u001B\\", 2),
     ).toBe("\u001B]8;;https://openclaw.ai\u001B\\li\u001B]8;;\u001B\\");
     expect(truncateToVisibleWidth("\u001B[32mxy\u001B[0m", 1)).toBe("\u001B[32mx\u001B[0m");
+  });
+
+  it("isolates interleaved segment scans and closes an unfinished iterator", () => {
+    const input = "before\x1b]8;;https://example.test/\x07link\x1b]8;;\x07after";
+    const expected = [...iterateAnsiSegments(input)];
+    const outer = iterateAnsiSegments(input);
+    const inner = iterateAnsiSegments("other" + input);
+    const first = outer.next().value;
+    expect(inner.next().value).toEqual({ kind: "text", value: "otherbefore" });
+    expect(stripAnsi("nested" + input)).toBe("nestedbeforelinkafter");
+    expect([first, ...outer]).toEqual(expected);
+
+    inner.return();
+    expect(inner.next().done).toBe(true);
+    expect([...iterateAnsiSegments(input)]).toEqual(expected);
   });
 });

@@ -10,7 +10,7 @@ export const enum CommandLane {
    * group rather than by adding a slot outside the cron budget.
    */
   HookDispatch = "hook-dispatch",
-  SkillWorkshopReview = "skill-workshop-review",
+  Background = "background",
   Subagent = "subagent",
   Nested = "nested",
 }
@@ -23,7 +23,7 @@ export const STATIC_COMMAND_LANES = [
   CommandLane.Cron,
   CommandLane.CronNested,
   CommandLane.HookDispatch,
-  CommandLane.SkillWorkshopReview,
+  CommandLane.Background,
   CommandLane.Subagent,
   CommandLane.Nested,
 ] as const;

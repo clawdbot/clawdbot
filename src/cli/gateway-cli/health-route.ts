@@ -11,7 +11,9 @@ type GatewayHealthJsonRouteArgs = {
 };
 
 type GatewayHealthRouteDependencies = {
-  callGateway?: typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport;
+  callGateway?: typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport<
+    Record<string, unknown>
+  >;
   readNonObservingHealthConfig?: typeof import("../../commands/health.js").readNonObservingHealthConfig;
   emitReachableGatewayAuthDiagnostic?: typeof import("../../commands/health.js").emitReachableGatewayAuthDiagnostic;
   formatGatewayAuthErrorJson?: typeof import("../../gateway/call.js").formatGatewayAuthErrorJson;

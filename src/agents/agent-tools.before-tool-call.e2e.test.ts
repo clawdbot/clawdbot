@@ -1017,12 +1017,28 @@ describe("before_tool_call loop detection behavior", () => {
     await expectUnblockedToolExecution(secondRunTool, "new-run-0", params);
   });
 
-  it("escalates generic repeat diagnostics from warning to critical", async () => {
+  it.each(["success", "error"])("warns on repeated %s results before blocking", async (status) => {
     await withToolLoopEvents(async (emitted) => {
-      const { tool, params } = createGenericReadRepeatFixture();
+      const { tool, params, execute } = createGenericReadRepeatFixture();
+      const rawResult = {
+        content: [{ type: "text", text: "same output" }],
+        details: { status },
+      };
+      execute.mockResolvedValue(rawResult);
 
       for (let i = 0; i < 21; i += 1) {
-        await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
+        const result = await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
+        if (i === 20) {
+          expectToolLoopBlockedResult(result, "identical outcomes");
+        } else {
+          expect(result.content).toEqual([
+            ...rawResult.content,
+            ...(i === 10
+              ? [{ type: "text", text: expect.stringMatching(/\[.*10.*change.*stop.*\]/i) }]
+              : []),
+          ]);
+          expect(result.details).toEqual(rawResult.details);
+        }
       }
 
       const genericEvents = emitted.filter((evt) => evt.detector === "generic_repeat");
@@ -1030,6 +1046,12 @@ describe("before_tool_call loop detection behavior", () => {
         ["warning", 10],
         ["critical", 20],
       ]);
+      expect(execute).toHaveBeenCalledTimes(20);
+      expect(rawResult.content).toEqual([{ type: "text", text: "same output" }]);
+      const outcomes = getDiagnosticSessionState({ sessionKey: "main" }).toolCallHistory;
+      const resultHashes = outcomes?.flatMap((outcome) => outcome.resultHash ?? []);
+      expect(resultHashes).toHaveLength(20);
+      expect(new Set(resultHashes).size).toBe(1);
     });
   });
 

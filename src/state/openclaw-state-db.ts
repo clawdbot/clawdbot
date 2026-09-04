@@ -61,7 +61,6 @@ import {
 } from "./openclaw-state-db-fast-path.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
-  assertSupportedSchemaVersion,
   markCurrentStateSchemaVersion,
   migrateConversationBindingTargets,
   migrateCronCreatorNamespaces,
@@ -88,6 +87,7 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
+import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   initializeNativeOpenClawStateConnection,
@@ -160,7 +160,7 @@ function repairStateSchema(
   let ownershipRefused = false;
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedSchemaVersion(db, pathname);
+    assertSupportedStateSchemaVersion(db, pathname);
     db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runSqliteImmediateTransactionSync(
       db,
@@ -324,7 +324,7 @@ function needsOpenClawStateDatabaseSchemaRepair(pathname: string): boolean {
   let database: DatabaseSync | undefined;
   try {
     database = openNodeSqliteDatabase(pathname, { readOnly: true });
-    assertSupportedSchemaVersion(database, pathname);
+    assertSupportedStateSchemaVersion(database, pathname);
     const needsRepair =
       readSqliteUserVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
       detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
@@ -390,7 +390,7 @@ function ensureSchema(
         () => {
           // Recheck ownership after BEGIN IMMEDIATE to exclude a concurrent external claim.
           assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
-          assertSupportedSchemaVersion(db, pathname);
+          assertSupportedStateSchemaVersion(db, pathname);
           // Native bootstrap admission is advisory until this transaction owns the
           // write. Never migrate state initialized or occupied by a concurrent owner.
           if (initializeNativeOnly && !isUninitializedNativeStartupDatabase(db)) {
@@ -528,7 +528,7 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
   }
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedSchemaVersion(db, pathname);
+    assertSupportedStateSchemaVersion(db, pathname);
     assertSqliteIntegrity(db, pathname);
     if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
       assertOpenClawStateDatabaseForMaintenance(db, { pathname });
@@ -638,10 +638,10 @@ function openOpenClawStateDatabaseWithBusyTimeout(
     if (!unpublished) {
       throw error;
     }
-    const cleanup = stateDbCache.closeOpenClawStateDatabaseHandle(unpublished);
-    if (cleanup.caught) {
+    const errors = stateDbCache.closeOpenClawStateDatabaseHandle(unpublished);
+    if (errors.length > 0) {
       throw createSqliteLifecycleAggregateError(
-        [error, ...cleanup.errors],
+        [error, ...errors],
         `Fresh OpenClaw state database open failed releasing access and closing its unpublished handle for ${pathname}.`,
         error,
       );

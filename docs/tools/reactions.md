@@ -46,6 +46,7 @@ action. Behavior varies by channel.
   </Accordion>
 
   <Accordion title="Telegram">
+    - Use `emoji-list` to find allowed standard reactions and numeric custom emoji identifiers.
     - Empty `emoji` removes the bot's reactions.
     - `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
 

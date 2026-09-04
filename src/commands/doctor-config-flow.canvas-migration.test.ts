@@ -4,39 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
-import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
+import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 
 const note = vi.hoisted(() => vi.fn<(message: string, title?: string) => void>());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 async function repairConfig(configPath: string) {
-  const runtime: RuntimeEnv = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
-  const options: DoctorOptions = { nonInteractive: true, repair: true };
-  const prompter = createDoctorPrompter({ runtime, options });
-  const configResult = await loadAndMaybeMigrateDoctorConfig({
-    options,
-    confirm: (params) => prompter.confirm(params),
-    runtime,
-    prompter,
-  });
-  const ctx: DoctorHealthFlowContext = {
-    runtime,
-    options,
-    prompter,
-    configResult,
-    cfg: configResult.cfg,
-    cfgForPersistence: structuredClone(configResult.cfg),
-    sourceConfigValid: configResult.sourceConfigValid ?? true,
-    configPath,
-    stateDirExistedAtStart: true,
-    ...(configResult.runWithPluginMetadataSnapshot
-      ? { runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot }
-      : {}),
-  };
+  const ctx = await prepareDoctorContext(configPath);
   await runInitialConfigWriteHealth(ctx);
   return JSON.parse(await fs.readFile(configPath, "utf8"));
 }

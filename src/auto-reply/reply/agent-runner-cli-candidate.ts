@@ -1,11 +1,23 @@
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
+import {
+  clearCliSessionInStore,
+  persistCliSessionBindingResult,
+  settleCliSessionResult,
+} from "../../agents/cli-session-store.js";
 import {
   getCliSessionBinding,
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
+import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
+import type { ModelFallbackResultClassification } from "../../agents/model-fallback-attempt.js";
+import { createAgentRunSupersededAbortError } from "../../agents/run-termination.js";
+import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -13,7 +25,6 @@ import {
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
-  clearCliSessionBindingForRun,
   createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
@@ -26,11 +37,11 @@ import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
+    classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
     lifecycleGeneration: string;
   },
 ): Promise<{
@@ -38,6 +49,7 @@ export async function runCliFallbackCandidate(
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
   const selectedModelEntry = findModelInCatalog(
     params.candidateRun.thinkingCatalog ?? [],
     params.provider,
@@ -126,19 +138,28 @@ export async function runCliFallbackCandidate(
     Boolean(params.presentation.blockReplyHandler) &&
     (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
-  turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
+  const toolAuthorityFingerprint = turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   const result = await params.timing.measure("cli_run", () =>
-    withLocalSessionPlacementTurnAdmission(
+    withLocalSessionPlacementTurnSettlement(
       {
         sessionId: turn.followupRun.run.sessionId,
-        sessionKey: turn.sessionKey,
+        sessionKey,
         agentId: turn.followupRun.run.agentId,
         runId: params.runId,
       },
-      async () => {
+      async (assertSettlementCurrent) => {
         // Placement admission may wait behind an older turn. Snapshot placement,
         // permission, and native resume identity only after this turn owns it.
-        const sessionEntry = turn.getActiveSessionEntry();
+        const sessionEntry = sessionTarget
+          ? loadSessionEntry({ ...sessionTarget, readConsistency: "latest" })
+          : turn.getActiveSessionEntry();
+        if (
+          sessionTarget &&
+          (sessionEntry?.sessionId !== sessionTarget.sessionId ||
+            sessionEntry.lifecycleRevision !== expectedLifecycleRevision)
+        ) {
+          throw createAgentRunSupersededAbortError();
+        }
         const cliSessionBinding = getCliSessionBinding(sessionEntry, params.cliExecutionProvider);
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
         let droppedCliSessionReplacement = false;
@@ -166,13 +187,15 @@ export async function runCliFallbackCandidate(
                   ) {
                     return;
                   }
-                  await clearCliSessionBindingForRun({
+                  await clearCliSessionInStore({
                     provider: params.cliExecutionProvider,
-                    expectedSessionId: cliSessionBinding.sessionId,
+                    expectedCliSessionId: cliSessionBinding.sessionId,
+                    expectedSessionId: sessionEntry?.sessionId,
+                    assertCommitAllowed: assertSettlementCurrent,
                     sessionKey: turn.sessionKey,
                     sessionStore: turn.activeSessionStore,
                     storePath: turn.storePath,
-                    activeSessionEntry: turn.getActiveSessionEntry(),
+                    activeSessionEntry: sessionEntry,
                   });
                 }
               : undefined,
@@ -185,25 +208,12 @@ export async function runCliFallbackCandidate(
             const textForTyping = classified.text;
             const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
             const onPartialReply = turn.opts?.onPartialReply;
-            if (!params.preserveProgressCallbackStartOrder) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              if (sanitized.skip || !sanitized.text || !onPartialReply) {
-                return false;
-              }
-              return await onPartialReply({ text: sanitized.text });
-            }
-            if (sanitized.skip || !sanitized.text) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              return false;
-            }
-            if (!onPartialReply) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              return false;
-            }
-            // Assistant and tool CLI bridges drain independently. Stage presentation first.
-            return await params.presentation.startPresentationWhileTyping(
+            return await params.presentation.presentWithTyping(
               turn.typingSignals.signalTextDelta(textForTyping),
-              () => onPartialReply({ text: sanitized.text }),
+              () =>
+                sanitized.skip || !sanitized.text || !onPartialReply
+                  ? false
+                  : onPartialReply({ text: sanitized.text }),
             );
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
@@ -211,6 +221,8 @@ export async function runCliFallbackCandidate(
           onReasoningProgress: async (payload) => {
             await turn.opts?.onReasoningProgress?.(payload);
           },
+          onCompactionStart: turn.opts?.onCompactionStart,
+          onCompactionEnd: turn.opts?.onCompactionEnd,
           onToolEvent: async (payload) => {
             if (!params.preserveProgressCallbackStartOrder) {
               const commandBearing = await cliToolSummaryTracker.noteToolEvent(payload);
@@ -241,7 +253,7 @@ export async function runCliFallbackCandidate(
             // Tool and assistant bridges drain independently. Preserve source order.
             await Promise.all([
               summaryPromise,
-              params.presentation.startPresentationWhileTyping(
+              params.presentation.presentWithTyping(
                 turn.typingSignals.signalToolStart(),
                 async () => {
                   await turn.opts?.onToolStart?.({
@@ -300,7 +312,7 @@ export async function runCliFallbackCandidate(
           runParams: {
             preparedRunAdmission: params.preparedRunAdmission,
             sessionId: turn.followupRun.run.sessionId,
-            sessionKey: turn.sessionKey,
+            sessionKey,
             sessionTarget,
             sessionEntry,
             chatType:
@@ -332,6 +344,17 @@ export async function runCliFallbackCandidate(
             currentInboundEventKind: turn.followupRun.currentInboundEventKind,
             currentInboundContext: turn.followupRun.currentInboundContext,
             inputProvenance: turn.followupRun.run.inputProvenance,
+            // Candidate zero is the primary attempt; later candidates are
+            // fallbacks. Carry the runner-owned fact instead of inferring from
+            // this shared dispatch path, or primary CLI runs lose delegation.
+            ...buildCliMcpDelegationCapabilityBinding(
+              resolveDelegationCapability({
+                fallbackActive: params.isFallbackRetry,
+                inputProvenance: turn.followupRun.run.inputProvenance,
+                disableTools: turn.opts?.disableTools,
+                toolsAllow: turn.opts?.toolsAllow,
+              }),
+            ),
             modelProvider: params.provider,
             modelHasVision,
             modelContextWindow: selectedModelEntry?.contextWindow,
@@ -399,27 +422,60 @@ export async function runCliFallbackCandidate(
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
             skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
+            skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
             disableTools: turn.opts?.disableTools,
-            toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
-              turn.followupRun,
-              toolAuthorityRoute,
-            ),
+            toolAuthorityFingerprint,
             abortSignal: params.runAbortSignal,
+            // Native input is already host-authored. Keep its stable delivery
+            // context out of the model-output normalization wrapper.
+            onBlockReply: turn.opts?.onBlockReply,
+            onPartialReply: turn.opts?.onPartialReply,
             onExecutionPhase: params.signalExecutionPhaseForTyping,
             replyOperation: turn.replyOperation,
           },
         });
         if (droppedCliSessionReplacement) {
-          await clearCliSessionBindingForRun({
+          // The room-event transform removed native continuity; only its guarded
+          // invalidation remains, and failure must retain the returned turn.
+          return await settleCliSessionResult(candidateResult, async () => {
+            await clearCliSessionInStore({
+              provider: params.cliExecutionProvider,
+              expectedCliSessionId: cliSessionBinding?.sessionId,
+              expectedSessionId: sessionEntry?.sessionId,
+              assertCommitAllowed: assertSettlementCurrent,
+              sessionKey: turn.sessionKey,
+              sessionStore: turn.activeSessionStore,
+              storePath: turn.storePath,
+              activeSessionEntry: sessionEntry,
+            });
+            params.classifyResult(candidateResult);
+          });
+        }
+        const classification = params.classifyResult(candidateResult);
+        if (
+          (!classification || candidateResult.meta.agentMeta?.clearCliSessionBinding === true) &&
+          !shouldPreserveUserFacingSessionStateForInputProvenance(
+            turn.followupRun.run.inputProvenance,
+          )
+        ) {
+          return await persistCliSessionBindingResult({
             provider: params.cliExecutionProvider,
-            expectedSessionId: cliSessionBinding?.sessionId,
-            sessionKey: turn.sessionKey,
-            sessionStore: turn.activeSessionStore,
+            result: candidateResult,
+            sessionKey,
             storePath: turn.storePath,
-            activeSessionEntry: turn.getActiveSessionEntry(),
+            sessionStore: turn.activeSessionStore,
+            expectedSession: sessionEntry,
+            assertSettlementCurrent,
+            abortSignal: params.runAbortSignal,
           });
         }
         return candidateResult;
+      },
+      {
+        lifecycleGeneration: params.lifecycleGeneration,
+        abortSignal: params.runAbortSignal,
+        trigger: turn.isHeartbeat ? "heartbeat" : "user",
+        inputProvenance: turn.followupRun.run.inputProvenance,
       },
     ),
   );

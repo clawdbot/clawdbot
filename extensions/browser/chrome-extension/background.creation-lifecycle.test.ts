@@ -152,17 +152,105 @@ describe("physical tab creation authority", () => {
     });
   });
 
-  it("revokes a later empty group title during creation", async () => {
+  it.each([
+    { event: "own naming", response: "result" },
+    { event: "unrelated group removal", response: "result" },
+    { event: "own title change", response: "error" },
+    { event: "own group removal", response: "error" },
+    { event: "own title change and restoration", response: "error" },
+  ] as const)(
+    "scopes handed-off navigation authority across $event",
+    async ({ event, response }) => {
+      const h = await setup("selected");
+      h.tabGroupsUpdate.mockResolvedValueOnce(undefined);
+      await h.create();
+      await h.attach();
+      h.debuggerSendCommand.mockImplementationOnce(async () => {
+        if (event === "own naming") {
+          h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
+        } else if (event === "unrelated group removal") {
+          h.tabGroupRemovedListener?.({ id: 9, title: "OpenClaw" });
+        } else if (event === "own group removal") {
+          h.tabGroupRemovedListener?.({ id: 7, title: "OpenClaw" });
+        } else {
+          h.tabGroupUpdatedListener?.({ id: 7, title: "Other" });
+          if (event === "own title change and restoration") {
+            h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
+          }
+        }
+        return { frameId: "main" };
+      });
+      const expected =
+        response === "result"
+          ? { type: "result", result: { frameId: "main" } }
+          : { type: "error", message: expect.stringContaining("access was revoked") };
+      expect(
+        await h.request({
+          type: "cdp",
+          tabId: 101,
+          method: "Page.navigate",
+          params: { url: "https://example.com/destination" },
+        }),
+      ).toMatchObject(expected);
+    },
+  );
+
+  it("restores fresh attachment authority without reviving a command admitted before a title change", async () => {
     const h = await setup("selected");
-    h.tabGroupsUpdate.mockImplementationOnce(async () => {
+    h.tabGroupsUpdate.mockResolvedValueOnce(undefined);
+    await h.create();
+    await h.attach();
+    h.debuggerSendCommand.mockImplementationOnce(async () => {
+      h.tabGroupUpdatedListener?.({ id: 7, title: "Other" });
       h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
-      h.tabGroupUpdatedListener?.({ id: 7, title: "" });
+      return { frameId: "main" };
     });
-    expect(await h.request({ type: "createTab", url: "about:blank" })).toMatchObject({
+
+    expect(
+      await h.request({
+        type: "cdp",
+        tabId: 101,
+        method: "Page.navigate",
+        params: { url: "https://example.com/destination" },
+      }),
+    ).toMatchObject({
       type: "error",
+      message: expect.stringContaining("access was revoked"),
     });
-    expect(h.tabsRemove).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => {
+      h.debuggerEventListener?.({ tabId: 101 }, "Runtime.consoleAPICalled", { value: 1 });
+      expect(
+        h
+          .frames()
+          .some(
+            (frame) => frame.type === "cdpEvent" && frame.method === "Runtime.consoleAPICalled",
+          ),
+      ).toBe(true);
+    });
+    expect(await h.request({ type: "cdp", tabId: 101, method: "Runtime.enable" })).toMatchObject({
+      type: "result",
+    });
   });
+
+  it.each(["title change", "removal"] as const)(
+    "revokes a group $event during creation",
+    async (event) => {
+      const h = await setup("selected");
+      h.tabGroupsUpdate.mockImplementationOnce(async () => {
+        h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
+        if (event === "title change") {
+          h.tabGroupUpdatedListener?.({ id: 7, title: "" });
+        } else {
+          h.tabGroupRemovedListener?.({ id: 7, title: "OpenClaw" });
+        }
+      });
+      expect(await h.request({ type: "createTab", url: "about:blank" })).toMatchObject({
+        type: "error",
+      });
+      expect(h.tabsRemove).not.toHaveBeenCalled();
+    },
+  );
 
   it("leaves a revoked Selected tab alone when the group lookup beats its event", async () => {
     const h = await setup("selected");

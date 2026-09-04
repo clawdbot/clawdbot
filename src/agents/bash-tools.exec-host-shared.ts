@@ -25,7 +25,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
-import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
+import type { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
   isExecApprovalRunAbortedError,
@@ -540,7 +540,12 @@ export async function sendExecApprovalFollowupResult(
   resultText: string,
   deps: ExecApprovalFollowupResultDeps = {},
 ): Promise<void> {
-  const send = deps.sendExecApprovalFollowup ?? sendExecApprovalFollowup;
+  const send: typeof sendExecApprovalFollowup =
+    deps.sendExecApprovalFollowup ??
+    (async (params) => {
+      const { sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js");
+      return sendExecApprovalFollowup(params);
+    });
   const warn = deps.logWarn ?? logWarn;
   const runtimeHandoff =
     target.direct === true || !target.sessionKey || isExecDeniedResultText(resultText)

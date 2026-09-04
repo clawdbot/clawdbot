@@ -74,6 +74,16 @@ export function readCodexAppServerConfigOptions(args: readonly string[]) {
   );
 }
 
+/** The stdio proxy forwards to an external server; it does not own that runtime. */
+export function isCodexAppServerProxyLaunch(args: readonly string[]): boolean {
+  const tokens = readCodexArgs(args);
+  const server = tokens.findLastIndex(({ name }) => name === "app-server");
+  return (
+    server >= 0 &&
+    tokens.slice(server + 1).find(({ name }) => !name.startsWith("-"))?.name === "proxy"
+  );
+}
+
 /** Keeps Codex overrides in one CLI scope without rewriting raw TOML or wrapper prefixes. */
 export function normalizeCodexAppServerArgs(
   rawArgs: string[],

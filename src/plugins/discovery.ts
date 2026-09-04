@@ -1240,6 +1240,9 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         if (duplicate.origin === "config" || duplicate.configSelected) {
           retained.configSelected = true;
         }
+        if (duplicate.sourcePreferred) {
+          retained.sourcePreferred = true;
+        }
         mergeCandidateInstallOwner(
           retained,
           resolvePluginCandidateInstallOwner(duplicate),
@@ -1378,11 +1381,15 @@ export function discoverOpenClawPlugins(params: {
         bundledRoot: roots.stock,
         env,
       })) {
+        const firstOverlay = result.candidates.length;
         discoverFromPath({
           rawPath: sourceOverlayDir,
           origin: "bundled",
           workspaceDir,
         });
+        for (const candidate of result.candidates.slice(firstOverlay)) {
+          candidate.sourcePreferred = true;
+        }
         result.diagnostics.push({
           level: "warn",
           source: sourceOverlayDir,

@@ -12,6 +12,7 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "./session-accessor.js";
 import {
+  getOwnedSessionTranscriptWriterFence,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
@@ -133,4 +134,74 @@ describe("owned transcript commit boundary", () => {
       });
     },
   );
+});
+
+describe("owned transcript writer fence scope", () => {
+  const runningTarget = {
+    agentId: "main",
+    sessionKey: "agent:main:running",
+    storePath: "/state/agents/main/openclaw-agent.sqlite",
+    expectedLifecycleRevision: "rev-3",
+    expectedWriterRunId: "run-running",
+  };
+
+  async function withRunningWriter(run: () => void): Promise<void> {
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionKey: runningTarget.sessionKey,
+        sessionTarget: runningTarget,
+        withTranscriptWrite: async (operation) => await operation(),
+      },
+      async () => run(),
+    );
+  }
+
+  it("inherits the fence for a caller that names the running session by key alone", async () => {
+    await withRunningWriter(() => {
+      expect(
+        getOwnedSessionTranscriptWriterFence({ sessionKey: runningTarget.sessionKey }),
+      ).toEqual({
+        expectedLifecycleRevision: "rev-3",
+        expectedWriterRunId: "run-running",
+      });
+    });
+  });
+
+  it("withholds the fence from a caller naming another session by key alone", async () => {
+    await withRunningWriter(() => {
+      // A key-only caller cannot form a target, so before this scoping it was refused by
+      // the target comparison and fell back to the ambient claim - a claim about a
+      // different session entirely.
+      expect(
+        getOwnedSessionTranscriptWriterFence({ sessionKey: "agent:main:elsewhere" }),
+      ).toBeUndefined();
+    });
+  });
+
+  it("still compares targets when the caller can express one", async () => {
+    await withRunningWriter(() => {
+      expect(getOwnedSessionTranscriptWriterFence({ sessionTarget: runningTarget })).toEqual({
+        expectedLifecycleRevision: "rev-3",
+        expectedWriterRunId: "run-running",
+      });
+      expect(
+        getOwnedSessionTranscriptWriterFence({
+          sessionTarget: {
+            ...runningTarget,
+            storePath: "/state/agents/other/openclaw-agent.sqlite",
+          },
+        }),
+      ).toBeUndefined();
+    });
+  });
+
+  it("keeps the unscoped lookup reading the ambient claim", async () => {
+    await withRunningWriter(() => {
+      expect(getOwnedSessionTranscriptWriterFence()).toEqual({
+        expectedLifecycleRevision: "rev-3",
+        expectedWriterRunId: "run-running",
+      });
+    });
+    expect(getOwnedSessionTranscriptWriterFence()).toBeUndefined();
+  });
 });
