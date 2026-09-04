@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatThreadDistanceFromBottom,
   createChatFlowE2eSuite,
@@ -168,7 +170,10 @@ suite.define(() => {
       await composer.fill(prompt);
       const draftHeight = await composer.evaluate((element) => element.clientHeight);
       if (artifactDir) {
-        await page.screenshot({ path: path.join(artifactDir, "before-send.png"), fullPage: true });
+        await writeFile(
+          path.join(artifactDir, "before-send.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
+        );
       }
       // Keyboard submission can land while the progress disclosure is resizing;
       // a pointer click on the moving send button would wait for stable layout.
@@ -189,7 +194,10 @@ suite.define(() => {
       });
       await waitForChatScrollIdle(page);
       if (artifactDir) {
-        await page.screenshot({ path: path.join(artifactDir, "after-send.png"), fullPage: true });
+        await writeFile(
+          path.join(artifactDir, "after-send.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
+        );
       }
       await expect
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })

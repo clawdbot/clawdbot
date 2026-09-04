@@ -210,8 +210,24 @@ does not retry, switch accounts, or change GitHub CLI routing, and it does not
 print raw response bodies, headers, or CLI errors.
 
 The default `rollup` mode waits for the attached CI workflow to succeed and
-for the remaining rollup checks to finish without failures. Supersession stays
-within workflow identity; `Auto response` is excluded from the wait.
+for the remaining rollup checks to finish without failures. Same-name checks use
+GitHub CLI-style deduplication within a workflow and event; this does not establish
+GitHub server merge authorization. `Auto response` is excluded from the wait.
+The default mode excludes runs associated only with another PR. Replacing an
+entire older job graph requires both runs to identify the requested PR and head
+uniquely, with matching workflow, event, and check-suite evidence. A shared head
+SHA alone is insufficient because different PR bases can select different jobs.
+Unique jobs, including cancelled jobs, remain visible without that proof.
+The watcher has no PR-bound replacement evidence for `pull_request_target` graphs,
+so their unique jobs remain visible too. Missing or ambiguous PR associations
+prevent whole-graph replacement while the attached run is monitored; same-name,
+same-event deduplication still applies on the shared head SHA.
+Replacement proof resolves older run IDs referenced by the rollup, including runs
+outside the initial attachment page. Metadata is reused across jobs and polls;
+missing records are read under the watcher deadline, followed by a fresh PR and
+rollup observation before deciding. Each poll reads at most 32 missing run records;
+excess references stay pending and resume from the cache on the next poll. Known
+missing or foreign associations remain blocking, as do independent failed checks.
 
 GitHub can retain queued rerun placeholders while omitting the successful
 same-name job from the rollup. The watcher reconciles a placeholder only after

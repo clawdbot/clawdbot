@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -11,6 +12,97 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI Home context updates" });
 
 suite.define(() => {
+  it.each(["workspace", "dashboard"] as const)(
+    "keeps the Home conversation usable with a saved %s main panel",
+    async (mainSlot) => {
+      const artifactDir = suite.artifactDir;
+      await suite.withPage(
+        { viewport: { width: 1280, height: 900 }, recordVideo: { dir: artifactDir } },
+        async ({ page }) => {
+          const workKey = "agent:main:parser";
+          const homeKey = "agent:main:main";
+          const savedLayout = {
+            columns: [
+              {
+                id: "side-panel-column",
+                side: "right",
+                panels: [
+                  { id: mainSlot, slot: mainSlot },
+                  { id: "conversation", slot: "conversation" },
+                ],
+                activePanelId: "conversation",
+                width: 480,
+                height: 360,
+              },
+            ],
+            mainPanelId: mainSlot,
+            open: true,
+          };
+          const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+          await page.addInitScript(
+            ({ key, homeKey: homeSessionKey, workKey: workSessionKey, layout }) => {
+              localStorage.setItem(
+                key,
+                JSON.stringify({
+                  sessionKey: workSessionKey,
+                  sidebarSessionLayouts: { [homeSessionKey]: layout },
+                }),
+              );
+            },
+            { key: settingsKey, homeKey, workKey, layout: savedLayout },
+          );
+          const gateway = await installMockGateway(page, {
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              "board.get",
+              "chat.history",
+              "chat.send",
+            ],
+            sessionKey: workKey,
+            sessions: [workKey, homeKey].map((key) => ({
+              key,
+              kind: "direct",
+              updatedAt: Date.now(),
+              label: key === homeKey ? "Personal Home" : "Parser work",
+            })),
+            historyMessages: [{ role: "assistant", content: "Home is ready to help." }],
+            methodResponses: {
+              "board.get": {
+                sessionKey: homeKey,
+                revision: 1,
+                tabs: [{ tabId: "main", title: "Main", position: 0 }],
+                widgets: [],
+              },
+            },
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, workKey));
+          await gateway.waitForRequest("chat.startup");
+          await page.locator(".sidebar-footer-bar__home").click();
+          const panel = page.locator("openclaw-assistant-panel");
+          await panel.locator("openclaw-chat-pane").waitFor();
+          await gateway.waitForRequest("chat.startup", { after: 1 });
+          await page.screenshot({ path: path.join(artifactDir, "home-open.png") });
+          const composer = panel.locator(".agent-chat__composer-combobox textarea");
+          await expect.poll(() => composer.isVisible()).toBe(true);
+          await composer.fill("Help with the current work");
+          await composer.press("Enter");
+          expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+            sessionKey: homeKey,
+          });
+          expect(
+            await page.evaluate(
+              ({ key, homeKey: homeSessionKey }) =>
+                JSON.parse(localStorage.getItem(key) ?? "{}").sidebarSessionLayouts[homeSessionKey]
+                  .mainPanelId,
+              { key: settingsKey, homeKey },
+            ),
+          ).toBe(mainSlot);
+          await page.screenshot({ path: path.join(artifactDir, "home-message-sent.png") });
+        },
+      );
+    },
+  );
+
   it("refreshes open Home context after a roster-only title update", async () => {
     const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
       ? suite.artifactDir

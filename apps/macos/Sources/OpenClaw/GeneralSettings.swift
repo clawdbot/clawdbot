@@ -123,6 +123,8 @@ struct GeneralSettings: View {
                 .disabled(!self.state.quickChatEnabled)
             }
 
+            AppIconPicker()
+
             SettingsCardGroup("Capabilities") {
                 SettingsCardToggleRow(
                     title: "Allow Canvas",

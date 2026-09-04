@@ -1,7 +1,9 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -793,10 +795,12 @@ suite.define(() => {
         true,
       );
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "00-native-history-initial-underfill-loading.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "00-native-history-initial-underfill-loading.png"),
+          await takeControlUiViewportScreenshot(page, pane.locator(".chat-main"), [
+            pane.locator('.chat-history-boundary__action[aria-busy="true"]'),
+          ]),
+        );
       }
 
       await gateway.deferNext("chat.history", { offset: 6 });
@@ -813,10 +817,12 @@ suite.define(() => {
         true,
       );
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "01-native-history-continued-auto-load.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "01-native-history-continued-auto-load.png"),
+          await takeControlUiViewportScreenshot(page, pane.locator(".chat-main"), [
+            pane.locator('.chat-history-boundary__action[aria-busy="true"]'),
+          ]),
+        );
       }
 
       await gateway.resolveDeferred("chat.history");
@@ -828,10 +834,10 @@ suite.define(() => {
         .toBe(0);
       expect(await pane.locator(".chat-history-sentinel").count()).toBe(1);
       if (artifactDir) {
-        await page.screenshot({
-          path: path.join(artifactDir, "02-native-history-final-scrollable.png"),
-          fullPage: true,
-        });
+        await writeFile(
+          path.join(artifactDir, "02-native-history-final-scrollable.png"),
+          await takeControlUiViewportScreenshot(page, pane.locator(".chat-main"), [thread]),
+        );
       }
       // The second applied page staged one background prefetch (offset 22);
       // the now-scrollable transcript must not consume or chain beyond it.
