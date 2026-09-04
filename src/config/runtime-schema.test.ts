@@ -342,10 +342,13 @@ describe("loadGatewayRuntimeConfigSchema", () => {
         plusOrigin: "workspace",
         expected: "core",
       },
-    ].flatMap((scenario) => (["plus", "core"] as const).map((first) => ({ ...scenario, first }))),
+    ].flatMap((scenario) => (["plus", "core"] as const).map((first) => ({ scenario, first }))),
   )(
-    "publishes the $name schema and sensitive hints with $first first",
-    ({ entries, deny, expected, first, coreOrigin = "config", plusOrigin = "config" }) => {
+    "publishes the $scenario.name schema and sensitive hints with $first first",
+    ({
+      scenario: { entries, deny, expected, coreOrigin = "config", plusOrigin = "config" },
+      first,
+    }) => {
       mockLoadConfig.mockReturnValue({
         ...explicitMainRoster(),
         plugins: { entries, deny },

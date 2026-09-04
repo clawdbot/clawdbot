@@ -360,10 +360,8 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema, origin: "bundled" }] as const,
         ),
       );
-      for (const entry of collectChannelSchemaMetadataWithOwnership(
-        info.registry,
-        resolveChannelSchemaSelection(info.registry, parsedConfig, opts.env),
-      )) {
+      const selection = resolveChannelSchemaSelection(info.registry, parsedConfig, opts.env);
+      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry, selection)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {
