@@ -557,23 +557,23 @@ describe("buildGatewayReloadPlan", () => {
     },
     {
       path: "models.providers.openai.models",
-      expected: { restartHeartbeat: true },
+      expected: { restartHeartbeat: true, reconcileSystemJobs: true },
     },
     {
       path: "agents.defaults.models",
-      expected: { restartHeartbeat: true },
+      expected: { restartHeartbeat: true, reconcileSystemJobs: true },
     },
     {
       path: "agents.defaults.heartbeat.every",
-      expected: { restartHeartbeat: true },
+      expected: { restartHeartbeat: true, reconcileSystemJobs: true },
     },
     {
       path: "agents.defaults.modelPolicy.allow",
-      expected: { restartHeartbeat: true },
+      expected: { restartHeartbeat: true, reconcileSystemJobs: true },
     },
     {
       path: "agents.entries",
-      expected: { restartHeartbeat: true },
+      expected: { restartHeartbeat: true, reconcileSystemJobs: true },
     },
     {
       path: "plugins.entries.lossless-claw.config.mode",
@@ -601,7 +601,7 @@ describe("buildGatewayReloadPlan", () => {
       restartGateway: false,
       hotReasons: [path],
       noopPaths: [],
-      reconcileSkillReviewJobs: true,
+      reconcileSystemJobs: true,
     });
     expect(isNoopGatewayReloadPlan(plan)).toBe(false);
   });
