@@ -1806,6 +1806,8 @@ describe("chat code-block copy", () => {
 
 describe("chat transcript rendering", () => {
   it("refreshes cached inline reply handlers when the callback identity changes", () => {
+    // Freeze the separate minute-based timestamp dependency while checking callback rebinding.
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
     const transcript = createTestTranscript();
     const firstReply = vi.fn();
     const currentReply = vi.fn();
@@ -1822,8 +1824,6 @@ describe("chat transcript rendering", () => {
         isStreaming: false,
       },
     ] as ReturnType<typeof chatThread.buildCachedChatItems>;
-    const defaultBuildChatItems = buildChatItemsMock.getMockImplementation();
-    const defaultRenderMessageGroup = renderMessageGroupMock.getMockImplementation();
     buildChatItemsMock.mockReturnValue(stableChatItems);
     renderMessageGroupMock.mockImplementation(
       (
@@ -1865,13 +1865,6 @@ describe("chat transcript rendering", () => {
       '[aria-label="Reply to message"]',
       "inline reply button",
     ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    if (defaultRenderMessageGroup) {
-      renderMessageGroupMock.mockImplementation(defaultRenderMessageGroup);
-    }
-    if (defaultBuildChatItems) {
-      buildChatItemsMock.mockImplementation(defaultBuildChatItems);
-    }
-
     expect(firstReply).not.toHaveBeenCalled();
     expect(currentReply).toHaveBeenCalledOnce();
   });
@@ -2616,8 +2609,9 @@ afterEach(() => {
   releaseChatAttachmentPayloads([...registeredAttachmentPayloads.values()]);
   registeredAttachmentPayloads.clear();
   vi.useRealTimers();
-  buildChatItemsMock.mockClear();
-  renderMessageGroupMock.mockClear();
+  // Restore defaults even when a case fails with an override installed.
+  buildChatItemsMock.mockReset();
+  renderMessageGroupMock.mockReset();
   chatMediaRenderVersionMock.value = 0;
   resetChatViewState();
   replaceSlashCommands(buildFallbackSlashCommands());
