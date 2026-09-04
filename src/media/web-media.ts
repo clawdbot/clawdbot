@@ -937,6 +937,42 @@ async function optimizeImageWithFallback(params: {
   };
 }
 
+function preserveUntransformedImage(params: {
+  buffer: Buffer;
+  cap: number;
+  contentType?: string;
+  fileName?: string;
+  imageCompression?: ImageCompressionPolicy;
+  includeStatic?: boolean;
+}): WebMediaResult | undefined {
+  const isGif = params.contentType === "image/gif";
+  const isAnimatedWebp =
+    params.contentType === "image/webp" &&
+    params.buffer.length >= 30 &&
+    params.buffer.toString("ascii", 0, 4) === "RIFF" &&
+    params.buffer.toString("ascii", 8, 12) === "WEBP" &&
+    params.buffer.toString("ascii", 12, 16) === "VP8X" &&
+    params.buffer.readUInt32LE(16) >= 10 &&
+    params.buffer.readUInt32LE(16) <= params.buffer.length - 20 &&
+    ((params.buffer[20] ?? 0) & 0x02) !== 0;
+  if (!isGif && !isAnimatedWebp && !params.includeStatic) {
+    return undefined;
+  }
+
+  if (params.buffer.length > params.cap) {
+    const label = isGif ? "GIF" : isAnimatedWebp ? "Animated WebP" : "Media";
+    throw new Error(formatCapLimit(label, params.cap, params.buffer.length));
+  }
+  // Rastermill encodes only one frame; preserve animation or reject its real limits.
+  assertImageSatisfiesHardDimensionPolicy(params.buffer, params.imageCompression);
+  return {
+    buffer: params.buffer,
+    contentType: params.contentType,
+    kind: "image",
+    fileName: params.fileName,
+  };
+}
+
 /** Optimizes image bytes for web-media delivery while preserving accepted original formats when possible. */
 export async function optimizeImageBufferForWebMedia(params: {
   buffer: Buffer;
@@ -947,17 +983,9 @@ export async function optimizeImageBufferForWebMedia(params: {
 }): Promise<WebMediaResult> {
   const baseCap = params.maxBytes ?? maxBytesForKind("image");
   const cap = effectiveImageBytesCap(baseCap, params.imageCompression) ?? baseCap;
-  if (params.contentType === "image/gif") {
-    if (params.buffer.length > cap) {
-      throw new Error(formatCapLimit("GIF", cap, params.buffer.length));
-    }
-    assertImageSatisfiesHardDimensionPolicy(params.buffer, params.imageCompression);
-    return {
-      buffer: params.buffer,
-      contentType: params.contentType,
-      kind: "image",
-      fileName: params.fileName,
-    };
+  const untransformed = preserveUntransformedImage({ ...params, cap });
+  if (untransformed) {
+    return untransformed;
   }
   const meta = { contentType: params.contentType, fileName: params.fileName };
   const originalContentType = resolvePreservableOriginalImageContentType({
@@ -1071,18 +1099,14 @@ async function loadWebMediaInternal(
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
     if (params.kind === "image") {
       const imageCap = effectiveImageBytesCap(cap, imageCompression) ?? cap;
-      const isGif = params.contentType === "image/gif";
-      if (isGif || !optimizeImages) {
-        if (params.buffer.length > imageCap) {
-          throw new Error(formatCapLimit(isGif ? "GIF" : "Media", imageCap, params.buffer.length));
-        }
-        assertImageSatisfiesHardDimensionPolicy(params.buffer, imageCompression);
-        return {
-          buffer: params.buffer,
-          contentType: params.contentType,
-          kind: params.kind,
-          fileName: params.fileName,
-        };
+      const untransformed = preserveUntransformedImage({
+        ...params,
+        cap: imageCap,
+        imageCompression,
+        includeStatic: !optimizeImages,
+      });
+      if (untransformed) {
+        return untransformed;
       }
       const originalContentType = resolvePreservableOriginalImageContentType({
         buffer: params.buffer,
