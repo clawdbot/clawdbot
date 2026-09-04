@@ -1,4 +1,5 @@
 // Diagnostic log capture helpers collect emitted diagnostic logs for tests.
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -17,9 +18,7 @@ async function flushDiagnosticLogRecords(): Promise<void> {
     if (!hasPendingInternalDiagnosticEvent((event) => event.type === "log.record")) {
       return;
     }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await yieldToEventLoop();
   }
 }
 
