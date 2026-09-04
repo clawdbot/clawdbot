@@ -4,6 +4,7 @@ import {
   type buildChannelInboundEventContext,
   buildMentionRegexes,
   isChannelPartialDeliveryError,
+  logInboundDrop,
   matchesMentionPatterns,
   implicitMentionKindWhen,
   type ChannelInboundMediaInput,
@@ -393,16 +394,22 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+  const { isGroup, groupId, roomId, userId } = getLineSourceInfo(event.source);
   if (isGroup && decision.access.activationAccess.shouldSkip) {
     const rawText = message.type === "text" ? readLineTextMessageBody(message) : "";
-    const sourceInfo = getLineSourceInfo(event.source);
-    logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
-    const senderId = sourceInfo.userId ?? "unknown";
+    logInboundDrop({
+      log: runtime.log,
+      channel: "line",
+      reason: "no mention",
+      target: historyKey,
+      onceKey: JSON.stringify([account.accountId, historyKey]),
+      hint: `Mention patterns can be derived from the agent identity name. Set channels.line.accounts[${JSON.stringify(account.accountId)}].groups[${JSON.stringify(historyKey)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+    });
+    const senderId = userId ?? "unknown";
     if (historyKey && context.groupHistories) {
-      const displayName = sourceInfo.userId
-        ? await getUserDisplayName(sourceInfo.userId, {
+      const displayName = userId
+        ? await getUserDisplayName(userId, {
             cfg,
             accountId: account.accountId,
             channelAccessToken: account.channelAccessToken,

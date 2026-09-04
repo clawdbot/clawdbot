@@ -303,9 +303,14 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       return;
     }
     if (mentionDecision.shouldSkip) {
-      monitor.logVerboseMessage(
-        `mattermost: drop group message (missing mention channel=${channelId} sender=${senderId} requireMention=${shouldRequireMention} bypass=${shouldBypassMention} canDetectMention=${canDetectMention})`,
-      );
+      logInboundDrop({
+        log: monitor.runtime.log,
+        channel: "mattermost",
+        reason: "no mention",
+        target: channelId,
+        onceKey: JSON.stringify([account.accountId, channelId]),
+        hint: `Mention patterns can be derived from the agent identity name. Set channels.mattermost.accounts[${JSON.stringify(account.accountId)}].groups[${JSON.stringify(channelId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+      });
       recordPendingHistory();
       return;
     }

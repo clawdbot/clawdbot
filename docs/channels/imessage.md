@@ -335,9 +335,31 @@ If disabling SIP is not acceptable for your threat model:
     Mention gating for groups:
 
     - iMessage has no native mention metadata
-    - mention detection uses regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
-    - with no configured patterns, mention gating cannot be enforced
+    - mention detection uses `agents.entries.*.groupChat.mentionPatterns`, then `messages.groupChat.mentionPatterns`; when neither is set, patterns are derived from the routed agent's `identity.name` and `identity.emoji`
+    - groups require a mention by default, even when no patterns were explicitly configured; an allowlisted sender's message can therefore be skipped unless it contains the agent's name or emoji
+    - an explicit `mentionPatterns: []` at the selected agent or global level suppresses identity-derived patterns; iMessage cannot enforce mention gating when no usable patterns remain
     - control commands from authorized senders bypass mention gating
+
+    To process every message from allowed senders in one group, set that chat's `requireMention` to `false`:
+
+    ```json5
+    {
+      channels: {
+        imessage: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15555550123", "+15555550124"],
+          groups: {
+            "*": {},
+            "123": { requireMention: false },
+          },
+        },
+      },
+    }
+    ```
+
+    Replace `123` with the numeric chat ID from `imsg chats --limit 20 --json`. When adding a `groups` map to a setup that had none, `"*": {}` preserves admission to other groups while keeping their default mention requirement. If you already restrict chats with a `groups` map, retain that map and add only the per-chat override. `groupAllowFrom` still controls sender access. For an account override, use `channels.imessage.accounts.<account-id>.groups`, including `accounts.default.groups` when configured; account settings take precedence over the channel-level map.
+
+    A skipped message with no mention produces a warning at the default log level with the chat ID and the `requireMention: false` fix. Repeated warnings for the same chat are suppressed by a bounded in-memory cache; restarting the channel or evicting a cache entry allows the warning again.
 
     Per-group `systemPrompt`:
 
@@ -803,7 +825,7 @@ openclaw channels status --probe --channel imessage
     - `channels.imessage.groupPolicy`
     - `channels.imessage.groupAllowFrom`
     - `channels.imessage.groups` allowlist behavior
-    - mention pattern configuration (`agents.entries.*.groupChat.mentionPatterns`)
+    - mention gating: explicit patterns or the routed agent's identity name/emoji; set `channels.imessage.groups["<chat_id>"].requireMention: false` to process all messages from allowed senders
 
   </Accordion>
 

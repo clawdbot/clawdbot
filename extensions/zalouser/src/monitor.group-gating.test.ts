@@ -549,8 +549,27 @@ describe("zalouser monitor group mention gating", () => {
     return dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
   }
 
-  it("skips unmentioned group messages when requireMention=true", async () => {
-    await expectSkippedGroupMessage();
+  it("logs missing mentions once per group with verbose logging disabled", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+      commandAuthorized: false,
+    });
+    const runtime = { ...createRuntimeEnv(), log: vi.fn() };
+    await processMessageThroughMonitor({
+      messages: ["mention-drop-1", "mention-drop-2"].map((msgId) =>
+        createGroupMessage({ threadId: "g-diagnostic", msgId }),
+      ),
+      account: createAccount(),
+      config: createConfig(),
+      runtime,
+    });
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(sendTypingZalouserMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("zalouser: drop no mention target=g-diagnostic"),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("requireMention=false"));
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Alice"));
   });
 
   it("blocks mentioned group messages by default when groupPolicy is omitted", async () => {

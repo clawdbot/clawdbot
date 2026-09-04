@@ -299,9 +299,11 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
     Group replies require a mention by default. Mention detection includes:
 
     - explicit WhatsApp mentions of the bot identity
-    - configured mention regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
+    - mention regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`); when neither is set, patterns are derived from the routed agent's `identity.name` and `identity.emoji`
     - inbound voice-note transcripts for authorized group messages
     - implicit reply-to-bot detection (reply sender matches bot identity)
+
+    An explicit `mentionPatterns: []` at the selected agent or global level suppresses identity-derived text patterns. Native mentions and reply-to-bot detection remain separate. To process all allowed messages in a group, set `channels.whatsapp.groups["<group-id>"].requireMention: false`. Preserve existing `groups` entries; when adding the first map, include `"*": {}` to keep other chats admitted. A saved session activation mode takes precedence over this config default; use `/activation always` for that session.
 
     Security: quote/reply only satisfies mention gating — it does **not** grant sender authorization. With `groupPolicy: "allowlist"`, non-allowlisted senders stay blocked even replying to an allowlisted user's message.
 

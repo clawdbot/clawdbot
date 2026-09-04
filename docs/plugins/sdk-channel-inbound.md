@@ -47,6 +47,14 @@ import {
 - `dispatchChannelInboundReply(...)`: records and dispatches an already
   assembled inbound reply with a delivery adapter.
 
+For intentional skips, `logInboundDrop({ log, channel, reason, target?, onceKey?, hint? })`
+formats a diagnostic through the supplied logger. Use a default-level logger and
+an actionable `hint` for mention-gated groups. Set `onceKey` to an account/conversation
+scope, such as `JSON.stringify([accountId, conversationId])`, to suppress repeats
+for that channel and reason. The process-local cache retains 512 recently used
+keys; evicted keys can log again. Omit `onceKey` for per-message logging. Keep
+message bodies and sender details out of default-level diagnostics.
+
 For media-only inbound events, keep the message body and command text empty and
 pass one `ChannelInboundMediaInput` fact per native attachment. When an ambient
 history line or another text-only carrier must describe those facts, use

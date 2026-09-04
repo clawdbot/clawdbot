@@ -5,6 +5,7 @@ import {
   createChannelPartialDeliveryError,
   implicitMentionKindWhen,
   isChannelPartialDeliveryError,
+  logInboundDrop,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -544,7 +545,14 @@ async function processMessage(
             }
           : null,
     });
-    logVerbose(core, runtime, `zalouser: skip group ${chatId} (mention required, not mentioned)`);
+    logInboundDrop({
+      log: runtime.log,
+      channel: "zalouser",
+      reason: "no mention",
+      target: chatId,
+      onceKey: JSON.stringify([account.accountId, chatId]),
+      hint: `Mention patterns can be derived from the agent identity name. Set channels.zalouser.accounts[${JSON.stringify(account.accountId)}].groups[${JSON.stringify(chatId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+    });
     return;
   }
 
