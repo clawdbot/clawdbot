@@ -13,7 +13,7 @@ import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import {
-  loadPreparedModelCatalogSnapshotForBrowse,
+  modelCatalogBrowseRequiresFullDiscovery,
   MODEL_CATALOG_BROWSE_TIMEOUT_MS,
 } from "../../agents/model-catalog-browse.js";
 import {
@@ -251,6 +251,36 @@ async function buildPreparedDataForConfig(
   options: ModelsBrowseOptions,
   control: { catalogFallback?: boolean; deadlineMs?: number },
 ): Promise<PreparedModelsProviderData> {
+  const project = (owner?: PreparedModelRuntimeSnapshot) =>
+    projectPreparedModelsProviderData(cfg, agentId, options, owner);
+  if (control.catalogFallback) {
+    return project();
+  }
+  const agentDir = options.agentDir ?? (agentId ? resolveAgentDir(cfg, agentId) : undefined);
+  const result = await awaitWithinDeadline(
+    () =>
+      preparedModelCatalog.withPreparedModelCatalogOwner(
+        {
+          config: cfg,
+          readOnly: !modelCatalogBrowseRequiresFullDiscovery({ cfg, agentId, view: options.view }),
+          refreshFullCatalog: "stale",
+          ...(agentId ? { agentId } : {}),
+          ...(agentDir ? { agentDir } : {}),
+          ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+        },
+        project,
+      ),
+    control.deadlineMs,
+  );
+  return result === ABSOLUTE_DEADLINE_EXPIRED ? project() : result;
+}
+
+async function projectPreparedModelsProviderData(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+  options: ModelsBrowseOptions,
+  owner?: PreparedModelRuntimeSnapshot,
+): Promise<PreparedModelsProviderData> {
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
@@ -264,32 +294,7 @@ async function buildPreparedDataForConfig(
   const cliRuntimeProviders = new Set(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
-  const agentDir = options.agentDir ?? (agentId ? resolveAgentDir(cfg, agentId) : undefined);
-
-  let loadedOwner: PreparedModelRuntimeSnapshot | undefined;
-  const timeoutMs = control.deadlineMs === undefined ? undefined : control.deadlineMs - Date.now();
-  const snapshot =
-    control.catalogFallback || (timeoutMs !== undefined && timeoutMs <= 0)
-      ? { entries: [], routeVariants: [] }
-      : await loadPreparedModelCatalogSnapshotForBrowse({
-          cfg,
-          agentId,
-          view: options.view ?? "default",
-          loadCatalog: async ({ readOnly }) => {
-            loadedOwner = await preparedModelCatalog.loadPreparedModelCatalogOwnerSnapshot({
-              config: cfg,
-              readOnly,
-              refreshFullCatalog: "stale",
-              ...(agentId ? { agentId } : {}),
-              ...(agentDir ? { agentDir } : {}),
-              ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-            });
-            return loadedOwner.modelCatalog;
-          },
-          ...(timeoutMs === undefined ? {} : { timeoutMs }),
-        });
-  // A timed-out read can complete later. Only pair auth with the catalog actually returned.
-  const owner = loadedOwner?.modelCatalog === snapshot ? loadedOwner : undefined;
+  const snapshot = owner?.modelCatalog ?? { entries: [], routeVariants: [] };
   const authStore = owner && getPreparedModelRuntimeAuthStore(owner);
   const catalog = snapshot.entries;
   const visibilityPolicy = createModelVisibilityPolicy({
@@ -512,6 +517,11 @@ async function buildPreparedDataForConfig(
       }),
     );
     runtimeChoicesByProvider.set(provider, choices);
+  }
+
+  // Auth and visibility cross awaits. Retired owners must restart the whole projection.
+  if (owner && !owner.isCurrent()) {
+    throw new PreparedModelRuntimePublicationSupersededError("model browse owner was superseded");
   }
 
   return {

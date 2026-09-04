@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import * as providerAuth from "../../agents/model-provider-auth.js";
 import { PreparedModelCatalogConfigReplacedError } from "../../agents/prepared-model-catalog.errors.js";
 import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
@@ -9,20 +10,29 @@ const catalogMocks = vi.hoisted(() => ({
   loadSnapshot: vi.fn(),
   loadPublishedOwner: vi.fn(),
   authStore: { version: 1, profiles: {} } as AuthProfileStore,
+  isCurrent: () => true,
 }));
 
-vi.mock("../../agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalogSnapshot: catalogMocks.loadSnapshot,
-  loadPreparedModelCatalogOwnerSnapshot: async (...args: unknown[]) => {
+vi.mock("../../agents/prepared-model-catalog.js", () => {
+  const loadOwner = async (...args: unknown[]) => {
     const owner = {
       modelCatalog: await catalogMocks.loadSnapshot(...args),
       authModes: {},
+      isCurrent: catalogMocks.isCurrent,
     };
     setPreparedModelRuntimeAuthStore(owner, catalogMocks.authStore);
     return owner;
-  },
-  loadPublishedPreparedModelCatalogOwnerSnapshot: catalogMocks.loadPublishedOwner,
-}));
+  };
+  return {
+    loadPreparedModelCatalogSnapshot: catalogMocks.loadSnapshot,
+    loadPreparedModelCatalogOwnerSnapshot: loadOwner,
+    withPreparedModelCatalogOwner: async (
+      params: unknown,
+      read: (owner: Awaited<ReturnType<typeof loadOwner>>) => unknown,
+    ) => read(await loadOwner(params)),
+    loadPublishedPreparedModelCatalogOwnerSnapshot: catalogMocks.loadPublishedOwner,
+  };
+});
 
 const { buildPreparedModelsProviderData, resolveModelsCommandReply } =
   await import("./commands-models.js");
@@ -40,9 +50,79 @@ afterEach(() => {
   catalogMocks.loadPublishedOwner.mockReset();
   vi.useRealTimers();
   catalogMocks.authStore = { version: 1, profiles: {} };
+  catalogMocks.isCurrent = () => true;
+  vi.restoreAllMocks();
 });
 
 describe("/models browse catalog recovery", () => {
+  it.each([
+    { view: "default", delayMs: 0 },
+    { view: "all", delayMs: 1_000 },
+    { view: "default", delayMs: 1_000 },
+  ] as const)(
+    "recovers supersession during $view auth projection within its deadline (delay=$delayMs)",
+    async ({ view, delayMs }) => {
+      vi.useFakeTimers();
+      let current = true;
+      catalogMocks.isCurrent = () => current;
+      const evaluating = Promise.withResolvers<void>();
+      const resumeAuth = Promise.withResolvers<void>();
+      const evaluateModelAuth = vi.fn(async () => ({
+        availability: true as const,
+        routeResolution: null,
+      }));
+      evaluateModelAuth.mockImplementationOnce(async () => {
+        evaluating.resolve();
+        await resumeAuth.promise;
+        return { availability: true, routeResolution: null };
+      });
+      vi.spyOn(providerAuth, "createProviderAuthChecker").mockReturnValue(
+        Object.assign(async () => true, { evaluateModelAuth }),
+      );
+      catalogMocks.loadSnapshot
+        .mockResolvedValueOnce({
+          entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Stale model" }],
+          routeVariants: [],
+        })
+        .mockResolvedValueOnce({
+          entries: [{ provider: "openai", id: "gpt-5.6-luna", name: "Current model" }],
+          routeVariants: [],
+        });
+      catalogMocks.loadPublishedOwner.mockImplementationOnce(async () => {
+        catalogMocks.isCurrent = () => true;
+        return { config: replacementCfg };
+      });
+
+      let settled = false;
+      const result = buildPreparedModelsProviderData(staleCfg, undefined, { view }).then((data) => {
+        settled = true;
+        return data;
+      });
+      await evaluating.promise;
+      current = false;
+      const timedOut = view === "default" && delayMs > 750;
+      if (delayMs) {
+        await vi.advanceTimersByTimeAsync(delayMs);
+        expect(settled).toBe(timedOut);
+      }
+      resumeAuth.resolve();
+      const data = await result;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(data.resolvedDefault).toEqual(
+        timedOut
+          ? { provider: "anthropic", model: "claude-opus-4-5" }
+          : { provider: "openai", model: "gpt-5.6-luna" },
+      );
+      expect(data.providers).toEqual([timedOut ? "anthropic" : "openai"]);
+      expect(data.modelNames.has("anthropic/claude-opus-4-5")).toBe(false);
+      expect(data.modelNames.get("openai/gpt-5.6-luna")).toBe(
+        timedOut ? undefined : "Current model",
+      );
+      expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledTimes(timedOut ? 0 : 1);
+    },
+  );
+
   it.each([false, true])(
     "projects prepared external OAuth with explicit exclusion=%s",
     async (excluded) => {
