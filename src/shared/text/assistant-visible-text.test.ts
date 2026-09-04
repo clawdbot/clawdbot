@@ -295,6 +295,24 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText(input, input);
     });
 
+    it("strips GLM-style <tool_call>exec<arg_key> shadow XML (#61645)", () => {
+      expectVisibleText(
+        "<tool_call>exec<arg_key>command</arg_key><arg_value>cd /home/hiiy/.openclaw && gh pr list --repo openclaw/openclaw --limit 10 --state open</arg_value><arg_key>timeout</arg_key><arg_value>30</arg_value></tool_call>",
+        "",
+      );
+      expectVisibleText(
+        "Checking.\n<tool_call>read<arg_key>path</arg_key><arg_value>/tmp/x</arg_value></tool_call>",
+        "Checking.\n",
+      );
+    });
+
+    it("strips dangling <tool_call> followed by <arg_key> to end", () => {
+      expectVisibleText(
+        "Checking.\n<tool_call>\n<arg_key>name</arg_key>\n<arg_value>read",
+        "Checking.\n",
+      );
+    });
+
     it("strips Qwen-style <tool_call> with nested <function=...> XML", () => {
       expectVisibleText(
         "prefix\n<tool_call><function=read><parameter=path>/home/user</parameter></function></tool_call>\nsuffix",
@@ -876,6 +894,17 @@ describe("sanitizeAssistantVisibleText", () => {
     ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("strips GLM-style <tool_call>exec<arg_key> shadow XML on the delivery path (#61645)", () => {
+    expect(
+      sanitizeAssistantVisibleText(
+        "<tool_call>exec<arg_key>command</arg_key><arg_value>cd /home/hiiy/.openclaw && gh pr list --repo openclaw/openclaw --limit 10 --state open</arg_value><arg_key>timeout</arg_key><arg_value>30</arg_value></tool_call>",
+      ),
+    ).toBe("");
+    expect(sanitizeAssistantVisibleText("Use <tool_call><arg> literally.")).toBe(
+      "Use <tool_call><arg> literally.",
+    );
   });
 
   it("strips adjacent plural function-call XML on the delivery path", () => {
