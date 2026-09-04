@@ -390,6 +390,11 @@ const PROVIDER_REQUEST_COPY = {
   "provider-internal-503": PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
 } satisfies Record<ProviderRequestFacet, string>;
 
+/** Shared user copy for provider-request facets, including structured refusal display. */
+export function resolveProviderRequestFacetUserMessage(facet: ProviderRequestFacet): string {
+  return PROVIDER_REQUEST_COPY[facet];
+}
+
 function renderProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;

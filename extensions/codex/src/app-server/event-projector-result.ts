@@ -6,11 +6,16 @@ import {
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
   attemptTerminal,
   type AttemptFailureSource,
   type EmbeddedRunAttemptResult,
 } from "./attempt-terminal.js";
+import {
+  applyCodexBiologicalRiskRefusal,
+  readCodexBiologicalRiskPolicyMessage,
+} from "./biological-risk-refusal.js";
 import type { CodexAssistantProjection } from "./event-projector-assistant.js";
 import type { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import type { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
@@ -127,19 +132,53 @@ export function buildCodexAttemptResult(
     input.recordSynthesizedMissingToolResultError(synthesizedMissingToolResultError);
     promptErrorSource = promptErrorSource ?? "prompt";
   }
+  const turnFailed = input.completedTurn?.status === "failed";
+  const candidatePromptError =
+    input.promptError ??
+    storedMissingToolResultError ??
+    (turnFailed ? (input.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
+  const biologicalRiskMessage = readCodexBiologicalRiskPolicyMessage(candidatePromptError);
+  // Biological-policy refusals are terminal provider_refusal outcomes. Keep them
+  // out of promptError so unrecognized-error fallback cannot advance candidates.
+  const promptError = biologicalRiskMessage ? null : candidatePromptError;
+  if (biologicalRiskMessage) {
+    promptErrorSource = null;
+  }
   const assistantMessageOptions = {
     tokenUsage: projectedUsage,
     aborted: input.aborted,
-    promptError: input.promptError,
+    promptError: biologicalRiskMessage ?? input.promptError,
   };
-  const lastAssistant = assistantTexts.length
+  let lastAssistant: AssistantMessage | undefined = assistantTexts.length
     ? input.assistantProjection.createAssistantMessage(
         assistantTexts.join("\n\n"),
         assistantMessageOptions,
       )
     : undefined;
-  const currentAttemptAssistant =
+  let currentAttemptAssistant =
     input.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
+  if (biologicalRiskMessage) {
+    const provider =
+      lastAssistant?.provider ??
+      currentAttemptAssistant?.provider ??
+      input.runParams.provider ??
+      input.runParams.model?.provider ??
+      "openai";
+    const refusalBase =
+      lastAssistant ??
+      currentAttemptAssistant ??
+      input.assistantProjection.createAssistantMessage("", {
+        tokenUsage: projectedUsage,
+        aborted: input.aborted,
+        promptError: biologicalRiskMessage,
+      });
+    const refusalAssistant = applyCodexBiologicalRiskRefusal(refusalBase, {
+      provider,
+      rawMessage: biologicalRiskMessage,
+    });
+    lastAssistant = refusalAssistant;
+    currentAttemptAssistant = refusalAssistant;
+  }
   // Each snapshot entry is tagged with a stable mirror identity of the
   // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
   // from this identity rather than from snapshot position or content
@@ -162,18 +201,17 @@ export function buildCodexAttemptResult(
     toolMessages: input.toolTranscriptProjection.transcriptMessages,
     lastAssistant,
   });
-  const turnFailed = input.completedTurn?.status === "failed";
-  const promptError =
-    input.promptError ??
-    storedMissingToolResultError ??
-    (turnFailed ? (input.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
-  const agentHarnessResultClassification = classifyAgentHarnessTerminalOutcome({
-    assistantTexts,
-    reasoningText,
-    planText,
-    promptError,
-    turnCompleted: Boolean(input.completedTurn),
-  });
+  // Skip empty-output harness classification for policy refusals: clearing
+  // promptError would otherwise look like a fallbackable empty completion.
+  const agentHarnessResultClassification = biologicalRiskMessage
+    ? undefined
+    : classifyAgentHarnessTerminalOutcome({
+        assistantTexts,
+        reasoningText,
+        planText,
+        promptError,
+        turnCompleted: Boolean(input.completedTurn),
+      });
   const toolMetas = input.toolProgressProjection.toolMetas;
   const hadPotentialSideEffects =
     input.toolTelemetry.didSendViaMessagingTool ||

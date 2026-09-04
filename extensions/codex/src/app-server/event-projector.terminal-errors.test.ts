@@ -74,6 +74,82 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
+  it("normalizes biological-policy app-server errors into provider_refusal without promptError", async () => {
+    const projector = await createProjector();
+    const message =
+      "This content was flagged for possible biological risk. If this seems wrong, try rephrasing your request.";
+
+    await projector.handleNotification(
+      forCurrentTurn("error", {
+        error: {
+          message,
+          codexErrorInfo: "other",
+          additionalDetails: null,
+        },
+        willRetry: false,
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: null,
+      promptErrorSource: null,
+    });
+    expect(result.agentHarnessResultClassification).toBeUndefined();
+    expect(result.lastAssistant).toMatchObject({
+      stopReason: "error",
+      errorMessage: message,
+      diagnostics: [
+        expect.objectContaining({
+          type: "provider_refusal",
+          details: expect.objectContaining({
+            provider: "openai",
+            category: "biological_risk",
+          }),
+        }),
+      ],
+    });
+    expect(result.currentAttemptAssistant).toEqual(result.lastAssistant);
+  });
+
+  it("normalizes biological-policy failed turns into provider_refusal without promptError", async () => {
+    const projector = await createProjector();
+    const message = "This content was flagged for possible biological risk.";
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          error: {
+            message,
+            codexErrorInfo: "other",
+            additionalDetails: null,
+          },
+          items: [],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: null,
+      promptErrorSource: null,
+    });
+    expect(result.lastAssistant).toMatchObject({
+      stopReason: "error",
+      errorMessage: message,
+      diagnostics: [
+        expect.objectContaining({
+          type: "provider_refusal",
+          details: expect.objectContaining({ category: "biological_risk" }),
+        }),
+      ],
+    });
+  });
+
   it("keeps sparse successful bash output eligible for the no-visible-answer guard", async () => {
     const projector = await createProjector();
 

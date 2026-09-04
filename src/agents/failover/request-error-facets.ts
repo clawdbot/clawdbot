@@ -10,12 +10,17 @@ export type ProviderRequestFacet =
 
 const BIOLOGICAL_RISK_PROVIDER_PREFIX = "this content was flagged for possible biological risk.";
 
+/** True when provider text matches the stable Codex/OpenAI biological-policy refusal prefix. */
+export function isBiologicalRiskProviderMessage(message: string): boolean {
+  return normalizeLowercaseStringOrEmpty(message).startsWith(BIOLOGICAL_RISK_PROVIDER_PREFIX);
+}
+
 /** Classify copy-sensitive provider-request facts that are finer than FailoverReason. */
 export function classifyProviderRequestFacets(signal: FailoverSignal): ProviderRequestFacet | null {
   const message = signal.message ?? "";
   const lower = normalizeLowercaseStringOrEmpty(message);
   // Codex/OpenAI bio_policy safety block — stable prefix, non-retryable, session-preserving.
-  if (lower.startsWith(BIOLOGICAL_RISK_PROVIDER_PREFIX)) {
+  if (isBiologicalRiskProviderMessage(message)) {
     return "biological-risk";
   }
   const genericProviderError =

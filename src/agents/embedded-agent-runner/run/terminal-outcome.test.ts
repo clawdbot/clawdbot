@@ -57,6 +57,15 @@ describe("embedded run attempt terminal outcome", () => {
         "The provider refused this request (category: cyber). Revise the request and try again.",
     },
     {
+      name: "biological-risk refusal copy",
+      refusal: true,
+      category: "biological_risk",
+      errorMessage:
+        "This content was flagged for possible biological risk. If this seems wrong, try rephrasing your request.",
+      expected:
+        "⚠️ The model provider blocked this turn due to its biological-risk policy. Your current session and conversation context remain intact — rephrase your request, or select another approved model.",
+    },
+    {
       name: "untrusted refusal category",
       refusal: true,
       category: "cyber\nProvider detail.",
@@ -68,27 +77,30 @@ describe("embedded run attempt terminal outcome", () => {
       category: undefined,
       expected: "The provider refused this request. Revise the request and try again.",
     },
-  ])("projects $name without exposing refusal explanations", ({ refusal, category, expected }) => {
-    const assistant: AssistantMessage = {
-      ...makeAssistant("error"),
-      errorMessage: "Provider detail.",
-      diagnostics: refusal
-        ? [
-            {
-              type: "provider_refusal",
-              timestamp: 0,
-              details: { category, explanation: "Provider detail." },
-            },
-          ]
-        : undefined,
-    };
-    const original = structuredClone(assistant);
+  ])(
+    "projects $name without exposing refusal explanations",
+    ({ refusal, category, expected, errorMessage }) => {
+      const assistant: AssistantMessage = {
+        ...makeAssistant("error"),
+        errorMessage: errorMessage ?? "Provider detail.",
+        diagnostics: refusal
+          ? [
+              {
+                type: "provider_refusal",
+                timestamp: 0,
+                details: { category, explanation: "Provider detail." },
+              },
+            ]
+          : undefined,
+      };
+      const original = structuredClone(assistant);
 
-    expect(
-      resolveEmbeddedRunAttemptTerminalOutcome({ attempt: makeAttempt(), assistant }),
-    ).toMatchObject({ reason: "failed", status: "error", error: expected });
-    expect(assistant).toEqual(original);
-  });
+      expect(
+        resolveEmbeddedRunAttemptTerminalOutcome({ attempt: makeAttempt(), assistant }),
+      ).toMatchObject({ reason: "failed", status: "error", error: expected });
+      expect(assistant).toEqual(original);
+    },
+  );
 
   it.each([
     {

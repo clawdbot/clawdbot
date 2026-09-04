@@ -113,3 +113,37 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     },
   );
 });
+
+describe("formatAssistantErrorText biological-risk provider_refusal", () => {
+  it("prefers curated biological-risk copy over generic refusal text", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [],
+      api: "openai-chatgpt-responses" as const,
+      provider: "openai",
+      model: "gpt-5.4-codex",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error" as const,
+      errorMessage:
+        "This content was flagged for possible biological risk. If this seems wrong, try rephrasing your request.",
+      timestamp: 0,
+      diagnostics: [
+        {
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: "openai", category: "biological_risk" },
+        },
+      ],
+    };
+    expect(formatAssistantErrorText(msg)).toContain("biological-risk policy");
+    expect(formatAssistantErrorText(msg)).not.toMatch(/\/new\b/);
+    expect(formatUserFacingAssistantErrorText(msg)).toContain("biological-risk policy");
+  });
+});
