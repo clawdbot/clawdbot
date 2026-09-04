@@ -59,10 +59,20 @@
       "types": "./dist/websocket-data.d.mts",
       "import": "./dist/websocket-data.mjs",
       "default": "./dist/websocket-data.mjs"
+    },
+    "./model": {
+      "types": "./dist/model/index.d.mts",
+      "import": "./dist/model/index.mjs",
+      "default": "./dist/model/index.mjs"
+    },
+    "./model/session-event-refresh": {
+      "types": "./dist/model/session-event-refresh.d.mts",
+      "import": "./dist/model/session-event-refresh.mjs",
+      "default": "./dist/model/session-event-refresh.mjs"
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/scope-upgrade.ts src/timeouts.ts src/websocket-data.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/scope-upgrade.ts src/timeouts.ts src/websocket-data.ts src/model/index.ts src/model/session-event-refresh.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",

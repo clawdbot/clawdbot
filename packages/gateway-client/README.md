@@ -165,3 +165,123 @@ from `@openclaw/gateway-protocol`, not from bundled implementation paths.
   logging stay host-owned through `GatewayClientHostDeps`.
 - Protocol changes are additive first. Incompatible changes require an explicit
   wire-version decision and coordinated server/client follow-through.
+
+## Higher-level control model (`@openclaw/gateway-client/model`)
+
+Framework-neutral state and command projections above
+`@openclaw/gateway-client`.
+
+The proposed public model subpaths own connection lifecycle, immutable session
+catalog snapshots, OC2 conversation projections, and OC3 renderer-neutral UI
+artifact projections. They do not include renderer registries or framework
+adapters. The `./model` subpaths remain review-gated until RFC 0029 accepts
+their public compatibility and release ownership.
+
+## Bind a Gateway client
+
+Hosts adapt their existing Gateway connection to `ControlModelGatewayBinding`:
+
+```ts
+import { createControlModel } from "@openclaw/gateway-client/model";
+
+const model = createControlModel({
+  gateway: {
+    getConnectionSnapshot: () => connectionSnapshot,
+    subscribeConnection: (listener) => connectionStore.subscribe(listener),
+    subscribeSessionCatalogInvalidations: (listener) =>
+      sessionCatalogInvalidations.subscribe(listener),
+    subscribeEvents: (listener) => {
+      const connectionEpoch = connectionSnapshot.epoch;
+      return gateway.subscribeEvents((frame) => listener({ ...frame, connectionEpoch }));
+    },
+    getMessageSubscriptionCoordinator: () =>
+      getGatewaySessionMessageSubscriptionCoordinator(gateway, {
+        keysEquivalent: areHostSessionKeysEquivalent,
+      }),
+    request: (method, params, options) => gateway.request(method, params, options),
+  },
+});
+
+model.start();
+const unsubscribe = model.subscribe(() => {
+  render(model.getSnapshot());
+});
+```
+
+The binding supplies monotonically increasing connection epochs. A response
+captured under a retired epoch never replaces state from the current
+connection.
+
+The invalidation binding remains responsible for the session-catalog
+subscription and authorized `sessions.changed` invalidations. The host injects
+the canonical Gateway Client coordinator already owned by its live connection;
+Control Model acquires and releases only its own targeted leases and never
+resets that shared coordinator. The host must retire and replace the coordinator
+before publishing a new connection epoch.
+
+`subscribeEvents` adapts ordinary protocol `EventFrame` values at the
+host-owned connection boundary. Capture that connection's epoch when installing
+the listener and stamp every forwarded frame, as above, so stale frames cannot
+cross a reconnect.
+
+## Session snapshots
+
+`model.refreshSessions()` requests one bounded `sessions.list` result and
+publishes a deeply frozen snapshot. Live `sessions.changed` events schedule a
+canonical refresh; they do not mutate rows directly. Control Model exports the
+same bounded refresh coordinator used by Control UI, so both surfaces preserve
+one trailing refresh after an in-flight request succeeds or fails.
+
+Subscriber notifications run in a coalesced microtask. A slow or throwing
+subscriber cannot block the Gateway event callback or prevent other subscribers
+from observing the current snapshot.
+
+Call `model.dispose()` before releasing the host connection.
+
+## OC2 conversations
+
+`model.conversation(sessionKey)` returns a stable, lazy
+`ControlModelConversation` handle. Handles expose immutable snapshots and
+coalesced subscriptions, plus `refreshHistory`, `loadMoreHistory`, `send`,
+`abort`, `resolveApproval`, `answerQuestion`, `cancelQuestion`, and `release`.
+An unsubscribed, operation-idle handle may be evicted and disposed when the
+finite inactive-handle bound is reached; subscribe to pin a handle or call
+`release` explicitly when it is no longer needed. Conversation history is
+reconciled through the canonical Gateway Client session projection, while live
+events are accepted only from the current connection epoch.
+`ControlModelCommandError` provides bounded, typed command failures.
+
+## OC3 UI artifacts
+
+Conversation snapshots expose bounded `artifacts` derived from canonical
+`details.uiArtifacts` metadata and existing sanitized MCP App/Canvas previews.
+Artifact identity and revision are independent of where a product renders the
+artifact. Unknown template URIs remain opaque data; this package never imports
+components or executes fallback content.
+
+Inline view data is validated as finite JSON. Deferred views contain descriptors
+only until the client selects one and calls `conversation.materializeView`.
+The optional `materializeArtifactView` host binding must re-enter the Gateway's
+session, extension, and policy checks and return only the exact selected view.
+The model rejects stale revisions and malformed or mismatched responses.
+Materialized data is scoped to the active Gateway connection epoch: disconnect
+or epoch replacement retires it, and reconnecting clients must request a fresh
+authorized materialization.
+
+Renderer registration, schema validation beyond the wire bounds, component
+construction, placement, and user selection remain host-owned. MCP App and
+Canvas fallback descriptors are explicit and inert; adopters must continue to
+use the existing sandbox, CSP, expiry, and authorization contracts to render
+them.
+
+Hosts must implement the framework-neutral event seam:
+
+```ts
+subscribeEvents(listener) => () => void
+```
+
+Each frame contains `event`, `payload`, and the source `connectionEpoch`, with
+optional `seq` and explicit `gap`. The host owns connection epochs; the model
+rejects frames from retired epochs and releases only its own leases. The host
+retires and replaces the shared Gateway Client message subscription coordinator
+when a connection is replaced.
