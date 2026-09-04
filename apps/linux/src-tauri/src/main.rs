@@ -425,7 +425,7 @@ impl DesktopState {
         *self.inner.tray.lock().expect("tray mutex poisoned") = Some(handles);
     }
 
-    pub(crate) fn set_quickchat_shortcut_checked(&self, checked: bool) {
+    fn with_tray(&self, update: impl FnOnce(&tray::TrayHandles)) {
         if let Some(tray) = self
             .inner
             .tray
@@ -433,8 +433,16 @@ impl DesktopState {
             .expect("tray mutex poisoned")
             .as_ref()
         {
-            tray.set_quickchat_shortcut_checked(checked);
+            update(tray);
         }
+    }
+
+    pub(crate) fn set_quickchat_shortcut_checked(&self, checked: bool) {
+        self.with_tray(|tray| tray.set_quickchat_shortcut_checked(checked));
+    }
+
+    pub(crate) fn set_update_action(&self, action: updater::UpdateAction) {
+        self.with_tray(|tray| tray.set_update_action(action));
     }
 
     pub fn connect(&self, app: &AppHandle) -> Result<GatewaySnapshot, String> {
@@ -776,15 +784,7 @@ impl DesktopState {
     }
 
     fn update_tray(&self, snapshot: &GatewaySnapshot) {
-        if let Some(tray) = self
-            .inner
-            .tray
-            .lock()
-            .expect("tray mutex poisoned")
-            .as_ref()
-        {
-            tray.update(snapshot);
-        }
+        self.with_tray(|tray| tray.update(snapshot));
     }
 
     fn show_missing_cli(
@@ -833,15 +833,7 @@ impl DesktopState {
             .lock()
             .expect("pending approval mutex poisoned")
             .update(&pending);
-        if let Some(tray) = self
-            .inner
-            .tray
-            .lock()
-            .expect("tray mutex poisoned")
-            .as_ref()
-        {
-            tray.update_pending_count(diff.count);
-        }
+        self.with_tray(|tray| tray.update_pending_count(diff.count));
         if !main_window(app).is_ok_and(|window| matches!(window.is_focused(), Ok(false))) {
             return;
         }

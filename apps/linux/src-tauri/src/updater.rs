@@ -35,14 +35,23 @@ enum TerminalResultKind {
     PackageUpdateAvailable,
     UpdateReady,
     UpdateFailed,
+    RelaunchFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResultDestination {
     None,
+    Notification,
     Webview,
     WebviewAndNotificationWhenUnfocused,
-    WebviewAndNotification,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum UpdateAction {
+    #[default]
+    Unavailable,
+    OpenDownloadPage,
+    RestartToUpdate,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,6 +65,7 @@ enum Platform {
 
 #[derive(Default)]
 pub struct UpdaterState {
+    action: Mutex<UpdateAction>,
     auto_check_started: AtomicBool,
     check_in_progress: Arc<AtomicBool>,
     deferred_update: Mutex<Option<DeferredUpdate>>,
@@ -159,7 +169,7 @@ pub fn relaunch(app: AppHandle) {
                 .lock()
                 .expect("deferred updater state lock poisoned")
                 .replace(deferred);
-            emit_error(&app, error);
+            deliver_error(&app, true, TerminalResultKind::RelaunchFailed, error);
         }
     }
 }
@@ -171,11 +181,28 @@ pub fn open_release_page(app: AppHandle) -> Result<(), String> {
         .map_err(|error| format!("Could not open release page: {error}"))
 }
 
+pub(crate) fn perform_action(app: &AppHandle) {
+    let action = *app
+        .state::<UpdaterState>()
+        .action
+        .lock()
+        .expect("updater action state lock poisoned");
+    match action {
+        UpdateAction::Unavailable => {}
+        UpdateAction::OpenDownloadPage => {
+            if let Err(error) = open_release_page(app.clone()) {
+                crate::notify::notify(app, "OpenClaw", &error);
+            }
+        }
+        UpdateAction::RestartToUpdate => relaunch(app.clone()),
+    }
+}
+
 // A manual (tray/command) check surfaces the "up to date" and check-error
 // notices; the launch auto-check runs silent. Manual intent is recorded on the
 // shared state before racing for the single-flight guard, so a manual click
 // that lands while the silent auto-check is running still gets a response
-// (`should_notify` reads it). Once an update is found, download
+// (`manual_requested` reads it). Once an update is found, download
 // progress/ready/errors always surface, since the user has been told an update
 // is coming.
 async fn run_check(app: AppHandle, manual: bool) {
@@ -236,6 +263,7 @@ async fn run_check(app: AppHandle, manual: bool) {
         notes: update.body.clone(),
     };
 
+    set_action(&app, UpdateAction::Unavailable);
     let install_kind = install_kind();
     if install_kind == InstallKind::NotifyOnly {
         let version = info.version.clone();
@@ -304,20 +332,57 @@ fn result_delivery(
     main_content_is_remote: bool,
     result: TerminalResultKind,
 ) -> ResultDestination {
-    if manual && main_content_is_remote {
-        return ResultDestination::WebviewAndNotification;
+    if !manual
+        && matches!(
+            result,
+            TerminalResultKind::NotAvailable | TerminalResultKind::CheckFailed
+        )
+    {
+        return ResultDestination::None;
+    }
+    if main_content_is_remote {
+        return ResultDestination::Notification;
     }
     match result {
-        TerminalResultKind::NotAvailable | TerminalResultKind::CheckFailed if !manual => {
-            ResultDestination::None
-        }
         TerminalResultKind::PackageUpdateAvailable | TerminalResultKind::UpdateReady => {
             ResultDestination::WebviewAndNotificationWhenUnfocused
         }
         TerminalResultKind::NotAvailable
         | TerminalResultKind::CheckFailed
-        | TerminalResultKind::UpdateFailed => ResultDestination::Webview,
+        | TerminalResultKind::UpdateFailed
+        | TerminalResultKind::RelaunchFailed => ResultDestination::Webview,
     }
+}
+
+fn terminal_action(result: TerminalResultKind) -> Option<UpdateAction> {
+    match result {
+        TerminalResultKind::NotAvailable => Some(UpdateAction::Unavailable),
+        TerminalResultKind::CheckFailed => None,
+        TerminalResultKind::PackageUpdateAvailable | TerminalResultKind::UpdateFailed => {
+            Some(UpdateAction::OpenDownloadPage)
+        }
+        TerminalResultKind::UpdateReady | TerminalResultKind::RelaunchFailed => {
+            Some(UpdateAction::RestartToUpdate)
+        }
+    }
+}
+
+fn set_action(app: &AppHandle, action: UpdateAction) {
+    let state = app.state::<UpdaterState>();
+    if action == UpdateAction::Unavailable {
+        // A new available version or a definitive no-update result supersedes old Windows bytes.
+        // Check failures never enter this path, so a ready retry survives transient failures.
+        state
+            .deferred_update
+            .lock()
+            .expect("deferred updater state lock poisoned")
+            .take();
+    }
+    *state
+        .action
+        .lock()
+        .expect("updater action state lock poisoned") = action;
+    app.state::<crate::DesktopState>().set_update_action(action);
 }
 
 fn begin_check(app: &AppHandle) -> Option<CheckGuard> {
@@ -395,19 +460,25 @@ fn deliver_result<S: Serialize + Clone>(
     payload: S,
     notification_body: &str,
 ) {
+    if let Some(action) = terminal_action(result) {
+        set_action(app, action);
+    }
     let window = main_window(app);
     let destination = result_delivery(manual, main_content_is_remote(app, window.as_ref()), result);
-    if !matches!(destination, ResultDestination::None) {
+    if matches!(
+        destination,
+        ResultDestination::Webview | ResultDestination::WebviewAndNotificationWhenUnfocused
+    ) {
         if let Some(window) = window.as_ref() {
             let _ = window.emit(event, payload);
         }
     }
     let notify = match destination {
         ResultDestination::None | ResultDestination::Webview => false,
+        ResultDestination::Notification => true,
         ResultDestination::WebviewAndNotificationWhenUnfocused => window
             .as_ref()
             .is_some_and(|window| matches!(window.is_focused(), Ok(false))),
-        ResultDestination::WebviewAndNotification => true,
     };
     if notify {
         crate::notify::notify(app, "OpenClaw", notification_body);
@@ -435,20 +506,10 @@ fn deliver_error(
 fn error_notification_body(result: TerminalResultKind, message: &str) -> String {
     let prefix = match result {
         TerminalResultKind::CheckFailed => "Update check failed",
-        TerminalResultKind::UpdateFailed => "Update failed",
+        TerminalResultKind::UpdateFailed | TerminalResultKind::RelaunchFailed => "Update failed",
         _ => unreachable!("only error results have error notification copy"),
     };
     format!("{prefix}: {message}")
-}
-
-fn emit_error(app: &AppHandle, error: impl std::fmt::Display) {
-    emit(
-        app,
-        ERROR_EVENT,
-        UpdateError {
-            message: error.to_string(),
-        },
-    );
 }
 
 fn ready_notification_body(version: &str) -> String {
@@ -524,53 +585,154 @@ mod tests {
             TerminalResultKind::PackageUpdateAvailable,
             TerminalResultKind::UpdateReady,
             TerminalResultKind::UpdateFailed,
+            TerminalResultKind::RelaunchFailed,
         ] {
             assert_eq!(
-                result_delivery(true, true, result),
-                ResultDestination::WebviewAndNotification,
-                "manual {result:?} must have a visible destination when the WebView is remote"
+                observable_delivery(result_delivery(true, true, result)),
+                (false, NotificationDelivery::Always),
+                "manual {result:?} must use native-only delivery when the WebView is remote"
             );
         }
     }
 
     #[test]
-    fn background_result_delivery_preserves_existing_behavior() {
-        let expected = [
-            (TerminalResultKind::NotAvailable, ResultDestination::None),
-            (TerminalResultKind::CheckFailed, ResultDestination::None),
+    fn background_result_delivery_uses_a_compatible_visible_sink() {
+        let local_expected = [
+            (
+                TerminalResultKind::NotAvailable,
+                (false, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::CheckFailed,
+                (false, NotificationDelivery::Never),
+            ),
             (
                 TerminalResultKind::PackageUpdateAvailable,
-                ResultDestination::WebviewAndNotificationWhenUnfocused,
+                (true, NotificationDelivery::WhenUnfocused),
             ),
             (
                 TerminalResultKind::UpdateReady,
-                ResultDestination::WebviewAndNotificationWhenUnfocused,
+                (true, NotificationDelivery::WhenUnfocused),
             ),
-            (TerminalResultKind::UpdateFailed, ResultDestination::Webview),
+            (
+                TerminalResultKind::UpdateFailed,
+                (true, NotificationDelivery::Never),
+            ),
         ];
-        for main_content_is_remote in [false, true] {
-            for (result, destination) in expected {
+        let remote_expected = [
+            (
+                TerminalResultKind::NotAvailable,
+                (false, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::CheckFailed,
+                (false, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::PackageUpdateAvailable,
+                (false, NotificationDelivery::Always),
+            ),
+            (
+                TerminalResultKind::UpdateReady,
+                (false, NotificationDelivery::Always),
+            ),
+            (
+                TerminalResultKind::UpdateFailed,
+                (false, NotificationDelivery::Always),
+            ),
+        ];
+        for (main_content_is_remote, expected) in [(false, local_expected), (true, remote_expected)]
+        {
+            for (result, observable) in expected {
                 assert_eq!(
-                    result_delivery(false, main_content_is_remote, result),
-                    destination
+                    observable_delivery(result_delivery(false, main_content_is_remote, result)),
+                    observable
                 );
             }
         }
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum NotificationDelivery {
+        Never,
+        WhenUnfocused,
+        Always,
+    }
+
+    fn observable_delivery(destination: ResultDestination) -> (bool, NotificationDelivery) {
+        match destination {
+            ResultDestination::None => (false, NotificationDelivery::Never),
+            ResultDestination::Notification => (false, NotificationDelivery::Always),
+            ResultDestination::Webview => (true, NotificationDelivery::Never),
+            ResultDestination::WebviewAndNotificationWhenUnfocused => {
+                (true, NotificationDelivery::WhenUnfocused)
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_results_own_the_matching_native_action_lifecycle() {
+        let expected = [
+            (
+                TerminalResultKind::NotAvailable,
+                Some(UpdateAction::Unavailable),
+            ),
+            (TerminalResultKind::CheckFailed, None),
+            (
+                TerminalResultKind::PackageUpdateAvailable,
+                Some(UpdateAction::OpenDownloadPage),
+            ),
+            (
+                TerminalResultKind::UpdateReady,
+                Some(UpdateAction::RestartToUpdate),
+            ),
+            (
+                TerminalResultKind::UpdateFailed,
+                Some(UpdateAction::OpenDownloadPage),
+            ),
+            (
+                TerminalResultKind::RelaunchFailed,
+                Some(UpdateAction::RestartToUpdate),
+            ),
+        ];
+        for (result, action) in expected {
+            assert_eq!(terminal_action(result), action, "{result:?}");
+        }
+    }
+
     #[test]
     fn manual_local_results_keep_the_in_page_delivery_path() {
-        for result in [
-            TerminalResultKind::NotAvailable,
-            TerminalResultKind::CheckFailed,
-            TerminalResultKind::PackageUpdateAvailable,
-            TerminalResultKind::UpdateReady,
-            TerminalResultKind::UpdateFailed,
-        ] {
-            assert!(!matches!(
-                result_delivery(true, false, result),
-                ResultDestination::None
-            ));
+        let expected = [
+            (
+                TerminalResultKind::NotAvailable,
+                (true, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::CheckFailed,
+                (true, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::PackageUpdateAvailable,
+                (true, NotificationDelivery::WhenUnfocused),
+            ),
+            (
+                TerminalResultKind::UpdateReady,
+                (true, NotificationDelivery::WhenUnfocused),
+            ),
+            (
+                TerminalResultKind::UpdateFailed,
+                (true, NotificationDelivery::Never),
+            ),
+            (
+                TerminalResultKind::RelaunchFailed,
+                (true, NotificationDelivery::Never),
+            ),
+        ];
+        for (result, observable) in expected {
+            assert_eq!(
+                observable_delivery(result_delivery(true, false, result)),
+                observable
+            );
         }
     }
 }
