@@ -407,6 +407,41 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: false,
     },
     {
+      label: "an allow glob and a deny glob covering the same memos tools",
+      tools: { allow: ["memos__read*"], deny: ["memos__read*"] },
+      visible: false,
+    },
+    {
+      label: "an allow glob and a deny glob covering different memos tools",
+      tools: { allow: ["memos__read*"], deny: ["memos__write*"] },
+      visible: true,
+    },
+    {
+      label: "an allow glob wider than the namespace under a deny covering it",
+      tools: { allow: ["mem*"], deny: ["memos__*"] },
+      visible: false,
+    },
+    {
+      label: "a repeated-wildcard deny covering the whole memos namespace",
+      tools: { profile: "coding", deny: ["memos__**"] },
+      visible: false,
+    },
+    {
+      label: "a deny glob that would catch a synthetic name but not the memos tools",
+      tools: { profile: "coding", deny: ["memos__t*"] },
+      visible: true,
+    },
+    {
+      label: "an exact deny of a memos tool name that does not exist",
+      tools: { profile: "coding", deny: ["memos__tool"] },
+      visible: true,
+    },
+    {
+      label: "a runtime allow glob reaching memos tools",
+      toolsAllow: ["memos__read*"],
+      visible: true,
+    },
+    {
       label: "an allow and a deny naming the same memos tool",
       tools: { allow: ["memos__read_note"], deny: ["memos__read_note"] },
       visible: false,

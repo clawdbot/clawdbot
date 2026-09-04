@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
+import { MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS } from "./tool-search-types.js";
 import {
   applyToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -66,6 +67,22 @@ function makeOutageCatalog(): McpToolCatalog {
       },
     ],
   };
+}
+
+/**
+ * The outage payload at its caps: eight failed servers, safe names at the
+ * 30-character sanitized prefix limit, redacted errors made of JSON-escaped
+ * control characters (six serialized characters each).
+ */
+function makeEscapedOutagesCatalog(): McpToolCatalog {
+  const catalog = makeOutageCatalog();
+  catalog.diagnostics = Array.from({ length: 8 }, (_, index) => ({
+    serverName: `down${index}`,
+    safeServerName: `down${index}`.padEnd(30, "d"),
+    launchSummary: LAUNCH_SUMMARY,
+    message: "\u0001".repeat(200),
+  }));
+  return catalog;
 }
 
 async function createControls(catalog: McpToolCatalog, mode: "tools" | "code" = "tools") {
@@ -193,6 +210,30 @@ describe("Tool Search with an unavailable MCP server", () => {
     );
     policy.apply();
     expect((await search.execute("search-open", { query: "memos" })).details).toMatchObject(outage);
+  });
+
+  it("keeps the outage payload inside the batch response cap at every limit", async () => {
+    const { control } = await createControls(makeEscapedOutagesCatalog());
+    // Sixteen queries filling the 512-byte batch text budget, none matching:
+    // nothing but the echoed queries and the outage payload remains to render.
+    const batch = await control(TOOL_SEARCH_RAW_TOOL_NAME).execute("search-batch-escaped", {
+      queries: Array.from({ length: 16 }, (_, index) => ({
+        query: `${index}`.padEnd(28, "q"),
+        limit: 1,
+      })),
+    });
+    const details = batch.details as {
+      results: Array<{ candidates: unknown[] }>;
+      unavailableMcpServers: Array<{ error: string }>;
+    };
+    expect(details.results.every((result) => result.candidates.length === 0)).toBe(true);
+    expect(details.unavailableMcpServers).toHaveLength(8);
+    for (const server of details.unavailableMcpServers) {
+      expect(JSON.stringify(server.error).length - 2).toBeLessThanOrEqual(160);
+    }
+    expect(JSON.stringify(details, null, 2).length).toBeLessThanOrEqual(
+      MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
+    );
   });
 
   it("carries the outage on a code mode exec whose only action is a search", async () => {

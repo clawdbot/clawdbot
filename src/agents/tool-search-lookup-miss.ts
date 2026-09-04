@@ -21,7 +21,10 @@ import type {
 
 // Bounded model-visible text: one short entry per failed server, capped.
 const MAX_UNAVAILABLE_MCP_SERVERS = 8;
-const MAX_UNAVAILABLE_MCP_ERROR_CHARS = 200;
+// Serialized bound. Eight entries with 30-char safe names and this many error
+// chars, plus the note, fit under MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS even
+// when a batch echoes its full 512-byte query budget with no candidates.
+const MAX_UNAVAILABLE_MCP_ERROR_CHARS = 160;
 const MCP_CATALOG_ID_SERVER_RE = /^mcp:([^:]+):/u;
 
 export type UnavailableMcpServersNote = {
@@ -29,8 +32,17 @@ export type UnavailableMcpServersNote = {
   note: string;
 };
 
+/** Bounded by serialized length: JSON escaping inflates a control character up to sixfold. */
 function boundedFailure(diagnostic: McpToolCatalogDiagnostic): string {
-  return truncateUtf16Safe(diagnostic.message, MAX_UNAVAILABLE_MCP_ERROR_CHARS);
+  let text = truncateUtf16Safe(diagnostic.message, MAX_UNAVAILABLE_MCP_ERROR_CHARS);
+  for (
+    let over = JSON.stringify(text).length - 2 - MAX_UNAVAILABLE_MCP_ERROR_CHARS;
+    over > 0;
+    over = JSON.stringify(text).length - 2 - MAX_UNAVAILABLE_MCP_ERROR_CHARS
+  ) {
+    text = truncateUtf16Safe(text, text.length - Math.ceil(over / 6));
+  }
+  return text;
 }
 
 /** Search-result addition naming every recorded failed server; undefined when none failed. */

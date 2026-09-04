@@ -2,11 +2,7 @@
  * Runtime matcher for sandbox tool policies. Deny patterns always win, then
  * an empty allow list means "allow everything not denied".
  */
-import {
-  compileGlobPatterns,
-  matchesAnyGlobPattern,
-  mayMatchGlobWithPrefix,
-} from "./glob-pattern.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
   expandToolGroups,
@@ -101,44 +97,57 @@ export function isToolAllowedByPolicies(
   return policies.every((policy) => isToolAllowedByPolicyName(name, policy));
 }
 
+// Outside the sanitized tool-name alphabet (`[A-Za-z0-9_-]`), so a deny entry
+// can cover a witness only through a wildcard, never by a literal that happens
+// to spell the placeholder while missing the server's real tools.
+const NAMESPACE_WITNESS = "~";
+
+/** In-namespace tool name an allow entry could match; undefined when it cannot reach the namespace. */
+function namespaceWitness(entry: string, namespace: string): string | undefined {
+  const wildcard = entry.indexOf("*");
+  if (wildcard < 0) {
+    return entry.length > namespace.length && entry.startsWith(namespace) ? entry : undefined;
+  }
+  const head = entry.slice(0, wildcard);
+  const tail = entry.slice(wildcard + 1).replaceAll("*", NAMESPACE_WITNESS);
+  if (head.startsWith(namespace)) {
+    return `${head}${NAMESPACE_WITNESS}${tail}`;
+  }
+  return namespace.startsWith(head) ? `${namespace}${NAMESPACE_WITNESS}${tail}` : undefined;
+}
+
 /**
  * Whether layered policies could still admit some tool inside a namespace prefix
  * (an MCP `server__`) whose tool names are unknown after a failed catalog load.
- * Allow entries naming concrete tools are decided as tools, so deny wins over
- * them and layers must agree; where only globs reach the prefix the namespace
- * survives unless a deny wildcard covers every name under it.
+ * Every allow entry reaching the prefix stands in for a tool it could match, and
+ * the real matcher judges those witnesses with deny precedence across all layers,
+ * so `allow: ["memos__read*"]` plus `deny: ["memos__read*"]` hides the namespace
+ * exactly as it hides the tools. Globs that intersect only through names neither
+ * layer spells out yield no shared witness and hide the outage: the safe side.
  */
 export function policiesAdmitToolNamespace(
   prefix: string,
   policies: Array<SandboxToolPolicy | undefined>,
 ): boolean {
   const namespace = normalizeToolPolicyName(prefix);
-  const mayReach = (entry: string) =>
-    entry.includes("*")
-      ? mayMatchGlobWithPrefix(entry, namespace)
-      : entry.length > namespace.length && entry.startsWith(namespace);
-  const namedTools = new Set<string>();
+  const witnesses = new Set<string>();
   for (const policy of policies) {
     const allow = expandToolGroups(policy?.allow);
-    const reaching = allow.filter(mayReach);
-    if (allow.length > 0 && reaching.length === 0) {
+    if (allow.length === 0) {
+      continue;
+    }
+    const reaching = allow.flatMap(
+      (entry) => namespaceWitness(normalizeToolPolicyName(entry), namespace) ?? [],
+    );
+    if (reaching.length === 0) {
       return false;
     }
-    // A layer that reaches the prefix only through a glob cannot enumerate what
-    // the failed server might have exposed; one that names tools outright can.
-    if (reaching.length > 0 && !reaching.some((entry) => entry.includes("*"))) {
-      for (const entry of reaching) {
-        namedTools.add(entry);
-      }
+    for (const witness of reaching) {
+      witnesses.add(witness);
     }
   }
-  if (namedTools.size > 0) {
-    return [...namedTools].some((name) => isToolAllowedByPolicies(name, policies));
+  if (witnesses.size === 0) {
+    witnesses.add(`${namespace}${NAMESPACE_WITNESS}`);
   }
-  return !policies.some((policy) =>
-    expandToolGroups(policy?.deny).some(
-      (entry) =>
-        entry.indexOf("*") === entry.length - 1 && namespace.startsWith(entry.slice(0, -1)),
-    ),
-  );
+  return [...witnesses].some((name) => isToolAllowedByPolicies(name, policies));
 }
