@@ -2152,6 +2152,33 @@ struct ChatViewModelTests {
         }
     }
 
+    @Test @MainActor func `metadata changes enable and disable Swarm progress without reconnecting`() async throws {
+        let script = SwarmCapabilityScript([.value(false), .value(true), .value(false)])
+        var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
+        child.parentSessionKey = "main"
+        child.status = "running"
+        child.swarmGroupId = "swarm:main:turn-1"
+        let swarmChild = child
+        let transport = TestChatTransport(
+            historyResponses: [],
+            swarmEnabledHook: { _ in try await script.next() },
+            listChildSessionsHook: { _ in [swarmChild] })
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        await viewModel.refreshSwarmCapability()
+        #expect(viewModel.activeSwarmGroups.isEmpty)
+
+        viewModel.handleTransportEvent(.chatMetadataChanged)
+        try await waitUntil("Swarm becomes visible after enabling") {
+            await MainActor.run { !viewModel.activeSwarmGroups.isEmpty }
+        }
+
+        viewModel.handleTransportEvent(.chatMetadataChanged)
+        try await waitUntil("Swarm clears after disabling") {
+            await MainActor.run { viewModel.activeSwarmGroups.isEmpty }
+        }
+    }
+
     @Test @MainActor func `fresh Swarm lease rechecks capability before paging`() async {
         let script = SwarmCapabilityScript([.value(true), .value(false)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
