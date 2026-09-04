@@ -76,7 +76,7 @@ export function isUnrecognizedLease(result: SpawnResult, identifier: string): bo
 // Stop success needs exit 4 naming this lease as not found. The inspect classifier above is
 // wider on purpose: missing local claims, coordinator 404 warnings and exit 5 retries do not
 // prove the release finished (docs/gateway/cloud-workers.md, "Failed teardown stays retryable").
-export function isLeaseConfirmedAbsent(result: SpawnResult, identifier: string): boolean {
+function isLeaseConfirmedAbsent(result: SpawnResult, identifier: string): boolean {
   if (result.code !== 4) {
     return false;
   }

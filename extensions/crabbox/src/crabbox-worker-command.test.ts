@@ -1,10 +1,6 @@
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  isLeaseConfirmedAbsent,
-  stopCrabboxLease,
-  type CrabboxCommandRunner,
-} from "./crabbox-worker-command.js";
+import { stopCrabboxLease, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
 const LEASE_ID = "cbx_1caa6f6fd07c";
 
@@ -53,6 +49,11 @@ describe("stopCrabboxLease", () => {
       name: "exit 5 coder workspace not found",
       code: 5,
       stderr: `coder workspace "${LEASE_ID}" not found`,
+    },
+    {
+      name: "the not-found line on any exit code other than 4",
+      code: 5,
+      stderr: `lease/server not found: ${LEASE_ID}`,
     },
     {
       name: "coordinator lease 404 on exit 1",
@@ -105,14 +106,5 @@ describe("stopCrabboxLease", () => {
         }),
       ),
     ).rejects.toThrow("Crabbox stop did not exit normally (timeout)");
-  });
-});
-
-describe("isLeaseConfirmedAbsent", () => {
-  it("requires exit 4", () => {
-    const stderr = `lease/server not found: ${LEASE_ID}`;
-    expect(isLeaseConfirmedAbsent(commandResult({ code: 4, stderr }), LEASE_ID)).toBe(true);
-    expect(isLeaseConfirmedAbsent(commandResult({ code: 5, stderr }), LEASE_ID)).toBe(false);
-    expect(isLeaseConfirmedAbsent(commandResult({ code: 0, stderr }), LEASE_ID)).toBe(false);
   });
 });
