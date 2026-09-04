@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
-  DEFAULT_MINIMAX_MAX_TOKENS,
   MINIMAX_API_COST,
   MINIMAX_HOSTED_MODEL_ID,
 } from "./model-definitions.js";
@@ -11,6 +10,7 @@ import { MINIMAX_TEXT_MODEL_CATALOG } from "./provider-models.js";
 
 const MINIMAX_M3_CATALOG_CONTEXT_WINDOW = MINIMAX_TEXT_MODEL_CATALOG["MiniMax-M3"].contextWindow;
 const EXPECTED_DEFAULT_CONTEXT_WINDOW = 204800;
+const EXPECTED_DEFAULT_MAX_TOKENS = 131072;
 
 describe("minimax model definitions", () => {
   it("uses M3 as default hosted model", () => {
@@ -22,7 +22,9 @@ describe("minimax model definitions", () => {
     expect(buildMinimaxApiModelDefinition("MiniMax-Future").contextWindow).toBe(
       EXPECTED_DEFAULT_CONTEXT_WINDOW,
     );
-    expect(DEFAULT_MINIMAX_MAX_TOKENS).toBe(131072);
+    expect(buildMinimaxApiModelDefinition("MiniMax-M3").maxTokens).toBe(
+      EXPECTED_DEFAULT_MAX_TOKENS,
+    );
     expect(MINIMAX_API_COST).toEqual({
       input: 0.6,
       output: 2.4,
@@ -36,7 +38,7 @@ describe("minimax model definitions", () => {
       id: "MiniMax-M3",
       cost: MINIMAX_API_COST,
       contextWindow: MINIMAX_M3_CATALOG_CONTEXT_WINDOW,
-      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+      maxTokens: EXPECTED_DEFAULT_MAX_TOKENS,
     });
     expect(model).toEqual({
       compat: { codeMode: "preferred" },
@@ -44,7 +46,7 @@ describe("minimax model definitions", () => {
       cost: MINIMAX_API_COST,
       id: "MiniMax-M3",
       input: ["text", "image"],
-      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+      maxTokens: EXPECTED_DEFAULT_MAX_TOKENS,
       name: "MiniMax M3",
       reasoning: true,
     });
@@ -55,14 +57,14 @@ describe("minimax model definitions", () => {
       id: "MiniMax-M2.5",
       cost: MINIMAX_API_COST,
       contextWindow: EXPECTED_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+      maxTokens: EXPECTED_DEFAULT_MAX_TOKENS,
     });
     expect(model).toEqual({
       contextWindow: EXPECTED_DEFAULT_CONTEXT_WINDOW,
       cost: MINIMAX_API_COST,
       id: "MiniMax-M2.5",
       input: ["text"],
-      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+      maxTokens: EXPECTED_DEFAULT_MAX_TOKENS,
       name: "MiniMax MiniMax-M2.5",
       reasoning: false,
     });
@@ -72,7 +74,7 @@ describe("minimax model definitions", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M3");
     expect(model.cost).toEqual(MINIMAX_API_COST);
     expect(model.contextWindow).toBe(MINIMAX_M3_CATALOG_CONTEXT_WINDOW);
-    expect(model.maxTokens).toBe(DEFAULT_MINIMAX_MAX_TOKENS);
+    expect(model.maxTokens).toBe(EXPECTED_DEFAULT_MAX_TOKENS);
     expect(model.input).toEqual(["text", "image"]);
   });
 

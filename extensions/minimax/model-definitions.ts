@@ -8,7 +8,7 @@ export const MINIMAX_CN_API_BASE_URL = "https://api.minimaxi.com/anthropic";
 export const MINIMAX_HOSTED_MODEL_ID = MINIMAX_DEFAULT_MODEL_ID;
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
 const DEFAULT_MINIMAX_CONTEXT_WINDOW = 204800;
-export const DEFAULT_MINIMAX_MAX_TOKENS = 131072;
+const DEFAULT_MINIMAX_MAX_TOKENS = 131072;
 
 export const MINIMAX_API_COST = {
   input: 0.6,
@@ -54,8 +54,11 @@ export const MINIMAX_LM_STUDIO_COST = {
 };
 
 type MinimaxCatalogId = keyof typeof MINIMAX_TEXT_MODEL_CATALOG;
+type MinimaxTextModelDefinition = Omit<ModelDefinitionConfig, "input"> & {
+  input: Array<"text" | "image">;
+};
 
-export function resolveMinimaxApiCost(modelId: string): ModelDefinitionConfig["cost"] {
+function resolveMinimaxApiCost(modelId: string): ModelDefinitionConfig["cost"] {
   if (modelId === "MiniMax-M2.7") {
     return MINIMAX_M27_API_COST;
   }
@@ -78,7 +81,7 @@ export function buildMinimaxModelDefinition(params: {
   cost: ModelDefinitionConfig["cost"];
   contextWindow: number;
   maxTokens: number;
-}): ModelDefinitionConfig {
+}): MinimaxTextModelDefinition {
   const catalog = MINIMAX_TEXT_MODEL_CATALOG[params.id as MinimaxCatalogId];
   const compat = catalog && "compat" in catalog ? catalog.compat : undefined;
   return {
@@ -93,7 +96,7 @@ export function buildMinimaxModelDefinition(params: {
   };
 }
 
-export function buildMinimaxApiModelDefinition(modelId: string): ModelDefinitionConfig {
+export function buildMinimaxApiModelDefinition(modelId: string): MinimaxTextModelDefinition {
   return buildMinimaxModelDefinition({
     id: modelId,
     cost: resolveMinimaxApiCost(modelId),

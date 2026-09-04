@@ -352,31 +352,57 @@ describe("minimax provider hooks", () => {
     expect(model?.input).toEqual(["text", "image"]);
     expect(model?.name).toBe("MiniMax M3");
     expect(model?.reasoning).toBe(true);
+    expect(model?.compat).toEqual({ codeMode: "preferred" });
   });
 
-  it("resolves M3 through the dynamic model hook before agent discovery", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: minimaxProviderPlugin,
-      id: "minimax",
-      name: "MiniMax Provider",
-    });
-    const apiProvider = requireRegisteredProvider(providers, "minimax");
+  it.each(["minimax", "minimax-portal"] as const)(
+    "preserves M3 Code Mode metadata in the %s static catalog",
+    async (providerId) => {
+      const { providers } = await registerProviderPlugin({
+        plugin: minimaxProviderPlugin,
+        id: "minimax",
+        name: "MiniMax Provider",
+      });
+      const providerPlugin = requireRegisteredProvider(providers, providerId);
 
-    const model = apiProvider.resolveDynamicModel?.({
-      provider: "minimax",
-      modelId: "MiniMax-M3",
-      providerConfig: {},
-    } as never);
+      const catalog = await providerPlugin.staticCatalog?.run({ env: {}, config: {} } as never);
+      const provider =
+        catalog && "providers" in catalog ? catalog.providers[providerId] : undefined;
 
-    expect(model).toMatchObject({
-      provider: "minimax",
-      id: "MiniMax-M3",
-      api: "anthropic-messages",
-      baseUrl: "https://api.minimax.io/anthropic",
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-    });
-  });
+      expect(provider?.models.find((model) => model.id === "MiniMax-M3")?.compat).toEqual({
+        codeMode: "preferred",
+      });
+      expect(provider?.models.find((model) => model.id === "MiniMax-M2.7")?.compat).toBeUndefined();
+    },
+  );
+
+  it.each(["minimax", "minimax-portal"] as const)(
+    "resolves M3 through the %s dynamic model hook before agent discovery",
+    async (providerId) => {
+      const { providers } = await registerProviderPlugin({
+        plugin: minimaxProviderPlugin,
+        id: "minimax",
+        name: "MiniMax Provider",
+      });
+      const providerPlugin = requireRegisteredProvider(providers, providerId);
+
+      const model = providerPlugin.resolveDynamicModel?.({
+        provider: providerId,
+        modelId: "MiniMax-M3",
+        providerConfig: {},
+      } as never);
+
+      expect(model).toMatchObject({
+        provider: providerId,
+        id: "MiniMax-M3",
+        api: "anthropic-messages",
+        baseUrl: "https://api.minimax.io/anthropic",
+        input: ["text", "image"],
+        contextWindow: 1_000_000,
+        compat: { codeMode: "preferred" },
+      });
+    },
+  );
 
   it("keeps MINIMAX_API_HOST endpoint overrides on dynamic M3 resolution", async () => {
     vi.stubEnv("MINIMAX_API_HOST", "https://api.minimaxi.com");

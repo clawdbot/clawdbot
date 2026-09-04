@@ -26,10 +26,9 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   isMiniMaxModernModelId,
   MINIMAX_DEFAULT_MODEL_ID,
-  MINIMAX_TEXT_MODEL_CATALOG,
   MINIMAX_TEXT_MODEL_ORDER,
 } from "./api.js";
-import { DEFAULT_MINIMAX_MAX_TOKENS, resolveMinimaxApiCost } from "./model-definitions.js";
+import { buildMinimaxApiModelDefinition } from "./model-definitions.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import {
@@ -107,30 +106,23 @@ function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string })
 
 function findMinimaxCatalogModel(modelId: string) {
   const normalizedModelId = modelId.trim().toLowerCase();
-  const catalogId = MINIMAX_TEXT_MODEL_ORDER.find((id) => id.toLowerCase() === normalizedModelId);
-  return catalogId ? { id: catalogId, model: MINIMAX_TEXT_MODEL_CATALOG[catalogId] } : undefined;
+  return MINIMAX_TEXT_MODEL_ORDER.find((id) => id.toLowerCase() === normalizedModelId);
 }
 
 function resolveMinimaxDynamicModel(params: {
   providerId: string;
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
-  const catalogModel = findMinimaxCatalogModel(params.ctx.modelId);
-  if (!catalogModel) {
+  const catalogModelId = findMinimaxCatalogModel(params.ctx.modelId);
+  if (!catalogModelId) {
     return undefined;
   }
   return normalizeModelCompat({
-    id: catalogModel.id,
-    name: catalogModel.model.name,
+    ...buildMinimaxApiModelDefinition(catalogModelId),
     provider: params.providerId,
     api: "anthropic-messages",
     baseUrl:
       normalizeOptionalString(params.ctx.providerConfig?.baseUrl) ?? resolveMinimaxCatalogBaseUrl(),
-    reasoning: catalogModel.model.reasoning,
-    input: [...catalogModel.model.input],
-    cost: resolveMinimaxApiCost(catalogModel.id),
-    contextWindow: catalogModel.model.contextWindow,
-    maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
   });
 }
 
