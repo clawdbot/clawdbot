@@ -234,11 +234,13 @@ import {
   createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,
+  createOpenAISafetyIdentifierWrapper,
   createOpenAIServiceTierWrapper,
   createOpenAIStringContentWrapper,
   createOpenAITextVerbosityWrapper,
   createOpenAIThinkingLevelWrapper,
   resolveOpenAIFastMode,
+  resolveOpenAISafetyIdentifier,
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
 } from "../llm/providers/stream-wrappers/openai.js";
@@ -376,6 +378,11 @@ function createTestOpenAIProviderWrapper(params: WrapProviderStreamFnParams): St
   const serviceTier = resolveOpenAIServiceTier(params.context.extraParams);
   if (serviceTier) {
     streamFn = createOpenAIServiceTierWrapper(streamFn, serviceTier);
+  }
+
+  const safetyIdentifier = resolveOpenAISafetyIdentifier(params.context.extraParams);
+  if (safetyIdentifier) {
+    streamFn = createOpenAISafetyIdentifierWrapper(streamFn, safetyIdentifier);
   }
 
   const textVerbosity = resolveOpenAITextVerbosity(params.context.extraParams);
@@ -3346,6 +3353,139 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(payload).not.toHaveProperty("service_tier");
+  });
+
+  it.each([
+    {
+      name: "injects configured OpenAI safety_identifier into Responses payloads",
+      params: { safetyIdentifier: "clipo-a1b2c3" },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: undefined,
+      expected: "clipo-a1b2c3",
+    },
+    {
+      name: "accepts snake_case safety_identifier and trims whitespace",
+      params: { safety_identifier: "  clipo-a1b2c3  " },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: undefined,
+      expected: "clipo-a1b2c3",
+    },
+    {
+      name: "injects configured OpenAI safety_identifier into native Chat Completions payloads",
+      params: { safetyIdentifier: "clipo-a1b2c3" },
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-completions">,
+      payload: undefined,
+      expected: "clipo-a1b2c3",
+    },
+    {
+      name: "preserves caller-provided safety_identifier values",
+      params: { safetyIdentifier: "clipo-a1b2c3" },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: { store: false, safety_identifier: "caller-owned" },
+      expected: "caller-owned",
+    },
+  ])("$name", ({ params, model, payload: initialPayload, expected }) => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      cfg: buildModelConfig("openai/gpt-5.4", params),
+      model,
+      payload: initialPayload,
+    });
+
+    expect(payload.safety_identifier).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "does not inject safety_identifier for the ChatGPT/Codex backend",
+      applyProvider: "openai",
+      configKey: "openai/gpt-5.4",
+      safetyIdentifier: "clipo-a1b2c3",
+      model: {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://chatgpt.com/backend-api",
+      } as Model<"openai-chatgpt-responses">,
+    },
+    {
+      name: "does not inject safety_identifier for non-openai providers",
+      applyProvider: "azure-openai-responses",
+      configKey: "azure-openai-responses/gpt-5.4",
+      safetyIdentifier: "clipo-a1b2c3",
+      model: {
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5.4",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      } as Model<"azure-openai-responses">,
+    },
+    {
+      name: "does not inject safety_identifier for proxied openai base URLs",
+      applyProvider: "openai",
+      configKey: "openai/gpt-5.4",
+      safetyIdentifier: "clipo-a1b2c3",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://proxy.example.com/v1",
+      } as Model<"openai-responses">,
+    },
+    {
+      name: "skips safety_identifier injection for empty values",
+      applyProvider: "openai",
+      configKey: "openai/gpt-5.4",
+      safetyIdentifier: "   ",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+    },
+    {
+      name: "skips safety_identifier injection for non-string values",
+      applyProvider: "openai",
+      configKey: "openai/gpt-5.4",
+      safetyIdentifier: 42,
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+    },
+  ])("$name", ({ applyProvider, configKey, safetyIdentifier, model }) => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider,
+      applyModelId: "gpt-5.4",
+      cfg: buildModelConfig(configKey, { safetyIdentifier }),
+      model,
+    });
+
+    expect(payload).not.toHaveProperty("safety_identifier");
   });
 
   it("does not warn for valid OpenAI serviceTier values", () => {
