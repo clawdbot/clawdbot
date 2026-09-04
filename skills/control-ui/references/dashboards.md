@@ -51,11 +51,12 @@ navigation page.
 
 - `sessions patch` can pin and organize the session.
 - `dashboard focus_tab` broadcasts a focus command. A connected Control UI
-  opens the dashboard panel and marks the session as dashboard-enabled.
+  opens the dashboard panel and saves the session's dashboard preference.
 - **Expand side panel** fills the task area; **Collapse** brings chat back beside
   the dashboard. Closing the panel returns to chat alone.
-- Dashboard-enabled sessions appear in the `/dashboards` gallery. Selecting a
-  card opens its owning chat with the dashboard panel expanded.
+- Sessions with a stored board appear in the `/dashboards` gallery, regardless
+  of their saved view. Selecting a card opens its owning chat with the dashboard
+  panel expanded.
 
 The active tab and side-panel layout are per-device UI state. The dashboard
 preference is server-side session state.

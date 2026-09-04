@@ -12,8 +12,8 @@ to inspect or interact with rendered pixels.
 
 - A sidebar item is a **session**, not a dashboard page.
 - Each session owns one board. The board contains tabs and widgets.
-- Pinning a session keeps it in the sidebar. Opening its dashboard panel makes it
-  appear in the `/dashboards` gallery.
+- Pinning a session keeps it in the sidebar. Sessions with a stored board appear
+  in the `/dashboards` gallery.
 - `screen` changes connected Control UI layout and navigation. It does not read
   the page or take screenshots.
 - `sessions_list` finds sessions. `sessions` renames, groups, pins, or archives
