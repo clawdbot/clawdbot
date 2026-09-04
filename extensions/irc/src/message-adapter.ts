@@ -32,7 +32,7 @@ async function sendIrcMessage(ctx: ChannelMessageSendTextContext, text = ctx.tex
 export const sendFormattedIrcText: NonNullable<
   ChannelOutboundAdapter["sendFormattedText"]
 > = async (ctx) => {
-  const { chunkMarkdownTextWithMode, resolveChunkMode, resolveTextChunkLimit } =
+  const { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } =
     await import("openclaw/plugin-sdk/reply-chunking");
   const accountId = ctx.accountId ?? undefined;
   const textLimit =
@@ -41,37 +41,21 @@ export const sendFormattedIrcText: NonNullable<
       fallbackLimit: ircOutboundBaseAdapter.textChunkLimit,
     });
   const chunkMode = ctx.formatting?.chunkMode ?? resolveChunkMode(ctx.cfg, "irc", accountId);
-  const chunkText = (text: string) =>
-    ctx.formatting
-      ? ircOutboundBaseAdapter.chunker(text, textLimit, { formatting: ctx.formatting })
-      : ircOutboundBaseAdapter.chunker(text, textLimit);
-  let chunks: string[];
-  if (chunkMode === "newline") {
-    const blocks = chunkMarkdownTextWithMode(ctx.text, textLimit, chunkMode);
-    if (blocks.length === 0 && ctx.text) {
-      blocks.push(ctx.text);
-    }
-    chunks = blocks.flatMap((block) => {
-      const blockChunks = chunkText(block);
-      return blockChunks.length === 0 && block ? [block] : blockChunks;
-    });
-  } else {
-    chunks = chunkText(ctx.text);
-  }
-
   const nextReplyToId = createReplyToFanout(ctx);
   const results = await sendIrcMessages(
     ctx.to,
-    chunks.map((text) => {
-      const replyTo = nextReplyToId();
-      return replyTo ? { text, replyTo } : { text };
-    }),
+    ctx.text,
     {
       cfg: ctx.cfg,
       accountId,
       abortSignal: ctx.abortSignal,
       onPlatformSendDispatch: ctx.onPlatformSendDispatch,
     },
+    (preparedText) =>
+      chunkTextWithMode(preparedText, textLimit, chunkMode).map((text) => ({
+        text,
+        replyTo: nextReplyToId(),
+      })),
     async (result) => {
       await ctx.onDeliveryResult?.(attachChannelToResult("irc", toIrcMessageResult(result)));
     },
