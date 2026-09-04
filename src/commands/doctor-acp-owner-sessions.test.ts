@@ -461,6 +461,59 @@ describe("Doctor ACP owner migration", () => {
     });
   });
 
+  it("keeps both rows when an interrupted staged target is stale on retry", async () => {
+    await withStateDirEnv("openclaw-doctor-acp-interrupted-retry-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const cfg = createConfig(stateDir);
+      const sourceStorePath = seedLegacySession({ cfg, env });
+      const targetStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "reviewer",
+        env,
+      });
+      expect(
+        claimAcpSessionMetaForOwnerMigration({
+          cfg,
+          entry,
+          env,
+          expectedAgent: "codex",
+          sourceAgentId: "codex",
+          sourceSessionKey: sourceKey,
+          targetAgentId: "reviewer",
+          targetSessionKey: targetKey,
+        }),
+      ).toBe("claimed");
+      replaceSessionEntrySync(
+        { agentId: "reviewer", env, sessionKey: targetKey, storePath: targetStorePath },
+        entry,
+      );
+      const concurrentEntry = { ...entry, model: "newer", updatedAt: 20 };
+      replaceSessionEntrySync(
+        { agentId: "codex", env, sessionKey: sourceKey, storePath: sourceStorePath },
+        concurrentEntry,
+      );
+
+      const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
+
+      expect(report).toMatchObject({ conflicts: 1, eligible: 0, migrated: 0 });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "codex",
+          env,
+          sessionKey: sourceKey,
+          storePath: sourceStorePath,
+        })?.entry,
+      ).toMatchObject(concurrentEntry);
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "reviewer",
+          env,
+          sessionKey: targetKey,
+          storePath: targetStorePath,
+        })?.entry,
+      ).toMatchObject(entry);
+    });
+  });
+
   it("leaves a bare key in a shared owner and harness store ambiguous", async () => {
     await withStateDirEnv("openclaw-doctor-acp-shared-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

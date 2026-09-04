@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   claimAcpSessionMetaForOwnerMigration,
   readAcpSessionMetaForOwnerMigration,
@@ -101,6 +102,10 @@ function sameSessionIdentity(left: SessionEntry, right: SessionEntry): boolean {
     : left.sessionId === right.sessionId;
 }
 
+function sameSessionEntry(left: SessionEntry, right: SessionEntry): boolean {
+  return sameSessionIdentity(left, right) && isDeepStrictEqual(left, right);
+}
+
 async function moveSessionEntry(params: {
   env: NodeJS.ProcessEnv;
   entry: SessionEntry;
@@ -117,7 +122,7 @@ async function moveSessionEntry(params: {
     sessionKey: params.targetKey,
     storePath: params.targetStorePath,
   })?.entry;
-  if (targetBeforePreparation && !sameSessionIdentity(targetBeforePreparation, params.entry)) {
+  if (targetBeforePreparation && !sameSessionEntry(targetBeforePreparation, params.entry)) {
     return "conflict";
   }
   if (!targetBeforePreparation) {
@@ -167,7 +172,7 @@ async function moveSessionEntry(params: {
       upserts: [
         {
           buildEntry: ({ currentEntry }) => {
-            if (currentEntry && !sameSessionIdentity(currentEntry, params.entry)) {
+            if (currentEntry && !sameSessionEntry(currentEntry, params.entry)) {
               targetConflict = true;
               return null;
             }
@@ -309,7 +314,7 @@ export async function migrateLegacyAcpOwnerSessions(params: {
         sessionKey: targetKey,
         storePath: targetStorePath,
       })?.entry;
-      if (targetEntry && !sameSessionIdentity(targetEntry, entry)) {
+      if (targetEntry && !sameSessionEntry(targetEntry, entry)) {
         conflicts += 1;
         warnings.push(
           `Canonical ACP session "${targetKey}" already exists with a different identity; legacy source "${sourceKey}" was left unchanged.`,
