@@ -62,7 +62,7 @@ async function createRealSession(
     {},
   );
   // Capture before connect starts the subprocess so failed handshakes retain stderr.
-  const getStderr = drainStderr(transport);
+  const stderrTail = drainStderr(transport);
   const session: ChromeMcpSession = {
     client,
     transport,
@@ -84,12 +84,17 @@ async function createRealSession(
         })(),
       );
     } catch (err) {
-      const stderr = getStderr();
-      if (stderr) {
-        log.warn(
-          `Chrome MCP attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". Subprocess stderr:\n${redactChromeMcpDiagnosticTextWithLocalPaths(stderr)}`,
-        );
-      }
+      // Initialize rejection can precede stderr delivery. Report its final tail
+      // without delaying cleanup or replacing the attach error with a log failure.
+      void stderrTail
+        .then((stderr) => {
+          if (stderr) {
+            log.warn(
+              `Chrome MCP attach failed for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}". Subprocess stderr:\n${redactChromeMcpDiagnosticTextWithLocalPaths(stderr)}`,
+            );
+          }
+        })
+        .catch(() => {});
       const targetLabel = options.browserUrl
         ? `the configured Chrome endpoint (${redactToolPayloadText(redactCdpUrl(options.browserUrl) ?? options.browserUrl)})`
         : options.userDataDir

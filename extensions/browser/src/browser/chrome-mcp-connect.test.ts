@@ -38,13 +38,16 @@ import readline from "node:readline";
 
 fs.writeFileSync(new URL("./pid", import.meta.url), String(process.pid));
 process.stdin.on("end", () => {
+  if (process.argv[4] === "shutdown") writeStartupDiagnostic();
   fs.writeFileSync(new URL("./stdin-ended", import.meta.url), "closed");
 });
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
 const detail = "startup-tail-é " + process.argv[3] + "/chrome/Profile 1 " +
   "wss://fixture-user:fixture-password@browser.example/chrome?token=fixture-token";
-if (process.argv[4] === undefined) {
+const writeStartupDiagnostic = () =>
   process.stderr.write("discarded-startup-prefix\n" + "x".repeat(9000) + "\n" + detail);
+if (process.argv[4] === undefined) {
+  writeStartupDiagnostic();
 }
 const failureMethod = process.argv[2];
 for await (const line of readline.createInterface({ input: process.stdin })) {
@@ -93,13 +96,17 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   });
 
   it.each([
-    { failureMethod: "initialize", ephemeral: false },
-    { failureMethod: "initialize", ephemeral: true },
-    { failureMethod: "tools/list", ephemeral: false },
+    { failureMethod: "initialize", ephemeral: false, stderrPhase: "startup" },
+    { failureMethod: "initialize", ephemeral: true, stderrPhase: "startup" },
+    { failureMethod: "tools/list", ephemeral: false, stderrPhase: "startup" },
+    { failureMethod: "initialize", ephemeral: true, stderrPhase: "shutdown" },
   ])(
-    "retains redacted startup stderr on $failureMethod failure (ephemeral=$ephemeral)",
-    async ({ failureMethod, ephemeral }) => {
+    "retains redacted $stderrPhase stderr on $failureMethod failure (ephemeral=$ephemeral)",
+    async ({ failureMethod, ephemeral, stderrPhase }) => {
       options.args[1] = failureMethod;
+      if (stderrPhase === "shutdown") {
+        options.args.push(stderrPhase);
+      }
       if (!ephemeral) {
         options.browserUrl =
           "wss://fixture-user:fixture-password@browser.example/chrome?token=fixture-token";
@@ -114,7 +121,7 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       await expect(attempt).rejects.not.toThrow(homeDir);
       await expectSubprocessClosed();
 
-      expect(warn).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
       const diagnostic = warn.mock.calls[0]![0];
       expect(diagnostic).toContain('profile "~/profiles/fixture-profile"');
       expect(diagnostic).toContain("startup-tail-é ~/chrome/Profile 1");
