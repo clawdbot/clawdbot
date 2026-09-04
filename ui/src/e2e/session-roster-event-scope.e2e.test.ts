@@ -34,7 +34,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
       const sidebar = page.locator("openclaw-app-sidebar");
       const selectedRow = sidebar.locator(`[data-session-key="${key}"]`);
-      await expect.poll(() => selectedRow.innerText()).toContain("Weekly report");
+      await expect.poll(() => selectedRow.textContent()).toContain("Weekly report");
       await gateway.waitForRequest("sessions.subscribe");
       // Let startup settle before counting event-driven network traffic.
       await page.waitForTimeout(1_200);
@@ -54,7 +54,7 @@ suite.define(() => {
       }
       await captureUiProof(suite, page, "roster-after-other-agent-events.png");
       expect((await gateway.getRequests("sessions.list")).length - before).toBe(0);
-      expect(await selectedRow.innerText()).toContain("Weekly report");
+      expect(await selectedRow.textContent()).toContain("Weekly report");
 
       await gateway.setSessionsListResponse(
         sessionsListResponse([{ ...row, label: "Weekly report ready", updatedAt: 5 }]),
@@ -64,7 +64,7 @@ suite.define(() => {
         reason: "update",
         updatedAt: 5,
       });
-      await expect.poll(() => selectedRow.innerText()).toContain("Weekly report ready");
+      await expect.poll(() => selectedRow.textContent()).toContain("Weekly report ready");
       expect((await gateway.getRequests("sessions.list")).length - before).toBe(1);
       await captureUiProof(suite, page, "roster-own-agent-updated.png");
     } finally {

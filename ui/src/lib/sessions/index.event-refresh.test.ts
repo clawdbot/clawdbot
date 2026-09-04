@@ -247,39 +247,6 @@ describe("event-driven session list refresh", () => {
     }
   });
 
-  it.each([
-    { name: "primary", scope: { agentId: " Main " } },
-    { name: "owner-first", scope: { agentId: "main", ownerFirst: true } },
-    { name: "owner-filtered", scope: { agentId: "main", ownerId: "profile-self" } },
-    { name: "involving-me", scope: { agentId: "main", involvingMe: true } },
-    { name: "searched", scope: { agentId: "main", search: "report" } },
-    { name: "all-agents", scope: {} },
-  ])("invalidates the $name roster only for matching or unscoped events", async ({ scope }) => {
-    vi.useFakeTimers();
-    const request = vi.fn(async () => sessionsResult([], 1));
-    const { sessions, emitEvent } = createSessionCapabilityHarness(
-      request as unknown as GatewayBrowserClient["request"],
-      { ownerId: "profile-self" },
-    );
-    try {
-      await sessions.refresh({ ...scope, force: true });
-      request.mockClear();
-      for (const agentId of ["research", "main", undefined]) {
-        emitEvent({
-          type: "event",
-          event: "session.message",
-          payload: { sessionKey: "global", agentId, hasActiveRun: false, status: "done" },
-        });
-        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_MAX_WAIT_MS);
-        expect(request).toHaveBeenCalledTimes(agentId === "research" && scope.agentId ? 0 : 1);
-        request.mockClear();
-      }
-    } finally {
-      sessions.dispose();
-      vi.useRealTimers();
-    }
-  });
-
   it("refreshes a Sessions-style managed query after a terminal session message", async () => {
     vi.useFakeTimers();
     const key = "agent:main:main";

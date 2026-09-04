@@ -577,8 +577,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       refreshOutcomeRevision > previousOutcomeRevision ? lastRefreshOutcome : { status: "stale" },
     );
   };
-  const refreshReplacement = (agentId?: string | null) =>
-    refreshReplacementResult(agentId).then(() => undefined);
   return {
     primaryList: () => primaryList,
     get requestRevision() {
@@ -648,7 +646,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     bootstrap(options: SessionRefreshOptions) {
       return refreshInternal(options, true);
     },
-    refreshReplacement,
+    refreshReplacement: (agentId?: string | null) =>
+      refreshReplacementResult(agentId).then(() => undefined),
     refreshReplacementResult,
     invalidateForegroundPublication: () => void ++foregroundPublicationGeneration,
     /** The row as currently published. The archived/all sidebars render their
