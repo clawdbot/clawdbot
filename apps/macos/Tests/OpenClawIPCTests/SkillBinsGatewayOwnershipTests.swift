@@ -6,8 +6,17 @@ import Testing
 
 @MainActor
 struct SkillBinsGatewayOwnershipTests {
-    @Test(.execApprovalsStateIsolated, arguments: [false, true])
-    func `implicit skill trust follows the gateway that supplied it`(replaceGateway: Bool) async throws {
+    @Test(
+        .execApprovalsStateIsolated,
+        arguments: ["unchanged", "disconnected", "replacement"], ["skill", "fallback", "explicit", "manual", "full"])
+    func `implicit skill trust follows the gateway that supplied it`(
+        transition: String, authorizationKind: String) async throws
+    {
+        let replaceGateway = transition == "replacement"
+        let requiresSkillTrust = authorizationKind == "skill" || authorizationKind == "fallback"
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = root.appendingPathComponent("executed")
         let selectedURL = try LockIsolated(#require(URL(string: "ws://127.0.0.1:49345/")))
         let statusReads = LockIsolated<[URL]>([])
         let session = GatewayTestWebSocketSession(taskFactory: {
@@ -24,7 +33,7 @@ struct SkillBinsGatewayOwnershipTests {
                 let payload: String
                 if frame["method"] as? String == "skills.status" {
                     statusReads.withValue { $0.append(url) }
-                    let report = Self.report(bins: url.port == 49345 ? ["true"] : [])
+                    let report = Self.report(bins: url.port == 49345 ? ["touch"] : [])
                     payload = try #require(String(data: JSONEncoder().encode(report), encoding: .utf8))
                 } else {
                     payload = #"{"ok":true}"#
@@ -38,10 +47,9 @@ struct SkillBinsGatewayOwnershipTests {
             sessionBox: WebSocketSessionBox(session: session))
         let cache = SkillBinsCache(gateway: gateway)
         do {
-            // Exercise the actual native policy inputs, without launching a process.
-            let command = ["/bin/sh", "-c", "true"]
+            let command = ["touch", marker.path]
             let resolutions = ExecCommandResolution.resolveForAllowlist(
-                command: command, rawCommand: nil, cwd: nil, env: nil)
+                command: command, rawCommand: nil, cwd: root.path, env: nil)
             try #require(ExecCommandResolution.bindForAllowlistExecution(
                 command: command, rawCommand: nil, resolutions: resolutions) != nil)
             let first = await cache.current()?.trustByName ?? [:]
@@ -50,18 +58,19 @@ struct SkillBinsGatewayOwnershipTests {
             let settings = ExecApprovalsSettingsModel(skillBinsCache: cache)
             settings.autoAllowSkills = true
             await settings.refreshSkillBins()
-            try #require(settings.skillBins == ["true"])
+            try #require(settings.skillBins == ["touch"])
+            let resolvedPath = try #require(resolutions.first?.resolvedRealPath ?? resolutions.first?.resolvedPath)
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "skill-trust-proof") { entry in
-                entry.security = .allowlist
+                entry.security = authorizationKind == "full" ? .full : .allowlist
                 entry.ask = .off
-                entry.askFallback = .deny
+                entry.askFallback = authorizationKind == "fallback" ? .allowlist : .deny
                 entry.autoAllowSkills = true
-                entry.allowlist = []
+                entry.allowlist = authorizationKind == "manual" ? [ExecAllowlistEntry(pattern: resolvedPath)] : []
             }.get()
             let evaluation = await ExecApprovalEvaluator.evaluate(
                 command: command,
                 rawCommand: nil,
-                cwd: nil,
+                cwd: root.path,
                 envOverrides: nil,
                 agentId: "skill-trust-proof",
                 skillBinsCache: cache)
@@ -69,9 +78,9 @@ struct SkillBinsGatewayOwnershipTests {
             let commit = {
                 ExecApprovalExecutionCommit.build(
                     context: evaluation,
-                    effectiveSecurity: .allowlist,
-                    approvalSource: nil,
-                    explicitlyApproved: false,
+                    effectiveSecurity: evaluation.security,
+                    approvalSource: authorizationKind == "fallback" ? .askFallback : nil,
+                    explicitlyApproved: authorizationKind == "explicit",
                     persistAllowlist: false)
             }
             let capturedCommit = commit()
@@ -80,19 +89,35 @@ struct SkillBinsGatewayOwnershipTests {
             if replaceGateway {
                 selectedURL.withValue { $0 = URL(string: "ws://127.0.0.1:49346/")! }
                 _ = try await gateway.acquireServerLease()
+            } else if transition == "disconnected" {
+                let trust = try #require(evaluation.skillTrust)
+                await gateway._test_handleDisconnect(socketGeneration: trust.source.socketGeneration)
+                try #require(trust.isCurrent)
             }
-            #expect(settings.skillBins == (replaceGateway ? [] : ["true"]))
+            let execution = try await ExecHostExecutor.runApprovedCommand(
+                authorization: capturedCommit.authorization,
+                command: #require(evaluation.boundCommand),
+                cwd: #require(ExecCommandResolution.captureApprovalCwdSnapshot(root.path)),
+                env: evaluation.env,
+                timeout: 2)
+            let executionAllowed = !replaceGateway || !requiresSkillTrust
+            #expect(execution.success == executionAllowed)
+            #expect(FileManager.default.fileExists(atPath: marker.path) == executionAllowed)
+            if !executionAllowed {
+                #expect(execution.preflightError != nil)
+            }
+            #expect(settings.skillBins == (replaceGateway ? [] : ["touch"]))
             #expect(evaluation.skillAllow == !replaceGateway)
             let committed = switch ExecApprovalsStore.commitExecution(commit()) {
             case .success: true
             case .failure: false
             }
-            #expect(committed == !replaceGateway)
+            #expect(committed == executionAllowed)
             let capturedCommitAccepted = switch ExecApprovalsStore.commitExecution(capturedCommit) {
             case .success: true
             case .failure: false
             }
-            #expect(capturedCommitAccepted == !replaceGateway)
+            #expect(capturedCommitAccepted == executionAllowed)
             let current = await cache.current()?.trustByName ?? [:]
             #expect(ExecApprovalEvaluator
                 .isSkillAutoAllowed(resolutions, trustedBinsByName: current) == !replaceGateway)
@@ -100,7 +125,7 @@ struct SkillBinsGatewayOwnershipTests {
             if replaceGateway {
                 let refreshed = await cache.current(force: true)?.trustByName ?? [:]
                 #expect(!ExecApprovalEvaluator.isSkillAutoAllowed(resolutions, trustedBinsByName: refreshed))
-            } else {
+            } else if authorizationKind == "skill" {
                 _ = try ExecApprovalsStore.updateAgentSettings(agentId: "skill-trust-proof") { entry in
                     entry.autoAllowSkills = nil
                 }.get()
