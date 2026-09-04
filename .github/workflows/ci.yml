@@ -4786,9 +4786,21 @@ jobs:
             -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
+            -only-testing:OpenClawTests/WatchMessagingInboundTransportTests \
+            -only-testing:OpenClawTests/WatchSessionActivationGateTests \
+            -only-testing:OpenClawTests/OpenClawTypographyTests \
             -only-testing:OpenClawTests/NotificationServingPreferenceTests \
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
+            test
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawUITests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=${simulator_id}" \
+            -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
             test
 
       - name: Run focused Apple Watch operation simulator tests

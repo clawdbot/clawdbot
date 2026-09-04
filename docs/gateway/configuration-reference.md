@@ -688,15 +688,19 @@ Inspect `openclaw nodes pending`, then approve the new request with
 `openclaw nodes approve <requestId>`. The node appears in the Desktop picker
 only while it is connected and the effective approved command remains allowed.
 
+The visible picker updates as nodes connect or disconnect. A desktop opened
+for a session or a specific source connects when its assigned node becomes
+available; opening the picker yourself keeps source selection manual.
+
 For VncAuth, `desktop.host.passwordFile` stays on the node and is delivered only
 to the Gateway's authenticated relay. Without a password file, the Control UI
 prompts for the VNC password. macOS ARD asks for account credentials when you
 first connect to a node in the Desktop panel. The panel keeps them in memory
-for reconnects to the same node. Closing the panel or selecting another desktop
-clears them; an authentication rejection asks for the password again. The
-Gateway completes ARD or VNC authentication before exposing a no-auth RFB
-handshake to the browser, so credentials are not returned in URLs, logs, or RPC
-results.
+for reconnects to the same node. Closing the panel, selecting another desktop,
+or losing the Gateway connection clears them; an authentication rejection asks
+for the password again. The Gateway completes ARD or VNC authentication before
+exposing a no-auth RFB handshake to the browser, so credentials are not returned
+in URLs, logs, or RPC results.
 
 Desktop bytes use a dedicated outbound binary WebSocket from the node. The
 normal node invoke remains only as the cancellable lifecycle handle and never
