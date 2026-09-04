@@ -32,6 +32,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   socket: WebSocket;
   connect: ConnectParams;
   connId: string;
+  /** Host-owned transport retirement notification; never accepted from wire params. */
+  connectionSignal?: AbortSignal;
   connectionKind?: GatewayWsConnectionKind;
   worker?: WorkerConnectionIdentity;
   isDeviceTokenAuth?: boolean;
