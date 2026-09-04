@@ -4,7 +4,6 @@ import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import { countInputRichBlockChars, type InputRichBlock } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
-import { htmlNodesToRichText, parseHtmlFragment } from "./rich-blocks-html.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 
 function blocksFor(markdown: string): InputRichBlock[] {
@@ -206,39 +205,33 @@ describe("block HTML islands", () => {
     expect(serialized).not.toContain('"superscript"');
   });
 
-  it("keeps unsupported matched tags literal", () => {
-    const blocks = blocksFor("a <custom>tag</custom> here");
+  it.each(["custom", "constructor"])("keeps unsupported matched <%s> tags literal", (tag) => {
+    const markdown = `a <${tag}>tag</${tag}> here`;
+    const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
+    expect(plainText).toBe(markdown);
     const serialized = JSON.stringify(blocks);
-    expect(serialized).toContain("<custom>");
-    expect(serialized).toContain("</custom>");
-  });
-
-  it("does not treat Object.prototype keys as inline styles", () => {
-    const rich = htmlNodesToRichText(parseHtmlFragment("<constructor>secret</constructor>"));
-    const nodes = Array.isArray(rich) ? rich : [rich];
-    for (const node of nodes) {
-      if (node && typeof node === "object") {
-        expect(typeof (node as { type?: unknown }).type).not.toBe("function");
-      }
-    }
-    const serialized = JSON.stringify(rich);
-    expect(serialized).toContain("<constructor>");
-    expect(serialized).toContain("secret");
+    expect(serialized).toContain(`<${tag}>`);
+    expect(serialized).toContain(`</${tag}>`);
   });
 
   it("still maps own inline style tags", () => {
-    expect(htmlNodesToRichText(parseHtmlFragment("<b>secret</b>"))).toEqual({
-      type: "bold",
-      text: "secret",
+    expect(single("<b>secret</b>")).toEqual({
+      type: "paragraph",
+      text: { type: "bold", text: "secret" },
     });
   });
 
-  it("keeps the entire subtree of unsupported wrappers literal", () => {
-    const blocks = blocksFor("a <custom><sup>x</sup></custom> here");
-    const serialized = JSON.stringify(blocks);
-    expect(serialized).toContain("<sup>x</sup>");
-    expect(serialized).not.toContain('"superscript"');
-  });
+  it.each(["custom", "constructor"])(
+    "keeps the entire subtree of unsupported <%s> wrappers literal",
+    (tag) => {
+      const markdown = `a <${tag}><sup>x</sup></${tag}> here`;
+      const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
+      expect(plainText).toBe(markdown);
+      const serialized = JSON.stringify(blocks);
+      expect(serialized).toContain("<sup>x</sup>");
+      expect(serialized).not.toContain('"superscript"');
+    },
+  );
 
   it("counts rowspan carryover toward the table column limit", () => {
     const secondRow = Array.from({ length: 20 }, (_, i) => `<td>c${i}</td>`).join("");
