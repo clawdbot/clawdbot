@@ -126,6 +126,11 @@ is not generic compute offload. `.crabbox.yaml` defaults remote proof to
 `blacksmith-testbox`. Its configured workflow hydrates provider and agent
 credentials, so untrusted contributor or fork code must use secretless fork CI
 or sanitized direct AWS Crabbox instead.
+Blacksmith Testbox proof requires Crabbox 0.48.0 or newer. That release binds
+stop and reuse to exact local claims, fences cleanup against ownership changes,
+retains failed-cleanup state for recovery, and reconciles terminal state before
+dropping local ownership. Older binaries are rejected before OpenClaw acquires
+or reuses Testbox capacity.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
