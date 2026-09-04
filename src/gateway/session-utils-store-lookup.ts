@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds } from "../agents/agent-scope.js";
 import {
@@ -10,9 +11,6 @@ import {
 } from "../config/sessions.js";
 import {
   listSessionChildEntriesReadOnly,
-  listSessionEntriesCore as listAccessorSessionEntries,
-  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
-  loadExactSessionEntryCandidates,
   type SessionEntryListScope,
 } from "../config/sessions/session-accessor.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
@@ -33,6 +31,13 @@ import type {
   GatewaySessionStoreTarget,
   GatewaySessionStoreTargetWithStore,
 } from "./session-utils-contracts.js";
+import {
+  loadGatewaySessionStoreReads,
+  readGatewaySessionStore,
+  type GatewaySessionStoreRead,
+  type GatewaySessionStoreCache,
+} from "./session-utils-store-read.js";
+export type { GatewaySessionStoreCache } from "./session-utils-store-read.js";
 
 function findCanonicalStoreMatch(
   store: Record<string, SessionEntry>,
@@ -128,18 +133,6 @@ function resolveGatewaySessionStoreCandidates(
 }
 
 /**
- * Request-scoped store reuse.
- *
- * Sharing resolution runs once per listed row, and each run materialized every
- * entry of a candidate store, making `sessions.list` quadratic in entries. A
- * caller that resolves many keys against the same stores passes one cache so
- * each store is materialized once. Entries are shared across rows within that
- * request, so cached stores are read-only to their holder; the cache is never
- * process-global, so it cannot serve a later request stale rows.
- */
-export type GatewaySessionStoreCache = Map<string, Record<string, SessionEntry>>;
-
-/**
  * Sharing resolves every returned row, but store targets are stable within one request.
  * Keep discovery agent-scoped here or each row repeats registry probes and agent-root scans.
  */
@@ -180,91 +173,36 @@ export function createGatewaySessionStoreDiscoveryCache(params: {
   return cache;
 }
 
-function loadGatewaySessionLookupStore(
-  storePath: string,
-  clone: boolean | undefined,
-  agentId?: string,
-  options: {
-    readOnly?: boolean;
-    cache?: GatewaySessionStoreCache;
-    exactKeys?: readonly string[];
-    projection?: SessionEntryListScope["projection"];
-  } = {},
-): Record<string, SessionEntry> {
-  const cache = options.cache;
-  const cacheKey = cache
-    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.exactKeys?.join("\u0001") ?? ""}`
-    : "";
-  if (cache) {
-    const cached = cache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
-  const loaded = loadGatewaySessionLookupStoreUncached(storePath, clone, agentId, options);
-  cache?.set(cacheKey, loaded);
-  return loaded;
-}
-
-function loadGatewaySessionLookupStoreUncached(
-  storePath: string,
-  clone: boolean | undefined,
-  agentId?: string,
-  options: {
-    exactKeys?: readonly string[];
-    readOnly?: boolean;
-    projection?: SessionEntryListScope["projection"];
-  } = {},
-): Record<string, SessionEntry> {
-  try {
-    if (options.exactKeys) {
-      // Borrowed listing views and probes never create stores; ordinary owned reads may.
-      return Object.fromEntries(
-        loadExactSessionEntryCandidates({
-          ...(agentId ? { agentId } : {}),
-          clone: false,
-          projection: options.projection,
-          sessionKeys: options.exactKeys,
-          readOnly: options.readOnly !== false || clone === false,
-          storePath,
-        }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-      );
-    }
-    const listEntries = options.readOnly
-      ? listAccessorSessionEntriesReadOnly
-      : listAccessorSessionEntries;
-    return Object.fromEntries(
-      listEntries({
-        ...(agentId ? { agentId } : {}),
-        ...(clone === false ? { clone: false } : {}),
-        ...(options.projection ? { projection: options.projection } : {}),
-        storePath,
-      }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-    );
-  } catch {
-    return {};
-  }
-}
-
-function resolveGatewaySessionStoreLookup(params: {
+type GatewaySessionStoreLookupParams = {
   cfg: OpenClawConfig;
   key: string;
-  canonicalKey: string;
-  agentId: string;
+  agentId?: string;
   clone?: boolean;
-  initialStore?: Record<string, SessionEntry>;
   projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   exactRead?: boolean;
   deferCanonicalValidation?: boolean;
+  includeStoreChildEntries?: boolean;
+  store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-}): {
+};
+
+type GatewaySessionStorePlan<T> = {
+  reads: GatewaySessionStoreRead[];
+  resolve: () => T;
+};
+
+type GatewaySessionStoreLookup = {
   storePath: string;
   store: Record<string, SessionEntry>;
   match: { entry: SessionEntry; key: string } | undefined;
   canonicalValidationError?: Error;
-} {
+};
+
+function prepareGatewaySessionStoreLookup(
+  params: GatewaySessionStoreLookupParams & { canonicalKey: string; agentId: string },
+): GatewaySessionStorePlan<GatewaySessionStoreLookup> {
   const scanTargets = buildGatewaySessionStoreScanTargets(params);
   const discovery = resolveGatewaySessionStoreCandidates(
     params.cfg,
@@ -279,67 +217,66 @@ function resolveGatewaySessionStoreLookup(params: {
       ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
       : existing;
   if (candidates.length === 0) {
-    // Discovery is read-only. Only configured agents may cross the fallback edge that creates a
-    // missing SQLite store; retired/manual agents must already have a discovered store.
+    // Retired/manual agents require an existing discovered store; lookup never creates one.
     return {
-      storePath: fallback.storePath,
-      store: {},
-      match: undefined,
+      reads: [],
+      resolve: () => ({ storePath: fallback.storePath, store: {}, match: undefined }),
     };
   }
-  const loadStore = (target: SessionStoreTarget) =>
-    loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
+  const reads = candidates.map((target, index): GatewaySessionStoreRead => ({
+    storePath: target.storePath,
+    agentId: target.agentId,
+    clone: params.clone,
+    options: {
       readOnly: configured ? params.readOnly : true,
       ...(params.exactRead ? { exactKeys: scanTargets } : {}),
       ...(params.projection ? { projection: params.projection } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
-    });
-  const firstCandidate = candidates[0] ?? fallback;
-  let selectedStorePath = firstCandidate.storePath;
-  let selectedStore =
-    params.initialStore && firstCandidate.storePath === fallback.storePath
-      ? params.initialStore
-      : loadStore(firstCandidate);
-  let canonicalValidationError: Error | undefined;
-  const recordCanonicalError = params.deferCanonicalValidation
-    ? (error: Error) => {
-        canonicalValidationError ??= error;
-      }
-    : undefined;
-  let selectedMatch = findCanonicalStoreMatch(selectedStore, scanTargets, recordCanonicalError);
-
-  for (let index = 1; index < candidates.length; index += 1) {
-    const candidate = candidates[index];
-    if (!candidate) {
-      continue;
-    }
-    const store = loadStore(candidate);
-    const match = findCanonicalStoreMatch(store, scanTargets, recordCanonicalError);
-    if (!match) {
-      continue;
-    }
-    if (selectedMatch) {
-      const error = canonicalSessionKeyMigrationRequiredError(
-        `duplicate rows resolve to canonical session key ${params.canonicalKey}`,
-      );
-      if (!recordCanonicalError) {
-        throw error;
-      }
-      recordCanonicalError(error);
-      if (match.key !== params.canonicalKey || selectedMatch.key === params.canonicalKey) {
-        continue;
-      }
-    }
-    selectedStorePath = candidate.storePath;
-    selectedStore = store;
-    selectedMatch = match;
-  }
-
+    },
+    store: index === 0 && target.storePath === fallback.storePath ? params.store : undefined,
+  }));
   return {
-    storePath: selectedStorePath,
-    store: selectedStore,
-    match: selectedMatch,
-    ...(canonicalValidationError ? { canonicalValidationError } : {}),
+    reads,
+    resolve: () => {
+      const first = expectDefined(reads[0], "first configured or discovered session store");
+      let selectedStorePath = first.storePath;
+      let selectedStore = readGatewaySessionStore(first);
+      let canonicalValidationError: Error | undefined;
+      const recordCanonicalError = params.deferCanonicalValidation
+        ? (error: Error) => {
+            canonicalValidationError ??= error;
+          }
+        : undefined;
+      let selectedMatch = findCanonicalStoreMatch(selectedStore, scanTargets, recordCanonicalError);
+      for (const candidate of reads.slice(1)) {
+        const store = readGatewaySessionStore(candidate);
+        const match = findCanonicalStoreMatch(store, scanTargets, recordCanonicalError);
+        if (!match) {
+          continue;
+        }
+        if (selectedMatch) {
+          const error = canonicalSessionKeyMigrationRequiredError(
+            `duplicate rows resolve to canonical session key ${params.canonicalKey}`,
+          );
+          if (!recordCanonicalError) {
+            throw error;
+          }
+          recordCanonicalError(error);
+          if (match.key !== params.canonicalKey || selectedMatch.key === params.canonicalKey) {
+            continue;
+          }
+        }
+        selectedStorePath = candidate.storePath;
+        selectedStore = store;
+        selectedMatch = match;
+      }
+      return {
+        storePath: selectedStorePath,
+        store: selectedStore,
+        match: selectedMatch,
+        ...(canonicalValidationError ? { canonicalValidationError } : {}),
+      };
+    },
   };
 }
 
@@ -347,17 +284,9 @@ function isAgentScopedSentinelSessionKey(canonicalKey: string): boolean {
   return canonicalKey === "global" || canonicalKey === "unknown";
 }
 
-function resolveExplicitDeletedLegacyMainStoreTarget(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  clone?: boolean;
-  deferCanonicalValidation?: boolean;
-  projection?: SessionEntryListScope["projection"];
-  readOnly?: boolean;
-  exactRead?: boolean;
-  storeCache?: GatewaySessionStoreCache;
-  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-}): GatewaySessionStoreTargetWithStore | null {
+function prepareExplicitDeletedLegacyMainStoreTarget(
+  params: GatewaySessionStoreLookupParams,
+): GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore | null> | null {
   const parsed = parseAgentSessionKey(params.key);
   const legacyAgentId = normalizeAgentId(parsed?.agentId);
   if (
@@ -368,120 +297,96 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   ) {
     return null;
   }
-
-  // Only preserve agent:main:* when it is backed by a discovered deleted-main store.
-  // Shared-store legacy aliases should continue remapping to the configured default agent.
+  // Deleted-main discovery precedes normal aliases; only a real matching row keeps this owner.
   const canonicalKey = resolveStoredSessionKeyForAgentStore({
     cfg: params.cfg,
     agentId: legacyAgentId,
     sessionKey: params.key,
   });
   const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: legacyAgentId });
-  const legacyAgentMainKey = `agent:${legacyAgentId}:main`;
   const lookupSeeds = Array.from(
-    new Set([params.key, canonicalKey, agentMainKey, legacyAgentMainKey]),
+    new Set([params.key, canonicalKey, agentMainKey, `agent:${legacyAgentId}:main`]),
   );
-  let best:
-    | {
-        storePath: string;
-        store: Record<string, SessionEntry>;
-        match: { entry: SessionEntry; key: string };
-      }
-    | undefined;
   const { existing } = resolveGatewaySessionStoreCandidates(
     params.cfg,
     legacyAgentId,
     params.targetDiscoveryCache,
   );
-  let canonicalValidationError: Error | undefined;
-  const recordCanonicalError = params.deferCanonicalValidation
-    ? (error: Error) => {
-        canonicalValidationError ??= error;
-      }
-    : undefined;
-  for (const target of existing) {
-    if (target.agentId !== legacyAgentId) {
-      continue;
-    }
-    const store = loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
-      readOnly: true,
-      ...(params.exactRead ? { exactKeys: lookupSeeds } : {}),
-      ...(params.projection ? { projection: params.projection } : {}),
-      ...(params.storeCache ? { cache: params.storeCache } : {}),
-    });
-    const match = findCanonicalStoreMatch(store, lookupSeeds, recordCanonicalError);
-    if (!match) {
-      continue;
-    }
-    if (best) {
-      const error = canonicalSessionKeyMigrationRequiredError(
-        `duplicate rows resolve to canonical session key ${canonicalKey}`,
-      );
-      if (!recordCanonicalError) {
-        throw error;
-      }
-      recordCanonicalError(error);
-    }
-    if (!best || (match.entry.updatedAt ?? 0) >= (best.match.entry.updatedAt ?? 0)) {
-      best = { storePath: target.storePath, store, match };
-    }
-  }
-  if (!best) {
-    return null;
-  }
-
-  const storeKeys = new Set<string>([canonicalKey]);
-  if (params.key !== canonicalKey) {
-    storeKeys.add(params.key);
-  }
-  storeKeys.add(best.match.key);
-  for (const seed of lookupSeeds) {
-    storeKeys.add(seed);
-  }
+  const reads = existing
+    .filter((target) => target.agentId === legacyAgentId)
+    .map((target): GatewaySessionStoreRead => ({
+      storePath: target.storePath,
+      clone: params.clone,
+      agentId: target.agentId,
+      options: {
+        readOnly: true,
+        ...(params.exactRead ? { exactKeys: lookupSeeds } : {}),
+        ...(params.projection ? { projection: params.projection } : {}),
+        ...(params.storeCache ? { cache: params.storeCache } : {}),
+      },
+    }));
   return {
-    agentId: legacyAgentId,
-    storePath: best.storePath,
-    canonicalKey,
-    storeKeys: Array.from(storeKeys),
-    store: best.store,
-    ...(canonicalValidationError ? { canonicalValidationError } : {}),
+    reads,
+    resolve: () => {
+      let best:
+        | {
+            storePath: string;
+            store: Record<string, SessionEntry>;
+            match: { entry: SessionEntry; key: string };
+          }
+        | undefined;
+      let canonicalValidationError: Error | undefined;
+      const recordCanonicalError = params.deferCanonicalValidation
+        ? (error: Error) => {
+            canonicalValidationError ??= error;
+          }
+        : undefined;
+      for (const target of reads) {
+        const store = readGatewaySessionStore(target);
+        const match = findCanonicalStoreMatch(store, lookupSeeds, recordCanonicalError);
+        if (!match) {
+          continue;
+        }
+        if (best) {
+          const error = canonicalSessionKeyMigrationRequiredError(
+            `duplicate rows resolve to canonical session key ${canonicalKey}`,
+          );
+          if (!recordCanonicalError) {
+            throw error;
+          }
+          recordCanonicalError(error);
+        }
+        if (!best || (match.entry.updatedAt ?? 0) >= (best.match.entry.updatedAt ?? 0)) {
+          best = { storePath: target.storePath, store, match };
+        }
+      }
+      if (!best) {
+        return null;
+      }
+      const storeKeys = new Set<string>([canonicalKey]);
+      if (params.key !== canonicalKey) {
+        storeKeys.add(params.key);
+      }
+      storeKeys.add(best.match.key);
+      for (const seed of lookupSeeds) {
+        storeKeys.add(seed);
+      }
+      return {
+        agentId: legacyAgentId,
+        storePath: best.storePath,
+        canonicalKey,
+        storeKeys: Array.from(storeKeys),
+        store: best.store,
+        ...(canonicalValidationError ? { canonicalValidationError } : {}),
+      };
+    },
   };
 }
 
-export function resolveGatewaySessionStoreTargetWithStore(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  agentId?: string;
-  clone?: boolean;
-  projection?: SessionEntryListScope["projection"];
-  readOnly?: boolean;
-  exactRead?: boolean;
-  deferCanonicalValidation?: boolean;
-  includeStoreChildEntries?: boolean;
-  store?: Record<string, SessionEntry>;
-  storeCache?: GatewaySessionStoreCache;
-  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-}): GatewaySessionStoreTargetWithStore {
-  const key = normalizeOptionalString(params.key) ?? "";
-  const explicitDeletedMainTarget = resolveExplicitDeletedLegacyMainStoreTarget({
-    cfg: params.cfg,
-    key,
-    clone: params.clone,
-    ...(params.deferCanonicalValidation ? { deferCanonicalValidation: true } : {}),
-    readOnly: params.readOnly,
-    exactRead: params.exactRead,
-    ...(params.projection ? { projection: params.projection } : {}),
-    ...(params.storeCache ? { storeCache: params.storeCache } : {}),
-    ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
-  });
-  if (explicitDeletedMainTarget) {
-    return includeDirectChildEntries(
-      explicitDeletedMainTarget,
-      params.includeStoreChildEntries,
-      params.projection,
-    );
-  }
-
+function prepareGatewaySessionStoreTarget(
+  params: GatewaySessionStoreLookupParams,
+): GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore> {
+  const key = params.key;
   const requestedAgentId = normalizeOptionalString(params.agentId);
   const canonicalKey = resolveSessionStoreKey({
     cfg: params.cfg,
@@ -495,70 +400,97 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
       : resolveSessionStoreAgentId(params.cfg, canonicalKey);
   if (isIncognitoSessionKey(canonicalKey)) {
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
-    // Session resolution may receive arbitrary stale keys; only creation/write
-    // owners may materialize the process-lifetime incognito database.
-    const store = loadGatewaySessionLookupStore(storePath, params.clone, agentId, {
-      readOnly: true,
-      ...(params.exactRead ? { exactKeys: [canonicalKey] } : {}),
-      ...(params.projection ? { projection: params.projection } : {}),
-      ...(params.storeCache ? { cache: params.storeCache } : {}),
-    });
-    return includeDirectChildEntries(
-      {
+    const read: GatewaySessionStoreRead = {
+      storePath,
+      agentId,
+      clone: params.clone,
+      options: {
+        // Arbitrary stale keys must not materialize process-lifetime incognito state.
+        readOnly: true,
+        ...(params.exactRead ? { exactKeys: [canonicalKey] } : {}),
+        ...(params.projection ? { projection: params.projection } : {}),
+        ...(params.storeCache ? { cache: params.storeCache } : {}),
+      },
+    };
+    return {
+      reads: [read],
+      resolve: () => ({
         agentId,
         storePath,
         canonicalKey,
         storeKeys: [canonicalKey],
-        store,
-      },
-      params.includeStoreChildEntries,
-      params.projection,
-    );
+        store: readGatewaySessionStore(read),
+      }),
+    };
   }
-  const { canonicalValidationError, storePath, store } = resolveGatewaySessionStoreLookup({
-    cfg: params.cfg,
-    key,
-    canonicalKey,
-    agentId,
-    clone: params.clone,
-    readOnly: params.readOnly,
-    exactRead: params.exactRead,
-    deferCanonicalValidation: params.deferCanonicalValidation,
-    initialStore: params.store,
-    ...(params.projection ? { projection: params.projection } : {}),
-    ...(params.storeCache ? { storeCache: params.storeCache } : {}),
-    ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
-  });
-  if (canonicalKey === "global" || canonicalKey === "unknown") {
-    const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];
-    return includeDirectChildEntries(
-      {
+  const lookup = prepareGatewaySessionStoreLookup({ ...params, canonicalKey, agentId });
+  return {
+    reads: lookup.reads,
+    resolve: () => {
+      const { canonicalValidationError, storePath, store } = lookup.resolve();
+      const storeKeys = isAgentScopedSentinelSessionKey(canonicalKey)
+        ? key && key !== canonicalKey
+          ? [canonicalKey, key]
+          : [key]
+        : Array.from(
+            new Set(
+              buildGatewaySessionStoreScanTargets({ cfg: params.cfg, key, canonicalKey, agentId }),
+            ),
+          );
+      return {
         agentId,
         storePath,
         canonicalKey,
         storeKeys,
         store,
         ...(canonicalValidationError ? { canonicalValidationError } : {}),
-      },
-      params.includeStoreChildEntries,
-      params.projection,
-    );
-  }
-
-  const storeKeys = new Set<string>(
-    buildGatewaySessionStoreScanTargets({ cfg: params.cfg, key, canonicalKey, agentId }),
-  );
-  return includeDirectChildEntries(
-    {
-      agentId,
-      storePath,
-      canonicalKey,
-      storeKeys: Array.from(storeKeys),
-      store,
-      ...(canonicalValidationError ? { canonicalValidationError } : {}),
+      };
     },
+  };
+}
+
+export function resolveGatewaySessionStoreTargetWithStore(
+  params: GatewaySessionStoreLookupParams,
+): GatewaySessionStoreTargetWithStore {
+  const normalized = { ...params, key: normalizeOptionalString(params.key) ?? "" };
+  const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized)?.resolve();
+  return includeDirectChildEntries(
+    deletedMain ?? prepareGatewaySessionStoreTarget(normalized).resolve(),
     params.includeStoreChildEntries,
     params.projection,
+  );
+}
+
+/** Resolve one synchronous set of logical metadata targets using exact grouped reads. */
+export function resolveGatewaySessionStoreTargetsReadOnly(params: {
+  cfg: OpenClawConfig;
+  targets: readonly { key: string; agentId?: string }[];
+}): GatewaySessionStoreTargetWithStore[] {
+  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+  const requests = params.targets.map((target) => {
+    const lookup: GatewaySessionStoreLookupParams = {
+      ...target,
+      key: normalizeOptionalString(target.key) ?? "",
+      cfg: params.cfg,
+      clone: false,
+      readOnly: true,
+      exactRead: true,
+      projection: "list",
+      targetDiscoveryCache,
+    };
+    return { lookup, legacy: prepareExplicitDeletedLegacyMainStoreTarget(lookup) };
+  });
+  loadGatewaySessionStoreReads(requests.flatMap((request) => request.legacy?.reads ?? []));
+  // A successful deleted-main lookup must not open or validate a normal fallback store.
+  const selected = requests.map((request) => {
+    const target = request.legacy?.resolve();
+    return target ? { target } : { plan: prepareGatewaySessionStoreTarget(request.lookup) };
+  });
+  loadGatewaySessionStoreReads(selected.flatMap((selection) => selection.plan?.reads ?? []));
+  return selected.map(
+    (selection) =>
+      selection.target ??
+      expectDefined(selection.plan, "unresolved logical session plan").resolve(),
   );
 }
 
