@@ -19,7 +19,7 @@ const { messageQueueMock, messageAllowMock, inboundInfoSpy, noteConversationMess
   }));
 
 vi.mock("../../draft-message-boundaries.js", () => ({
-  noteSlackDraftConversationMessage: (...args: unknown[]) => noteConversationMessageMock(...args),
+  noteSlackConversationMessage: (...args: unknown[]) => noteConversationMessageMock(...args),
 }));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {

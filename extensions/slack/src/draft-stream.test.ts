@@ -1,7 +1,7 @@
 // Slack tests cover draft stream plugin behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it, vi } from "vitest";
-import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
+import { noteSlackConversationMessage } from "./draft-message-boundaries.js";
 import { createSlackDraftStream } from "./draft-stream.js";
 
 type DraftStreamParams = Parameters<typeof createSlackDraftStream>[0];
@@ -33,6 +33,7 @@ function createDraftStreamHarness(
     accountId?: string;
     maxChars?: number;
     threadTs?: string;
+    conversationThreadTs?: string;
     send?: DraftSendFn;
     edit?: DraftEditFn;
     eventScope?: DraftStreamParams["eventScope"];
@@ -50,6 +51,9 @@ function createDraftStreamHarness(
     token: "xoxb-test",
     accountId: params.accountId,
     conversationChannelId: "C123",
+    conversationThreadTs: Object.hasOwn(params, "conversationThreadTs")
+      ? params.conversationThreadTs
+      : params.threadTs,
     throttleMs: 250,
     maxChars: params.maxChars,
     eventScope: params.eventScope,
@@ -243,7 +247,7 @@ describe("createSlackDraftStream", () => {
 
     stream.update("_first card_");
     await stream.flush();
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       channelId: "C123",
       threadTs: "100.000",
@@ -258,7 +262,7 @@ describe("createSlackDraftStream", () => {
 
     stream.update("_second card_");
     await stream.flush();
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       channelId: "C123",
       threadTs: "100.000",
@@ -337,7 +341,7 @@ describe("createSlackDraftStream", () => {
     stream.update("_looking into the original question_");
     await stream.flush();
 
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       channelId: "C123",
       threadTs: "100.000",
@@ -364,6 +368,28 @@ describe("createSlackDraftStream", () => {
     expect(stream.messageId()).toBe("100.300");
   });
 
+  it("keys a top-level conversation separately from its threaded outbound reply", async () => {
+    const accountId = "top-level-threaded-reply";
+    const send = vi.fn<DraftSendFn>(async () => slackDraftSendResult("100.100"));
+    const { stream } = createDraftStreamHarness({
+      accountId,
+      threadTs: "100.000",
+      conversationThreadTs: undefined,
+      send,
+    });
+
+    stream.update("_working on the first message_");
+    await stream.flush();
+    noteSlackConversationMessage({
+      accountId,
+      channelId: "C123",
+      messageTs: "100.200",
+      userId: "U_OWNER",
+    });
+
+    expect(stream.messageId()).toBeUndefined();
+  });
+
   it("keeps moving below repeated interruptions from different participants", async () => {
     const accountId = "multiple-participants";
     const send = vi
@@ -379,7 +405,7 @@ describe("createSlackDraftStream", () => {
 
     stream.update("_first update_");
     await stream.flush();
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       channelId: "C123",
       threadTs: "100.000",
@@ -389,7 +415,7 @@ describe("createSlackDraftStream", () => {
 
     stream.update("_second update_");
     await stream.flush();
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       channelId: "C123",
       threadTs: "100.000",
@@ -428,7 +454,7 @@ describe("createSlackDraftStream", () => {
       expect(send).toHaveBeenCalledOnce();
     });
 
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       channelId: "C123",
       threadTs: "100.000",
@@ -459,7 +485,7 @@ describe("createSlackDraftStream", () => {
 
     stream.update("_looking into this_");
     await stream.flush();
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       channelId: "C123",
       messageTs: "100.200",
@@ -491,7 +517,7 @@ describe("createSlackDraftStream", () => {
 
     stream.update("_first workspace_");
     await stream.flush();
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       teamId: "T_SECOND",
       channelId: "C123",
@@ -505,7 +531,7 @@ describe("createSlackDraftStream", () => {
     expect(send).toHaveBeenCalledOnce();
     expect(edit).toHaveBeenCalledOnce();
 
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       teamId: "T_FIRST",
       channelId: "C123",
@@ -550,7 +576,7 @@ describe("createSlackDraftStream", () => {
         botId: "B_OTHER",
       },
     ]) {
-      noteSlackDraftConversationMessage({ accountId, ...event });
+      noteSlackConversationMessage({ accountId, ...event });
     }
 
     stream.update("_latest update_");
@@ -579,7 +605,7 @@ describe("createSlackDraftStream", () => {
       await finalEdit;
     });
 
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       channelId: "C123",
       threadTs: "100.000",
@@ -607,7 +633,7 @@ describe("createSlackDraftStream", () => {
     stream.update("_nearly finished_");
     await stream.flush();
     await stream.seal();
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       channelId: "C123",
       threadTs: "100.000",
@@ -629,7 +655,7 @@ describe("createSlackDraftStream", () => {
     await stream.seal();
     await stream.finalizeMessage("111.222", async () => {});
 
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId,
       channelId: "C123",
       threadTs: "100.000",

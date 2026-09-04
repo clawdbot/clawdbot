@@ -71,6 +71,7 @@ export function createSlackProgressRuntime(runtimeParams: {
         token: ctx.botToken,
         accountId: account.accountId,
         conversationChannelId: message.channel,
+        conversationThreadTs: message.thread_ts,
         eventScope: prepared.eventScope,
         // Impersonated Slack messages cannot be deleted. Keep the temporary
         // preview app-authored and apply custom identity only to final delivery.
@@ -386,7 +387,7 @@ export function createSlackProgressRuntime(runtimeParams: {
   const deliverNativeFinalNow = async (payload: ReplyPayload, kind: ReplyDispatchKind) => {
     progressDraft.markFinalReplyStarted();
     const streamReady = await nativeTransport.waitForStart();
-    const finalThreadTs = delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs;
+    const finalThreadTs = delivery.resolvePostBoundaryThreadTs();
     // A short narration leaves the session buffered locally (`delivered` false)
     // because `stop` can be its first network call. Requiring delivery here
     // sent the final normally and then finalized the stream anyway, which is
@@ -452,6 +453,7 @@ export function createSlackProgressRuntime(runtimeParams: {
       await delivery.nativeProgressStreamStartPromise.catch(() => null);
     }
     const session = delivery.streamSession;
+    delivery.stopStreamBoundaryTracking();
     if (session && !session.stopped) {
       try {
         if (completionChunks?.length) {
@@ -644,6 +646,19 @@ export function createSlackProgressRuntime(runtimeParams: {
     delivery.resetDeliveryTracker();
     return true;
   };
+  delivery.setInterveningMessageHandler(
+    useNativeProgressStreaming
+      ? () => {
+          void withNativeStreamOrder(async () => {
+            await beginNewProgressTurn({ force: true });
+          }).catch((err: unknown) => {
+            runtime.error?.(
+              danger(`slack-stream: failed to rotate after human reply: ${formatSlackError(err)}`),
+            );
+          });
+        }
+      : undefined,
+  );
   const onDraftBoundary =
     !shouldUseDraftStream && !useNativeProgressStreaming
       ? undefined

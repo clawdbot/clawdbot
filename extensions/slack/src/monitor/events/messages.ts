@@ -12,7 +12,7 @@ import {
   normalizeOptionalString as asString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { noteSlackDraftConversationMessage } from "../../draft-message-boundaries.js";
+import { noteSlackConversationMessage } from "../../draft-message-boundaries.js";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -212,7 +212,7 @@ export function registerSlackMessageEvents(params: {
     message: SlackMessageEvent | SlackAppMentionEvent,
     eventScope?: SlackEventScope,
   ) => {
-    noteSlackDraftConversationMessage({
+    noteSlackConversationMessage({
       accountId: ctx.accountId,
       teamId: eventScope?.teamId,
       channelId: message.channel,

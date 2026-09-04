@@ -225,8 +225,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           await delivery.deliverNormally({
             payload,
             kind: info.kind,
-            forcedThreadTs:
-              delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs,
+            forcedThreadTs: delivery.resolvePostBoundaryThreadTs(),
           });
           return;
         }
@@ -237,7 +236,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       await delivery.deliverNormally({
         payload,
         kind: info.kind,
-        forcedThreadTs: delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs,
+        forcedThreadTs: delivery.resolvePostBoundaryThreadTs(),
       });
       return;
     }
@@ -593,6 +592,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // Finalize the stream if one was started
   // -----------------------------------------------------------------------
   let streamFallbackDelivered = false;
+  delivery.stopStreamBoundaryTracking();
   const finalStream = delivery.streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
     try {
