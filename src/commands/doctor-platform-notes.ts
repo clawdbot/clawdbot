@@ -264,7 +264,10 @@ export async function maybeRepairMacGatewayServiceEnvQuotes(params: {
       [
         `- ${shortenHomePath(detected.envFilePath)} has ${detected.keys.length} value(s) wrapped in literal double quotes (${keyList}).`,
         "- This is the #103804 serialization corruption; the quotes reach consumers as data and break them (e.g. AWS region validation).",
-        `- ${formatCliCommand("openclaw doctor --fix")} rewrites these entries without the wrapping quotes.`,
+        // Not "doctor --fix": repair mode runs under gateway maintenance,
+        // which skips this section; only the interactive doctor pass reaches
+        // this shape-gated prompt (requiresInteractiveConfirmation below).
+        `- Accept the following prompt (interactive ${formatCliCommand("openclaw doctor")}) to rewrite these entries without the wrapping quotes.`,
       ].join("\n"),
       "Gateway service env",
     );
