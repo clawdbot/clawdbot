@@ -33,10 +33,13 @@ import {
 import { registerManagedUpdateHandoffTriageTests } from "./update-managed-service-handoff-triage.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
-const { forceKillChildProcessTreeMock, spawnMock } = vi.hoisted(() => ({
-  forceKillChildProcessTreeMock: vi.fn(),
-  spawnMock: vi.fn(),
-}));
+const { forceKillChildProcessTreeMock, resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(
+  () => ({
+    forceKillChildProcessTreeMock: vi.fn(),
+    resolvePreferredOpenClawTmpDirMock: vi.fn(),
+    spawnMock: vi.fn(),
+  }),
+);
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-lifecycle-${process.pid}`);
 
 function createSpawnMock(params?: { pid?: number }) {
@@ -68,9 +71,20 @@ vi.mock("../process/child-process-tree.js", async () => {
   return { ...actual, forceKillChildProcessTree: forceKillChildProcessTreeMock };
 });
 
+vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tmp-openclaw-dir.js")>()),
+  resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
+}));
+
 const tempDirs = new Set<string>();
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Helpers in one fixture share a coordinator without touching the operator's database.
+  const coordinatorDir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
+  );
+  tempDirs.add(coordinatorDir);
+  resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
   forceKillChildProcessTreeMock.mockReset();
   spawnMock.mockReset();
   spawnMock.mockImplementation((_command: string, args: string[]) => {

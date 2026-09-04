@@ -91,6 +91,7 @@ export function createManagedServiceCommandFixture(params: {
               `}`,
             ]
           : []),
+        `state.recoveryAllowance = process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS;`,
         `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
         ...(options?.recoverySentinel
           ? [
@@ -162,6 +163,7 @@ export function createManagedServiceCommandFixture(params: {
             `state.triageInputMode = fs.statSync(contextPath).mode & 0o777;`,
             `state.triageObservedRestored = state.restored === true;`,
             `state.triageObservedRecovery = Array.isArray(state.guardedRestart);`,
+            `state.triageRecoveryAllowance = process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS;`,
             `fs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(state));`,
             ...(options?.triageHang
               ? [

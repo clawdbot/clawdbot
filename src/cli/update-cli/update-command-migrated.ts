@@ -115,10 +115,10 @@ export async function continueMigratedUpdateInFreshProcess(
     if (result.status === "ok") {
       await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(params.preManagedServiceStop, true);
     } else {
-      windowsRecovery?.complete(false);
+      await windowsRecovery?.complete(false);
     }
   } catch (error) {
-    windowsRecovery?.complete(false);
+    await windowsRecovery?.complete(false);
     // Compensation still belongs to the parent closure, but only candidate
     // code can persist its failure after migration.
     result = {
@@ -207,14 +207,14 @@ export async function continueMigratedUpdateInFreshProcess(
       );
     }
     if (response.result.status !== "ok") {
-      windowsRecovery?.complete(false);
+      await windowsRecovery?.complete(false);
     }
     await params.packageTransaction?.complete().catch((error: unknown) => {
       defaultRuntime.error(`Update backup cleanup failed: ${String(error)}`);
     });
     return { result: response.result, exitCode: response.exitCode };
   } catch (error) {
-    windowsRecovery?.complete(false);
+    await windowsRecovery?.complete(false);
     throw error;
   } finally {
     await fs.rm(scratchDir, { recursive: true, force: true });

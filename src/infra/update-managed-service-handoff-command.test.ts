@@ -9,6 +9,7 @@ import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-targ
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn());
 const getFileLockProcessStartTimeMock = vi.hoisted(() => vi.fn((_pid: number) => 17));
 const forceKillChildProcessTreeMock = vi.hoisted(() => vi.fn());
 const tempDirs = new Set<string>();
@@ -52,7 +53,18 @@ vi.mock("../process/child-process-tree.js", async (importOriginal) => ({
   forceKillChildProcessTree: forceKillChildProcessTreeMock,
 }));
 
-beforeEach(() => {
+vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tmp-openclaw-dir.js")>()),
+  resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
+}));
+
+beforeEach(async () => {
+  // Helpers in one fixture share a coordinator without touching the operator's database.
+  const coordinatorDir = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
+  );
+  tempDirs.add(coordinatorDir);
+  resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
   getFileLockProcessStartTimeMock.mockReset();
   getFileLockProcessStartTimeMock.mockReturnValue(17);
   forceKillChildProcessTreeMock.mockReset();

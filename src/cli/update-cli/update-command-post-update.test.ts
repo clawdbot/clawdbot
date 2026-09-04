@@ -429,7 +429,7 @@ describe("successful update finalization ordering", () => {
         windowsTaskAutoStartRecovery: {
           beginMutation: () => {},
           restore,
-          complete: () => {},
+          complete: async () => {},
           interrupted: () => false,
         },
       }),

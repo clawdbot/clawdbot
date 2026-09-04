@@ -7503,6 +7503,81 @@ describe("update-cli", () => {
     },
   );
 
+  it.each([
+    { verified: true, compensationFails: false },
+    { verified: false, compensationFails: false },
+    { verified: false, compensationFails: true },
+  ])(
+    "settles restored Windows autostart after verification=$verified (compensation failure=$compensationFails)",
+    async ({ verified, compensationFails }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
+      const nativeTaskControl = await vi.importActual<
+        typeof import("../daemon/schtasks-control.js")
+      >("../daemon/schtasks-control.js");
+      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
+        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
+      );
+      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
+        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
+      );
+      const runFixture = requireValue(
+        vi.mocked(runCommandWithTimeout).getMockImplementation(),
+        "managed task command fixture",
+      );
+      let enabled = true;
+      const mutations: string[] = [];
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+        if (argv[0] !== "schtasks") {
+          return await runFixture(argv, options);
+        }
+        if (argv[1] === "/Query") {
+          return commandResult({
+            stdout: `<Task><Settings><Enabled>${enabled}</Enabled></Settings></Task>`,
+          });
+        }
+        const action = argv.at(-1)!;
+        mutations.push(action);
+        enabled = action === "/ENABLE";
+        return compensationFails && mutations.length === 3
+          ? commandResult({ code: 124, stderr: "disable timed out after commit" })
+          : commandResult();
+      });
+      const {
+        maybeStopManagedServiceBeforeMutableUpdate,
+        maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
+      } = await import("./update-cli/update-command-service.js");
+      const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
+        root: process.cwd(),
+        updateInstallKind: "package",
+        shouldRestart: true,
+        jsonMode: true,
+      });
+      const recovery = requireValue(stopped.windowsTaskAutoStartRecovery, "task suspension");
+      try {
+        recovery.beginMutation();
+        await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped, true);
+        expect(enabled).toBe(true);
+        expect(stopped.windowsTaskAutoStartRecovery).toBe(recovery);
+        if (compensationFails) {
+          await expect(recovery.complete(verified)).rejects.toThrow(
+            "disable timed out after commit",
+          );
+        } else {
+          await recovery.complete(verified);
+        }
+        expect(enabled).toBe(verified);
+        await recovery.complete();
+        await recovery.restore(true);
+        expect(mutations).toEqual(
+          verified ? ["/DISABLE", "/ENABLE"] : ["/DISABLE", "/ENABLE", "/DISABLE"],
+        );
+      } finally {
+        await recovery.complete(false);
+      }
+    },
+  );
+
   it("does not restore autostart on a pinned Windows task replaced during service stop", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);

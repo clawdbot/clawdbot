@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
+vi.mock("./update-command-service-command.js", () => ({
+  runUpdatedInstallGatewayCommand: async () => true,
+}));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
   readConfigFileSnapshot: async () => ({
@@ -312,7 +315,7 @@ describe("failed Git update recovery restart", () => {
   ] as const)(
     "does not re-enable Windows autostart without verified safety ($status, $recovery)",
     async ({ status, recovery }) => {
-      const complete = vi.fn();
+      const complete = vi.fn(async () => {});
       const restore = vi.fn();
       await finishFailedUpdate(
         {

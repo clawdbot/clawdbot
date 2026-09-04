@@ -163,6 +163,34 @@ export async function tryInstallShellCompletion(opts: {
   }
 }
 
+/** A restart command can throw before health probes; replace pre-activation facts at that boundary. */
+export async function recordFailedUpdateGatewayState(
+  run: UpdateCommandOptions["run"],
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  if (!run) {
+    return;
+  }
+  const runtime = await resolveGatewayService()
+    .readRuntime(env)
+    .catch(() => undefined);
+  recordUpdateRunVerification(
+    run.runId,
+    {
+      serviceRunning:
+        runtime?.status === "running" ? true : runtime?.status === "stopped" ? false : undefined,
+      pid: typeof runtime?.pid === "number" ? runtime.pid : undefined,
+      runningVersion: undefined,
+      runningBuildId: undefined,
+      versionMatch: undefined,
+      readyz: false,
+      settled: false,
+      channelsReady: false,
+    },
+    { env: run.env },
+  );
+}
+
 export async function maybeRestartService(params: {
   shouldRestart: boolean;
   result: UpdateRunResult;
@@ -188,13 +216,17 @@ export async function maybeRestartService(params: {
     params.serviceEnv ?? invocationEnv,
     params.invocationCwd,
   );
+  const failed = async () => {
+    await recordFailedUpdateGatewayState(params.opts.run, serviceEnv);
+    return false;
+  };
   if (params.shouldRestart) {
     const message =
       resolveGatewayServiceManagementBlockMessageForUpdate(invocationEnv) ??
       resolveGatewayServiceManagementBlockMessageForUpdate(serviceEnv);
     if (message) {
       defaultRuntime.error(message);
-      return false;
+      return await failed();
     }
   }
   let activation = { ...params, invocationEnv, serviceEnv };
@@ -408,7 +440,7 @@ export async function maybeRestartService(params: {
       defaultRuntime.error(
         "The updated installation requires a writable gateway service definition.",
       );
-      return false;
+      return await failed();
     }
     if (!activation.opts.json) {
       defaultRuntime.log("");
@@ -500,7 +532,7 @@ export async function maybeRestartService(params: {
           defaultRuntime.error(
             "Gateway service did not point at the updated install after refresh.",
           );
-          return false;
+          return await failed();
         }
       }
       // Refresh already activated and verified this process. Complete root validation
@@ -540,7 +572,7 @@ export async function maybeRestartService(params: {
               theme.warn("Gateway service did not point at the updated install after restart."),
             );
           }
-          return false;
+          return await failed();
         }
       } else if (
         shouldUseLegacyProcessRestartAfterUpdate({ updateMode: activation.result.mode }) &&
@@ -575,7 +607,7 @@ export async function maybeRestartService(params: {
           if (!activation.opts.json) {
             defaultRuntime.log("");
           }
-          return false;
+          return await failed();
         }
         if (!activation.opts.json && restartInitiated) {
           defaultRuntime.log(theme.success("Daemon restart completed."));
@@ -592,7 +624,7 @@ export async function maybeRestartService(params: {
         `Gateway: restart failed: ${String(err)}. Code update remains installed; a service stopped for update may still be stopped. ` +
           "Run `openclaw gateway status --deep` and ask its service owner to restart it manually.",
       );
-      return false;
+      return await failed();
     }
     return true;
   }

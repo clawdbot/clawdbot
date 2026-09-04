@@ -231,7 +231,7 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
 type WindowsTaskAutoStartRecovery = {
   beginMutation: () => void;
   restore: (restartSafe?: boolean) => Promise<void>;
-  complete: (restartSafe?: boolean) => void;
+  complete: (restartSafe?: boolean) => Promise<void>;
   interrupted: () => boolean;
 };
 
@@ -262,6 +262,8 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
     return undefined;
   }
   let restorePromise: Promise<void> | undefined;
+  let settlement: Promise<void> | undefined;
+  let restorationAttempted = false;
   let restorationFailed = false;
   let restoreAllowed = true;
   let unregisterSignalExitBarrier = () => {};
@@ -293,40 +295,51 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
     unregisterSignalExitBarrier();
   };
   const complete = (restartSafe = true) => {
-    try {
-      // Native preparation may abort before returning its recovery handle.
-      // Persist that outcome before releasing the signal's process-exit gate.
-      if (finishUpdate && interrupted && updateRun && (restoreAllowed || restorationFailed)) {
-        const failed = restorationFailed || !restartSafe;
-        finishUpdateRun(
-          updateRun.runId,
-          {
-            status: failed ? "failed" : "skipped",
-            reason: restorationFailed
-              ? "windows-task-autostart-restore-failed"
-              : failed
-                ? "update-failed"
-                : "cancelled",
-          },
-          { env: updateRun.env },
-        );
-      }
-    } finally {
-      if (!restartSafe) {
-        // Re-enabling a rejected installation would let a login trigger bypass
-        // the updater's unsafe-stop decision after this process has exited.
-        restoreAllowed = false;
-        removeSignalHandlers();
-      }
-      finishUpdate?.();
-      finishUpdate = undefined;
-      unregisterSignalExitGate();
+    if (settlement) {
+      return settlement.catch(() => undefined);
     }
+    const recordInterruption = interrupted && (restoreAllowed || restorationFailed);
+    restoreAllowed = false;
+    settlement = (async () => {
+      await restorePromise?.catch(() => undefined);
+      if (!restartSafe && restorationAttempted && (await suspensionPromise.catch(() => false))) {
+        // Failed verification revokes autostart, even if /ENABLE committed before
+        // reporting failure. Compensation must never re-enable the rejected runtime.
+        await suspendScheduledTaskAutoStartForUpdate(serviceEnv, {
+          beforeMutation: assertCurrentService,
+          restoreOnFailure: false,
+        });
+      }
+    })().finally(() => {
+      try {
+        if (finishUpdate && recordInterruption && updateRun) {
+          const failed = restorationFailed || !restartSafe;
+          finishUpdateRun(
+            updateRun.runId,
+            {
+              status: failed ? "failed" : "skipped",
+              reason: restorationFailed
+                ? "windows-task-autostart-restore-failed"
+                : failed
+                  ? "update-failed"
+                  : "cancelled",
+            },
+            { env: updateRun.env },
+          );
+        }
+      } finally {
+        removeSignalHandlers();
+        finishUpdate?.();
+        finishUpdate = undefined;
+        unregisterSignalExitGate();
+      }
+    });
+    return settlement;
   };
   const restore = (restartSafe?: boolean) => {
     // Finalization has already reported this lifecycle's outcome. A retained
     // cleanup handle cannot reopen it or replay its settled restoration error.
-    if (!finishUpdate) {
+    if (!finishUpdate || settlement) {
       return Promise.resolve();
     }
     if (restartSafe === true) {
@@ -334,11 +347,17 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
     }
     restorePromise ??= suspensionPromise
       .then(async (suspended) => {
-        if (suspended && restoreAllowed) {
-          // Enabling a replaced task would activate an owner this operation never
-          // stopped. Revalidate even on failure and signal recovery paths.
+        if (suspended && restoreAllowed && !settlement) {
           await assertCurrentService?.();
-          await resumeScheduledTaskAutoStartAfterUpdate(serviceEnv);
+          await resumeScheduledTaskAutoStartAfterUpdate(serviceEnv, {
+            beforeMutation: async () => {
+              await assertCurrentService?.();
+              if (settlement || !restoreAllowed) {
+                throw new Error("Windows task restoration authority has closed.");
+              }
+              restorationAttempted = true;
+            },
+          });
         }
       })
       .catch((error: unknown) => {
@@ -373,7 +392,7 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
     suspended = await suspensionPromise;
   } catch (err) {
     await recovery.restore().catch(() => undefined);
-    recovery.complete(!(err instanceof ScheduledTaskAutoStartRecoveryError));
+    await recovery.complete(!(err instanceof ScheduledTaskAutoStartRecoveryError));
     throw err;
   }
   await abortWindowsTaskUpdateIfInterrupted(recovery);
@@ -381,7 +400,7 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
     try {
       await recovery.restore();
     } finally {
-      recovery.complete();
+      await recovery.complete();
     }
     return undefined;
   }
@@ -397,7 +416,7 @@ async function abortWindowsTaskUpdateIfInterrupted(
   try {
     await recovery.restore();
   } finally {
-    recovery.complete();
+    await recovery.complete();
   }
   throw new UpdateCommandAbort();
 }
@@ -409,10 +428,9 @@ export async function maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
   if (!stopState?.windowsTaskAutoStartRecovery) {
     return;
   }
-  // The recovery exists only when this update disabled an enabled task. Clear it
-  // after use so later failure paths cannot repeat the state change.
+  // Retain the suspension through verification so a failed activation can revoke
+  // autostart; the owner makes restoration and final settlement idempotent.
   await stopState.windowsTaskAutoStartRecovery.restore(restartSafe);
-  stopState.windowsTaskAutoStartRecovery = undefined;
 }
 
 export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
@@ -629,7 +647,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
           serviceState.env,
         );
       } finally {
-        windowsTaskAutoStartRecovery.complete(autostartRestored);
+        await windowsTaskAutoStartRecovery.complete(autostartRestored);
       }
       if (windowsTaskAutoStartRecovery.interrupted()) {
         throw new UpdateCommandAbort();

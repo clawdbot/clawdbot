@@ -400,11 +400,11 @@ describe("update run ledger", () => {
     { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
     { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512) },
   ])(
-    "retains notice custody and phases across the $name bound and database reopen",
+    "retains notice custody, restoration proof, and phases across the $name bound and database reopen",
     ({ count, detail }) => {
       const options = isolatedOptions();
       const run = createUpdateRun({ trigger: "chat" }, options);
-      const notices = ["notice:ack", "notice:activating", "notice:verifying"];
+      const notices = ["notice:ack", "notice:activating", "notice:verifying", "previous generation restoration"];
       for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
         recordUpdateRunStep(run.runId, { step, status: "completed", detail }, options);
       }

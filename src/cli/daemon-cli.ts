@@ -22,6 +22,7 @@ export {
 // Handoff admission uses the serving runtime; terminal writes load the installed runtime afresh.
 export {
   finishUpdateRun,
+  getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";

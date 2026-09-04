@@ -47,6 +47,7 @@ import {
   resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 import {
+  recordFailedUpdateGatewayState,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
@@ -57,6 +58,7 @@ import {
   tryInstallShellCompletion,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
+
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const CLI_NAME = resolveCliName();
@@ -90,6 +92,7 @@ export type FinishUpdateParams = {
 
 export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRunResult> {
   let rollbackAttempted = false;
+  let rollbackStopState: PreManagedServiceStop | undefined;
   let rolledBack = false;
   let extraDowntimeMs = 0;
   let pendingRestartAtMs: number | undefined;
@@ -164,7 +167,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           rollbackBlockedReason: params.rollbackBlockedReason,
           schemaVersions: params.schemaVersions,
           previousVerified: params.previousVerified,
-          config: params.configSnapshot.config,
+          config:
+            params.configSnapshot.sourceConfigBeforeMigrations ??
+            params.configSnapshot.sourceConfig,
           opts: params.opts,
           preManagedServiceStop: params.preManagedServiceStop,
           timeoutMs: params.updateStepTimeoutMs,
@@ -173,6 +178,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         }),
       );
       result = rollback.result;
+      rollbackStopState = rollback.stoppedForRollback;
       rolledBack = rollback.rolledBack;
       if (previouslyConfirmed) {
         extraDowntimeMs +=
@@ -212,7 +218,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       ...(result.status === "error" && !recoverService && !rolledBack
         ? {
             recovery:
-              result.recovery?.serviceRestartSafe === false
+              result.recovery?.serviceRestartSafe === false ||
+              result.recovery?.packageRollbackVerified
                 ? result.recovery
                 : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
           }
@@ -221,10 +228,10 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (!restoreFailure) {
       try {
         if (finalResult.status !== "ok" && finalResult.recovery?.serviceRestartSafe !== true) {
-          params.preManagedServiceStop?.windowsTaskAutoStartRecovery?.complete(false);
+          await (rollbackStopState ?? params.preManagedServiceStop)?.windowsTaskAutoStartRecovery?.complete(false);
         } else {
           await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
-            params.preManagedServiceStop,
+            rollbackStopState ?? params.preManagedServiceStop,
             true,
           );
         }
@@ -239,7 +246,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       finalResult.status = "error";
       finalResult.reason = "windows-task-autostart-restore-failed";
       finalResult.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
-      params.preManagedServiceStop?.windowsTaskAutoStartRecovery?.complete(false);
+      await (rollbackStopState ?? params.preManagedServiceStop)?.windowsTaskAutoStartRecovery?.complete(false);
     }
     recordNextAction(finalResult);
     if (notify) {
@@ -248,6 +255,12 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         result: finalResult,
         jsonMode: Boolean(params.opts.json),
       });
+    }
+    if (finalResult.status === "error" && !rolledBack && params.preManagedServiceStop?.stopped) {
+      await recordFailedUpdateGatewayState(
+        params.opts.run,
+        params.preManagedServiceStop.serviceEnv ?? process.env,
+      );
     }
     // The recovering Gateway reads this notification at startup. Persist once
     // before restarting; rewriting a consumed sentinel could deliver it twice.
@@ -267,6 +280,9 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         }
       }
     }
+    await (rollbackStopState ?? params.preManagedServiceStop)?.windowsTaskAutoStartRecovery?.complete(
+      finalResult.status === "ok" || finalResult.recovery?.service === "healthy",
+    );
     // Only recovery advances the outcome after persistence; ordinary reports share one snapshot.
     const reportedResult = printFinalResult(
       recoverService ? completedResult(finalResult) : finalResult,

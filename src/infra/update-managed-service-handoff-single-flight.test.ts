@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   signalMockManagedUpdateHandoffReady,
@@ -13,6 +13,7 @@ import {
 } from "./update-managed-service-handoff.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn());
 const forceKillChildProcessTreeMock = vi.hoisted(() => vi.fn());
 const findInstalledSystemdGatewayScopeMock = vi.hoisted(() =>
   vi.fn(
@@ -24,7 +25,8 @@ const findInstalledSystemdGatewayScopeMock = vi.hoisted(() =>
       } | null,
   ),
 );
-const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+// The coordinator must outlive mocked lease cleanup in afterEach.
+const tempRoots = createTempDirTracker();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-single-flight-${process.pid}`);
 
@@ -71,7 +73,16 @@ vi.mock("../process/child-process-tree.js", async (importOriginal) => ({
   forceKillChildProcessTree: forceKillChildProcessTreeMock,
 }));
 
+vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tmp-openclaw-dir.js")>()),
+  resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
+}));
+
 beforeEach(async () => {
+  // Competing helpers share this fixture's coordinator, never the operator's database.
+  resolvePreferredOpenClawTmpDirMock.mockReturnValue(
+    tempRoots.make("openclaw-handoff-coordinator-"),
+  );
   let pid = 24680;
   const liveChildren = new Set<number>();
   const processIdentity = await import("../shared/pid-alive.js");
@@ -107,6 +118,7 @@ afterEach(async () => {
     return scriptPath ? [path.dirname(scriptPath)] : [];
   });
   await Promise.all(handoffDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  tempRoots.cleanup();
   vi.restoreAllMocks();
   vi.resetModules();
 });

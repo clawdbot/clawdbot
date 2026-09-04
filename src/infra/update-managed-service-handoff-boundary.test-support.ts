@@ -5,6 +5,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { expect, vi, type Mock } from "vitest";
+import { waitForFile } from "../../test/helpers/process-wait.js";
+import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
 import { writeTriageUpdateFailure } from "../commands/triage-update.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -112,8 +114,9 @@ export function createManagedServiceManagerBoundary({
       ${options?.updaterNotification === "consumed" ? consumeNotification : ""}
       ${options?.diagnosticReadFailure === "after-recovery" ? `{ const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)}); db.exec("ALTER TABLE gateway_restart_sentinel RENAME COLUMN thread_id TO unreadable_thread_id"); db.close(); }` : ""}
       const fault = ${JSON.stringify(options?.gatewayHealth)};
+      if (fault === "throw") throw new Error("readiness probe unavailable");
       return { healthy: !["unready", "wrong-version", "wrong-build", "exited"].includes(fault),
-        runtime: { status: fault === "exited" ? "stopped" : "running" },
+        runtime: { status: fault === "exited" ? "stopped" : "running", pid: fault === "exited" ? null : ${process.pid} },
         gatewayVersion: fault === "wrong-version" ? "0.0.1" : expectedVersion,
         gatewayBuildId: fault === "wrong-build" ? "another-build-same-version" : expectedBuildId };
     }
@@ -169,7 +172,7 @@ export function createManagedServiceManagerBoundary({
         recoveryModulePath,
         `
       ${ledgerRuntimeImport}
-      export const { recordUpdateRunPhase, recordUpdateRunVerification } = ledger;
+      export const { getUpdateRun, recordUpdateRunPhase, recordUpdateRunVerification } = ledger;
       ${options?.replaceLedgerWriter ? 'export function finishUpdateRun() { throw new Error("the previous runtime must not finalize the candidate"); }' : "export const { finishUpdateRun } = ledger;"}
     `,
       );
@@ -246,6 +249,24 @@ export function createManagedServiceManagerBoundary({
         consumeNotification,
         options,
       });
+      if (run && options?.rollbackRestoration) {
+        updaterScript = `void (async () => {
+          ${ledgerRuntimeImport}
+          ledger.recordUpdateRunPhase(${JSON.stringify(run.runId)}, "restarting", {
+            before: { version: "1.0.0" }, after: { version: "1.0.0" },
+            step: { step: "previous generation restoration", status: "completed", endedAtMs: Date.now() },
+          });
+          ledger.recordUpdateRunVerification(${JSON.stringify(run.runId)}, {
+            serviceRunning: false, pid: ${parentPid}, readyz: false, settled: false,
+            channelsReady: false, pluginErrors: ["candidate plugin failed"], inferenceProbe: "passed",
+          });
+          const managerFs = require("node:fs");
+          const managerState = JSON.parse(managerFs.readFileSync(${JSON.stringify(statePath)}, "utf8"));
+          managerState.previousGenerationRestored = true;
+          managerFs.writeFileSync(${JSON.stringify(statePath)}, JSON.stringify(managerState));
+          ${updaterScript}
+        })().catch((error) => { console.error(error); process.exit(18); });`;
+      }
       if (options?.replaceLedgerWriter) {
         const installedLedgerModule = `${ledgerRuntimeImport}
         export const { finishUpdateRun } = ledger;
@@ -391,15 +412,9 @@ export function createManagedServiceManagerBoundary({
           runningHelper.stdin?.end();
         }
         if (options.controlDisconnect === "transferred") {
-          await vi.waitFor(
-            async () => {
-              expect(
-                (await pathExists(validationStartedPath)) || (await pathExists(commandsPath)),
-              ).toBe(true);
-            },
-            // The real owner runtime can cold-load the configured plugin graph before validation.
-            { timeout: 30_000 },
-          );
+          // Configured plugin cold loading shares the suite saturation budget. Only
+          // the updater's validation signal permits revocation or activation below.
+          await waitForFile(validationStartedPath, DEFAULT_VITEST_TEST_TIMEOUT_MS);
           await expect(pathExists(commandsPath)).resolves.toBe(false);
           await expect(pathExists(validationStartedPath)).resolves.toBe(true);
           // A real updater child is now validating, but the service has received no stop.

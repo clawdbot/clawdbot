@@ -97,7 +97,7 @@ export function renderUpdateRunReport(
   const after = run.after.sha?.slice(0, 8) ?? run.after.version;
   const reason = bounded(run.reason?.trim() || "unknown reason", 240);
   const running =
-    run.verification.serviceRunning === false ? undefined : run.verification.runningVersion;
+    run.verification.serviceRunning === true ? run.verification.runningVersion : undefined;
   let headline: string;
   switch (run.status) {
     case "succeeded":

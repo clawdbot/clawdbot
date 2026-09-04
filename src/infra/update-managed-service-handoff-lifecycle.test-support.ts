@@ -14,6 +14,7 @@ type ManagedSystemdPostExitState = {
 
 export type ManagedServiceManagerBoundaryOptions = {
   ledger?: boolean;
+  rollbackRestoration?: boolean;
   cancelAfterPark?: boolean;
   parentExitTimeoutMs?: number;
   launchdFault?: "wrong-parent" | "missing-restored-pid" | "dead-restored-pid";
@@ -47,7 +48,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   updaterOutput?: "malformed" | "overflow" | "missing" | "split-utf8";
   updaterSignal?: boolean;
   updaterNotification?: "published" | "consumed";
-  gatewayHealth?: "ready" | "unready" | "wrong-version" | "wrong-build" | "exited";
+  gatewayHealth?: "ready" | "unready" | "wrong-version" | "wrong-build" | "exited" | "throw";
   diagnosticReadFailure?: "before-recovery" | "after-recovery";
 };
 
@@ -263,11 +264,13 @@ if (${JSON.stringify(kind)} === "systemd") {
       : observation?.mainPid === "none" ? 0
       : state.restored ? restoredPid : active ? ${parentPid} : 0;
     const observedGeneration = state.restored || observation?.generation === "replacement" ? "222"
+      : state.previousGenerationRestored ? "333"
       : observation?.generation === "parked" ? "111"
         : observation?.generation === "cleared" ? "0"
           : active || observation?.activeState === "deactivating" ? "111" : "0";
     const observedInvocation = state.restored || observation?.invocation === "replacement"
       ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      : state.previousGenerationRestored ? "cccccccccccccccccccccccccccccccc"
       : observation?.invocation === "parked" ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         : observation?.invocation === "cleared" ? ""
           : active || observation?.activeState === "deactivating"

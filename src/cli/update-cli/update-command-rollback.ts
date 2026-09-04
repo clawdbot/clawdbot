@@ -1,3 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
+import { readConfigFileSnapshot, mutateConfigFile } from "../../config/config.js";
+import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -11,6 +14,8 @@ import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   maybeRestartService,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
@@ -19,7 +24,19 @@ import {
   type PreManagedServiceStop,
 } from "./update-command-service.js";
 
-/** Restore retained bytes only across unchanged schemas; restart needs prior service proof. */
+function withoutWriterStamp(config: OpenClawConfig): OpenClawConfig {
+  const result = structuredClone(config);
+  if (result.meta) {
+    delete result.meta.lastTouchedVersion;
+    if (Object.keys(result.meta).length === 0) {
+      delete result.meta;
+    }
+  }
+  return result;
+}
+
+/** Owns the previous generation: package/shims, config stamp, and service definition/start.
+ * Only stamp-neutral config and unchanged schemas permit restoring its prior service proof. */
 export async function rollbackFailedUpdate(params: {
   result: UpdateRunResult;
   previousRoot: string;
@@ -36,37 +53,77 @@ export async function rollbackFailedUpdate(params: {
 }): Promise<{
   result: UpdateRunResult;
   rolledBack: boolean;
+  stoppedForRollback?: PreManagedServiceStop;
   downtimeMs?: number;
   verifiedAtMs?: number;
 }> {
-  const { result, preManagedServiceStop: before, packageTransaction, opts } = params;
+  const { preManagedServiceStop: before, packageTransaction, opts } = params;
+  let result = params.result;
   const env = before?.serviceEnv ?? opts.run?.env ?? process.env;
+  const recoveryEnv = { ...env, [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1" };
   const state = { stateDir: resolveStateDir(env), config: params.config, env };
   const port = before?.stopped
     ? await resolveUpdatedGatewayRestartPort({ config: params.config, serviceEnv: env })
     : undefined;
   const failed = (reason: string) => {
-    stoppedForRollback?.windowsTaskAutoStartRecovery?.complete(false);
-    return { result: { ...result, status: "error" as const, reason }, rolledBack: false };
+    return {
+      result: {
+        ...result,
+        status: "error" as const,
+        reason:
+          result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
+            ? (params.result.reason ?? reason)
+            : reason,
+      },
+      rolledBack: false,
+      stoppedForRollback,
+    };
   };
-  const schemasUnchanged = async () => {
+  const stateUnchanged = async () => {
     const baseline = params.schemaVersions;
     const current = await readUpdateStateSchemaVersions(state);
-    return baseline !== undefined && updateStateSchemaVersionsMatch(baseline, current);
+    if (baseline === undefined || !updateStateSchemaVersionsMatch(baseline, current)) {
+      return false;
+    }
+    const snapshot = await withOwnedManagedUpdateEnv(env, () =>
+      readConfigFileSnapshot({
+        skipPluginValidation: true,
+        observe: false,
+        suppressFutureVersionWarning: true,
+      }),
+    );
+    if (!snapshot.valid) {
+      throw new Error("Config could not be verified before rollback.");
+    }
+    return isDeepStrictEqual(
+      withoutWriterStamp(snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig),
+      withoutWriterStamp(params.config),
+    );
   };
   let stoppedForRollback: PreManagedServiceStop | undefined;
   let failureReason = "rollback-state-unverified";
   const stop = async () => {
     failureReason = "service-revalidation-failed";
-    const stopped = await maybeStopManagedServiceBeforeMutableUpdate({
-      updateRun: opts.run,
-      updateInstallKind: "package",
-      root: result.root ?? params.previousRoot,
-      shouldRestart: true,
-      jsonMode: opts.json === true,
-      expectedService: before,
-      timeoutMs: params.timeoutMs,
-    });
+    // The parent binary can be older than the candidate's stamp even before bytes are restored.
+    // This existing recovery allowance belongs only to this guarded stop invocation.
+    const stopped = await withOwnedManagedUpdateEnv(recoveryEnv, () =>
+      maybeStopManagedServiceBeforeMutableUpdate({
+        updateRun: opts.run,
+        updateInstallKind: "package",
+        root: result.root ?? params.previousRoot,
+        shouldRestart: true,
+        jsonMode: opts.json === true,
+        expectedService: before,
+        timeoutMs: params.timeoutMs,
+      }),
+    );
+    if (stopped.serviceEnv) {
+      stopped.serviceEnv = { ...stopped.serviceEnv };
+      delete stopped.serviceEnv[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
+    }
+    // Reinspection of an already disabled task creates no new suspension owner.
+    // Keep the original authority through rollback activation and final settlement.
+    stopped.windowsTaskAutoStartRecovery ??= before?.windowsTaskAutoStartRecovery;
     stoppedForRollback = stopped;
     if (
       stopped.blockMessage ||
@@ -91,15 +148,14 @@ export async function rollbackFailedUpdate(params: {
       await stopIfUnreachable();
       return failed("rollback-state-unverified");
     }
-    if (!(await schemasUnchanged())) {
+    if (!(await stateUnchanged())) {
       await stopIfUnreachable();
       return failed("state-migrated-no-rollback");
     }
     const stopped = before?.stopped ? await stop() : undefined;
     // Recheck after stop so a final startup migration cannot race the first read.
     failureReason = "rollback-state-unverified";
-    if (!(await schemasUnchanged())) {
-      stopped?.windowsTaskAutoStartRecovery?.complete(false);
+    if (!(await stateUnchanged())) {
       return failed("state-migrated-no-rollback");
     }
     failureReason = "source-rollback-failed";
@@ -107,6 +163,18 @@ export async function rollbackFailedUpdate(params: {
       throw new Error("The retained package transaction is unavailable.");
     }
     const restored = await packageTransaction.rollback();
+    // Restoration changes the active runtime before any later reporting or
+    // restart can fail. Carry that identity through every recovery outcome.
+    result = { ...result, steps: [...result.steps, restored] };
+    if (restored.exitCode === 0) {
+      result.root = params.previousRoot;
+      result.after = result.before;
+      result.recovery = {
+        serviceRestartSafe: false,
+        packageRollbackVerified: true,
+        reason: "runtime-verification-failed",
+      };
+    }
     if (opts.run) {
       recordUpdateRunStep(
         opts.run.runId,
@@ -118,56 +186,105 @@ export async function rollbackFailedUpdate(params: {
         { env: opts.run.env },
       );
     }
-    const restoredResult: UpdateRunResult = {
-      ...result,
-      root: params.previousRoot,
-      after: result.before,
-      steps: [...result.steps, restored],
-    };
     if (restored.exitCode !== 0) {
-      stopped?.windowsTaskAutoStartRecovery?.complete(false);
-      return { result: { ...restoredResult, reason: "source-rollback-failed" }, rolledBack: false };
+      return failed("source-rollback-failed");
     }
-    restoredResult.recovery = {
-      serviceRestartSafe: false,
-      packageRollbackVerified: true,
-      reason: "runtime-verification-failed",
-    };
+    failureReason = "rollback-state-unverified";
+    await withOwnedManagedUpdateEnv(env, async () => {
+      const snapshot = await readConfigFileSnapshot({
+        skipPluginValidation: true,
+        observe: false,
+        suppressFutureVersionWarning: true,
+      });
+      if (
+        snapshot.exists &&
+        result.before?.version &&
+        snapshot.sourceConfig.meta?.lastTouchedVersion &&
+        snapshot.sourceConfig.meta?.lastTouchedVersion !== result.before.version
+      ) {
+        await mutateConfigFile({
+          baseHash: snapshot.hash,
+          writeOptions: {
+            lastTouchedVersionOverride: result.before.version,
+            skipPluginValidation: true,
+          },
+          mutate: (_draft, { snapshot: current }) => {
+            if (
+              !isDeepStrictEqual(
+                withoutWriterStamp(current.sourceConfigBeforeMigrations ?? current.sourceConfig),
+                withoutWriterStamp(params.config),
+              )
+            ) {
+              throw new Error("Config changed during previous-generation restoration.");
+            }
+          },
+        });
+      }
+    });
     // A no-service or --no-restart update owns file restoration only. Preserve
     // its original failure without claiming or changing a Gateway generation.
     if (!stopped || port === undefined) {
-      return { result: restoredResult, rolledBack: false };
+      return { result, rolledBack: false };
     }
     if (!params.previousVerified || !result.before?.version) {
       // Restoring retained bytes is safe after the schema fence. Starting the
       // previous runtime additionally requires its pre-activation verification.
-      stopped.windowsTaskAutoStartRecovery?.complete(false);
-      return {
-        result: { ...restoredResult, reason: "previous-version-unverified" },
-        rolledBack: false,
-      };
+      return failed("previous-version-unverified");
     }
+    failureReason = "service-revalidation-failed";
     await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(stopped, true);
     // A failed candidate does not authorize its restart. The previous package's
     // pre-activation verification authorizes restarting this schema-neutral restoration.
     const verdict = stopped.serviceUpdateVerdict ?? before?.serviceUpdateVerdict;
-    let verifiedAtMs: number | undefined;
+    const nodeRunner = before?.serviceNodeRunner ?? params.nodeRunner;
+    if (verdict?.kind === "owned" && verdict.refreshDefinition) {
+      await runUpdatedInstallGatewayCommand(
+        {
+          result,
+          opts,
+          invocationEnv: env,
+          serviceInstallEnv: before?.serviceDefinitionEnv,
+          nodeRunner,
+          timeoutMs: params.timeoutMs,
+          invocationCwd: params.invocationCwd,
+        },
+        "install",
+      );
+    }
+    result.recovery = {
+      serviceRestartSafe: true,
+      packageRollbackVerified: true,
+      version: result.before.version,
+      ...(result.before.buildId ? { buildId: result.before.buildId } : {}),
+    };
+    if (opts.run) {
+      recordUpdateRunStep(
+        opts.run.runId,
+        {
+          step: "previous generation restoration",
+          status: "completed",
+          endedAtMs: Date.now(),
+        },
+        { env: opts.run.env },
+      );
+    }
     failureReason = "restart-unhealthy";
+    let verifiedAtMs: number | undefined;
     const healthy = await maybeRestartService({
       shouldRestart: true,
-      result: restoredResult,
+      result,
       channel: "stable",
       opts,
-      refreshServiceEnv: verdict?.kind === "owned" && verdict.refreshDefinition,
+      refreshServiceEnv: false,
       serviceUpdateVerdict: verdict,
-      serviceEnv: env,
+      serviceEnv: recoveryEnv,
       serviceInstallEnv: before?.serviceDefinitionEnv,
       gatewayPort: port,
       requireRunningServiceAfterRestart: true,
       timeoutMs: params.timeoutMs,
       // Prior verification covers this executable too; refreshing with the
       // candidate's newer Node would not restore the previously serving runtime.
-      nodeRunner: before?.serviceNodeRunner ?? params.nodeRunner,
+      nodeRunner,
       invocationCwd: params.invocationCwd,
       onVerified: (at) => {
         verifiedAtMs = at;
@@ -175,13 +292,11 @@ export async function rollbackFailedUpdate(params: {
     });
     return {
       result: {
-        ...restoredResult,
-        recovery: healthy
-          ? { serviceRestartSafe: true, version: result.before.version, service: "healthy" }
-          : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        ...(healthy ? {} : { reason: "restart-unhealthy" }),
+        ...result,
+        recovery: healthy ? { ...result.recovery, service: "healthy" } : result.recovery,
       },
       rolledBack: healthy,
+      stoppedForRollback,
       ...(verifiedAtMs === undefined ? {} : { verifiedAtMs }),
       ...(verifiedAtMs !== undefined && stopped.stoppedAtMs !== undefined
         ? { downtimeMs: Math.max(0, verifiedAtMs - stopped.stoppedAtMs) }
@@ -197,7 +312,6 @@ export async function rollbackFailedUpdate(params: {
         detail += `; ${formatErrorMessage(stopError)}`;
       }
     }
-    stoppedForRollback?.windowsTaskAutoStartRecovery?.complete(false);
     if (opts.run) {
       recordUpdateRunStep(
         opts.run.runId,

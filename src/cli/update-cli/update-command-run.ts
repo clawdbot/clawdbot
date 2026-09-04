@@ -190,21 +190,30 @@ export function completeUpdateCommandRun(
       recordOptions,
     );
   }
-  finishUpdateRun(
-    run.runId,
-    {
-      status:
-        normalized.status === "ok"
-          ? "succeeded"
-          : normalized.status === "error"
-            ? "failed"
-            : "skipped",
-      reason: normalized.reason,
-      after: normalized.after,
-      downtimeMs,
-    },
-    recordOptions,
-  );
+  // Both finalization and outer CLI unwind come here. A verified restored generation
+  // stays with its helper until native recovery finishes; neither caller may close it early.
+  const helperRecoveryPending =
+    process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
+    result.recovery?.serviceRestartSafe === true &&
+    result.recovery.packageRollbackVerified === true &&
+    result.recovery.service === undefined;
+  if (!helperRecoveryPending) {
+    finishUpdateRun(
+      run.runId,
+      {
+        status:
+          normalized.status === "ok"
+            ? "succeeded"
+            : normalized.status === "error"
+              ? "failed"
+              : "skipped",
+        reason: normalized.reason,
+        after: normalized.after,
+        downtimeMs,
+      },
+      recordOptions,
+    );
+  }
   return { ...result, runId: run.runId };
 }
 

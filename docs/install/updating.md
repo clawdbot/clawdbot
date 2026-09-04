@@ -165,7 +165,8 @@ Installer-driven switches verify the replacement before the working owner is ret
 
 Candidate validation failures leave the old Gateway serving. After activation,
 package recovery can restore the retained previous package only when the shared
-and affected per-agent database schema versions are unchanged. The restored
+and affected per-agent database schema versions and configuration content are
+unchanged. The restored
 Gateway must pass the same runtime checks before recovery is reported as
 complete. A schema migration prevents automatic package rollback; replacing
 code cannot undo migrated state. Incomplete file rollback retains its backups
@@ -645,29 +646,40 @@ made after the backup.
 
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
-pre-activation values. When they match and the retained previous package was
-verified before the update, it stops the candidate, restores that package,
-refreshes service metadata, starts it, and verifies
-service health, version/build identity, plugins, channels, and `/readyz` again.
-Successful recovery finishes the run as `rolled-back`, retaining the original
-verification failure as its reason. The update still reports failure; recovery
-does not turn a rejected candidate into a successful update.
+pre-activation values and checks that configuration content is unchanged.
+When both checks pass and the retained previous package was verified before the
+update, it stops the candidate and restores the previous generation: package,
+command shim, service definition, and config writer stamp. Owned, writable
+service metadata is refreshed; protected service definitions are preserved.
+The CLI verifies the restarted previous Gateway's service health, version/build
+identity, plugins, channels, and `/readyz` again.
 
-A failure alone does not authorize another candidate restart. The previous
-runtime was verified before activation, so the unchanged schema check permits
-restarting it during rollback. The bounded inference check is advisory:
+The candidate may have advanced the config writer stamp without changing config
+content. Rollback restores that stamp and uses the existing intentional-recovery
+allowance only for its service commands, so the older-binary guard does not block
+recovery. The allowance is never saved in config or the service environment.
+
+Successful recovery leaves the previous Gateway running and finishes the run as
+`rolled-back`, with `after.version` set to the previous version and downtime
+measured from service stop through verified recovery. The headline is
+`↩️ OpenClaw update rolled back to <previous>: <reason>`, retaining the original
+verification failure. The command still exits nonzero; recovery does not turn a
+rejected candidate into a successful update.
+
+The bounded inference check is advisory:
 `inference: unavailable` by itself does not trigger rollback.
 
-If a schema version changed, the run fails with
+If configuration content or a schema version changed, rollback is refused with
 `state-migrated-no-rollback`. A reachable candidate remains running so it can be
 diagnosed; an unreachable candidate remains stopped. Preserve the current state
 and use `openclaw triage` or the printed repair command before considering an
-older version. Automatic rollback restores code, not a full state snapshot.
+older version.
+Automatic rollback restores code, not a full state snapshot.
 The candidate's temporary migration-rehearsal snapshots are removed after
 validation and do not replace your backup.
-If the schema comparison cannot be completed, the run reports
-`rollback-state-unverified` and does not attempt automatic rollback. The freshly
-installed candidate owns final verification and reporting after migration,
+If the schema comparison cannot be completed, automatic rollback is refused
+(`rollback-state-unverified`). The freshly installed candidate owns final
+verification and reporting after migration,
 preserving the same run ID and recorded activation steps.
 
 ### Before updating: create a verified backup
