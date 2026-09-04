@@ -67,12 +67,14 @@ import {
 import { getUpdateAvailable, initializeGatewayUpdateStatus } from "../../infra/update-startup.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
+  INTERNAL_MESSAGE_CHANNEL,
   isBrowserOperatorUiClient,
   isInternalMessageChannel,
 } from "../../utils/message-channel.js";
 import { VERSION } from "../../version.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { recordLatestUpdateRestartSentinel } from "../server-restart-sentinel.js";
+import { resolveUpdateRunNoticeTarget } from "../update-run-notice-target.js";
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -115,7 +117,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     const restartDelayMs = normalizeGatewayRestartDelayMs(requestedRestartDelayMs);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
       extractDeliveryInfo(sessionKey);
-    const deliveryContext = mergeDeliveryContext(requestedDeliveryContext, sessionDeliveryContext);
+    let deliveryContext = mergeDeliveryContext(requestedDeliveryContext, sessionDeliveryContext);
     const threadId = requestedThreadId ?? sessionThreadId;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
@@ -131,6 +133,17 @@ export const updateHandlers: GatewayRequestHandlers = {
             (sessionKey && isInternalMessageChannel(requesterChannel ?? deliveryContext?.channel))
           ? "control-ui"
           : "api";
+    const config = context.getRuntimeConfig();
+    const noticeTarget = resolveUpdateRunNoticeTarget({
+      cfg: config,
+      sessionKey,
+      explicitDeliveryContext: deliveryContext,
+      threadId,
+    });
+    // Recording an internal destination does not change the caller's trigger classification.
+    if (noticeTarget.kind === "internal") {
+      deliveryContext = { channel: INTERNAL_MESSAGE_CHANNEL };
+    }
     const origin = {
       doctorHint: formatDoctorNonInteractiveHint(),
       ...(params.requester ? { requester: params.requester } : {}),
@@ -207,9 +220,8 @@ export const updateHandlers: GatewayRequestHandlers = {
     if (refuseNonOwner()) {
       return;
     }
-    const config = context.getRuntimeConfig();
     const { createUpdateRunNotifier } = await import("../update-run-notice.runtime.js");
-    const notify = createUpdateRunNotifier(run, config, context.deps);
+    const notify = createUpdateRunNotifier(run, config, context.deps, noticeTarget);
     const sentinelMeta: UpdateRestartSentinelMeta = {
       runId,
       ...(sessionKey ? { sessionKey } : {}),

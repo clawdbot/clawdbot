@@ -9,16 +9,8 @@ import { recordUpdateRunStep, recordUpdateRunVerification } from "../infra/updat
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { renderUpdateRunNotice, type UpdateRunNoticeKind } from "../infra/update-run-report.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  deliveryContextFromSession,
-  mergeDeliveryContext,
-} from "../utils/delivery-context.shared.js";
-import { isInternalMessageChannel } from "../utils/message-channel.js";
-import {
-  resolveGatewayLifecycleNoticeRoute,
-  sendGatewayLifecycleNotice,
-} from "./server-restart-sentinel-notice.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { sendGatewayLifecycleNotice } from "./server-restart-sentinel-notice.js";
+import { resolveUpdateRunNoticeTarget } from "./update-run-notice-target.js";
 
 const log = createSubsystemLogger("gateway/update-run");
 
@@ -27,25 +19,14 @@ export function createUpdateRunNotifier(
   initial: UpdateRunRecord,
   cfg: OpenClawConfig = getRuntimeConfig(),
   deps: CliDeps = createDefaultDeps(),
+  target = resolveUpdateRunNoticeTarget({
+    cfg,
+    sessionKey: initial.origin.sessionKey,
+    explicitDeliveryContext: initial.origin.deliveryContext,
+    threadId: initial.origin.deliveryContext?.threadId,
+  }),
 ) {
   const { sessionKey } = initial.origin;
-  const session =
-    sessionKey &&
-    (!initial.origin.deliveryContext?.channel ||
-      isInternalMessageChannel(initial.origin.deliveryContext.channel))
-      ? loadSessionEntry(sessionKey)
-      : undefined;
-  const deliveryContext = mergeDeliveryContext(
-    initial.origin.deliveryContext,
-    deliveryContextFromSession(session?.entry),
-  );
-  const route = resolveGatewayLifecycleNoticeRoute({
-    cfg,
-    deliveryContext,
-    threadId: initial.origin.deliveryContext?.threadId,
-  });
-  const internal =
-    sessionKey && isInternalMessageChannel(deliveryContext?.channel) ? session : undefined;
   return async (run: UpdateRunRecord, kind: UpdateRunNoticeKind) => {
     const message = renderUpdateRunNotice(run, kind);
     const recorded =
@@ -59,16 +40,17 @@ export function createUpdateRunNotifier(
     // ownership. A repeated phase or sentinel revision cannot send a fifth message.
     const deliveryIntentId = `update-run-${kind}:${run.runId}`;
     let delivered = false;
-    if (route) {
+    if (target.kind === "route") {
       delivered = await sendGatewayLifecycleNotice({
-        ...route,
+        ...target.route,
         cfg,
         deps,
         sessionKey,
         message,
         deliveryIntentId,
       });
-    } else if (internal?.entry) {
+    } else if (target.kind === "internal") {
+      const internal = target.session;
       const notice = await appendAssistantMessageToSessionTranscript({
         agentId: internal.agentId,
         sessionKey: internal.canonicalKey,
@@ -86,7 +68,7 @@ export function createUpdateRunNotifier(
     if (delivered && kind === "finished") {
       recordUpdateRunVerification(run.runId, { noticeDelivered: true });
     }
-    const custody = route ? findDeliveryIntentOwner(deliveryIntentId) : null;
+    const custody = target.kind === "route" ? findDeliveryIntentOwner(deliveryIntentId) : null;
     const owned = delivered || custody?.status === "pending" || custody?.status === "completed";
     if (owned && kind !== "finished") {
       recordUpdateRunStep(run.runId, {

@@ -115,7 +115,7 @@ vi.mock("../../config/commands.flags.js", () => ({ isRestartEnabled: isRestartEn
 
 vi.mock("../../config/sessions.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions.js")>()),
-  extractDeliveryInfo: (sessionKey: string | undefined) => {
+  extractDeliveryInfo: vi.fn((sessionKey: string | undefined) => {
     if (!sessionKey) {
       return { deliveryContext: undefined, threadId: undefined };
     }
@@ -130,7 +130,7 @@ vi.mock("../../config/sessions.js", async (importOriginal) => ({
       deliveryContext: { channel: "webchat", to: "webchat:user-123", accountId: "default" },
       threadId: undefined,
     };
-  },
+  }),
 }));
 
 vi.mock("../../infra/restart-sentinel.js", async () => {

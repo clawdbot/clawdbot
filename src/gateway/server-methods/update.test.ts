@@ -3,6 +3,8 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import {
@@ -12,6 +14,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { summarizeUpdateRunResponse } from "../update-run-summary.js";
 import {
   sentinelState,
@@ -246,6 +249,26 @@ describe("update.run acknowledgement", () => {
     const response = await captureUpdateRunPayload({ sessionKey });
     expect(response?.ackDelivered).toBe(false);
     expect(runGatewayUpdateMock).toHaveBeenCalledOnce();
+  });
+
+  it("records an internal API origin from only its persisted session key", async () => {
+    const internalSessionKey = "agent:main:webchat:lane";
+    await upsertSessionEntryCore(
+      {
+        agentId: "main",
+        sessionKey: internalSessionKey,
+        storePath: resolveDefaultSessionStorePath("main"),
+      },
+      { sessionId: "internal-api-update", updatedAt: 1, delivery: { kind: "internal" } },
+    );
+    const { extractDeliveryInfo } = await import("../../config/sessions/delivery-info.js");
+    const sessions = await import("../../config/sessions.js");
+    vi.mocked(sessions.extractDeliveryInfo).mockImplementationOnce(extractDeliveryInfo);
+    const response = await captureUpdateRunPayload({ sessionKey: internalSessionKey });
+    expect(response).toMatchObject({ ok: true, ackDelivered: true });
+    const run = getUpdateRun(response!.runId);
+    expect(run).toMatchObject({ trigger: "api", origin: { sessionKey: internalSessionKey } });
+    expect(run?.origin.deliveryContext).toEqual({ channel: INTERNAL_MESSAGE_CHANNEL });
   });
 
   it("does not acknowledge a preflight refusal or a missing route", async () => {

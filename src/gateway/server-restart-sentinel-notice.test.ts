@@ -164,7 +164,10 @@ describe("restart sentinel notice recovery", () => {
           source: "test",
           plugin: createOutboundTestPlugin({
             id: "matrix",
-            outbound: { deliveryMode: "direct", sendText: vi.fn(async () => ({ ok: true })) },
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async () => ({ channel: "matrix", messageId: "notice" }),
+            },
           }),
         },
       ]),

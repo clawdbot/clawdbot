@@ -98,6 +98,10 @@ chat:
 3. `🔁 Back on v<to>, verifying…` when the new Gateway starts verification.
 4. The final report, including successful updates.
 
+Runs with an internal origin session, including Control UI and webchat, receive
+these notices directly in that session's transcript. Passing only `sessionKey`
+is enough; the caller does not need to supply `deliveryContext`.
+
 The report includes the outcome, recorded phase durations, failed steps,
 verification facts, and the next action when needed. A run sends each notice
 at most once; an update that stops before restart sends only the notices for
@@ -522,8 +526,9 @@ acknowledgement from an unavailable or failed route. Restart, verification,
 and completion notices follow the durable run state, as described in
 [From chat](/install/updating#from-chat).
 
-The Control UI includes its active session in the update request. Internal/webchat
-sessions receive the outcome as a transcript message after restart; sessions with
+The Control UI includes its active session in the update request. Any run with an
+existing internal/webchat origin session receives its report in that session's
+transcript, whether or not the caller supplied a delivery context. Sessions with
 an external delivery route receive a durable notice in that channel. Updates
 without an originating session send their notice through the system main
 session's external route when available. Otherwise, recovery keeps the
