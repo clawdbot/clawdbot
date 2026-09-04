@@ -799,6 +799,36 @@ function pathTargetsAgentRoster(path: readonly string[]): boolean {
   return AGENT_ROSTER_PATHS.some((rosterPath) => pathStartsWith(path, rosterPath));
 }
 
+function hasOnlyPreparedKeyedAgentEntryRosterIncludes(
+  rootAuthoredConfig: unknown,
+  preparedIncludePaths: readonly (readonly string[])[] | undefined,
+): boolean {
+  const authoredEntries = getPathValue(rootAuthoredConfig, ["agents", "entries"]);
+  if (!isRecord(authoredEntries) || !preparedIncludePaths || preparedIncludePaths.length === 0) {
+    return false;
+  }
+  const rosterIncludePaths = collectIncludeOwnedPaths(rootAuthoredConfig).filter((path) =>
+    pathTouchesAgentRoster(path),
+  );
+  // Whole-entry includes can be restored independently while their containing map accepts siblings.
+  // Broader or nested include paths still own the roster boundary and must fail closed.
+  return (
+    rosterIncludePaths.length > 0 &&
+    rosterIncludePaths.every(
+      (path) =>
+        path.length === 3 &&
+        path[0] === "agents" &&
+        path[1] === "entries" &&
+        preparedIncludePaths.some(
+          (prepared) =>
+            prepared.length === path.length &&
+            path.every((segment, index) => segment === prepared[index]),
+        ),
+    ) &&
+    preparedIncludePaths.length === rosterIncludePaths.length
+  );
+}
+
 function canCanonicalizeAgentRoster(value: unknown): boolean {
   const roster = readAgentRosterProperty(value);
   if (!roster) {
@@ -1496,6 +1526,7 @@ export function resolvePersistCandidateForWrite(params: {
   nextConfig: unknown;
   rootAuthoredConfig?: unknown;
   agentRosterIncludeOwned?: boolean;
+  keyedAgentEntryIncludePaths?: readonly (readonly string[])[];
   unsetPaths?: readonly string[][];
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: unknown;
@@ -1512,21 +1543,28 @@ export function resolvePersistCandidateForWrite(params: {
     explicitSetValueSource: params.explicitSetValueSource ?? params.nextConfig,
   });
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
-  const persistCanonicalRoster = shouldPersistCanonicalAgentRoster(params);
+  const wantsCanonicalRoster = shouldPersistCanonicalAgentRoster(params);
   const includeOwnsRoster =
-    persistCanonicalRoster &&
+    wantsCanonicalRoster &&
     configIncludeOwnsAgentRosterValues({
       parsed: rootAuthoredConfig,
       sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations ?? params.sourceConfig,
       includeContributesRoster: params.agentRosterIncludeOwned,
     });
-  if (includeOwnsRoster) {
+  const preserveKeyedEntryIncludes =
+    includeOwnsRoster &&
+    hasOnlyPreparedKeyedAgentEntryRosterIncludes(
+      rootAuthoredConfig,
+      params.keyedAgentEntryIncludePaths,
+    );
+  if (includeOwnsRoster && !preserveKeyedEntryIncludes) {
     // Canonical roster writes replace the whole roster atomically. Any included contribution
     // therefore owns this boundary; flattening only its root-authored siblings is not safe.
     // The owning directive may sit at agents, agents.entries, agents.list, or an entry, so
     // the refusal names the boundary without guessing which included file owns it.
     throw createConfigIncludeOwnershipError({ ownedConfigPath: "agents" });
   }
+  const persistCanonicalRoster = wantsCanonicalRoster && !preserveKeyedEntryIncludes;
   const projectedAuthoredRoster = persistCanonicalRoster
     ? projectAuthoredAgentRosterForWrite({
         rootAuthoredConfig,
@@ -1553,7 +1591,11 @@ export function resolvePersistCandidateForWrite(params: {
         ...(params.explicitSetPaths ?? []).filter((path) => !pathTargetsAgentRoster(path)),
         ["agents", "entries"],
       ]
-    : params.explicitSetPaths;
+    : preserveKeyedEntryIncludes
+      ? (params.explicitSetPaths ?? []).filter(
+          (path) => !isIncludeOwnedPath(includeProjectionRootAuthoredConfig, [...path]),
+        )
+      : params.explicitSetPaths;
   const explicitSetValueSource = persistCanonicalRoster
     ? canonicalizeAgentRosterForExplicitWrite({
         valueSource: params.explicitSetValueSource ?? params.nextConfig,
@@ -1592,10 +1634,10 @@ export function resolvePersistCandidateForWrite(params: {
   const preserveAuthoredRoster =
     canCanonicalizeAgentRoster(params.nextConfig) || params.preserveLegacyAgentRoster === true;
   const withAuthoredRoster =
-    persistCanonicalRoster || !preserveAuthoredRoster
+    wantsCanonicalRoster || !preserveAuthoredRoster
       ? withPreservedIncludes
       : restoreAuthoredAgentRoster(withPreservedIncludes, rootAuthoredConfig);
-  if (persistCanonicalRoster) {
+  if (wantsCanonicalRoster) {
     // A roster rewrite must never drop entries the mutation did not explicitly delete.
     // A 2026-07-25 production incident lost agents.entries.main twice through silent rewrites.
     assertCanonicalAgentRosterRetainsEntries({

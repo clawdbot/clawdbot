@@ -23,6 +23,7 @@ import {
   restoreEnvRefsFromMap,
   restoreEnvVarRefs,
 } from "./env-preserve.js";
+import { resolveKeyedAgentEntryIncludePreservation } from "./include-write-boundary.js";
 import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import {
   appendConfigAuditRecord,
@@ -138,6 +139,10 @@ export async function writeConfigFileFromContext(
   // Doctor repairs need the same authored projection so roster moves preserve nested includes.
   // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
+    const keyedAgentEntryIncludes = resolveKeyedAgentEntryIncludePreservation({
+      configPath: snapshot.path,
+      provenance: snapshot.includeProvenance,
+    });
     persistCandidate = resolvePersistCandidateForWrite({
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
@@ -146,6 +151,7 @@ export async function writeConfigFileFromContext(
       nextConfig,
       rootAuthoredConfig: snapshot.parsed,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
+      keyedAgentEntryIncludePaths: keyedAgentEntryIncludes?.includePaths,
       unsetPaths,
       explicitSetPaths,
       explicitSetValueSource,

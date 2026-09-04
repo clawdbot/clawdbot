@@ -1,7 +1,7 @@
 // Resolves which authored $include file owns a config mutation, at any depth.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "../utils.js";
-import type { ConfigIncludeOwnership } from "./includes.js";
+import { isInternalIncludeWriteTarget, type ConfigIncludeOwnership } from "./includes.js";
 
 /** Authored include boundary that can absorb a whole config mutation. */
 export type IncludeWriteBoundary = {
@@ -62,6 +62,21 @@ function isPathPrefix(prefix: readonly string[], candidate: readonly string[]): 
     prefix.length <= candidate.length &&
     prefix.every((segment, index) => segment === candidate[index])
   );
+}
+
+function pathsEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index]);
+}
+
+function pathTouchesAgentRoster(path: readonly string[]): boolean {
+  return [
+    ["agents", "entries"],
+    ["agents", "list"],
+  ].some((rosterPath) => isPathPrefix(path, rosterPath) || isPathPrefix(rosterPath, path));
+}
+
+function isKeyedAgentEntryPath(path: readonly string[]): boolean {
+  return path.length === 3 && path[0] === "agents" && path[1] === "entries";
 }
 
 function isSoleOwner(entry: ConfigIncludeOwnership): boolean {
@@ -139,4 +154,50 @@ export function resolveIncludeWriteBoundary(params: {
     }
   }
   return best;
+}
+
+/** Exact keyed-entry includes whose authored pointers may survive a root-owned roster edit. */
+export function resolveKeyedAgentEntryIncludePreservation(params: {
+  configPath: string;
+  provenance: readonly ConfigIncludeOwnership[] | undefined;
+}): { includePaths: readonly (readonly string[])[] } | null {
+  const provenance = params.provenance;
+  if (!provenance) {
+    return null;
+  }
+  const rosterOwnership = provenance.filter((entry) => pathTouchesAgentRoster(entry.path));
+  if (
+    rosterOwnership.length === 0 ||
+    rosterOwnership.some((entry) => !isKeyedAgentEntryPath(entry.path))
+  ) {
+    return null;
+  }
+
+  const includePaths: string[][] = [];
+  for (const entry of rosterOwnership) {
+    // Same-path delegation is ambiguous for preservation even though a direct include write can
+    // select the innermost file: the root must retain the outer directive without flattening it.
+    if (
+      rosterOwnership.filter((candidate) => pathsEqual(candidate.path, entry.path)).length !== 1
+    ) {
+      return null;
+    }
+    const boundary = resolveIncludeWriteBoundary({
+      provenance,
+      changed: { paths: [[...entry.path, "$value"]], rootChanged: false },
+    });
+    if (
+      !boundary ||
+      !pathsEqual(boundary.boundaryPath, entry.path) ||
+      boundary.includePath !== entry.targetPath ||
+      !isInternalIncludeWriteTarget({
+        configPath: params.configPath,
+        includePath: boundary.includePath,
+      })
+    ) {
+      return null;
+    }
+    includePaths.push([...entry.path]);
+  }
+  return { includePaths };
 }
