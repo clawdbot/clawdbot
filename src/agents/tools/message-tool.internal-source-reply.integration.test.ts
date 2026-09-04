@@ -27,6 +27,7 @@ import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../embedded-agent-runner/run/attempt-transcript-lifecycle.js";
@@ -309,11 +310,9 @@ describe("WebChat message tool internal source reply", () => {
         const publishedDownloads: Array<Promise<unknown>> = [];
         const unsubscribe = onSessionTranscriptUpdate((update) => {
           updates.push(update);
-          const content =
-            update.message && typeof update.message === "object"
-              ? (update.message as { content?: Array<Record<string, unknown>> }).content
-              : undefined;
-          for (const block of content?.filter((entry) => entry.type === "image") ?? []) {
+          for (const block of readAssistantDisplayContent(update.message).filter(
+            (entry) => entry.type === "image",
+          )) {
             publishedDownloads.push(
               resolveManagedOutgoingMediaArtifactDownload({
                 sessionKey,
@@ -399,18 +398,22 @@ describe("WebChat message tool internal source reply", () => {
         const content = Array.isArray(assistant?.content)
           ? (assistant.content as Array<Record<string, unknown>>)
           : [];
-        const image = content.find((block) => block.type === "image");
-        const document = content.find((block) => block.type === "attachment");
+        const displayContent = Array.isArray(assistant?.openclawDisplayContent)
+          ? (assistant.openclawDisplayContent as Array<Record<string, unknown>>)
+          : [];
+        const image = displayContent.find((block) => block.type === "image");
+        const document = displayContent.find((block) => block.type === "attachment");
         expect(toolResult.details).toMatchObject({
           sourceReplySink: "internal-ui",
           idempotencyKey: expect.any(String),
         });
         expect(content[0]).toEqual({ type: "text", text: "Durable image reply" });
+        expect(content).toHaveLength(1);
         expect(image).toMatchObject({
           type: "image",
           artifactId: expect.stringMatching(/^artifact_managed_image_/u),
         });
-        expect(content.filter((block) => block.type === "image")).toHaveLength(2);
+        expect(displayContent.filter((block) => block.type === "image")).toHaveLength(2);
         expect(document).toMatchObject({
           type: "attachment",
           attachment: {
@@ -433,15 +436,21 @@ describe("WebChat message tool internal source reply", () => {
           runId: "restart-proof-run",
           target: { agentId: "main", sessionId, sessionKey },
         });
-        const publishedContent = (
-          published?.message as { content?: Array<Record<string, unknown>> }
-        )?.content;
-        expect(publishedContent?.filter((block) => block.type === "image")).toHaveLength(2);
+        const publishedMessage = published?.message as
+          | {
+              content?: Array<Record<string, unknown>>;
+              openclawDisplayContent?: Array<Record<string, unknown>>;
+            }
+          | undefined;
+        expect(publishedMessage?.content?.filter((block) => block.type === "image")).toEqual([]);
+        expect(
+          publishedMessage?.openclawDisplayContent?.filter((block) => block.type === "image"),
+        ).toHaveLength(2);
         await expect(Promise.all(publishedDownloads)).resolves.toEqual([
           expect.objectContaining({ type: "image" }),
           expect.objectContaining({ type: "image" }),
         ]);
-        for (const block of content.filter((entry) => entry.type === "image")) {
+        for (const block of displayContent.filter((entry) => entry.type === "image")) {
           await expect(
             resolveManagedOutgoingMediaArtifactDownload({
               sessionKey,

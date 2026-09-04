@@ -7,7 +7,6 @@ import { normalizeActiveSummary, truncateSummary } from "./prompt.js";
 import { extractTextContent } from "./query.js";
 import { readMergedActiveMemoryTranscriptState } from "./transcript-watch.js";
 import {
-  fileTranscriptSource,
   hasUnavailableMemoryResultInSessionRecord,
   hasUsableMemoryResultInSessionRecord,
   isUnavailableMemorySearchDebug,
@@ -78,17 +77,14 @@ function extractAssistantTextFromSessionRecord(value: unknown): string {
 }
 
 async function readPartialAssistantText(
-  source: ActiveMemoryTranscriptSource | string | undefined,
+  source: ActiveMemoryTranscriptSource,
   limits?: TranscriptReadLimits,
 ): Promise<string | null> {
-  if (!source) {
-    return null;
-  }
   const texts: string[] = [];
   const resolvedLimits = resolveTranscriptReadLimits(limits);
   let collectedChars = 0;
   await streamActiveMemoryTranscriptRecords({
-    source: typeof source === "string" ? fileTranscriptSource(source) : source,
+    source,
     limits: resolvedLimits,
     onRecord: (record) => {
       const text = extractAssistantTextFromSessionRecord(record);
@@ -158,9 +154,8 @@ async function waitForSubagentPartialTimeoutData(
     return await Promise.race([
       subagentPromise.then(
         (result) => ({
-          hasUsableMemoryResult: result.hasUsableMemoryResult === true,
-          // Cleanup can cross the deadline after execution has already failed.
-          resultStatus: result.resultStatus,
+          // Cleanup may remove temporary transcripts before this result settles.
+          ...result,
           settled: true as const,
         }),
         (error: unknown) => ({ ...readPartialTimeoutData(error), settled: true as const }),

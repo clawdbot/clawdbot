@@ -71,6 +71,43 @@ function textContent(
 }
 
 describe("grep tool streaming", () => {
+  it.each([
+    {
+      chunks: ["x".repeat(65536), "y".repeat(65536), "终"],
+      dropped: 65539,
+      tail: "y".repeat(65533) + "终",
+    },
+    {
+      chunks: ["aaaa😀" + "c".repeat(65527), "dddddd"],
+      dropped: 8,
+      tail: "c".repeat(65527) + "dddddd",
+    },
+    { chunks: [" ".repeat(65540)], dropped: 4, tail: "ripgrep exited with code 2" },
+  ])(
+    "discloses $dropped discarded stderr bytes before the ripgrep diagnostic",
+    async ({ chunks, dropped, tail }) => {
+      const child = createChild();
+      vi.mocked(spawnCommand).mockReturnValue(child as never);
+      vi.mocked(ensureTool).mockResolvedValue("rg");
+      const result = createGrepToolDefinition(process.cwd()).execute(
+        "stderr",
+        { pattern: "needle" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+      for (const chunk of chunks) {
+        child.stderr.write(chunk);
+      }
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", 2);
+      await expect(result).rejects.toThrow(
+        `[${dropped} UTF-8 bytes of earlier stderr discarded at the 65536-byte retention cap]\n${tail}`,
+      );
+    },
+  );
   it.each([1, 3])("keeps colliding byte-path context separate at match limit %s", async (limit) => {
     const cwd = tempDirs.make("openclaw-grep-byte-path-");
     const child = createChild();

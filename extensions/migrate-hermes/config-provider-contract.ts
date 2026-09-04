@@ -4,6 +4,7 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import {
   MCP_ENV_REFERENCE_RE,
   mcpValueHasEnvReferences,
+  normalizeHermesEnvReferenceName,
   resolveMcpEnvReferences,
 } from "./config-env.js";
 import { childRecord } from "./helpers.js";
@@ -262,12 +263,6 @@ export function readEnvReference(value: unknown): string | undefined {
   const raw = normalizeOptionalString(value);
   const match = raw?.match(/^\$\{([^}]+)\}$/u);
   return match ? normalizeHermesEnvReferenceName(match[1] ?? "") : undefined;
-}
-
-function normalizeHermesEnvReferenceName(value: string): string | undefined {
-  const trimmed = value.trim();
-  const name = trimmed.startsWith("env:") ? trimmed.slice("env:".length).trim() : trimmed;
-  return name || undefined;
 }
 
 export function readProviderApiKeyEnv(raw: Record<string, unknown>): string | undefined {

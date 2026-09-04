@@ -413,26 +413,84 @@ describe("createClackPrompter", () => {
     );
   });
 
-  it("cancels text prompts silently when their owner aborts them", async () => {
-    const controller = new AbortController();
-    clackMocks.isCancel.mockReturnValueOnce(true);
-    clackMocks.text.mockImplementation(
-      async ({ signal }: { signal?: AbortSignal }) =>
-        await new Promise<symbol>((resolve) => {
-          signal?.addEventListener("abort", () => resolve(Symbol("clack:cancel")), { once: true });
-        }),
-    );
-    const prompter = createClackPrompter();
+  it.each([
+    {
+      label: "select",
+      mock: clackMocks.select,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.select({ message: "Provider", options: [{ value: "one", label: "One" }] }),
+    },
+    {
+      label: "multiselect",
+      mock: clackMocks.multiselect,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.multiselect({ message: "Options", options: [{ value: "one", label: "One" }] }),
+    },
+    {
+      label: "confirm",
+      mock: clackMocks.confirm,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.confirm({ message: "Continue?" }),
+    },
+    {
+      label: "text",
+      mock: clackMocks.text,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.text({ message: "Account label" }),
+    },
+    {
+      label: "password",
+      mock: clackMocks.password,
+      run: (prompter: ReturnType<typeof createClackPrompter>) =>
+        prompter.text({ message: "API key", sensitive: true }),
+    },
+  ])(
+    "cancels $label input silently when its owner completes or disconnects",
+    async ({ mock, run }) => {
+      const controller = new AbortController();
+      const initialEndListeners = process.stdin.listenerCount("end");
+      const initialKeypressListeners = process.stdin.listenerCount("keypress");
+      clackMocks.isCancel.mockReturnValueOnce(true);
+      mock.mockImplementation(
+        async ({ signal }: { signal?: AbortSignal }) =>
+          await new Promise<symbol>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(Symbol("clack:cancel")), {
+              once: true,
+            });
+          }),
+      );
+      const prompt = run(createClackPrompter(process.stderr, controller.signal));
+      controller.abort();
 
-    const prompt = prompter.text({ message: "Paste callback", signal: controller.signal });
-    controller.abort();
+      await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
+      expect(clackMocks.cancel).not.toHaveBeenCalled();
+      expect(mock.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+      expect(process.stdin.listenerCount("end")).toBe(initialEndListeners);
+      expect(process.stdin.listenerCount("keypress")).toBe(initialKeypressListeners);
+    },
+  );
 
-    await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
-    expect(clackMocks.cancel).not.toHaveBeenCalled();
-    const signal = clackMocks.text.mock.calls[0]?.[0].signal;
-    expect(signal).toBeInstanceOf(AbortSignal);
-    expect(signal?.aborted).toBe(true);
-  });
+  it.each(["owner", "text"])(
+    "preserves both cancellation owners for a text prompt: %s",
+    async (cancelOwner) => {
+      const owner = new AbortController();
+      const text = new AbortController();
+      clackMocks.isCancel.mockReturnValueOnce(true);
+      clackMocks.text.mockImplementation(
+        async ({ signal }: { signal: AbortSignal }) =>
+          await new Promise<symbol>((resolve) => {
+            signal.addEventListener("abort", () => resolve(Symbol("clack:cancel")), { once: true });
+          }),
+      );
+      const prompt = createClackPrompter(process.stderr, owner.signal).text({
+        message: "Label",
+        signal: text.signal,
+      });
+      (cancelOwner === "owner" ? owner : text).abort();
+      await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
+      expect(clackMocks.cancel).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

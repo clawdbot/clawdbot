@@ -325,9 +325,10 @@ describe("oxlint config", () => {
       diagnostics: Array<{ code: string }>;
     };
     expect(report.number_of_files).toBe(selected.length);
-    expect(report.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(
-      Array.from({ length: 5 }, () => "typescript(no-floating-promises)"),
-    );
+    expect(
+      report.diagnostics.map((diagnostic) => diagnostic.code),
+      result.stdout,
+    ).toEqual(Array.from({ length: 5 }, () => "typescript(no-floating-promises)"));
     for (const file of selected) {
       const config = file.endsWith("/runtime.ts")
         ? "extensions/sample/tsconfig.json"
@@ -382,13 +383,6 @@ describe("oxlint config", () => {
     expect(tsconfig.include).toContain("**/*.mts");
     expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
     expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
-  });
-
-  it("has a discoverable test tsconfig for type-aware linting", () => {
-    const tsconfig = readJson("test/tsconfig.json") as OxlintTsconfig;
-
-    expect(tsconfig.include).toContain("**/*.ts");
-    expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
   });
 
   it("does not ignore the bundled extensions tree", () => {

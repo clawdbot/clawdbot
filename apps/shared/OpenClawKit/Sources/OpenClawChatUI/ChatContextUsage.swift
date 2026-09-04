@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 
 /// Snapshot of how full the active session's context window is, derived from
 /// the newest usage-bearing message plus session/model metadata.
@@ -214,54 +213,3 @@ enum ChatContextUsageFormatter {
         String(format: "$%.2f", value)
     }
 }
-
-#if os(macOS)
-/// Compact token ring for the window toolbar, mirroring the web UI's context
-/// gauge: ring fill and tint track pressure, the menu carries the details.
-struct ChatContextUsageIndicator: View {
-    let usage: OpenClawChatContextUsage
-
-    var body: some View {
-        HStack(spacing: 5) {
-            ZStack {
-                Circle()
-                    .stroke(Color.secondary.opacity(0.25), lineWidth: 2.5)
-                Circle()
-                    .trim(from: 0, to: max(0.02, self.usage.fractionUsed ?? 0))
-                    .stroke(self.tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-            }
-            .frame(width: 13, height: 13)
-
-            if let percent = self.usage.percentUsed {
-                Text(Double(percent) / 100, format: .percent.precision(.fractionLength(0)))
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Context usage")
-        .accessibilityValue(self.accessibilityValue)
-    }
-
-    private var tint: Color {
-        guard let percent = usage.percentUsed else { return .secondary }
-        if percent >= 90 { return Color(nsColor: .systemRed) }
-        if percent >= 75 { return Color(nsColor: .systemOrange) }
-        return Color(nsColor: .systemGreen)
-    }
-
-    private var accessibilityValue: String {
-        if let percent = self.usage.percentUsed {
-            return String(
-                format: String(localized: "%@ percent of the context window used"),
-                percent.formatted())
-        }
-        return String(
-            format: String(localized: "%@ tokens used"),
-            self.usage.usedTokens.formatted())
-    }
-}
-
-#endif

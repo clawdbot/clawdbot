@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  renderPresentationForDelivery,
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -23,6 +24,20 @@ import type { MatrixExtraContentFields } from "./matrix/send/types.js";
 const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
 const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
 const MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT = "---";
+
+const MATRIX_PRESENTATION_CAPABILITIES = {
+  supported: true,
+  buttons: true,
+  selects: true,
+  context: true,
+  divider: true,
+  limits: {
+    text: {
+      markdownDialect: "markdown",
+      supportsEdit: true,
+    },
+  },
+} satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
 type MatrixChannelData = {
   extraContent?: MatrixExtraContentFields;
@@ -86,6 +101,17 @@ function renderMatrixPresentationPayload(params: {
   };
 }
 
+export function prepareMatrixReplyPayload(payload: ReplyPayload): Promise<ReplyPayload> {
+  return renderPresentationForDelivery(
+    {
+      presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
+      renderPresentation: (prepared) =>
+        renderMatrixPresentationPayload({ payload: prepared, presentation: prepared.presentation }),
+    },
+    payload,
+  );
+}
+
 function resolveMatrixPayloadText(payload: ReplyPayload): string {
   const text = payload.text ?? "";
   if (text.trim() || !resolveMatrixPresentationContent(payload)) {
@@ -94,7 +120,10 @@ function resolveMatrixPayloadText(payload: ReplyPayload): string {
   return MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT;
 }
 
-function resolveMatrixExtraContent(payload: ReplyPayload): MatrixExtraContentFields | undefined {
+/** Matrix event fields a reply carries beyond its body, currently its presentation. */
+export function resolveMatrixExtraContent(
+  payload: ReplyPayload,
+): MatrixExtraContentFields | undefined {
   const presentation = resolveMatrixPresentationContent(payload);
   return presentation ? { [MATRIX_OPENCLAW_PRESENTATION_KEY]: presentation } : undefined;
 }
@@ -116,19 +145,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  presentationCapabilities: {
-    supported: true,
-    buttons: true,
-    selects: true,
-    context: true,
-    divider: true,
-    limits: {
-      text: {
-        markdownDialect: "markdown",
-        supportsEdit: true,
-      },
-    },
-  },
+  presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
   renderPresentation: ({ payload, presentation }) =>
     renderMatrixPresentationPayload({ payload, presentation }),
   sendPayload: async ({

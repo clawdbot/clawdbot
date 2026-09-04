@@ -48,6 +48,29 @@ describe("model pricing source policy", () => {
 describe("native pricing catalogs", () => {
   const paid = { id: "paid", pricing: { input: 2, output: 10 } };
 
+  it("uses the selected identity and validates prices before filtering unsupported schedules", () => {
+    const options = {
+      readModelId: (row: Record<string, unknown>) => row.model_name,
+      readPricing: (row: Record<string, unknown>) => row.cost,
+      isSupportedPricing: (value: unknown) => !Object.hasOwn(value as object, "qualified"),
+    };
+    const native = { id: "ignored", model_name: " paid ", cost: paid.pricing };
+    const qualified = { model_name: "qualified", cost: { ...paid.pricing, qualified: true } };
+    expect(
+      normalizeModelPricingCatalog([native, qualified], normalizeUpstreamModelPricing, options),
+    ).toEqual(new Map([["paid", BASE_COST]]));
+    for (const rows of [
+      [qualified],
+      [native, { ...qualified, model_name: "paid" }],
+      [native, { model_name: "paid" }],
+      [native, { ...qualified, cost: { input: -1, output: 10, qualified: true } }],
+    ]) {
+      expect(
+        normalizeModelPricingCatalog(rows, normalizeUpstreamModelPricing, options),
+      ).toBeUndefined();
+    }
+  });
+
   it("keeps declared free prices distinct from missing prices", () => {
     expect(
       normalizeModelPricingCatalog(

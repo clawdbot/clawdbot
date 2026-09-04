@@ -238,6 +238,47 @@ describe("published upstream repository advisories", () => {
     );
   });
 
+  it.each(["integration", "personal access token"])(
+    "keeps resource denial by %s local while preserving real findings and reconciling stale ranges",
+    async (actor) => {
+      const ids = Array.from({ length: 6 }, (_, index) => `GHSA-2222-3333-444${index}`);
+      const inaccessible = ids.slice(0, 4);
+      const trueMatch = expectDefined(ids[4], "true advisory");
+      const staleMatch = expectDefined(ids[5], "stale advisory");
+      const secret = "synthetic-advisory-secret";
+      vi.stubEnv("GH_TOKEN", secret);
+      const source = createSourceFetch({
+        page: () => Response.json(ids.map((id) => advisory("< 2.0.0", { ghsa_id: id }))),
+        reviewed: (url) => {
+          const id = url.pathname.split("/").at(-1) ?? "";
+          if (inaccessible.includes(id)) {
+            return Response.json(
+              { message: `Resource not accessible by ${actor}`, diagnostic: secret },
+              { status: 403, headers: { "x-ratelimit-remaining": "100" } },
+            );
+          }
+          return Response.json({
+            ghsa_id: id,
+            published_at: "2026-08-01T00:00:00Z",
+            github_reviewed_at: "2026-08-02T00:00:00Z",
+            withdrawn_at: null,
+            vulnerabilities: [vulnerability(id === staleMatch ? "< 1.0.0" : "< 2.0.0")],
+          });
+        },
+      });
+      const report = await scan(source.fetchImpl);
+      expect(report.advisories.map(({ id }) => id)).toEqual([...inaccessible, trueMatch]);
+      expect(report.coverage.issues).toEqual(
+        inaccessible.map((id) => ({ subject: `fixture#${id}`, reason: "request-failed" })),
+      );
+      expect(report.coverage.reconciliations).toMatchObject([
+        { id: trueMatch, matchedVersions: ["1.0.0"] },
+        { id: staleMatch, matchedVersions: [] },
+      ]);
+      expect(JSON.stringify(report)).not.toContain(secret);
+    },
+  );
+
   it("sends the token only to fixed GitHub requests and refuses redirects on every request", async () => {
     vi.stubEnv("GH_TOKEN", "synthetic-upstream-test-token");
     const source = createSourceFetch();
@@ -700,27 +741,64 @@ describe("published upstream repository advisories", () => {
     { code: 429, remaining: "0", reason: "rate-limited" },
     { code: 403, remaining: "100", reason: "request-failed" },
     { code: 401, remaining: "100", reason: "request-failed" },
-  ])(
-    "stops scheduling GitHub work after HTTP $code (remaining $remaining)",
-    async ({ code, remaining, reason: expectedReason }) => {
-      const source = createSourceFetch({
-        manifest: (url) =>
-          manifest(url, `https://github.com/fixture/${url.pathname.split("/")[1]}`),
-        page: () =>
-          new Response(null, { status: code, headers: { "x-ratelimit-remaining": remaining } }),
-      });
-      const payload = Object.fromEntries(
-        Array.from({ length: 8 }, (_, index) => [`package-${index}`, ["1.0.0"]]),
-      );
-      const report = await scan(source.fetchImpl, payload);
-      expect(source.calls.filter(({ url }) => url.origin === REGISTRY)).toHaveLength(8);
-      expect(
-        source.calls.some(({ url }) =>
-          /\/repos\/fixture\/package-[4-7](?:\/|$)/u.test(url.pathname),
-        ),
-      ).toBe(false);
-      expect(report.coverage.status).toBe("partial");
-      expect(report.coverage.issues.some(({ reason }) => reason === expectedReason)).toBe(true);
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({ message: "You have exceeded a secondary rate limit." }),
     },
-  );
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({ message: "Unknown denial", diagnostic: "synthetic-advisory-secret" }),
+    },
+    { code: 403, remaining: "100", reason: "request-failed", body: "{" },
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({
+        message: "Resource not accessible by integration",
+        padding: "x".repeat(2 * 1024 * 1024),
+      }),
+    },
+    {
+      code: 403,
+      remaining: "0",
+      reason: "rate-limited",
+      body: JSON.stringify({ message: "Resource not accessible by integration" }),
+    },
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({ message: "Resource not accessible by integration" }),
+      retryAfter: "60",
+    },
+  ])("stops scheduling GitHub work after HTTP $code (remaining $remaining)", async (entry) => {
+    const { code, remaining, reason: expectedReason } = entry;
+    const source = createSourceFetch({
+      manifest: (url) => manifest(url, `https://github.com/fixture/${url.pathname.split("/")[1]}`),
+      page: () =>
+        new Response("body" in entry ? entry.body : null, {
+          status: code,
+          headers: {
+            "x-ratelimit-remaining": remaining,
+            ...("retryAfter" in entry ? { "retry-after": entry.retryAfter } : {}),
+          },
+        }),
+    });
+    const payload = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [`package-${index}`, ["1.0.0"]]),
+    );
+    const report = await scan(source.fetchImpl, payload);
+    expect(source.calls.filter(({ url }) => url.origin === REGISTRY)).toHaveLength(8);
+    expect(
+      source.calls.some(({ url }) => /\/repos\/fixture\/package-[4-7](?:\/|$)/u.test(url.pathname)),
+    ).toBe(false);
+    expect(report.coverage.status).toBe("partial");
+    expect(report.coverage.issues.some(({ reason }) => reason === expectedReason)).toBe(true);
+    expect(JSON.stringify(report)).not.toContain("synthetic-advisory-secret");
+  });
 });

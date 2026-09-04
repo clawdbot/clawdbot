@@ -84,16 +84,20 @@ function resolveBundledCandidatePluginIds(params: {
 }
 
 function resolveBundledRuntimeCandidatePluginIds(params: {
+  contract: "webSearchProviders" | "webFetchProviders";
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   onlyPluginIds: readonly string[];
   manifestRecords?: readonly PluginManifestRecord[];
 }): string[] | null {
-  const resolvedConfig = resolveBundledWebFetchResolutionConfig(params).config;
+  const search = params.contract === "webSearchProviders";
+  const resolvedConfig = (
+    search ? resolveBundledWebSearchResolutionConfig : resolveBundledWebFetchResolutionConfig
+  )(params).config;
   const candidates = resolveManifestDeclaredWebProviderCandidates({
-    contract: "webFetchProviders",
-    configKey: "webFetch",
+    contract: params.contract,
+    configKey: search ? "webSearch" : "webFetch",
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -115,7 +119,7 @@ function resolveBundledRuntimeCandidatePluginIds(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
       onlyPluginIds: pluginIds,
-      contract: "webFetchProviders",
+      contract: params.contract,
       manifestRecords: candidates.manifestRecords,
     }).map((plugin) => plugin.id),
   );
@@ -205,12 +209,25 @@ export function resolveBundledWebFetchProvidersFromPublicArtifacts(
   });
 }
 
+export function resolveEnabledBundledWebSearchProvidersFromPublicArtifacts(
+  params: BundledWebProviderPublicArtifactParams & { onlyPluginIds: readonly string[] },
+): PluginWebSearchProviderEntry[] | null {
+  const pluginIds = resolveBundledRuntimeCandidatePluginIds({
+    ...params,
+    contract: "webSearchProviders",
+  });
+  return pluginIds
+    ? resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({ onlyPluginIds: pluginIds })
+    : null;
+}
+
 export function resolveBundledRuntimeWebFetchProvidersFromPublicArtifacts(
   params: BundledWebProviderPublicArtifactParams & {
     onlyPluginIds: readonly string[];
   },
 ): PluginWebFetchProviderEntry[] | null {
   const pluginIds = resolveBundledRuntimeCandidatePluginIds({
+    contract: "webFetchProviders",
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

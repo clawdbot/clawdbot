@@ -16,6 +16,7 @@ import { isPathInside } from "@openclaw/fs-safe/path";
 import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinfo-path.ts";
 import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { CLAUDE_AGENT_SDK_ASSET_DIR } from "./lib/claude-agent-sdk-assets.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   resolveDistArtifactLockPath,
@@ -105,6 +106,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/build-artifact-cache.mts",
   "scripts/lib/dist-artifact-ownership.mts",
   "scripts/lib/managed-child-process.mts",
+  "scripts/lib/vitest-resource-ownership.mts",
   "scripts/lib/direct-run.mjs",
   "scripts/lib/repo-root.mjs",
   "scripts/lib/local-check-runtime.mts",
@@ -130,32 +132,6 @@ export const TSDOWN_PACKAGES_CACHE_INPUT = {
 export const TSDOWN_UNIFIED_CACHE_ENV = [
   "OPENCLAW_BUILD_PRIVATE_QA",
   ...BUNDLED_PLUGIN_BUILD_ENV_NAMES,
-];
-export const TSDOWN_UNIFIED_CACHE_INPUTS = [
-  ...TSDOWN_DECLARATION_TOOL_INPUTS,
-  "tsdown.config.ts",
-  "scripts/lib/runtime-process-build-entries.mts",
-  "scripts/lib/vitest-worker-artifacts.mts",
-  "scripts/lib/fs-safe-native-assets.mts",
-  {
-    // Unified entry types can import scripts, test helpers and root declarations.
-    // Restricting this to runtime folders leaves those transitive edits unstamped.
-    path: ".",
-    extensions: TSDOWN_SOURCE_EXTENSIONS,
-    excludeDirectories: [
-      "dist",
-      "dist-runtime",
-      "node_modules",
-      ".artifacts",
-      ".cache",
-      ".git",
-      ".local",
-      ".agents",
-      ".claude",
-      // Other checkouts cannot invalidate this checkout's declaration generation.
-      ".worktrees",
-    ],
-  },
 ];
 
 type OutputRootParams = {
@@ -293,11 +269,9 @@ export function cleanTsdownOutputRoots(params: OutputRootParams = {}) {
   const rootPaths = assertTsdownCleanOutputRoots({ cwd, fs: fsImpl, pathImpl, roots });
   const protectedDeclarationPaths =
     env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
-      ? listExistingDeclarationOutputPaths(cwd, fsImpl, roots)
+      ? listExistingGeneratedDeclarationOutputPaths(cwd, fsImpl, roots)
       : new Set<string>();
   const protectedPaths = new Set([
-    // Vite owns and cleans this subtree; runtime-only builds cannot recreate it.
-    path.resolve(cwd, "dist/control-ui"),
     ...protectedDeclarationPaths,
     ...listExistingPreservedOutputPaths(cwd, env, fsImpl),
   ]);
@@ -351,16 +325,30 @@ function cleanOutputRootExcept(rootPath: string, protectedPaths: Set<string>, fs
   }
 }
 
-function listExistingDeclarationOutputPaths(cwd: string, fsImpl: typeof fs, roots: string[]) {
+function listExistingGeneratedDeclarationOutputPaths(
+  cwd: string,
+  fsImpl: typeof fs,
+  roots: string[],
+) {
   const protectedPaths = new Set<string>();
   for (const root of roots) {
     collectDeclarationOutputPaths(path.resolve(cwd, root), protectedPaths, fsImpl);
   }
-  return protectedPaths;
+  // Copied SDK types belong to the runtime package: JS builds replace them,
+  // while declaration publication (including cache restores) must leave them intact.
+  const runtimeAssetRoots = roots.map((root) =>
+    path.resolve(cwd, root, CLAUDE_AGENT_SDK_ASSET_DIR),
+  );
+  return new Set(
+    [...protectedPaths].filter(
+      (file) => !runtimeAssetRoots.some((root) => isPathInside(root, file)),
+    ),
+  );
 }
 
 function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, fsImpl: typeof fs) {
-  const protectedPaths = new Set<string>();
+  // Vite owns and cleans this subtree; tsdown cannot recreate its assets.
+  const protectedPaths = new Set([path.resolve(cwd, "dist/control-ui")]);
   // Mac packaging owns replacement of signed bundles. Rebuilding its JS must
   // leave the previous app (including its private runtime) usable on failure.
   const pendingDirectories = [path.join(cwd, "dist")];
@@ -395,6 +383,26 @@ function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, f
     }
   }
   return protectedPaths;
+}
+
+/** Publish generated declarations without claiming runtime assets or protected subtrees. */
+export function listReplaceableTsdownDeclarationOutputs(params: OutputRootParams = {}) {
+  const cwd = path.resolve(params.cwd ?? process.cwd());
+  const fsImpl = params.fs ?? fs;
+  const roots = params.roots ?? listTsdownOutputRoots();
+  assertTsdownCleanOutputRoots({ ...params, cwd, fs: fsImpl, roots });
+  const protectedPaths = [
+    ...listExistingPreservedOutputPaths(cwd, params.env ?? process.env, fsImpl),
+  ];
+  return [...listExistingGeneratedDeclarationOutputPaths(cwd, fsImpl, roots)]
+    .filter(
+      (file) =>
+        !protectedPaths.some(
+          (protectedPath) =>
+            file === protectedPath || file.startsWith(`${protectedPath}${path.sep}`),
+        ),
+    )
+    .toSorted();
 }
 
 function collectDeclarationOutputPaths(

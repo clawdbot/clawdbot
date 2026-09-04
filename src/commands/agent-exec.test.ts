@@ -250,13 +250,18 @@ describe("agent exec command composition", () => {
   it("maps structured thrown timeouts to exit code 2", async () => {
     const { runtime } = createRuntime();
     const timeout = Object.assign(new Error("deadline elapsed"), { name: "TimeoutError" });
-
-    const result = await agentExecCommand("inspect", { json: true }, runtime, {
-      runAgent: vi.fn(async () => {
-        throw timeout;
-      }),
+    const runAgent = vi.fn(async () => {
+      throw timeout;
     });
 
+    const result = await agentExecCommand("inspect", { timeout: "1", json: true }, runtime, {
+      runAgent,
+    });
+
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ timeout: "1" }),
+      expect.any(Object),
+    );
     expect(result).toMatchObject({
       exitCode: 2,
       envelope: { status: "timeout", error: { kind: "timeout" } },
@@ -570,6 +575,46 @@ describe("agent exec command composition", () => {
     });
   });
 
+  it.each([
+    { kind: "exception", status: "error", exitCode: 1, thrown: true },
+    { kind: "timeout", status: "timeout", exitCode: 2, thrown: true },
+    { kind: "context_overflow", status: "error", exitCode: 1, thrown: false },
+  ] as const)("preserves $kind when temporary-state cleanup also fails", async (failure) => {
+    const { runtime, log, error } = createRuntime();
+    let observedStateDir = "";
+    vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("cleanup denied"));
+
+    const result = await agentExecCommand("inspect", { json: true }, runtime, {
+      runAgent: async () => {
+        observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+        if (failure.thrown) {
+          throw Object.assign(new Error("original run failure"), {
+            name: failure.kind === "timeout" ? "TimeoutError" : "Error",
+          });
+        }
+        return {
+          ...successResult("partial answer"),
+          meta: { durationMs: 25, error: { kind: failure.kind, message: "original run failure" } },
+        };
+      },
+    });
+    externalTempDirs.push(observedStateDir);
+
+    expect(result).toMatchObject({
+      exitCode: failure.exitCode,
+      envelope: {
+        status: failure.status,
+        final: failure.thrown ? "" : "partial answer",
+        payloads: failure.thrown ? [] : [{ text: "partial answer" }],
+        error: { kind: failure.kind, message: "original run failure" },
+      },
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual(result.envelope);
+    expect(error).toHaveBeenCalledWith("original run failure");
+    expect(error).toHaveBeenCalledWith("Agent exec cleanup failed: cleanup denied");
+  });
+
   it("classifies cleanup failures before emitting the JSON envelope", async () => {
     const { runtime, log } = createRuntime();
     let observedStateDir = "";
@@ -599,15 +644,15 @@ describe("agent exec command composition", () => {
     });
   });
 
-  it("threads --cwd to both workspace and tool cwd", async () => {
+  it("threads --cwd and --timeout to the agent", async () => {
     const root = tempDirs.make("openclaw-agent-exec-cwd-");
     const { runtime } = createRuntime();
     const runAgent = vi.fn(async () => successResult());
 
-    await agentExecCommand("inspect", { cwd: root }, runtime, { runAgent });
+    await agentExecCommand("inspect", { cwd: root, timeout: "7" }, runtime, { runAgent });
 
     expect(runAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: root, cwd: root }),
+      expect.objectContaining({ workspaceDir: root, cwd: root, timeout: "7" }),
       expect.any(Object),
     );
   });

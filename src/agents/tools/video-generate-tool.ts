@@ -8,6 +8,7 @@ import { parseVideoGenerationModelRef } from "../../media-generation/model-ref.j
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { probeMediaFilesWithinBudget } from "../../media/media-probe.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { SaveMediaSourceError } from "../../media/store.shared.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
@@ -274,6 +275,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
 
   for (const plugin of snapshot.plugins) {
     if (
+      !plugin.contracts?.videoGenerationProviders?.length ||
       !isManifestPluginAvailableForControlPlane({
         snapshot,
         plugin,
@@ -282,8 +284,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
     ) {
       continue;
     }
-    const providerIds = plugin.contracts?.videoGenerationProviders ?? [];
-    for (const providerId of providerIds) {
+    for (const providerId of plugin.contracts.videoGenerationProviders) {
       knownProviderIds.add(providerId);
       const metadata = plugin.videoGenerationProviderMetadata?.[providerId];
       const providerCanUseReferenceAudio = metadata?.referenceAudioInputs === true;
@@ -464,10 +465,6 @@ type ExecutedVideoGeneration = {
   wakeResult: string;
 };
 
-function isGeneratedMediaSizeLimitError(error: unknown): boolean {
-  return error instanceof Error && /^Media exceeds \d+MB limit$/.test(error.message);
-}
-
 async function executeVideoGenerationJob(params: {
   effectiveCfg: OpenClawConfig;
   prompt: string;
@@ -565,7 +562,7 @@ async function executeVideoGenerationJob(params: {
           savedMedia,
         };
       } catch (error) {
-        if (video.url && isGeneratedMediaSizeLimitError(error)) {
+        if (video.url && error instanceof SaveMediaSourceError && error.code === "too-large") {
           return {
             value: {
               kind: "url" as const,

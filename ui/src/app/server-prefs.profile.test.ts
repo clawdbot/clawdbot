@@ -30,6 +30,7 @@ const scope = "ws://profiles";
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   resetServerUiPrefsSync();
+  patchSettings({ gatewayUrl: scope });
 });
 
 afterEach(() => {

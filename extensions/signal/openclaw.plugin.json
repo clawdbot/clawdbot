@@ -1,9 +1,10 @@
 {
   "id": "signal",
+  "name": "Signal",
+  "description": "OpenClaw Signal channel plugin.",
   "doctorContract": {
     "configRepair": true
   },
-  "icon": "https://cdn.simpleicons.org/signal",
   "activation": {
     "onStartup": false
   },

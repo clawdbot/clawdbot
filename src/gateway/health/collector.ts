@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { buildChannelAccountSnapshotFromInspection } from "../../channels/account-summary.js";
@@ -17,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
+import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   degradedPluginMatchesRoot,
@@ -68,19 +70,6 @@ const debugHealth = (
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
-
-function attachPluginActivation(
-  plugin: NonNullable<ReturnType<typeof getActivePluginRegistry>>["plugins"][number] | undefined,
-  error: PluginHealthErrorSummary,
-): PluginHealthErrorSummary {
-  if (plugin?.activationSource) {
-    error.activationSource = plugin.activationSource;
-  }
-  if (plugin?.activationReason) {
-    error.activationReason = plugin.activationReason;
-  }
-  return error;
-}
 
 export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
@@ -171,7 +160,19 @@ export async function buildHealthAgentSummaries(
   });
 }
 
-function buildPluginHealthSummary(): PluginHealthSummary | undefined {
+function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | undefined {
+  // Keep full internal diagnostics, but sanitize both load and service errors before public caching.
+  function projectError(
+    plugin: NonNullable<ReturnType<typeof getActivePluginRegistry>>["plugins"][number] | undefined,
+    error: PluginHealthErrorSummary,
+  ): PluginHealthErrorSummary {
+    return {
+      ...error,
+      activationSource: plugin?.activationSource,
+      activationReason: plugin?.activationReason,
+      error: truncateUtf16Safe(redactToolPayloadTextWithConfig(error.error, cfg.logging), 1_000),
+    };
+  }
   const registry = getActivePluginRegistry();
   const degradedPlugins = listActiveDegradedPlugins();
   const unavailable = degradedPlugins
@@ -199,7 +200,7 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
         ),
     )
     .map((plugin) =>
-      attachPluginActivation(plugin, {
+      projectError(plugin, {
         id: plugin.id,
         origin: plugin.origin,
         activated: plugin.activated === true,
@@ -209,7 +210,7 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
     );
   const serviceErrors = registry
     ? listPluginServiceHealthFailures(registry).map((failure) =>
-        attachPluginActivation(
+        projectError(
           registry.plugins.find((entry) => entry.id === failure.pluginId),
           {
             id: failure.pluginId,
@@ -358,7 +359,7 @@ async function buildHealthAccountRecord(params: {
     (params.accountId === params.defaultAccountId
       ? params.runtimeSnapshot?.channels[params.plugin.id]
       : undefined);
-  const unavailable = resolveUnavailableChannelAccountSnapshot({
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
     channelId: params.plugin.id,
     accountId: params.accountId,
     runtime: runtimeSnapshot,
@@ -564,6 +565,9 @@ export async function collectGatewayHealthSnapshot(params: {
   const channels: Record<string, ChannelHealthSummary> = {};
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     includeSetupFallbackPlugins: false,
+    // Health reports admitted/configured channels; dormant credentials are migration evidence.
+    // Loading their checkers here can synchronously stall the Gateway after hello.
+    includePersistedAuthState: false,
   });
   const channelOrder = plugins.map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
@@ -660,7 +664,7 @@ export async function collectGatewayHealthSnapshot(params: {
     }
   }
 
-  const pluginHealth = buildPluginHealthSummary();
+  const pluginHealth = buildPluginHealthSummary(cfg);
   const contextEngineHealth = buildContextEngineHealthSummary();
   const deliveryQueueHealth = buildDeliveryQueueHealthSummary();
   return {

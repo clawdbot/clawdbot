@@ -1,5 +1,6 @@
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -665,6 +666,99 @@ describe("loadGatewayPlugins", () => {
       ...params,
       sessionWorkerPlacementContext: context,
     });
+  });
+
+  test("captures retired plugin reply owners through their canonical Gateway binding", async () => {
+    const { admitReplyTurn } = await import("../auto-reply/reply/reply-turn-admission.js");
+    const { captureGatewayReplyRunRestartAbort } =
+      await import("../auto-reply/reply/reply-run-registry.js");
+    const { captureGatewaySessionWorkAdmissions } =
+      await import("../sessions/session-lifecycle-admission.js");
+    const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
+    const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-restart-owner-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    const context = createTestContext("same-context-distinct-owners");
+    const closingResolver = vi.fn(() => context);
+    const otherResolver = vi.fn(() => context);
+    const operations: import("../auto-reply/reply/reply-run-registry.js").ReplyOperation[] = [];
+    const runtimes: ReturnType<ServerPluginsModule["loadGatewayPlugins"]>[] = [];
+    try {
+      for (const [name, resolver] of [
+        ["closing", closingResolver],
+        ["other", otherResolver],
+      ] as const) {
+        const sessionKey = `agent:main:plugin-${name}`;
+        await replaceSessionEntry(
+          { storePath, sessionKey },
+          { sessionId: name, updatedAt: Date.now() },
+        );
+        loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+        runtimes.push(
+          serverPluginsModule.loadGatewayPlugins({
+            cfg: {},
+            workspaceDir: stateDir,
+            log: createTestLog(),
+            baseMethods: [],
+            pluginIds: ["test-channel"],
+            resolveGatewayContext: resolver,
+          }),
+        );
+        const runtimeOptions = getLastPluginLoadOption("runtimeOptions") as Parameters<
+          PluginRuntimeModule["createPluginRuntime"]
+        >[0];
+        const dispatch = runtimeOptions?.dispatchReplyFromConfig;
+        if (!dispatch) {
+          throw new Error("Expected bound channel dispatch");
+        }
+        dispatchReplyFromConfig.mockImplementationOnce(async () => {
+          const admission = await admitReplyTurn({
+            sessionKey,
+            sessionId: name,
+            storePath,
+            kind: "visible",
+            resetTriggered: false,
+          });
+          if (admission.status !== "owned") {
+            throw new Error("Expected an owned reply");
+          }
+          operations.push(admission.operation);
+          return { counts: {}, queuedFinal: false };
+        });
+        await dispatch({} as Parameters<typeof dispatch>[0]);
+      }
+      const capturedResolver = gatewayRequestScopeModule.getGatewayContextResolver(operations[0]!);
+      expect(capturedResolver?.()).toBe(context);
+      runtimes[0]!.retireGatewayRuntimeBindings();
+      expect(capturedResolver?.()).toBeUndefined();
+      closingResolver.mockImplementation(() => {
+        throw new Error("Retired resolver must not be invoked");
+      });
+      otherResolver.mockClear();
+      const admissions = captureGatewaySessionWorkAdmissions(closingResolver);
+      const aborted = captureGatewayReplyRunRestartAbort(closingResolver)(() => {});
+      expect({
+        closing: admissions.isActive({
+          scope: storePath,
+          sessionKey: "agent:main:plugin-closing",
+          sessionId: "closing",
+        }),
+        other: admissions.isActive({
+          scope: storePath,
+          sessionKey: "agent:main:plugin-other",
+          sessionId: "other",
+        }),
+        aborted,
+        signals: operations.map((operation) => operation.abortSignal.aborted),
+      }).toEqual({ closing: true, other: false, aborted: 1, signals: [true, false] });
+      expect(otherResolver).not.toHaveBeenCalled();
+    } finally {
+      operations.forEach((operation) => operation.complete());
+      runtimes.forEach((runtime) => runtime.retireGatewayRuntimeBindings());
+      await Promise.resolve();
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   test("injects the process HOME-isolation fact into registry construction", () => {

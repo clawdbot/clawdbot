@@ -8,7 +8,15 @@ import {
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import {
+  requiresAgentHarnessPluginSelection,
+  resolveAgentHarnessOwnerPluginIds,
+} from "../agents/harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -65,6 +73,8 @@ import {
   sessionAgentStatusExpiresAt,
   SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
 } from "../sessions/session-agent-status.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
+import type { UserModelAccountSelection } from "./model-account-authority.js";
 import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
@@ -123,11 +133,14 @@ export async function projectSessionsPatchEntry(params: {
   patch: SessionsPatchParams;
   /** Canonical root prepared by the trusted create path; never accepted from public patches. */
   preparedSessionRoot?: string;
+  /** Trusted catalog runtime must own selection checks before the new row is persisted. */
+  preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
+  personalModelSelection?: UserModelAccountSelection;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, storeKey, patch, creation } = params;
   if ("execSecurity" in patch || "execAsk" in patch) {
@@ -177,6 +190,7 @@ export async function projectSessionsPatchEntry(params: {
       entry,
     });
     return (
+      params.preparedAgentRuntime ??
       acpMeta?.backend ??
       resolveEffectiveAgentRuntime({
         cfg,
@@ -203,6 +217,8 @@ export async function projectSessionsPatchEntry(params: {
   const next: SessionEntry = {
     ...existing,
     sessionId: existing?.sessionId || randomUUID(),
+    // Reset retains sessionId, so rollback also needs the original lifecycle revision.
+    ...(existing?.sessionId ? {} : { lifecycleRevision: randomUUID() }),
     updatedAt: Math.max(existing?.updatedAt ?? 0, now),
     ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
@@ -276,6 +292,7 @@ export async function projectSessionsPatchEntry(params: {
       // Archived sessions leave the active quick-access set in the same write.
       if (next.archivedAt === undefined) {
         next.archivedAt = now;
+        next.archiveReason = "manual";
         if (params.archivedBy) {
           next.archivedBy = params.archivedBy;
         } else {
@@ -286,6 +303,7 @@ export async function projectSessionsPatchEntry(params: {
     } else {
       delete next.archivedAt;
       delete next.archivedBy;
+      delete next.archiveReason;
     }
   }
 
@@ -468,22 +486,11 @@ export async function projectSessionsPatchEntry(params: {
       : undefined;
     delete next.modelFallback;
     const raw = patch.model;
+    let selection:
+      | { provider: string; model: string; profile?: string; isDefault: boolean }
+      | undefined;
     if (raw === null) {
-      applyModelOverrideWithAuthProfileCompatibility({
-        cfg,
-        agentDir: resolveAgentDir(cfg, sessionAgentId),
-        entry: next,
-        currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-        selection: {
-          provider: resolvedDefault.provider,
-          model: resolvedDefault.model,
-          isDefault: true,
-        },
-        ...(params.providerAuthMetadataSnapshot
-          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
-          : {}),
-      });
-      delete next.liveModelSwitchPending;
+      selection = { ...resolvedDefault, isDefault: true };
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
@@ -511,22 +518,61 @@ export async function projectSessionsPatchEntry(params: {
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
+      selection = resolved;
+    }
+    if (selection) {
+      if (selection.profile && isUserModelAuthProfileId(selection.profile)) {
+        if (params.personalModelSelection?.authProfileId !== selection.profile) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.FORBIDDEN,
+              "Choose your personal account from an identified Gateway connection.",
+            ),
+          };
+        }
+        params.personalModelSelection.assertCurrent();
+      }
+      // Catalog membership does not guarantee an activatable harness. Reject before
+      // committing the session so sticky defaults cannot retain an unusable selection.
+      const harnessSelection = {
+        provider: selection.provider,
+        modelId: selection.model,
+        runtime: resolveThinkingRuntime(selection.provider, selection.model, next),
+        agentId: sessionAgentId,
+      };
+      if (
+        !readAcpSessionMetaForEntry({
+          sessionKey: storeKey,
+          agentId: sessionAgentId,
+          entry: next,
+        }) &&
+        requiresAgentHarnessPluginSelection(harnessSelection, cfg) &&
+        resolveAgentHarnessOwnerPluginIds({
+          ...harnessSelection,
+          config: cfg,
+          workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
+        }).length === 0
+      ) {
+        return invalid(
+          `Model ${selection.provider}/${selection.model} requires agent harness "${harnessSelection.runtime}", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.`,
+        );
+      }
       applyModelOverrideWithAuthProfileCompatibility({
         cfg,
         agentDir: resolveAgentDir(cfg, sessionAgentId),
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-        selection: {
-          provider: resolved.provider,
-          model: resolved.model,
-          isDefault: resolved.isDefault,
-        },
-        profileOverride: resolved.profile,
+        selection,
+        profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),
-        markLiveSwitchPending: true,
+        markLiveSwitchPending: raw !== null,
       });
+      if (raw === null) {
+        delete next.liveModelSwitchPending;
+      }
     }
     if (agentModelFallback) {
       next.modelFallback = agentModelFallback;

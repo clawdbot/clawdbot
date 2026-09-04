@@ -174,12 +174,9 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
-  it.each([
-    { prepared: false, reason: "request timed out" },
-    { prepared: true, reason: "provider internal error" },
-  ])(
+  it.each([{ prepared: false }, { prepared: true }])(
     "replaces raw provider detail with classified facts (prepared: $prepared)",
-    ({ prepared, reason }) => {
+    ({ prepared }) => {
       const raw = "HTTP 500: opaque-provider-canary";
       const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
         provider: "openai",
@@ -193,7 +190,7 @@ describe("formatAssistantErrorText", () => {
       });
 
       expect(userFacing).toBe(
-        `⚠️ openai/gpt-5.6-luna request failed (${reason}, HTTP 500). ` +
+        "⚠️ openai/gpt-5.6-luna request failed (provider internal error, HTTP 500). " +
           "This is usually temporary — try again shortly.",
       );
       expect(userFacing).not.toContain("opaque-provider-canary");
@@ -271,6 +268,19 @@ describe("formatAssistantErrorText", () => {
         ),
       ).toBe("server_error");
     });
+  });
+  it("renders opaque upstream_error facts as a temporary provider error", () => {
+    const msg = makeAssistantMessageFixture({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      errorMessage: "opaque provider response",
+      errorType: "upstream_error",
+    });
+
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "⚠️ openai/gpt-5.6-luna request failed (provider internal error). " +
+        "This is usually temporary — try again shortly.",
+    );
   });
   it("uses generic user-facing copy for escaped structured provider messages", () => {
     // The internal formatter keeps detail for logs, while user-facing text must

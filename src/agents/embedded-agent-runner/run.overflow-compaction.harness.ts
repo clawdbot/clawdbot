@@ -345,9 +345,6 @@ const mockedIsBillingAssistantError = vi.fn(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
 export const mockedIsFailoverAssistantError = vi.fn<MockAssistantErrorProbe>(() => false);
 const mockedIsFailoverErrorMessage = vi.fn(() => false);
-const mockedIsGenericUnknownStreamErrorMessage = vi.fn((raw: string) =>
-  /^\s*an unknown error occurred\.?\s*$/i.test(raw),
-);
 function matchesCanonicalOverflowFixture(msg?: string): boolean {
   const raw = msg ?? "";
   return (
@@ -547,14 +544,12 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedCoerceToFailoverError.mockReset();
   mockedCoerceToFailoverError.mockReturnValue(null);
   mockedDescribeFailoverError.mockReset();
-  mockedDescribeFailoverError.mockImplementation(
-    (err: unknown): MockFailoverErrorDescription => ({
-      message: formatErrorMessage(err),
-      reason: undefined,
-      status: undefined,
-      code: undefined,
-    }),
-  );
+  mockedDescribeFailoverError.mockImplementation((err: unknown): MockFailoverErrorDescription => ({
+    message: formatErrorMessage(err),
+    reason: undefined,
+    status: undefined,
+    code: undefined,
+  }));
   mockedResolveFailoverStatus.mockReset();
   mockedResolveFailoverStatus.mockReturnValue(undefined);
 
@@ -588,10 +583,6 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsFailoverAssistantError.mockReturnValue(false);
   mockedIsFailoverErrorMessage.mockReset();
   mockedIsFailoverErrorMessage.mockReturnValue(false);
-  mockedIsGenericUnknownStreamErrorMessage.mockReset();
-  mockedIsGenericUnknownStreamErrorMessage.mockImplementation((raw: string) =>
-    /^\s*an unknown error occurred\.?\s*$/i.test(raw),
-  );
   mockedIsLikelyContextOverflowError.mockReset();
   mockedIsLikelyContextOverflowError.mockImplementation(matchesCanonicalOverflowFixture);
   mockedParseImageSizeError.mockReset();
@@ -910,7 +901,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
     isFailoverAssistantError: mockedIsFailoverAssistantError,
     isFailoverErrorMessage: mockedIsFailoverErrorMessage,
-    isGenericUnknownStreamErrorMessage: mockedIsGenericUnknownStreamErrorMessage,
     parseImageSizeError: mockedParseImageSizeError,
     parseImageDimensionError: mockedParseImageDimensionError,
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,

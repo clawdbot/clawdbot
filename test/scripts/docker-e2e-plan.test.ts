@@ -702,6 +702,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
       },
       {
         command:
+          "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat",
+        imageKind: "bare",
+        live: false,
+        name: "update-first-hop-compat",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_500_000,
+        weight: 3,
+      },
+      {
+        command:
           "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade",
         imageKind: "bare",
         live: false,
@@ -842,8 +853,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ].map((releaseChunk) => planFor({ ...options, releaseChunk }));
       const lanes = partitions.flatMap((partition) => partition.lanes);
 
-      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 2]);
-      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(9);
+      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 3]);
+      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(10);
       expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
       const complete = planFor({ ...options, planReleaseAll: true });
       const packageNames = new Set(lanes.map((lane) => lane.name));
@@ -888,6 +899,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "update-channel-switch",
       "published-upgrade-survivor",
       "upgrade-survivor",
+      "update-first-hop-compat",
       "update-run-package-self-upgrade",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([
@@ -1007,38 +1019,41 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
-  it.each(["prerelease-plugin-registry", "auth-profile-v2026-7-2-beta-5", "recovery-cleanup"])(
-    "plans %s only when explicitly requested",
-    (scenario) => {
-      const laneName = `published-upgrade-survivor-2026.7.1-2-${scenario}`;
-      const explicitPlan = planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorBaselines: "2026.7.1-2",
-        upgradeSurvivorScenarios: scenario,
-      });
+  it.each([
+    { baseline: "2026.7.1", scenario: "mobile-pairing-reconnect" },
+    { baseline: "2026.8.1", scenario: "watchos-direct-node" },
+    { baseline: "2026.7.1-2", scenario: "prerelease-plugin-registry" },
+    { baseline: "2026.7.1-2", scenario: "auth-profile-v2026-7-2-beta-5" },
+    { baseline: "2026.7.1-2", scenario: "recovery-cleanup" },
+  ])("plans $scenario only when explicitly requested", ({ baseline, scenario }) => {
+    const laneName = `published-upgrade-survivor-${baseline}-${scenario}`;
+    const explicitPlan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: baseline,
+      upgradeSurvivorScenarios: scenario,
+    });
 
-      expect(explicitPlan.lanes.map(summarizeLane)).toEqual([
-        publishedUpgradeSurvivorLane(laneName, "openclaw@2026.7.1-2", scenario),
+    expect(explicitPlan.lanes.map(summarizeLane)).toEqual([
+      publishedUpgradeSurvivorLane(laneName, `openclaw@${baseline}`, scenario),
+    ]);
+    if (scenario === "recovery-cleanup") {
+      expect(explicitPlan.requiredPrepublishPluginPackages).toEqual([
+        "@openclaw/codex",
+        "@openclaw/discord",
+        "@openclaw/whatsapp",
       ]);
-      if (scenario === "recovery-cleanup") {
-        expect(explicitPlan.requiredPrepublishPluginPackages).toEqual([
-          "@openclaw/codex",
-          "@openclaw/discord",
-          "@openclaw/whatsapp",
-        ]);
-      }
+    }
 
-      for (const aggregateScenario of ["reported-issues", "far-reaching"]) {
-        const aggregateLaneNames = planFor({
-          selectedLaneNames: ["published-upgrade-survivor"],
-          upgradeSurvivorBaselines: "2026.7.1-2",
-          upgradeSurvivorScenarios: aggregateScenario,
-        }).lanes.map((lane) => lane.name);
+    for (const aggregateScenario of ["reported-issues", "far-reaching"]) {
+      const aggregateLaneNames = planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorBaselines: baseline,
+        upgradeSurvivorScenarios: aggregateScenario,
+      }).lanes.map((lane) => lane.name);
 
-        expect(aggregateLaneNames).not.toContain(laneName);
-      }
-    },
-  );
+      expect(aggregateLaneNames).not.toContain(laneName);
+    }
+  });
 
   it("expands reported upgrade issue scenarios", () => {
     const plan = planFor({
@@ -1063,11 +1078,14 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
-  it("keeps SQLite volume stress out of release soak and in far-reaching runs", () => {
-    const scenariosFor = (upgradeSurvivorScenarios: string) =>
+  it("keeps platform survivors out of release aliases", () => {
+    const scenariosFor = (
+      upgradeSurvivorScenarios: string,
+      upgradeSurvivorBaselines = "2026.7.1-2",
+    ) =>
       planFor({
         selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorBaselines: "2026.7.1-2",
+        upgradeSurvivorBaselines,
         upgradeSurvivorScenarios,
       }).lanes.map((lane) => lane.name);
 
@@ -1077,6 +1095,59 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(scenariosFor("far-reaching")).toContain(
       "published-upgrade-survivor-2026.7.1-2-sqlite-volume",
     );
+    for (const alias of ["reported-issues", "far-reaching"]) {
+      expect(scenariosFor(alias, "2026.7.1")).not.toContain(
+        "published-upgrade-survivor-2026.7.1-mobile-pairing-reconnect",
+      );
+      expect(scenariosFor(alias, "2026.8.1")).not.toContain(
+        "published-upgrade-survivor-2026.8.1-watchos-direct-node",
+      );
+    }
+  });
+
+  it("runs the watchOS direct-node survivor only from its shipped gateway floor", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.7.1 2026.8.1",
+      upgradeSurvivorScenarios: "watchos-direct-node",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.8.1-watchos-direct-node",
+    ]);
+  });
+
+  it("runs mobile pairing reconnect from the 2026.7.1 baseline floor", () => {
+    const supported = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.7.1",
+      upgradeSurvivorScenarios: "mobile-pairing-reconnect",
+    });
+    const unsupported = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.7.0",
+      upgradeSurvivorScenarios: "mobile-pairing-reconnect",
+    });
+
+    expect(supported.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.7.1-mobile-pairing-reconnect",
+    ]);
+    expect(unsupported.lanes).toEqual([]);
+    expect(unsupported.omittedUnsupportedLanes).toEqual([]);
+  });
+
+  it("plans the weekly mobile and watch matrix as three logical rows", () => {
+    const plan = planFor({
+      selectedLaneNames: ["update-migration"],
+      upgradeSurvivorBaselines: "2026.7.1 2026.8.1",
+      upgradeSurvivorScenarios: "mobile-pairing-reconnect watchos-direct-node",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "update-migration-2026.7.1-mobile-pairing-reconnect",
+      "update-migration-2026.8.1-mobile-pairing-reconnect",
+      "update-migration-2026.8.1-watchos-direct-node",
+    ]);
   });
 
   it("omits trusted-current scenarios unsupported by a frozen target harness", () => {
@@ -1154,6 +1225,73 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.6.11-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.6.11-cron-scheduled-authority",
     ]);
+  });
+
+  it("recognizes the frozen combined mobile and watch scenario catalog", () => {
+    const targetRoot = tempDirs.make("openclaw-platform-survivors-frozen-harness-");
+    const assertionsFile = join(targetRoot, "scripts/e2e/lib/upgrade-survivor/assertions.mjs");
+    const scenarios = [
+      "base",
+      "mobile-pairing-reconnect",
+      "acpx-openclaw-tools-bridge",
+      "feishu-channel",
+      "bootstrap-persona",
+      "channel-post-core-restore",
+      "codex-allowlist-survival",
+      "plugin-deps-cleanup",
+      "configured-plugin-installs",
+      "stale-source-plugin-shadow",
+      "prerelease-plugin-registry",
+      "tilde-log-path",
+      "meeting-transcripts-sqlite",
+      "versioned-runtime-deps",
+      "cron-scheduled-authority",
+      "sqlite-volume",
+      "recovery-cleanup",
+      "auth-profile-v2026-7-2-beta-5",
+      "watchos-direct-node",
+    ];
+    mkdirSync(dirname(assertionsFile), { recursive: true });
+    writeFileSync(
+      assertionsFile,
+      [
+        "const SCENARIOS = new Set([",
+        ...scenarios.map((scenario) => `  "${scenario}",`),
+        "]);",
+        'throw new Error("unknown upgrade-survivor assertion command: list-scenarios");',
+      ].join("\n"),
+    );
+
+    const plan = planFor({
+      selectedLaneNames: ["update-migration"],
+      upgradeSurvivorBaselines: "2026.7.1 2026.8.1",
+      upgradeSurvivorScenarios: "mobile-pairing-reconnect watchos-direct-node",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "update-migration-2026.7.1-mobile-pairing-reconnect",
+      "update-migration-2026.8.1-mobile-pairing-reconnect",
+      "update-migration-2026.8.1-watchos-direct-node",
+    ]);
+  });
+
+  it("runs trusted-harness-owned mobile pairing against frozen package targets", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-mobile-package-target-");
+    writeFrozenScenarioContract(targetRoot, ["base"]);
+
+    const plan = planFor({
+      selectedLaneNames: ["update-migration"],
+      upgradeSurvivorBaselines: "2026.7.1",
+      upgradeSurvivorScenarios: "mobile-pairing-reconnect",
+      upgradeSurvivorTargetRoot: targetRoot,
+      allowFrozenTargetScenarioOmissions: false,
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "update-migration-2026.7.1-mobile-pairing-reconnect",
+    ]);
+    expect(plan.omittedUnsupportedLanes).toEqual([]);
   });
 
   it("omits survivor lanes when the target exposes none of the requested scenarios", () => {

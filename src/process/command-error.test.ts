@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createCommandError } from "./command-error.js";
+import { createCommandError, formatCommandOutput, formatCommandResult } from "./command-error.js";
 import type { SpawnResult } from "./exec-result.js";
 
 const failure: SpawnResult = {
@@ -145,4 +145,95 @@ it.each([
   const detail = error.message.slice(error.message.indexOf(":\n") + 2);
   expect(detail).toBe(present);
   expect(error.message).toContain("exit code 23");
+});
+
+// Buffered capture/launch failures carry an error termination, sometimes with an exit code.
+it.each([23, null])("keeps buffered error exit metadata %#", (code) => {
+  const error = createCommandError(
+    "setup",
+    {
+      ...failure,
+      code,
+      killed: false,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      termination: "error",
+    },
+    { timeoutMs: 3_000 },
+  );
+  expect(error.message).toBe(code === null ? "setup failed" : "setup failed (exit code 23)");
+});
+
+it.each([0, 1])("keeps zero and tiny output caps surrogate-safe %#", (maxChars) => {
+  expect(formatCommandOutput("🦞", maxChars)).toBe("…\n");
+});
+
+it.each([
+  { stderr: " \tstale\r\tfinal\tfield\t \n", expected: "stderr: final\\tfield\nstdout: recovery" },
+  { stderr: "\u0007\u007f\u0085", expected: "recovery" },
+])("keeps trim and control-only normalization %#", ({ stderr, expected }) => {
+  const error = createCommandError(
+    "setup",
+    {
+      ...failure,
+      code: 23,
+      killed: false,
+      termination: "exit",
+      stderr,
+      stdout: "recovery",
+    },
+    { timeoutMs: 3_000 },
+  );
+  expect(error.message).toBe(`setup failed (exit code 23):\n${expected}`);
+});
+
+it("retains a short already-omitted tail alongside the other stream", () => {
+  const error = createCommandError(
+    "setup",
+    {
+      ...failure,
+      code: 23,
+      killed: false,
+      termination: "exit",
+      stderr: Array.from({ length: 13 }, (_, index) => `note ${index}`).join("\n"),
+      stdout: "recovery",
+    },
+    { timeoutMs: 3_000 },
+  );
+  expect(error.message).toContain("stderr: …\nnote 1\n");
+  expect(error.message).not.toContain("note 0\n");
+  expect(error.message).toContain("note 12\nstdout: recovery");
+  expect(error.message.match(/…/g)).toHaveLength(1);
+});
+
+it.each(["stdout", "stderr"] as const)(
+  "does not widen the result %s cap for a single stream",
+  (stream) => {
+    const result = formatCommandResult("command", {
+      ...failure,
+      code: 23,
+      killed: false,
+      termination: "exit",
+      stdout: "",
+      stderr: "",
+      [stream]: "x".repeat(1_600),
+    });
+    expect(result).toContain(`${stream}:`);
+    expect(result).not.toContain("x".repeat(801));
+    expect(result).toContain("…");
+  },
+);
+
+it("keeps timeout ahead of an output-limit flag", () => {
+  const error = createCommandError(
+    "setup",
+    {
+      ...failure,
+      code: null,
+      termination: "timeout",
+      outputLimitExceeded: true,
+    },
+    { timeoutMs: 3_000 },
+  );
+  expect(error.message).toBe("setup failed (timed out after 3 seconds)");
 });

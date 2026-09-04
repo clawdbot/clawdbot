@@ -12,6 +12,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import {
   findTaskByRunId,
@@ -1468,45 +1469,58 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("emits provider failure messages without the internal error class name", async () => {
-    const message =
-      "The selected model was not found by the provider. Check the model id or choose a different model.";
-    mocks.agentCommand.mockRejectedValueOnce(
-      new FailoverError(message, {
+  it.each([false, true])(
+    "emits provider failures and optional diagnostics without class names: %s",
+    async (withDiagnostic) => {
+      const message =
+        "The selected model was not found by the provider. Check the model id or choose a different model.";
+      const failure = new FailoverError(message, {
         reason: "model_not_found",
         provider: "ollama",
         model: "definitely-not-a-real-model:latest",
-      }),
-    );
-    const context = makeContext();
-    const respond = vi.fn();
-    const runId = "agent-run-model-not-found";
+      });
+      const diagnostic = "stderr: earlier request timed out; Rate limit exceeded";
+      if (withDiagnostic) {
+        attachErrorDiagnostic(failure, diagnostic);
+      }
+      const displayed = withDiagnostic ? `${message}\n${diagnostic}` : message;
+      mocks.agentCommand.mockRejectedValueOnce(failure);
+      const context = makeContext();
+      const respond = vi.fn();
+      const runId = "agent-run-model-not-found";
 
-    dispatchAgentRunFromGateway({
-      ingressOpts: {
-        message: "hi",
-        sessionKey: "agent:badmodel:main",
-        allowModelOverride: false,
-      },
-      runId,
-      dedupeKeys: [`agent:${runId}`],
-      abortController: new AbortController(),
-      cleanupAbortController: vi.fn(),
-      io: createAgentTurnIo(respond),
-      context,
-      taskTrackingMode: "none",
-    });
+      dispatchAgentRunFromGateway({
+        ingressOpts: {
+          message: "hi",
+          sessionKey: "agent:badmodel:main",
+          allowModelOverride: false,
+        },
+        runId,
+        dedupeKeys: [`agent:${runId}`],
+        abortController: new AbortController(),
+        cleanupAbortController: vi.fn(),
+        io: createAgentTurnIo(respond),
+        context,
+        taskTrackingMode: "none",
+      });
 
-    await waitForAssertion(() => {
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        { runId, status: "error", summary: message },
-        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
-        { runId, error: message },
-      );
-      expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
-    });
-  });
+      await waitForAssertion(() => {
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          { runId, status: "error", summary: message },
+          expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
+          { runId, error: message },
+        );
+        expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
+        expect(failure.message).toBe(message);
+        expect(failure.reason).toBe("model_not_found");
+      });
+      await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+        status: "error",
+        error: displayed,
+      });
+    },
+  );
 
   it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {
     await withTestDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {

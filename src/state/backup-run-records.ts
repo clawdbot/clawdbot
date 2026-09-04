@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { BACKUP_RUN_ERROR_MAX_LENGTH } from "./backup-run-records.contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
@@ -28,7 +30,7 @@ export type BackupRunRecord = {
 
 function boundedText(value: string | undefined, maxLength: number): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed.slice(0, maxLength) : undefined;
+  return trimmed ? truncateUtf16Safe(trimmed, maxLength) : undefined;
 }
 
 function parseBackupRun(row: {
@@ -86,7 +88,9 @@ export function recordBackupRunOutcome(params: {
   const manifest = JSON.stringify({
     kind: params.kind,
     ...(boundedText(params.target, 512) ? { target: boundedText(params.target, 512) } : {}),
-    ...(boundedText(params.error, 1_200) ? { error: boundedText(params.error, 1_200) } : {}),
+    ...(boundedText(params.error, BACKUP_RUN_ERROR_MAX_LENGTH)
+      ? { error: boundedText(params.error, BACKUP_RUN_ERROR_MAX_LENGTH) }
+      : {}),
     ...(params.pushFailed === true ? { pushFailed: true } : {}),
   });
   runOpenClawStateWriteTransaction(

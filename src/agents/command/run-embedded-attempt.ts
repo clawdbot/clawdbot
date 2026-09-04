@@ -21,6 +21,7 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
+import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import {
   runEmbeddedAgentEntry,
   type EmbeddedAgentRunEntryTerminal,
@@ -37,7 +38,6 @@ import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import {
-  isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
   resolveAgentRunErrorLifecycleFields,
 } from "../run-termination.js";
@@ -499,6 +499,10 @@ export async function runEmbeddedAgentAttempt(params: {
               body,
               transcriptBody,
               isFallbackRetry: runOptions.isFallbackRetry,
+              classifyResult: runOptions.classifyResult,
+              preserveCliSessionBinding:
+                isHeartbeatLifecycleRunKind(logicalTurnOpts.bootstrapContextRunKind) ||
+                params.preserveUserFacingSessionModelState,
               modelRoutingProvenance: runOptions.modelRoutingProvenance,
               resolvedThinkLevel: candidateThinkLevel,
               fastMode,
@@ -629,8 +633,10 @@ export async function runEmbeddedAgentAttempt(params: {
             { cause: err },
           );
         }
-        const previousProvider = provider;
-        const previousModel = model;
+        if (storedModelOverride || err.model !== model || err.provider !== provider) {
+          storedModelOverride = err.model;
+          storedModelOverrideSource = "user";
+        }
         if (autoFallbackPrimaryProbe) {
           autoFallbackPrimaryProbeInterruptedByLiveSwitch = true;
         }
@@ -653,23 +659,16 @@ export async function runEmbeddedAgentAttempt(params: {
           sessionEntry.authProfileOverrideCompactionCount = undefined;
           sessionEntryForAttempt = sessionEntry;
         }
-        if (
-          storedModelOverride ||
-          err.model !== previousModel ||
-          err.provider !== previousProvider
-        ) {
-          storedModelOverride = err.model;
-          storedModelOverrideSource = "user";
-        }
         attemptLifecycleState.lifecycleEnded = false;
         log.info(
           `Live session model switch in subagent run ${runId}: switching to ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}`,
         );
         continue;
       }
-      const errorLifecycleFields = isAgentRunDirectAbortReason(err)
-        ? { aborted: true as const, stopReason: "aborted" as const }
-        : resolveAgentRunErrorLifecycleFields(err, params.opts.abortSignal);
+      const errorLifecycleFields = resolveAgentRunErrorLifecycleFields(
+        err,
+        params.opts.abortSignal,
+      );
       lifecycle.emitBasicError(
         err instanceof Error ? err : new Error("Agent run failed"),
         errorLifecycleFields,

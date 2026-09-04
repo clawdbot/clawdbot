@@ -147,9 +147,10 @@ export async function runNonInteractiveLocalSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  sourceConfigBeforeMigrations: OpenClawConfig;
   baseHash?: string;
 }) {
-  const { opts, runtime, baseConfig, baseHash } = params;
+  const { opts, runtime, baseConfig, sourceConfigBeforeMigrations, baseHash } = params;
   const mode = "local" as const;
 
   const requestedWorkspaceDir = resolveNonInteractiveWorkspaceDir({
@@ -157,7 +158,12 @@ export async function runNonInteractiveLocalSetup(params: {
     baseConfig,
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
-  const workspaceConflict = resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
+  // Injected main is not authored membership; legacy workspace state still owns its guard.
+  const hasAuthoredRoster = listAgentEntries(sourceConfigBeforeMigrations).length > 0;
+  const workspaceConflict = resolveOnboardingWorkspaceConflict(
+    sourceConfigBeforeMigrations,
+    requestedWorkspaceDir,
+  );
   const workspaceDir = workspaceConflict?.currentWorkspaceDir ?? requestedWorkspaceDir;
   if (workspaceConflict) {
     runtime.error(
@@ -173,6 +179,7 @@ export async function runNonInteractiveLocalSetup(params: {
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
     baseConfig,
     requestedWorkspaceDir,
+    { allowWorkspaceChange: !hasAuthoredRoster && !workspaceConflict },
   );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
@@ -181,9 +188,7 @@ export async function runNonInteractiveLocalSetup(params: {
   // that requested owner before first-agent creation is allowed to write.
   const authTarget = resolveOnboardingSetupTarget(
     nextConfig,
-    opts.agentName && listAgentEntries(baseConfig).length === 0
-      ? { name: opts.agentName, workspaceDir }
-      : undefined,
+    opts.agentName && !hasAuthoredRoster ? { name: opts.agentName, workspaceDir } : undefined,
   );
 
   const inferredAuthChoice = opts.authChoice
@@ -248,6 +253,7 @@ export async function runNonInteractiveLocalSetup(params: {
     workspace: workspaceDir,
     baseConfig,
     firstAgent: { name: opts.agentName ?? "main" },
+    expectedConfigHash: baseHash ?? null,
   });
   for (const warning of created.sessionMigrationWarnings ?? []) {
     runtime.log(`Warning: ${warning}`);

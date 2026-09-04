@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
   type NpmIntegrityDrift,
   type NpmSpecResolution,
@@ -33,6 +34,7 @@ import {
   listManagedNpmRootPackageNames,
   listNewManagedNpmRootPackageDirs,
   quarantineManagedNpmProjectRebuildArtifacts,
+  removeEmptyDirectoryIfPresent,
   resolveManagedNpmGenerationUseForInstall,
   resolveManagedNpmInstallRoot,
   resolveManagedNpmRootDependencySpecForInstall,
@@ -72,6 +74,7 @@ import type {
   PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
+import { isOfficialCatalogLookupPluginIdReplacement } from "./official-external-install-records.js";
 import {
   auditDeclaredOpenClawHostDependency,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
@@ -547,7 +550,11 @@ export async function installPluginFromManagedNpmRoot(
       if (
         manifestResult.ok &&
         manifestResult.manifest.id === params.expectedReplacementPluginId &&
-        manifestResult.manifest.legacyPluginIds?.includes(expectedPluginId)
+        (manifestResult.manifest.legacyPluginIds?.includes(expectedPluginId) ||
+          isOfficialCatalogLookupPluginIdReplacement({
+            expectedPluginId,
+            expectedReplacementPluginId: params.expectedReplacementPluginId,
+          }))
       ) {
         // Only managed npm updates may replace an expected id, after the downloaded
         // official manifest corroborates the catalog-declared migration.
@@ -577,6 +584,15 @@ export async function installPluginFromManagedNpmRoot(
       ...(policyMode === "update" ? { currentArtifactDir: installRoot } : {}),
       stagedArtifactDir: installRoot,
       mode: policyMode,
+      ...(params.installPolicyRequest.source?.kind === "npm"
+        ? {
+            sourceRecord: {
+              source: "npm" as const,
+              spec: params.displaySpec,
+              ...buildNpmResolutionFields(params.npmResolution),
+            },
+          }
+        : {}),
     });
     return {
       ...result,
@@ -611,6 +627,10 @@ export async function installPluginFromManagedNpmRoot(
       logger,
     });
     await cleanupManagedNpmPluginInstallRollbackSnapshot({ snapshot: rollbackSnapshot, logger });
+    // Prepared npm-pack archives must be gone before retiring an empty failed project.
+    await removeEmptyDirectoryIfPresent(npmRoot).catch((error: unknown) =>
+      logger.warn?.(`Failed to remove empty managed npm project ${npmRoot}: ${String(error)}`),
+    );
   };
 
   try {

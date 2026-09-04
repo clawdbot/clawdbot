@@ -3,6 +3,7 @@ import path from "node:path";
 import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -140,10 +141,7 @@ export function createWikiStatusTool(
         appConfig,
         callerAgentId: memoryContext.agentId,
       });
-      return {
-        content: [{ type: "text", text: renderMemoryWikiStatus(status) }],
-        details: status,
-      };
+      return textResult(renderMemoryWikiStatus(status), status);
     },
   };
 }
@@ -190,10 +188,7 @@ export function createWikiSearchTool(
                   `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}${result.matchedClaimId ? `\nClaim: ${result.matchedClaimId}` : ""}${result.evidenceKinds && result.evidenceKinds.length > 0 ? `\nEvidence: ${result.evidenceKinds.join(", ")}` : ""}\nSnippet: ${result.snippet}`,
               )
               .join("\n\n");
-      return {
-        content: [{ type: "text", text }],
-        details: { results },
-      };
+      return textResult(text, { results });
     },
   };
 }
@@ -228,15 +223,12 @@ export function createWikiLintTool(
               `Provenance gaps: ${provenance}`,
               `Report: ${reportPath}`,
             ].join("\n");
-      return {
-        content: [{ type: "text", text: summary }],
-        details: {
-          issueCount: result.issueCount,
-          issues: result.issues,
-          issuesByCategory: result.issuesByCategory,
-          reportPath,
-        },
-      };
+      return textResult(summary, {
+        issueCount: result.issueCount,
+        issues: result.issues,
+        issuesByCategory: result.issuesByCategory,
+        reportPath,
+      });
     },
   };
 }
@@ -265,15 +257,10 @@ export function createWikiApplyTool(
         result.compile.updatedFiles.length > 0
           ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.`
           : "Indexes unchanged.";
-      return {
-        content: [
-          {
-            type: "text",
-            text: `${action} ${result.pagePath} via ${result.operation}. ${compileSummary}`,
-          },
-        ],
-        details: result,
-      };
+      return textResult(
+        `${action} ${result.pagePath} via ${result.operation}. ${compileSummary}`,
+        result,
+      );
     },
   };
 }
@@ -299,10 +286,7 @@ export function createWikiGetTool(
       };
       const lookup = typeof params.lookup === "string" ? params.lookup.trim() : "";
       if (!lookup) {
-        return {
-          content: [{ type: "text", text: "wiki_get requires a non-empty `lookup` path or id." }],
-          details: { found: false },
-        };
+        return textResult("wiki_get requires a non-empty `lookup` path or id.", { found: false });
       }
       await syncImportedSourcesIfNeeded(config, appConfig, memoryContext.signal);
       const result = await getMemoryWikiPage({
@@ -319,15 +303,9 @@ export function createWikiGetTool(
         ...(params.corpus ? { searchCorpus: params.corpus } : {}),
       });
       if (!result) {
-        return {
-          content: [{ type: "text", text: `Wiki page not found: ${lookup}` }],
-          details: { found: false },
-        };
+        return textResult(`Wiki page not found: ${lookup}`, { found: false });
       }
-      return {
-        content: [{ type: "text", text: result.content }],
-        details: { found: true, ...result },
-      };
+      return textResult(result.content, { found: true, ...result });
     },
   };
 }

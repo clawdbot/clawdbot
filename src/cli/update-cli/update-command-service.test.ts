@@ -32,8 +32,7 @@ vi.mock("./restart-helper.js", async (importOriginal) => ({
   runRestartScript: mocks.runRestartScript,
 }));
 
-vi.mock("./update-command-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-config.js")>()),
+vi.mock("./update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: mocks.createUpdateConfigSnapshot,
 }));
 

@@ -144,12 +144,14 @@ export class ChatPaneComposerHandoff {
       [attachments, ...Object.values(fallbacks).map((fallback) => fallback.attachments)],
     );
     targetState.chatMessage = sourceState.chatMessage;
+    targetState.chatMentions = sourceState.chatMentions;
     targetState.chatGoalDraftMode = sourceState.chatGoalDraftMode;
     targetState.chatReplyTarget = sourceState.chatReplyTarget;
     targetState.chatQueuedEdit = sourceState.chatQueuedEdit;
     targetState.chatAttachments = attachments;
     targetState.chatComposerFallbackByScope = fallbacks;
     sourceState.chatMessage = "";
+    sourceState.chatMentions = [];
     sourceState.chatGoalDraftMode = null;
     sourceState.chatReplyTarget = null;
     sourceState.chatQueuedEdit = null;

@@ -57,8 +57,8 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
   <Accordion title="Deep phase">
     - Ranks candidates with weighted scoring and threshold gates (`minScore`, `minRecallCount`, `minUniqueQueries` must all pass).
     - Rehydrates snippets from live daily files before writing, so stale/deleted snippets are skipped.
-    - Passes gated owner and agent-derived candidates to a consolidation subagent with the current `MEMORY.md`.
-    - Rewrites `MEMORY.md` only when the result preserves enough prior entries, includes candidate source references, and fits the bootstrap budget.
+    - Passes gated owner and agent-derived candidates to a tool-free completion that chooses additions, merges, and supersessions against the current `MEMORY.md`.
+    - Composes `MEMORY.md` from validated source evidence, preserving unrelated entries and candidate source references within the prior-entry loss limit and bootstrap budget.
     - Falls back to the previous append-only promotion path when the model is unavailable or the rewrite fails validation.
     - Writes a `## Deep Sleep` summary into `DREAMS.md` and optionally `memory/dreaming/deep/YYYY-MM-DD.md`.
 
@@ -82,7 +82,9 @@ taint gate, not a score penalty. Eligible candidates include their origin,
 session kind, observation time, optional supersession key, and daily-note
 source reference.
 
-An accepted rewrite must:
+The model returns operation decisions, not replacement memory prose. The memory
+writer applies those decisions to the existing file using each candidate's
+bounded, sourced entry. An accepted rewrite must:
 
 - preserve prior entries within `phases.deep.maxPriorEntryLossFraction`
 - include every promoted candidate's `Source: path#Lx-Ly` reference
@@ -100,7 +102,9 @@ memory framing in the Generative Agents research.
 
 ## Dream Diary
 
-Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a best-effort background subagent turn and appends a short diary entry, using the default runtime model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with the session default model; trust or allowlist failures are not retried and stay visible in logs instead of silently falling back to a generic diary entry.
+Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a tool-free background completion and appends a short diary entry, using the workspace agent's default model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with that agent's default model. Trust or allowlist failures are not retried.
+
+Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
 
 <Note>
 The diary is for human reading in the Dreams UI, not a promotion source. Diary/report artifacts are excluded from short-term promotion; only grounded memory snippets are eligible to promote into `MEMORY.md`.
@@ -154,6 +158,16 @@ Light and REM phase hits recorded in SQLite-backed plugin state add a small rece
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+
+Dreaming completions share the [background work budget](/concepts/queue#background-work) with Skill Workshop and other plugin completions: at most three runs in total, with up to three available to `memory-core`. The sweep coordinator does not consume a completion slot while it waits for phase work. System busyness shows these runs together in the `background` row.
+
+An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents#agents.defaults.systemagent) for this job. If logs report `Agent-less cron job has no resolvable owner`, choose an existing agent to own the sweep. For example, if that agent is `ops`:
+
+```bash
+openclaw config set agents.defaults.systemAgent.agentId ops
+```
+
+This selects the execution owner; it does not change any agent's workspace or limit the sweep to that agent's memory. A sole-agent installation resolves its owner automatically.
 
 | Setting              | Default       |
 | -------------------- | ------------- |
@@ -260,14 +274,14 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
   Cron cadence for the full dreaming sweep.
 </ParamField>
 <ParamField path="model" type="string">
-  Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
+  Optional Dream Diary completion model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
 </ParamField>
 <ParamField path="phases.deep.maxPromotedSnippetTokens" type="number" default="160">
   Maximum estimated token count kept from each short-term recall snippet promoted into `MEMORY.md`. Ranking provenance remains visible.
 </ParamField>
 
 <Warning>
-`dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`. The automatic retry only covers model-unavailable errors; trust or allowlist failures stay visible in logs instead of falling back silently.
+`dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`. The automatic retry only covers model-unavailable errors; trust or allowlist failures produce a fallback diary trace and a degraded outcome instead of silently switching models.
 </Warning>
 
 <Note>

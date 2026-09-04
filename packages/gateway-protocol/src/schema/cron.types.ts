@@ -1,8 +1,10 @@
 // Wire types derive from the cron schemas without importing the ProtocolSchemas registry.
 import type { Static } from "typebox";
 import type {
+  CronAddJobResultSchema,
   CronAddParamsSchema,
   CronAddResultSchema,
+  CronDeliveryPreviewSchema,
   CronDeclarativeAddResultSchema,
   CronGetParamsSchema,
   CronJobSchema,
@@ -24,7 +26,9 @@ export type CronListParams = Static<typeof CronListParamsSchema>;
 export type CronStatusParams = Static<typeof CronStatusParamsSchema>;
 export type CronGetParams = Static<typeof CronGetParamsSchema>;
 export type CronAddParams = Static<typeof CronAddParamsSchema>;
+export type CronAddJobResult = Static<typeof CronAddJobResultSchema>;
 export type CronAddResult = Static<typeof CronAddResultSchema>;
+export type CronDeliveryPreview = Static<typeof CronDeliveryPreviewSchema>;
 export type CronDeclarativeAddResult = Static<typeof CronDeclarativeAddResultSchema>;
 export type CronUpdateParams = Static<typeof CronUpdateParamsSchema>;
 export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;

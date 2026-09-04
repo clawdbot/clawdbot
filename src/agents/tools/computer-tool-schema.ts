@@ -28,9 +28,13 @@ export function availableComputerActions(
   actions: readonly ComputerUseV2ActionName[],
   hasCleanupOwner: boolean,
 ): readonly ComputerUseV2ActionName[] {
-  return hasCleanupOwner
+  const available = hasCleanupOwner
     ? actions
     : actions.filter((action) => !EXECUTION_OWNED_ACTIONS.has(action));
+  // Local pacing uses snapshot authority; providers need no native wait action.
+  return available.includes("screenshot") && !available.includes("wait")
+    ? [...available, "wait"]
+    : available;
 }
 
 export function createComputerToolSchema(

@@ -30,7 +30,7 @@ import { removeSessionWorktree } from "../../sessions/session-worktree-lifecycle
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly, loadSessionEntry } from "../session-utils.js";
 import { prepareSessionWorkerPlacementRetirement } from "../worker-environments/session-placement-lifecycle.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -155,7 +155,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
 
     const assertCurrent = () => {
       sessionMutationAuthorization?.assertCurrent();
-      const current = loadSessionEntry(key, { agentId: requestedAgentId });
+      const current = loadGatewaySessionEntryReadOnly(key, { agentId: requestedAgentId });
       if (
         current.storePath !== storePath ||
         current.canonicalKey !== target.canonicalKey ||

@@ -14,6 +14,7 @@ import {
 import { loadPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  advancePreparedModelRuntimeConfig,
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   refreshStalePreparedModelRuntimeCatalog,
@@ -59,7 +60,7 @@ describe("prepared model runtime reload auth adoption", () => {
       catalogMode: "static",
     });
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
-    mocks.createPreparedModelCatalogWorkerInput.mockClear();
+    mocks.createPreparedModelCatalogWorker.mockClear();
     expect((await prepareModelRuntimeSnapshot(input)).modelCatalog.entries).toEqual([]);
 
     mocks.mutationListener?.({
@@ -68,29 +69,38 @@ describe("prepared model runtime reload auth adoption", () => {
       profileSetChanged: true,
     });
 
-    const published = await prepareModelRuntimeSnapshot(input);
-    expect(published).toMatchObject({
+    const authPublished = await prepareModelRuntimeSnapshot(input);
+    expect(authPublished).toMatchObject({
       modelCatalog: { entries: [] },
     });
     expect(
-      mocks.createPreparedModelCatalogWorkerInput.mock.calls.at(-1)?.[0].agentFacts.providerIds,
+      mocks.createPreparedModelCatalogWorker.mock.calls.at(-1)?.[0].agentFacts.providerIds,
     ).toContain("custom");
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
 
-    let requestReadSettled = false;
-    const requestRead = loadPreparedModelCatalogOwnerSnapshot({
-      ...input,
-      readOnly: true,
-    }).then(() => {
-      requestReadSettled = true;
+    const nextConfig = { logging: { level: "debug" as const } };
+    advancePreparedModelRuntimeConfig(nextConfig);
+    const readInput = { ...input, config: nextConfig };
+    const published = await prepareModelRuntimeSnapshot(readInput);
+
+    const discoveryStarted = createDeferred();
+    mocks.runPreparedModelCatalogWorker.mockImplementation(() => {
+      discoveryStarted.resolve();
+      return liveBuild.promise;
     });
-    mocks.runPreparedModelCatalogWorker.mockImplementation(() => liveBuild.promise);
-    for (let i = 0; i < 5; i += 1) {
-      await Promise.resolve();
-    }
+    const requestRead = loadPreparedModelCatalogOwnerSnapshot({
+      ...readInput,
+      readOnly: true,
+    });
     try {
-      expect(requestReadSettled).toBe(true);
+      // Discovery stays withheld so an ordinary read must finish without starting it.
+      await expect(
+        Promise.race([
+          requestRead.then(() => "read"),
+          discoveryStarted.promise.then(() => "discovery"),
+        ]),
+      ).resolves.toBe("read");
       expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
     } finally {
       liveBuild.resolve({ entries: [model], routeVariants: [model] });
@@ -141,7 +151,7 @@ describe("prepared model runtime reload auth adoption", () => {
       catalogMode: "static",
     });
     mocks.runPreparedModelCatalogWorker.mockClear();
-    mocks.createPreparedModelCatalogWorkerInput.mockClear();
+    mocks.createPreparedModelCatalogWorker.mockClear();
     mocks.mutationListener?.({
       agentDir: input.agentDir,
       affectsInheritedStores: false,
@@ -151,7 +161,7 @@ describe("prepared model runtime reload auth adoption", () => {
     await prepareModelRuntimeSnapshot(input);
     expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
     expect(
-      mocks.createPreparedModelCatalogWorkerInput.mock.calls.at(-1)?.[0].agentFacts.providerIds,
+      mocks.createPreparedModelCatalogWorker.mock.calls.at(-1)?.[0].agentFacts.providerIds,
     ).toEqual([]);
   });
 

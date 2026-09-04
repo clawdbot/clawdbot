@@ -55,9 +55,9 @@ describe("fireworks provider plugin", () => {
     expect(resolved.method.id).toBe("api-key");
   });
 
-  it("builds the Fireworks catalog", async () => {
+  it("builds the static Fireworks catalog", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
-    const catalogProvider = await runSingleProviderCatalog(provider);
+    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
 
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe(FIREWORKS_BASE_URL);

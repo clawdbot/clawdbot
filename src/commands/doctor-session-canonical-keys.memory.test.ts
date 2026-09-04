@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
+import packageJson from "../../package.json" with { type: "json" };
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -81,14 +82,19 @@ describe("canonical SQLite session repair memory", () => {
     );
     await esbuild({
       bundle: true,
-      entryPoints: [fileURLToPath(canonicalMemoryTestSupportModuleUrl)],
+      entryPoints: { child: fileURLToPath(canonicalMemoryTestSupportModuleUrl) },
       format: "esm",
       // Keep generated source overhead out of the entry-data heap budget;
       // preserve function/class names used by runtime dispatch and diagnostics.
       minify: true,
       keepNames: true,
-      outfile: childPath,
-      packages: "external",
+      outdir: bundleDir,
+      outExtension: { ".js": ".mjs" },
+      // Preserve lazy runtime imports so unused provider SDKs do not consume the child heap.
+      splitting: true,
+      external: Object.entries(packageJson.dependencies)
+        .filter(([, version]) => !version.startsWith("workspace:"))
+        .map(([name]) => name),
       platform: "node",
       target: "node22",
     });

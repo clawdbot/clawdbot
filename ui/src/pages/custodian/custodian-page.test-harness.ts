@@ -106,6 +106,7 @@ export function createContext(
     pairingBusyRequestId: null,
     whatsappLoginMessage: null,
     whatsappLoginQrDataUrl: null,
+    whatsappLoginSessionKey: null,
     whatsappLoginConnected: null,
     whatsappBusy: false,
   };
@@ -123,7 +124,7 @@ export function createContext(
         agentsList: options.agentsList ?? {
           defaultId: "main",
           mainKey: "main",
-          scope: "agent",
+          scope: "global",
           agents: [{ id: "main", model: { primary: "openai/gpt-5.5" } }],
         },
       },

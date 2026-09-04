@@ -22,6 +22,7 @@ import {
   hasSessionEntriesByStatusReadOnly,
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
+  loadExactSessionEntryReadOnly,
   openSessionEntryReadView,
   readSessionTranscriptTitleProbeBatch,
   readSessionTranscriptWatermark,
@@ -191,6 +192,24 @@ describe("session accessor readonly listing", () => {
       recent: [],
       byAgent: new Map([[scope.agentId, { count: 5, recent: [] }]]),
     });
+
+    const retainedScope = { ...scope, sessionKey: "agent:main:retained" };
+    for (const projection of ["full", "list"] as const) {
+      expect(loadExactSessionEntryReadOnly({ ...retainedScope, projection })).toBeUndefined();
+      for (const key of ["bad-json", "bad-timestamp"]) {
+        expect(() =>
+          loadExactSessionEntryReadOnly({ ...scope, sessionKey: `agent:main:${key}`, projection }),
+        ).toThrow("openclaw doctor --fix");
+      }
+    }
+    update.run(
+      JSON.stringify({ skillsSnapshot: { prompt: "invalid prompt-only row" } }),
+      2000,
+      retainedScope.sessionKey,
+    );
+    expect(() => loadExactSessionEntryReadOnly({ ...retainedScope, projection: "list" })).toThrow(
+      "openclaw doctor --fix",
+    );
 
     closeOpenClawAgentDatabasesForTest();
     expect(() => readSessionStoreSummaryReadOnly(scope, options)).toThrow("openclaw doctor --fix");

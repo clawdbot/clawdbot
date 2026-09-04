@@ -54,6 +54,7 @@ export function resolveOpenClawToolsForMcp(
   return selection.map((tool) => {
     if (tool === "openclaw") {
       return createSystemAgentTool({
+        agentId: params.agentId,
         surface: params.systemAgentSurface ?? resolveOpenClawToolsMcpSystemAgentSurface(),
         ...resolveOpenClawToolsMcpSystemAgentApproval(),
       });

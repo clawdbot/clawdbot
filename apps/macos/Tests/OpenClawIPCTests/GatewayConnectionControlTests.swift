@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import Foundation
 import OpenClawChatUI
 import OpenClawProtocol
@@ -6,7 +7,7 @@ import Testing
 @testable import OpenClawKit
 @testable import OpenClawMacCLI
 
-private func makeGatewayGenerationSnapshot(version: String) -> HelloOk {
+func makeGatewayGenerationSnapshot(version: String, mainSessionKey: String? = nil) -> HelloOk {
     HelloOk(
         type: "hello-ok",
         _protocol: 3,
@@ -19,7 +20,7 @@ private func makeGatewayGenerationSnapshot(version: String) -> HelloOk {
             uptimems: 0,
             configpath: nil,
             statedir: nil,
-            sessiondefaults: nil,
+            sessiondefaults: mainSessionKey.map { ["mainSessionKey": OpenClawProtocol.AnyCodable($0)] },
             authmode: nil,
             updateavailable: nil),
         controluitabs: nil,
@@ -28,9 +29,18 @@ private func makeGatewayGenerationSnapshot(version: String) -> HelloOk {
         policy: [:])
 }
 
-private func gatewayGenerationSnapshotVersion(_ push: GatewayPush?) -> String? {
-    guard case let .snapshot(snapshot) = push else { return nil }
+private func gatewayGenerationSnapshotVersion(_ delivery: GatewayConnection.PushDelivery?) -> String? {
+    guard let delivery, delivery.isCurrent, case let .snapshot(snapshot) = delivery.push else { return nil }
     return snapshot.server["version"]?.value as? String
+}
+
+private func nextCurrentGatewayPush(
+    _ iterator: inout AsyncStream<GatewayConnection.PushDelivery>.Iterator) async -> GatewayConnection.PushDelivery?
+{
+    while let delivery = await iterator.next() {
+        if delivery.isCurrent, delivery.push != nil { return delivery }
+    }
+    return nil
 }
 
 private final class WebSocketMessageRecorder: @unchecked Sendable {
@@ -86,7 +96,7 @@ final class GatewayConnectionEndpointSource: @unchecked Sendable {
     }
 }
 
-private actor GatewayConnectionSuspensionGate {
+actor GatewayConnectionSuspensionGate {
     private var didStart = false
     private var isOpen = false
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
@@ -227,6 +237,128 @@ private func assertConfigLookupCannotRecreateRoute(
 }
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
+    @Test func `direct shared connection success retires only its current route mismatch`() async throws {
+        let urlA = try #require(URL(string: "ws://127.0.0.1:49220"))
+        let urlB = try #require(URL(string: "ws://127.0.0.1:49221"))
+        let source = GatewayConnectionEndpointSource(endpoint: GatewayConnection.EndpointSnapshot(
+            config: (urlA, nil, nil), routeAuthority: nil, revision: 1))
+        let rejectConnect = LockIsolated(true)
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                let id = socket.snapshotConnectRequestID() ?? "connect"
+                return .data(rejectConnect.value
+                    ? GatewayWebSocketTestSupport.connectAuthFailureData(
+                        id: id, detailCode: "PROTOCOL_MISMATCH", message: "protocol mismatch")
+                    : GatewayWebSocketTestSupport.connectOkData(id: id))
+            })
+        })
+        let connection = GatewayConnection(
+            testEndpointProvider: { source.snapshot() },
+            sessionBox: WebSocketSessionBox(session: session))
+        var mismatch: GatewayCompatibilityIssue?
+        do {
+            _ = try await connection.request(method: "set-heartbeats", params: nil, retryTransportFailures: false)
+            Issue.record("expected protocol rejection")
+        } catch {
+            mismatch = GatewayCompatibilityIssue(error: error)
+        }
+        let issue = try #require(mismatch)
+        var alerts = ControlChannelCompatibilityAlerts()
+        _ = alerts.observeEndpoint(revision: 1)
+        let prepared = alerts.prepare(issue, generation: alerts.routeGeneration)
+        let originalIssue = try #require(prepared)
+        let initialRecovery = alerts.observeConnection(revision: connection.connectedEndpointRevision)
+        #expect(initialRecovery == nil)
+        #expect(alerts.presentation == originalIssue)
+        let stream = await connection.subscribe()
+        var buffered = stream.makeAsyncIterator()
+        rejectConnect.withValue { $0 = false }
+        _ = try await connection.request(method: "set-heartbeats", params: nil, retryTransportFailures: false)
+        let firstRevision = connection.connectedEndpointRevision
+        let firstRecovery = alerts.observeConnection(revision: firstRevision)
+        #expect(firstRevision == 1)
+        #expect(firstRecovery == .connected)
+        #expect(alerts.presentation == nil)
+        let queued = await buffered.next()
+        guard case .snapshot = queued?.push else {
+            Issue.record("expected the successful handshake before replacing its route")
+            await connection.shutdown()
+            return
+        }
+
+        // A coalesced failure can resume after the successful snapshot was consumed.
+        let lateFailure = alerts.prepare(issue, generation: alerts.routeGeneration)
+        #expect(lateFailure != nil)
+        let lateRecovery = alerts.observeConnection(revision: connection.connectedEndpointRevision)
+        #expect(lateRecovery == .connected)
+        #expect(alerts.presentation == nil)
+
+        source.setEndpoint(GatewayConnection.EndpointSnapshot(
+            config: (urlB, nil, nil), routeAuthority: nil, revision: 2))
+        try await connection.refresh()
+        _ = alerts.observeEndpoint(revision: 2)
+        let replacementIssue = alerts.prepare(issue, generation: alerts.routeGeneration)
+        #expect(replacementIssue != nil)
+        // Resume the old snapshot's delivery only after the replacement was admitted.
+        let disconnectedRevision = connection.connectedEndpointRevision
+        let staleRecovery = alerts.observeConnection(revision: disconnectedRevision)
+        #expect(disconnectedRevision == nil)
+        #expect(staleRecovery == nil)
+        #expect(alerts.presentation == replacementIssue)
+
+        _ = try await connection.request(method: "set-heartbeats", params: nil, retryTransportFailures: false)
+        let secondRevision = connection.connectedEndpointRevision
+        let secondRecovery = alerts.observeConnection(revision: secondRevision)
+        #expect(secondRevision == 2)
+        #expect(secondRecovery == .connected)
+        #expect(alerts.presentation == nil)
+        let socketCount = session.snapshotMakeCount()
+        source.setEndpoint(GatewayConnection.EndpointSnapshot(
+            config: (urlB, nil, nil), routeAuthority: nil, revision: 3))
+        try await connection.refresh()
+        #expect(connection.connectedEndpointRevision == 3)
+        #expect(session.snapshotMakeCount() == socketCount)
+        await connection.shutdown()
+        #expect(connection.connectedEndpointRevision == nil)
+    }
+
+    @Test @MainActor
+    func `only primary snapshots update the menu bar main session`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let activity = WorkActivityStore.shared
+            let previousMainSessionKey = activity.mainSessionKey
+            defer { activity.setMainSessionKey(previousMainSessionKey) }
+            let primary = makeActivityGatewayConnection(mainSessionKey: "primary-next")
+            let control = ControlChannel(gateway: primary, endpointRevision: { 1 })
+            activity.setMainSessionKey("primary-initial")
+
+            let profile = makeActivityGatewayConnection(mainSessionKey: "profile-main")
+            _ = try await profile.request(method: "health", params: nil, retryTransportFailures: false)
+            #expect(await !self.waitForMainSessionKey("profile-main"))
+            #expect(activity.mainSessionKey == "primary-initial")
+
+            _ = try await primary.request(method: "health", params: nil, retryTransportFailures: false)
+            #expect(await self.waitForMainSessionKey("primary-next"))
+
+            await profile.shutdown()
+            await control.disconnect()
+        }
+    }
+
+    @MainActor
+    func waitForMainSessionKey(_ key: String) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            if WorkActivityStore.shared.mainSessionKey == key { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return WorkActivityStore.shared.mainSessionKey == key
+    }
+
     @Test @MainActor
     func `cancelled pending request never activates local gateway recovery`() async throws {
         try await self.withIsolatedRecoveryFixture { _, _, _ in } operation: { connection, session in
@@ -251,6 +383,60 @@ private func assertConfigLookupCannotRecreateRoute(
         }
     }
 
+    @Test(arguments: [false, true]) @MainActor
+    func `intentional disconnect retires queued recovery`(pendingFailure: Bool) async throws {
+        let shutdown = GatewayConnectionSuspensionGate()
+        let retireClient: @Sendable (GatewayChannelActor) async -> Void = { client in
+            await shutdown.suspend()
+            await client.shutdown()
+        }
+        try await self.withIsolatedRecoveryFixture(clientShutdown: retireClient) { socket, message, sendIndex in
+            guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        } operation: { connection, session in
+            _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+            let control = ControlChannel(gateway: connection, endpointRevision: { 1 })
+            if pendingFailure {
+                control.endpointDidChange(.unavailable(mode: .local, reason: "offline", routeRevision: 1))
+            } else {
+                _ = try await control.health()
+                #expect(control.state == .connected)
+            }
+
+            let proof = Task {
+                await shutdown.waitUntilStarted()
+                // Hold transport retirement open while any previously queued recovery gets its turn.
+                let deadline = ContinuousClock.now + .milliseconds(200)
+                while GatewayProcessManager.shared.status == .stopped, ContinuousClock.now < deadline {
+                    try? await Task.sleep(for: .milliseconds(2))
+                }
+                #expect(GatewayProcessManager.shared.status == .stopped)
+                #expect(control.state == .disconnected)
+                #expect(session.snapshotMakeCount() == 1)
+                await shutdown.open()
+            }
+            await control.disconnect()
+            await proof.value
+        }
+    }
+
+    @Test @MainActor
+    func `current endpoint failure still starts control recovery`() async throws {
+        try await self.withIsolatedRecoveryFixture { socket, message, sendIndex in
+            guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        } operation: { connection, _ in
+            let control = ControlChannel(gateway: connection, endpointRevision: { 1 })
+            control.endpointDidChange(.unavailable(mode: .local, reason: "offline", routeRevision: 1))
+            let deadline = ContinuousClock.now + .seconds(2)
+            while GatewayProcessManager.shared.status == .stopped, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+            #expect(GatewayProcessManager.shared.status != .stopped)
+            await control.disconnect()
+        }
+    }
+
     @Test @MainActor
     func `genuine transport failure still activates and retries local gateway recovery`() async throws {
         try await self.assertUncancelledFailureRecovers(URLError(.networkConnectionLost))
@@ -259,6 +445,44 @@ private func assertConfigLookupCannotRecreateRoute(
     @Test @MainActor
     func `send-side cancellation without caller cancellation still activates gateway recovery`() async throws {
         try await self.assertUncancelledFailureRecovers(CancellationError())
+    }
+
+    @Test(arguments: [AppState.ConnectionMode.local, .remote], [false, true]) @MainActor
+    func `recovery preserves a protocol mismatch before later transport failures`(
+        mode: AppState.ConnectionMode,
+        structured: Bool) async throws
+    {
+        let requests = WebSocketMessageRecorder()
+        let mismatch = GatewayConnectAuthError(
+            message: "protocol mismatch",
+            detailCode: structured ? GatewayConnectAuthDetailCode.protocolMismatch.rawValue : "INVALID_REQUEST",
+            canRetryWithDeviceToken: false,
+            expectedProtocol: 3)
+        try await self.withIsolatedRecoveryFixture(mode: mode) { socket, message, sendIndex in
+            guard sendIndex > 0,
+                  let id = GatewayWebSocketTestSupport.requestID(from: message),
+                  let data = Self.messageData(message),
+                  let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            if frame["method"] as? String == "status" {
+                requests.append(message)
+                switch requests.snapshot().count {
+                case 1: throw URLError(.networkConnectionLost)
+                case 2: throw mismatch
+                default: throw URLError(.cannotConnectToHost)
+                }
+            }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        } operation: { connection, _ in
+            do {
+                _ = try await connection.request(method: "status", params: nil)
+                Issue.record("expected the protocol rejection from recovery")
+            } catch {
+                #expect((error as? GatewayConnectAuthError)?.expectedProtocol == 3)
+                #expect(GatewayCompatibilityIssue(error: error) != nil)
+            }
+            #expect(requests.snapshot().count == 2)
+        }
     }
 
     @Test(arguments: [false, true], [false, true]) @MainActor
@@ -688,7 +912,9 @@ private func assertConfigLookupCannotRecreateRoute(
         #expect(refreshCount == 1)
         await connection.shutdown()
     }
+}
 
+extension GatewayConnectionControlTests {
     @Test func `wizard not found means cancellation already reached a terminal session`() {
         let notFound = GatewayResponseError(
             method: "wizard.cancel",
@@ -780,8 +1006,9 @@ private func assertConfigLookupCannotRecreateRoute(
             routeB: (tunnelURL, ownerB))
     }
 
-    @Test func `retired socket callbacks cannot mutate cache or subscribers`() async {
+    @Test func `retired socket callbacks cannot mutate cache or subscribers`() async throws {
         let (connection, _) = makeTestGatewayConnection()
+        try await connection.refresh()
         let routeGeneration = await connection._test_routeGeneration()
         let stream = await connection.subscribe(bufferingNewest: 10)
         var iterator = stream.makeAsyncIterator()
@@ -808,18 +1035,17 @@ private func assertConfigLookupCannotRecreateRoute(
             routeGeneration: routeGeneration,
             socketGeneration: 1)
 
-        let firstPush = await iterator.next()
-        let secondPush = await iterator.next()
-        #expect(gatewayGenerationSnapshotVersion(firstPush) == "socket-1")
-        #expect(gatewayGenerationSnapshotVersion(secondPush) == "socket-2")
+        let currentPush = await nextCurrentGatewayPush(&iterator)
+        #expect(gatewayGenerationSnapshotVersion(currentPush) == "socket-2")
         #expect(await connection.cachedGatewayVersion() == "socket-2")
         await connection.shutdown()
     }
 
-    @Test func `replaced route rejects callbacks from previous client`() async {
+    @Test func `replaced route rejects callbacks from previous client`() async throws {
         let (connection, _) = makeTestGatewayConnection()
         let replacedRouteGeneration = await connection._test_routeGeneration()
         await connection.shutdown()
+        try await connection.refresh()
         let currentRouteGeneration = await connection._test_routeGeneration()
         let stream = await connection.subscribe(bufferingNewest: 10)
         var iterator = stream.makeAsyncIterator()
@@ -1004,7 +1230,7 @@ private func assertConfigLookupCannotRecreateRoute(
         let json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
         let params = json?["params"] as? [String: Any]
         #expect(params?["thinking"] == nil)
-        #expect(params?["voiceWakeTrigger"] as? String == "")
+        #expect((params?["voiceWakeTrigger"] as? String)?.isEmpty == true)
     }
 
     @Test func `chat send carries route bound routing and settings preconditions`() async throws {
@@ -1062,16 +1288,29 @@ private func assertConfigLookupCannotRecreateRoute(
 
     @Test(arguments: [
         (
-            #"{"defaultId":"main","mainKey":"main","scope":"per-sender","agents":[{"id":"main","model":{"primary":"openai/gpt-5.5"}}]}"#,
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","model":{"primary":"openai/gpt-5.5"}}]}
+            """#,
             "openai/gpt-5.5"),
         (
-            #"{"defaultId":"work","mainKey":"main","scope":"per-sender","agents":[{"id":"main","model":{"primary":"openai/gpt-5.5"}},{"id":"work","model":{"primary":"anthropic/claude-opus-4-8"}}]}"#,
+            #"""
+            {"defaultId":"work","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","model":{"primary":"openai/gpt-5.5"}},
+            {"id":"work","model":{"primary":"anthropic/claude-opus-4-8"}}]}
+            """#,
             "anthropic/claude-opus-4-8"),
         (
-            #"{"defaultId":"main","mainKey":"main","scope":"per-sender","agents":[{"id":"main"},{"id":"work","model":{"primary":"openai/gpt-5.5"}}]}"#,
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":[{"id":"main"},
+            {"id":"work","model":{"primary":"openai/gpt-5.5"}}]}
+            """#,
             nil),
         (
-            #"{"defaultId":"main","mainKey":"main","scope":"per-sender","agents":[{"id":"main","model":{"primary":"   "}}]}"#,
+            #"""
+            {"defaultId":"main","mainKey":"main","scope":"per-sender","agents":
+            [{"id":"main","model":{"primary":"   "}}]}
+            """#,
             nil),
     ])
     func `configured inference model follows the default agent`(
@@ -1081,7 +1320,7 @@ private func assertConfigLookupCannotRecreateRoute(
         #expect(try GatewayConnection.decodeConfiguredInferenceModel(Data(json.utf8)) == expected)
     }
 
-    private static func messageData(_ message: URLSessionWebSocketTask.Message) -> Data? {
+    static func messageData(_ message: URLSessionWebSocketTask.Message) -> Data? {
         switch message {
         case let .string(text):
             Data(text.utf8)
@@ -1094,6 +1333,8 @@ private func assertConfigLookupCannotRecreateRoute(
 
     @MainActor
     private func withIsolatedRecoveryFixture<T>(
+        mode: AppState.ConnectionMode = .local,
+        clientShutdown: @escaping @Sendable (GatewayChannelActor) async -> Void = { await $0.shutdown() },
         _ sendHook: @escaping GatewayTestWebSocketTask.SendHook,
         operation: (GatewayConnection, GatewayTestWebSocketSession) async throws -> T) async throws -> T
     {
@@ -1102,7 +1343,10 @@ private func assertConfigLookupCannotRecreateRoute(
         try FileManager.default.createDirectory(at: isolatedState, withIntermediateDirectories: true)
         let configURL = isolatedState.appendingPathComponent("openclaw.json")
         let port = Int.random(in: 30000...59999)
-        try Data(#"{"gateway":{"mode":"local","port":\#(port)}}"#.utf8).write(to: configURL)
+        try Data(
+            (#"{"gateway":{"mode":"\#(mode.rawValue)","port":\#(port),"remote":{"transport":"direct","# +
+                #""url":"ws://127.0.0.1:\#(port)"}}}"#)
+                .utf8).write(to: configURL)
         defer { try? FileManager.default.removeItem(at: isolatedState) }
 
         // Profiles and their reserved ports live for the process; a temporary
@@ -1119,14 +1363,16 @@ private func assertConfigLookupCannotRecreateRoute(
                     endpointProvider: {
                         GatewayConnection.EndpointSnapshot(
                             config: (url: URL(string: "ws://127.0.0.1:\(port)")!, token: nil, password: nil),
-                            routeAuthority: nil)
+                            routeAuthority: nil,
+                            revision: 1)
                     },
                     supportsSharedEndpointRecovery: true,
                     activationBindingKeyProvider: { nil },
-                    sessionBox: WebSocketSessionBox(session: session))
+                    sessionBox: WebSocketSessionBox(session: session),
+                    clientShutdown: clientShutdown)
                 let manager = GatewayProcessManager.shared
                 let priorMode = AppStateStore.shared.connectionMode
-                AppStateStore.shared.connectionMode = .local
+                AppStateStore.shared.connectionMode = mode
                 manager._testResetGatewayStartTask()
                 manager.setTestingStatus(.stopped)
                 manager.setTestingConnection(connection)

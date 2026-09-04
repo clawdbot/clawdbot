@@ -10,6 +10,11 @@ import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
+import {
+  classifyAcceptedChatSendFailure,
+  shouldRetainAcceptedChatSendRetryIdentity,
+  type AcceptedChatSendFailureDisposition,
+} from "./chat-send-retry.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -38,9 +43,17 @@ export async function handleChatSendSetupError(params: {
   const { cleanupAdmittedRun, lifecycleGeneration, restartSafeAdmission } = params.admission;
   const { agentId, clientRunId, sessionKey } = params.session;
   const errorMessage = String(params.error);
+  const failureDisposition = classifyAcceptedChatSendFailure({
+    error: params.error,
+    phase: "pre-ack",
+  });
   if (restartSafeAdmission) {
     const terminalized = await params
-      .terminalizeRestartSafeAdmission({ error: errorMessage, retryable: true, status: "failed" })
+      .terminalizeRestartSafeAdmission({
+        error: errorMessage,
+        retryable: shouldRetainAcceptedChatSendRetryIdentity(failureDisposition),
+        status: "failed",
+      })
       .catch((terminalizeError: unknown) => {
         params.context.logGateway.warn(
           `failed to release restart-safe chat admission after setup error: ${formatForLog(
@@ -60,9 +73,13 @@ export async function handleChatSendSetupError(params: {
   cleanupAdmittedRun();
   clearAgentRunContext(clientRunId, lifecycleGeneration);
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
-  const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
+  const error = errorShape(
+    ErrorCodes.UNAVAILABLE,
+    errorMessage,
+    failureDisposition === "client-retry" ? { retryable: true, retryAfterMs: 250 } : undefined,
+  );
   const payload = { runId: clientRunId, status: "error" as const, summary: errorMessage };
-  if (params.cacheResult !== false) {
+  if (params.cacheResult !== false && failureDisposition !== "client-retry") {
     setGatewayDedupeEntry({
       dedupe: params.context.dedupe,
       key: `chat:${clientRunId}`,
@@ -70,13 +87,15 @@ export async function handleChatSendSetupError(params: {
     });
   }
   params.respond(false, payload, error, { runId: clientRunId, error: formatForLog(params.error) });
-  broadcastChatError({
-    context: params.context,
-    runId: clientRunId,
-    sessionKey,
-    agentId,
-    errorMessage,
-  });
+  if (failureDisposition !== "client-retry") {
+    broadcastChatError({
+      context: params.context,
+      runId: clientRunId,
+      sessionKey,
+      agentId,
+      errorMessage,
+    });
+  }
 }
 
 /** Own dispatch rejection projection and post-cleanup lifecycle persistence. */
@@ -87,6 +106,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
   >;
   context: GatewayRequestContext;
   isQueuedFollowupEnqueued: () => boolean;
+  classifyFailure?: (error: unknown) => AcceptedChatSendFailureDisposition;
   isReplyDispatchRun?: () => boolean;
   persistUserTurnTranscript: () => Promise<unknown>;
   session: Pick<
@@ -113,6 +133,9 @@ export function createChatSendDispatchErrorLifecycle(params: {
 
   const handleError = async (err: unknown) => {
     const errorMessage = String(err);
+    const failureDisposition =
+      params.classifyFailure?.(err) ??
+      classifyAcceptedChatSendFailure({ error: err, phase: "post-ack" });
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
     if (queuedFollowupEnqueued) {
       context.logGateway.warn(
@@ -196,7 +219,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     if (restartSafeAdmission && !agentTerminalPersistenceOwnedAtDispatchReject) {
       restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
         error: errorMessage,
-        retryable: true,
+        retryable: shouldRetainAcceptedChatSendRetryIdentity(failureDisposition),
         status: "failed",
       }).catch((terminalizeError: unknown) => {
         context.logGateway.warn(

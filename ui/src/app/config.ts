@@ -34,6 +34,7 @@ type ApplicationConfig = {
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
+  communityInvite: boolean;
   terminalEnabled: boolean;
   cliAgentsEnabled?: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
@@ -67,6 +68,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
+  communityInvite: false,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
   cliAgentsEnabled: false,
   pluginFrameGrants: [],
@@ -104,6 +106,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     embedSandboxMode: parsed.embedSandbox ?? "scripts",
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
+    communityInvite: parsed.communityInvite === true,
     terminalEnabled: Boolean(parsed.terminalEnabled),
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
     pluginFrameGrants: (parsed.pluginFrameGrants ?? []).filter(

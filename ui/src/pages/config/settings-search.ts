@@ -12,11 +12,14 @@ import {
 } from "../../components/config-form.search.ts";
 import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { configPageForSection } from "./config-sections.ts";
 import { memoryVisibleSchemaKeys } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
 import { setupVisibleSchema } from "./setup-schema.ts";
+
+registerSettingsEnglish();
 
 type StaticSettingsBlock = SettingsSearchBlock & {
   searchText: string;

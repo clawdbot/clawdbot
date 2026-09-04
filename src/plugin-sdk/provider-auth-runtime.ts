@@ -20,6 +20,7 @@ export {
 } from "../agents/api-key-rotation.js";
 export { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 export {
+  isProviderAuthError,
   requireApiKey,
   resolveAwsSdkEnvVarName,
   type ResolvedProviderAuth,

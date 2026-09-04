@@ -124,7 +124,7 @@ suite.define(() => {
     };
     const refresh = async (diskSpace: SessionPlacementDiskSpace): Promise<void> => {
       const requestCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse("sessions.list", sessionsList(diskSpace));
+      await gateway.setSessionsListResponse(sessionsList(diskSpace));
       await gateway.emitGatewayEvent("sessions.changed", {
         reason: "worker-disk-space",
         sessionKey,

@@ -300,6 +300,47 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
 });
 
+it.each(["NO_REPLY", "hook_block", "empty"] as const)(
+  "finalizes a %s fallback without confusing deliberate silence with failure",
+  async (completion) => {
+    const fixture = await createFixture();
+    const { context } = fixture;
+    const onAgentRunTerminalOutcome = vi.fn();
+    context.opts = { onAgentRunTerminalOutcome };
+    context.execution.resolved = { provider: "fallback-provider", model: "fallback-model" };
+    context.execution.fallback.attempts = [
+      { provider: diagnostic.provider, model: diagnostic.model, reason: "auth", error: "No login" },
+    ];
+    context.execution.result.payloads = [];
+    if (completion === "NO_REPLY") {
+      context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
+    } else if (completion === "hook_block") {
+      context.execution.result.meta.error = { kind: "hook_block", message: "Reply suppressed" };
+    }
+
+    const result = await finalizeReplyAgentRun(context);
+    context.replyOperation.complete();
+
+    if (completion === "empty") {
+      expect(result).toMatchObject({
+        isError: true,
+        text: expect.stringContaining("produced no visible reply"),
+      });
+      expect(context.replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+      expect(onAgentRunTerminalOutcome).toHaveBeenCalledWith("failed");
+    } else {
+      expect(result).toBeUndefined();
+      expect(context.replyOperation.result).toEqual({ kind: "completed" });
+      expect(onAgentRunTerminalOutcome).not.toHaveBeenCalledWith("failed");
+    }
+    expect(fixture.read()?.fallbackNotice).toMatchObject({
+      kind: "active",
+      activeModel: "fallback-provider/fallback-model",
+    });
+    expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+  },
+);
+
 describe("cancelled followup compaction accounting", () => {
   it.each(["user", "restart"] as const)(
     "retains committed compaction facts after %s abort without success bookkeeping",
@@ -395,6 +436,53 @@ describe("cancelled followup compaction accounting", () => {
 });
 
 describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting", (lane) => {
+  it.each([
+    { runtimeOwned: true, finalizer: false },
+    { runtimeOwned: true, finalizer: true },
+    { runtimeOwned: false, finalizer: false },
+  ])(
+    "records runtime-selected models without inventing host fallback (owned: $runtimeOwned, finalizer: $finalizer)",
+    async ({ runtimeOwned, finalizer }) => {
+      const fixture = await createFixture();
+      const outer = { provider: "outer-provider", model: "outer-model" };
+      const selection = {
+        provider: diagnostic.provider,
+        model: finalizer ? "native-selected-model" : diagnostic.model,
+      };
+      const models = fixture.context.cfg.models!.providers!.openai!.models;
+      models.push({
+        ...models[0]!,
+        id: "native-selected-model",
+        cost: { input: 10, output: 20, cacheRead: 5, cacheWrite: 10 },
+      });
+      Object.assign(fixture.context.followupRun.run, outer);
+      const entry = fixture.context.activeSessionEntry!;
+      Object.assign(entry, { modelProvider: outer.provider, model: outer.model });
+      await fixture.replace(entry);
+
+      await fixture.account(lane, {
+        provider: diagnostic.provider,
+        model: diagnostic.model,
+        agentHarnessId: "codex",
+        ...(runtimeOwned ? { runtimeModelSelection: selection } : {}),
+        usage: { input: 120, output: 8 },
+      });
+
+      const persisted = fixture.read();
+      expect(persisted?.fallbackNotice === undefined).toBe(runtimeOwned);
+      expect(persisted).toMatchObject({
+        modelProvider: runtimeOwned ? selection.provider : outer.provider,
+        model: runtimeOwned ? selection.model : outer.model,
+        inputTokens: 120,
+        outputTokens: 8,
+        estimatedCostUsd: 0.000136,
+      });
+      if (runtimeOwned) {
+        expect(persisted?.agentHarnessId).toBe("codex");
+      }
+    },
+  );
+
   it("does not infer a durable target from publisher compaction metadata", async () => {
     const fixture = await createFixture();
     fixture.context.execution.autoCompactionCount = 2;

@@ -42,22 +42,39 @@ describe("media understanding attachment cache", () => {
     readRemoteMediaBufferMock.mockReset();
   });
 
-  it("prefers local attachment bytes over conflicting declared MIME", async () => {
+  it.each([
+    {
+      name: "prefers local attachment bytes over conflicting declared MIME",
+      fileName: "photo.jpg",
+      buffer: PNG_1X1,
+      declaredMime: "application/pdf",
+      expected: { mime: "image/png", class: "image" },
+    },
+    {
+      name: "infers long UTF-8 text from a generically typed local attachment",
+      fileName: "notes",
+      buffer: Buffer.from("验证".repeat(700), "utf8"),
+      declaredMime: "application/octet-stream",
+      expected: { mime: "text/plain", class: "text" },
+    },
+  ])("$name", async (testCase) => {
     await withTestDir({ prefix: "openclaw-media-cache-mime-local-" }, async (base) => {
-      const attachmentPath = path.join(base, "photo.jpg");
-      await fs.writeFile(attachmentPath, PNG_1X1);
+      const attachmentPath = path.join(base, testCase.fileName);
+      await fs.writeFile(attachmentPath, testCase.buffer);
       const cache = new MediaAttachmentCache(
-        [{ index: 0, path: attachmentPath, mime: "application/pdf" }],
+        [{ index: 0, path: attachmentPath, mime: testCase.declaredMime }],
         { localPathRoots: [base] },
       );
 
       const result = await cache.getBuffer({
         attachmentIndex: 0,
-        maxBytes: 1024,
+        maxBytes: testCase.buffer.byteLength,
         timeoutMs: 1000,
       });
 
-      expect(result.mime).toBe("image/png");
+      expect(result.mime).toBe(testCase.expected.mime);
+      expect(result.classification).toEqual(testCase.expected);
+      expect(result.buffer).toEqual(testCase.buffer);
     });
   });
 

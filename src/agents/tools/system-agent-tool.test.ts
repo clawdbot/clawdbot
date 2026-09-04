@@ -53,7 +53,8 @@ describe("openclaw tool", () => {
   it("stays directly callable instead of entering tool catalogs", () => {
     const tool = createSystemAgentTool({ surface: "cli" });
     expect(tool.catalogMode).toBe("direct-only");
-    expect(tool.description).toContain("Exact user approval required; then approved=true.");
+    expect(tool.description).toContain("Direct chat: exact user approval, then approved=true.");
+    expect(tool.description).toContain("host applies session permission policy");
   });
 
   it("runs read actions immediately", async () => {
@@ -120,8 +121,9 @@ describe("openclaw tool", () => {
     const text = toolText(result);
 
     expect(text).toContain("needs-approval:");
-    expect(text).toContain("OpenClaw operator UI");
-    expect(text).toContain("cannot be applied from this chat");
+    expect(text).toContain("requesting session's permission policy");
+    expect(text).toContain("returns the final outcome");
+    expect(text).not.toContain("OpenClaw operator UI");
     expect(text).not.toContain("ask the user to reply yes");
     expect(proposalRef.current).toBe(
       hashSystemAgentOperation({
@@ -131,7 +133,7 @@ describe("openclaw tool", () => {
       }),
     );
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
-    // Out-of-process CLI hosts still mirror the refusal from the marker line.
+    // Out-of-process CLI hosts still mirror the proposal from the marker line.
     expect(resolveSystemAgentProposalTransition({ args, resultText: text })).toEqual({
       proposal: proposalRef.current,
       operation: {
@@ -409,6 +411,17 @@ describe("openclaw tool", () => {
     expect(toolText(memory)).toContain("copy-only memory import");
     expect(directiveRef.current).toEqual({ kind: "memory-import" });
 
+    const accounts = await tool.execute("t5-accounts", { action: "manage_model_accounts" });
+    expect(toolText(accounts)).toContain("Nothing has changed yet");
+    expect(toolText(accounts)).toContain("never request, repeat, or put credentials in chat");
+    expect(directiveRef.current).toEqual({ kind: "model-accounts" });
+    expect(
+      resolveSystemAgentDirectiveTransition({
+        args: { action: "manage_model_accounts" },
+        resultText: toolText(accounts),
+      }),
+    ).toEqual({ kind: "model-accounts" });
+
     const configureModel = await tool.execute("t6", {
       action: "configure_model_provider",
       workspace: "/tmp/work",
@@ -462,6 +475,7 @@ describe("openclaw tool", () => {
     { action: "configure_gateway" },
     { action: "import_memory" },
     { action: "configure_model_provider" },
+    { action: "manage_model_accounts" },
     { action: "open_agent" },
     { action: "open_setup", target: "channels" },
   ])("does not promise a delegated $action handoff", async (args) => {

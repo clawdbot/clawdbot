@@ -343,7 +343,9 @@ for ((index = 0; index < run_count; index += 1)); do
       and (.verifier.schemaVersion == 3)
       and (.verifier.sourceSha == $verifier_sha)
       and ([.children[].role] | sort) ==
-        (if (
+        (if .validationInputs.coveragePolicy == "npm-beta-v1" then
+          ["normalCi", "pluginPrereleaseCandidate", "pluginPrereleaseIndependent", "releaseChecksCandidate", "releaseChecksIndependent"]
+        elif (
           .rerunGroup == "all"
           and ((.validationInputs.telegramWaiver // "") == "")
           and (
@@ -358,7 +360,8 @@ for ((index = 0; index < run_count; index += 1)); do
       and ([.children[].runId] | length == (unique | length))
       and ([.children[]
         | select(.role == "productPerformance")
-        | .reportPublication] == ["artifact-only"])
+        | .reportPublication] ==
+          (if .validationInputs.coveragePolicy == "npm-beta-v1" then [] else ["artifact-only"] end))
       and all(.children[];
         .status == "completed"
         and .policyPassed == true

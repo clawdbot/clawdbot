@@ -1,6 +1,10 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatItem, MessageGroup, NormalizedMessage } from "../../lib/chat/chat-types.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+  resolveMessageRole,
+} from "../../lib/chat/message-normalizer.ts";
 
 export function safeNormalizeMessage(message: unknown): NormalizedMessage | null {
   if (!asRecord(message)) {
@@ -36,8 +40,7 @@ export function chatItemStartsUserTurn(item: ChatItem | MessageGroup): boolean {
     return item.startsTurn === true;
   }
   if (item.kind === "message") {
-    const normalized = safeNormalizeMessage(item.message);
-    return normalized ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user" : false;
+    return normalizeRoleForGrouping(resolveMessageRole(item.message)).toLowerCase() === "user";
   }
   if (item.kind !== "group") {
     return false;

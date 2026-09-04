@@ -1,9 +1,16 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionPath,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { readTextTone } from "../test-helpers/rendered-colors.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -94,6 +101,7 @@ suite.define(() => {
     const page = await suite.browser.newPage({
       deviceScaleFactor: 2,
       viewport: { height: 900, width: 1280 },
+      colorScheme: "dark",
     });
     await page.addInitScript(
       (key) => localStorage.removeItem(key),
@@ -189,7 +197,6 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       await expandCodingSection(page, true);
       const sessionGroups = page.locator(".sidebar-recent-sessions");
       const workSection = sessionGroups.locator(':scope > [data-session-section="work"]');
@@ -305,16 +312,29 @@ suite.define(() => {
   it("groups sessions by host and hides empty offline nodes", async () => {
     const page = await suite.browser.newPage({
       deviceScaleFactor: 2,
+      colorScheme: "dark",
       viewport: { height: 1100, width: 1440 },
     });
-    await page.addInitScript((key) => localStorage.removeItem(key), catalogGroupingStorageKey);
     await page.addInitScript(
-      (key) => localStorage.removeItem(key),
-      collapsedSessionSectionsStorageKey,
+      ({ key, gatewayUrl, groupingKey, sectionsKey }) => {
+        localStorage.removeItem(groupingKey);
+        localStorage.removeItem(sectionsKey);
+        localStorage.setItem(key, JSON.stringify({ gatewayUrl, theme: "knot", themeMode: "dark" }));
+      },
+      {
+        groupingKey: catalogGroupingStorageKey,
+        sectionsKey: collapsedSessionSectionsStorageKey,
+        key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+        gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+      },
     );
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: {
+        "config.get": {
+          config: { ui: { prefs: { theme: "knot", themeMode: "dark" } } },
+          hash: "catalog-knot-dark",
+        },
         "sessions.list": {
           count: 1,
           defaults: {
@@ -435,13 +455,30 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.evaluate(() => {
-        document.documentElement.setAttribute("data-theme", "openknot");
-        document.documentElement.setAttribute("data-theme-mode", "dark");
-      });
       await expandCodingSection(page);
       const section = page.locator('[data-session-section="catalog:codex"]');
       await section.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: import("../app/bootstrap.ts").ApplicationRuntime;
+            };
+            const theme = app.runtime?.context.theme;
+            const palette = document.getElementById("openclaw-theme-palette-knot");
+            const root = document.documentElement.dataset;
+            return {
+              preferences: [theme?.settings.theme, theme?.mode, theme?.resolvedMode],
+              paletteReady: palette instanceof HTMLLinkElement && Boolean(palette.sheet),
+              root: [root.theme, root.themeMode],
+            };
+          }),
+        )
+        .toEqual({
+          preferences: ["knot", "dark", "dark"],
+          paletteReady: true,
+          root: ["openknot", "dark"],
+        });
       await expect.poll(() => section.locator("[data-session-catalog-host]").count()).toBe(2);
       expect(await section.locator('[data-session-catalog-host="gateway:local"]').count()).toBe(1);
       expect(await section.locator('[data-session-catalog-host="node:build"]').count()).toBe(1);
@@ -522,35 +559,16 @@ suite.define(() => {
           paddingTop: "4px",
         });
       }
-      const projectLabelTone = await openclawProject
-        .locator(".sidebar-session-catalog-project__label")
-        .evaluate((label) => {
-          const probe = document.createElement("span");
-          document.body.append(probe);
-          const resolveColor = (value: string) => {
-            probe.style.color = value;
-            return getComputedStyle(probe).color;
-          };
-          const channels = (value: string) => {
-            const values =
-              value
-                .match(/[\d.]+/g)
-                ?.slice(0, 3)
-                .map(Number) ?? [];
-            return value.startsWith("color(srgb") ? values.map((channel) => channel * 255) : values;
-          };
-          const distance = (left: number[], right: number[]) =>
-            Math.hypot(...left.map((channel, index) => channel - (right[index] ?? 0)));
-          const labelColor = channels(getComputedStyle(label).color);
-          const textColor = channels(resolveColor("var(--text)"));
-          const mutedColor = channels(resolveColor("var(--muted)"));
-          probe.remove();
-          return {
-            distanceToMuted: distance(labelColor, mutedColor),
-            distanceToText: distance(labelColor, textColor),
-          };
-        });
+      const projectLabelTone = await readTextTone(
+        openclawProject.locator(".sidebar-session-catalog-project__label"),
+      );
       expect(projectLabelTone.distanceToText).toBeLessThan(projectLabelTone.distanceToMuted);
+      if (captureUiProofEnabled) {
+        await writeFile(
+          path.join(uiProofArtifactDir, "project-label-tone.json"),
+          JSON.stringify(projectLabelTone, null, 2),
+        );
+      }
       expect(
         await section
           .locator('[data-session-catalog-project="project:/Users/dev/other"]')

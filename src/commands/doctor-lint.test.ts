@@ -570,7 +570,7 @@ describe("runDoctorLintCli", () => {
     }
   });
 
-  it("keeps mixed selected checks on a fully isolated state view", async () => {
+  it("keeps mixed selected checks on an isolated plugin metadata view", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-private-"));
     const stateDir = path.join(rootDir, "operator-state");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -720,6 +720,7 @@ describe("runDoctorLintCli", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     const config = {
       gateway: { mode: "local" },
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
       memory: { search: { provider: "local", fallback: "none" } },
     } satisfies OpenClawConfig;
     fs.mkdirSync(stateDir, { recursive: true });

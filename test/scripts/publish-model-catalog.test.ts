@@ -81,7 +81,7 @@ function writeFixtureManifest(root: string, pluginId: string, providers: Record<
   );
 }
 
-function nativeManifests(source: "OpenCode" | "Venice" | "Chutes" | "Cerebras") {
+function nativeManifests(source: "OpenCode" | "Venice" | "Chutes" | "Cerebras" | "DeepInfra") {
   const provider = source.toLowerCase();
   const sourceId = source === "OpenCode" ? "openCode" : provider;
   return [
@@ -145,6 +145,144 @@ const NATIVE_SOURCES = [
 ] as const;
 
 describe("publish model catalog", () => {
+  it("publishes native DeepInfra array prices with discounts rather than generic rates", async () => {
+    const manifests = nativeManifests("DeepInfra");
+    const bundle = await assembleModelCatalogBundle({
+      manifests,
+      generatedAt: Date.now(),
+      sourceCommit: "fixture",
+    });
+    const provider = bundle.providers.deepinfra!;
+    for (const id of ["qualified", "absent", "free"]) {
+      provider.models.push({
+        ...provider.models[0]!,
+        id,
+        name: `Fixture ${id}`,
+        contextWindow: 123456,
+      });
+    }
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      expect(new Headers(init?.headers).has("authorization")).toBe(false);
+      const url = requestUrl(input);
+      if (url === "https://api.deepinfra.com/models/list") {
+        return Response.json([
+          {
+            model_name: "priced-fixture",
+            pricing: {
+              type: "tokens",
+              cents_per_input_token: 0.0002,
+              cents_per_output_token: 0.001,
+              discount: 0.5,
+              rate_per_input_token_cached: 0.2,
+            },
+          },
+          {
+            model_name: "qualified",
+            pricing: {
+              type: "tokens",
+              cents_per_input_token: 0.0002,
+              cents_per_output_token: 0.001,
+              full: "Higher rates at long context",
+            },
+          },
+          ...["free", "standalone-free", "foreign/hidden"].map((model_name) => ({
+            model_name,
+            pricing: { type: "tokens", cents_per_input_token: 0, cents_per_output_token: 0 },
+          })),
+        ]);
+      }
+      if (url === OPENROUTER_MODELS_URL) {
+        return Response.json({
+          data: ["priced-fixture", "qualified", "absent", "absent-unbundled"].map((id) => ({
+            id: `deepinfra/${id}`,
+            pricing: { prompt: "1", completion: "1" },
+          })),
+        });
+      }
+      expect(url).toBe(LITELLM_PRICING_URL);
+      return Response.json({
+        absent: {
+          litellm_provider: "deepinfra",
+          input_cost_per_token: 1,
+          output_cost_per_token: 1,
+        },
+      });
+    });
+    await enrichModelCatalogPricing({ bundle, manifests, fetchImpl });
+    expect(bundle.providers.deepinfra?.models[0]?.cost).toEqual({
+      input: 1,
+      output: 5,
+      cacheRead: 0.2,
+      cacheWrite: 0,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    for (const id of ["qualified", "absent"]) {
+      const model = bundle.providers.deepinfra?.models.find((row) => row.id === id);
+      expect(model).toMatchObject({ name: `Fixture ${id}`, contextWindow: 123456 });
+      expect(model?.cost).toBeUndefined();
+    }
+    for (const id of ["priced-fixture", "qualified", "absent", "absent-unbundled"]) {
+      expect(bundle.pricing).not.toHaveProperty(`deepinfra/${id}`);
+    }
+    expect(bundle.pricing).not.toHaveProperty("absent");
+    expect(bundle.pricing).not.toHaveProperty("foreign/hidden");
+    expect(bundle.providers).not.toHaveProperty("foreign");
+    const params = publishedPricingParams(bundle, "deepinfra");
+    for (const model of ["free", "standalone-free"]) {
+      expect(bundle.pricing?.[`deepinfra/${model}`]).toEqual({ input: 0, output: 0 });
+      expect(resolveModelCostConfig({ ...params, model })).toEqual({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      });
+    }
+    expect(resolveModelCostConfig({ ...params, model: "qualified" })).toBeUndefined();
+  });
+
+  it.each(["outage", "object response", "malformed qualified price"])(
+    "rejects DeepInfra %s before mutating the previous bundle",
+    async (scenario) => {
+      const manifests = nativeManifests("DeepInfra");
+      const bundle = await assembleModelCatalogBundle({
+        manifests,
+        generatedAt: Date.now(),
+        sourceCommit: "fixture",
+      });
+      const previous = serializeModelCatalogBundle(bundle);
+      await expect(
+        enrichModelCatalogPricing({
+          bundle,
+          manifests,
+          fetchImpl: async (input) => {
+            const url = requestUrl(input);
+            if (url === "https://api.deepinfra.com/models/list") {
+              if (scenario === "outage") {
+                return new Response("unavailable", { status: 503 });
+              }
+              if (scenario === "object response") {
+                return Response.json({ data: [] });
+              }
+              return Response.json([
+                {
+                  model_name: "fixture/bad",
+                  pricing: {
+                    type: "tokens",
+                    cents_per_input_token: -1,
+                    cents_per_output_token: 0.001,
+                    full: "Qualified",
+                  },
+                },
+              ]);
+            }
+            return Response.json(url === OPENROUTER_MODELS_URL ? { data: [] } : {});
+          },
+        }),
+      ).rejects.toThrow("DeepInfra pricing");
+      expect(serializeModelCatalogBundle(bundle)).toBe(previous);
+    },
+  );
+
   it("assembles and validates fixture manifests at the 200-model floor", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publish-catalog-"));
     tempDirs.push(root);
@@ -398,6 +536,99 @@ describe("publish model catalog", () => {
     expect(Object.hasOwn(bundle.providers, "unknown")).toBe(false);
   });
 
+  it.each(["flat", "openRouter", "liteLLM"])(
+    "preserves declared context pricing unless an external source supplies tiers: %s",
+    async (tierSource) => {
+      const manifests = [
+        {
+          pluginId: "fixture",
+          manifestPath: "fixture.json",
+          manifest: {
+            modelCatalog: {
+              providers: {
+                anthropic: fixtureProvider("claude", 100),
+                openai: fixtureProvider("gpt", 100),
+              },
+            },
+          },
+        },
+      ];
+      const bundle = await assembleModelCatalogBundle({
+        manifests,
+        generatedAt: Date.now(),
+        sourceCommit: "fixture",
+      });
+      const model = bundle.providers.openai!.models[0]!;
+      const declared: NonNullable<typeof model.cost> = {
+        input: 10,
+        output: 50,
+        tieredPricing: [
+          { input: 10, output: 50, cacheRead: 0, cacheWrite: 0, range: [0, 272_001] },
+          { input: 20, output: 75, cacheRead: 0, cacheWrite: 0, range: [272_001] },
+        ],
+      };
+      model.cost = declared;
+      await enrichModelCatalogPricing({
+        bundle,
+        manifests,
+        fetchImpl: async (input) => {
+          if (requestUrl(input) === OPENROUTER_MODELS_URL) {
+            return Response.json({
+              data: [
+                {
+                  id: "openai/gpt-0",
+                  pricing: {
+                    prompt: "0.000002",
+                    completion: "0.000003",
+                    ...(tierSource === "openRouter"
+                      ? { overrides: [{ min_prompt_tokens: 272_000, prompt: "0.000004" }] }
+                      : {}),
+                  },
+                },
+              ],
+            });
+          }
+          return Response.json({
+            "gpt-0": {
+              litellm_provider: "openai",
+              input_cost_per_token: 0.000002,
+              output_cost_per_token: 0.000003,
+              ...(tierSource === "liteLLM"
+                ? {
+                    tiered_pricing: [
+                      {
+                        input_cost_per_token: 0.000002,
+                        output_cost_per_token: 0.000003,
+                        range: [0, 272_001],
+                      },
+                      {
+                        input_cost_per_token: 0.000004,
+                        output_cost_per_token: 0.000003,
+                        range: [272_001],
+                      },
+                    ],
+                  }
+                : {}),
+            },
+          });
+        },
+      });
+      const published = bundle.providers.openai!.models[0]!.cost;
+      if (tierSource === "flat") {
+        expect(published).toEqual(declared);
+      } else {
+        expect(published).toMatchObject({ input: 2, output: 3 });
+        expect(published?.tieredPricing?.at(-1)).toMatchObject({
+          input: 4,
+          output: 3,
+          range: [272_001],
+        });
+      }
+      expect(bundle.pricing).not.toHaveProperty("openai/gpt-0");
+      expect(bundle.pricing).not.toHaveProperty("gpt-0");
+    },
+  );
+
   it.each([
     {
       source: "Chutes" as const,
@@ -553,6 +784,14 @@ describe("publish model catalog", () => {
         generatedAt: Date.now(),
         sourceCommit: "fixture",
       });
+      bundle.providers[provider]!.models[0]!.cost = {
+        input: 99,
+        output: 99,
+        tieredPricing: [
+          { input: 99, output: 99, cacheRead: 0, cacheWrite: 0, range: [0, 272_001] },
+          { input: 199, output: 199, cacheRead: 0, cacheWrite: 0, range: [272_001] },
+        ],
+      };
       const fetchImpl: typeof fetch = async (input) => {
         if (requestUrl(input) === url) {
           return Response.json(
@@ -813,6 +1052,10 @@ describe("publish model catalog", () => {
 
   it.each([
     { source: "OpenCode", scenario: "unreachable" },
+    ...["unreachable", "malformed body", "invalid price"].map((scenario) => ({
+      source: "DeepInfra",
+      scenario,
+    })),
     ...["unreachable", "malformed body", "missing model", "invalid price"].map((scenario) => ({
       source: "Venice",
       scenario,
@@ -842,6 +1085,16 @@ for (const manifest of manifests) {
 globalThis.fetch = async (url) => {
   if (${JSON.stringify(source)} === "OpenCode") throw new Error("fixture outage");
   if (url === ${JSON.stringify(OPENCODE_PRICING_URL)}) return Response.json(openCode);
+  if (${JSON.stringify(source)} === "DeepInfra") {
+    if (url === "https://api.deepinfra.com/models/list") {
+      if (${JSON.stringify(scenario)} === "unreachable") throw new Error("fixture outage");
+      if (${JSON.stringify(scenario)} === "malformed body") return Response.json({ data: [] });
+      return Response.json([{ model_name: "fixture/bad", pricing: { type: "tokens", cents_per_input_token: -1, cents_per_output_token: 0.001, full: "Qualified" } }]);
+    }
+    if (url === "https://llm.chutes.ai/v1/models") return Response.json({ data: [{ id: "fixture/chat", pricing: { prompt: 2, completion: 10 } }] });
+    if (url === "https://api.cerebras.ai/public/v1/models") return Response.json({ data: [{ id: "fixture/chat", pricing: { prompt: "0.000002", completion: "0.00001" } }] });
+    if (url === ${JSON.stringify(VENICE_PRICING_URL)}) return Response.json({ data: [{ id: "fixture/chat", type: "text", model_spec: { pricing: { input: { usd: 2 }, output: { usd: 10 } } } }] });
+  }
   if (url === ${JSON.stringify(VENICE_PRICING_URL)}) {
     if (${JSON.stringify(scenario)} === "unreachable") throw new Error("fixture outage");
     if (${JSON.stringify(scenario)} === "malformed body") return Response.json({});

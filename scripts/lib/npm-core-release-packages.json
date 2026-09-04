@@ -1,0 +1,5 @@
+[
+  { "path": "packages/ai", "name": "@openclaw/ai", "dependency": "@openclaw/ai" },
+  { "path": "packages/gateway-protocol", "name": "@openclaw/gateway-protocol" },
+  { "path": "packages/gateway-client", "name": "@openclaw/gateway-client" }
+]

@@ -1,4 +1,5 @@
 // Covers SQLite WAL maintenance configuration.
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import childProcess, { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   configureSqliteConnectionPragmas,
@@ -541,26 +543,63 @@ describe("sqlite WAL maintenance", () => {
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
   });
 
-  it("runs lightweight periodic PASSIVE checkpoints and TRUNCATE on close", () => {
-    vi.useFakeTimers();
+  it("runs periodic maintenance outside request contexts and TRUNCATE on close", async () => {
+    const requestScope = new AsyncLocalStorage<object>();
+    const sessionScope = new AsyncLocalStorage<object>();
+    const request = {};
+    const session = {};
+    const timerContexts: Array<[object | undefined, object | undefined]> = [];
+    const periodic = createDeferredCore<[object | undefined, object | undefined]>();
+    const hook = createHook({
+      init(_asyncId, type) {
+        if (type === "Timeout") {
+          timerContexts.push([requestScope.getStore(), sessionScope.getStore()]);
+        }
+      },
+    });
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.mocked(db["exec"]).mockImplementation((sql) => {
+      if (sql === "PRAGMA incremental_vacuum(512);") {
+        periodic.resolve([requestScope.getStore(), sessionScope.getStore()]);
+      }
+    });
+    let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
+    try {
+      await requestScope.run(request, () =>
+        sessionScope.run(session, async () => {
+          hook.enable();
+          try {
+            maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 5 });
+          } finally {
+            hook.disable();
+          }
+          expect(requestScope.getStore()).toBe(request);
+          expect(sessionScope.getStore()).toBe(session);
+          // The native resource must be detached at allocation, not only when its callback runs.
+          expect(timerContexts).toEqual([[undefined, undefined]]);
+          expect(db["exec"]).toHaveBeenCalledTimes(3);
 
-    const maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 100 });
-    // journal_mode=WAL, wal_autocheckpoint, journal_size_limit.
-    expect(db["exec"]).toHaveBeenCalledTimes(3);
+          expect(await periodic.promise).toEqual([undefined, undefined]);
+          expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
+          expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
+          expect(maintenance.close()).toBe(true);
+          expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
+          expect(requestScope.getStore()).toBe(request);
+          expect(sessionScope.getStore()).toBe(session);
 
-    vi.advanceTimersByTime(100);
-    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
-    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
-
-    expect(maintenance.close()).toBe(true);
-    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
-
-    vi.advanceTimersByTime(200);
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 10);
+          });
+          expect(db["exec"]).toHaveBeenCalledTimes(4);
+        }),
+      );
+    } finally {
+      hook.disable();
+      maintenance?.close();
+      requestScope.disable();
+      sessionScope.disable();
+    }
   });
 
   it.runIf(process.platform === "linux").each([

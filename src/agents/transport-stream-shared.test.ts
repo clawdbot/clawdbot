@@ -68,13 +68,14 @@ describe("transport stream shared helpers", () => {
   it("merges transport headers in source order", () => {
     expect(
       mergeTransportHeaders(
-        { accept: "text/event-stream", "x-base": "one" },
+        { accept: "text/event-stream", "user-agent": "configured", "x-base": "one" },
         { authorization: "Bearer token" },
-        { "x-base": "two" },
+        { "User-Agent": "openclaw/2026.9.1", "x-base": "two" },
       ),
     ).toEqual({
       accept: "text/event-stream",
       authorization: "Bearer token",
+      "User-Agent": "openclaw/2026.9.1",
       "x-base": "two",
     });
     expect(mergeTransportHeaders(undefined, undefined)).toBeUndefined();

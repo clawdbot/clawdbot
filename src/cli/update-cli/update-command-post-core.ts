@@ -6,6 +6,8 @@ import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
+import { resolveStateDir } from "../../config/paths.js";
 import {
   createPluginInstallRecordMap,
   serializePluginInstallRecordMap,
@@ -13,7 +15,7 @@ import {
 } from "../../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import { hasErrnoCode } from "../../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
@@ -49,6 +51,28 @@ const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 // v2026.4.29 first shipped target-owned channel persistence during resume.
 // Earlier targets can ignore the handoff and start another core update.
 const POST_CORE_CONFIG_WRITER_MIN_VERSION = "2026.4.29";
+
+type PostCoreUpdateFailure = { status: "failed"; error: string };
+
+export async function writePostCoreUpdateFailureFile(
+  filePath: string | undefined,
+  error: unknown,
+): Promise<void> {
+  if (filePath) {
+    const failure = sanitizeTriageUpdateFailure(
+      { error: formatErrorMessage(error) },
+      {
+        env: process.env,
+        stateDir: resolveStateDir(),
+      },
+    );
+    await writeJson(
+      filePath,
+      { status: "failed", error: failure.error },
+      { trailingNewline: true },
+    );
+  }
+}
 
 export async function writePostCorePluginUpdateResultFile(
   filePath: string | undefined,
@@ -145,11 +169,16 @@ export async function resolvePostCoreUpdateStartedAtMs(
   return await readProcessStartTimeMs(process.ppid);
 }
 
-async function readPostCorePluginUpdateResultFile(
+async function readPostCoreUpdateResultFile(
   filePath: string,
-): Promise<PostCorePluginUpdateResult | undefined> {
+): Promise<PostCorePluginUpdateResult | PostCoreUpdateFailure | undefined> {
   try {
-    const parsed = await readJsonIfExists<PostCorePluginUpdateResult>(filePath);
+    const parsed = await readJsonIfExists<PostCorePluginUpdateResult | PostCoreUpdateFailure>(
+      filePath,
+    );
+    if (parsed?.status === "failed" && typeof parsed.error === "string") {
+      return parsed;
+    }
     if (
       parsed &&
       typeof parsed === "object" &&
@@ -250,6 +279,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   resumed: boolean;
   pluginUpdate?: PostCorePluginUpdateResult;
   exitCode?: number;
+  error?: string;
 }> {
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
@@ -375,9 +405,9 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
         }
       };
       const resultPoll = setInterval(() => {
-        void readPostCorePluginUpdateResultFile(resultPath)
+        void readPostCoreUpdateResultFile(resultPath)
           .then((pluginUpdate) => {
-            if (pluginUpdate) {
+            if (pluginUpdate && pluginUpdate.status !== "failed") {
               finish({ kind: "plugin-update", pluginUpdate });
             }
           })
@@ -405,11 +435,18 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       });
     });
 
-    const pluginUpdate =
+    const postCoreResult =
       childResult.kind === "plugin-update"
         ? childResult.pluginUpdate
-        : await readPostCorePluginUpdateResultFile(resultPath);
+        : await readPostCoreUpdateResultFile(resultPath);
     const exitCode = childResult.kind === "exit" ? childResult.exitCode : 0;
+    if (postCoreResult?.status === "failed") {
+      // A phase exception did not commit plugin convergence. Keep its original
+      // rollback behavior and carry the child cause through the existing handoff.
+      await restoreTentativePluginIndex();
+      return { resumed: false, exitCode: exitCode || 1, error: postCoreResult.error };
+    }
+    const pluginUpdate = postCoreResult;
     if (exitCode !== 0) {
       if (pluginUpdate) {
         return { resumed: true, pluginUpdate };

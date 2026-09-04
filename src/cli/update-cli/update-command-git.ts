@@ -6,9 +6,11 @@ import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
   createGlobalInstallEnv,
+  verifyPackageUpdateRecovery,
   resolveGlobalInstallTarget,
   resolveNpmLifecyclePolicyGate,
 } from "../../infra/update-global.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-database-preflight.js";
@@ -154,6 +156,9 @@ export function createBeforeGitMutation(params: {
         formatSchemaRefusalLines(postStopSchemas).join("\n"),
       );
     }
+    // Git's deferred prepare phase owns the task suspension. Once mutation
+    // starts, only a verified recovery may re-enable persistent autostart.
+    preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     // A candidate checkout cannot own the service until its global exposure
     // succeeds. Finalization refreshes and activates the verified installation.
     return params.switchToGit
@@ -203,9 +208,11 @@ export async function updateGitInstall(params: {
     return {
       status: "error",
       mode: "git",
-      root: updateRoot,
+      root: params.root,
       reason: "npm lifecycle policy preflight",
-      recovery: { serviceRestartSafe: true },
+      recovery: await (params.installKind === "git"
+        ? readCurrentGitUpdateRecovery(params.root)
+        : verifyPackageUpdateRecovery(params.root)),
       steps: [],
       durationMs: Date.now() - params.startedAt,
     };
@@ -226,9 +233,11 @@ export async function updateGitInstall(params: {
     return {
       status: "error",
       mode: "git",
-      root: updateRoot,
+      root: params.root,
       reason: cloneStep.name,
-      recovery: { serviceRestartSafe: true },
+      recovery: await (params.installKind === "git"
+        ? readCurrentGitUpdateRecovery(params.root)
+        : verifyPackageUpdateRecovery(params.root)),
       steps: [cloneStep],
       durationMs: Date.now() - params.startedAt,
     };

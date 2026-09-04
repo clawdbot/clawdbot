@@ -17,7 +17,7 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
   getReplyPayloadMetadata,
@@ -99,6 +99,7 @@ export async function prepareReplyAgentPayloads(state: {
     runResult,
     selectedModel,
     selectedProvider,
+    sessionModel,
     terminalFailurePayload,
     usage,
     verboseEnabled,
@@ -302,6 +303,7 @@ export async function prepareReplyAgentPayloads(state: {
       hasSuccessfulTerminalDelivery: successfulTerminalDelivery,
       allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
       silentExpected: followupRun.run.silentExpected,
+      hasExplicitSilentReply: deliberateSilentTerminalReply,
     });
     if (!silentFallbackFailurePayload) {
       return undefined;
@@ -312,6 +314,7 @@ export async function prepareReplyAgentPayloads(state: {
         `configured model backend ${fallbackTransition.selectedModelRef} failed and fallback ${fallbackTransition.activeModelRef} produced no visible reply`,
       ),
     );
+    opts?.onAgentRunTerminalOutcome?.("failed");
     return returnPreparedFallbackPayload(silentFallbackFailurePayload);
   };
   const fallbackNoticeChanged =
@@ -333,8 +336,8 @@ export async function prepareReplyAgentPayloads(state: {
         phase: "fallback",
         selectedProvider,
         selectedModel,
-        activeProvider: providerUsed,
-        activeModel: modelUsed,
+        activeProvider: sessionModel.provider,
+        activeModel: sessionModel.model,
         reasonSummary: fallbackTransition.reasonSummary,
         attemptSummaries: fallbackTransition.attemptSummaries,
         attempts: fallbackAttempts,
@@ -344,8 +347,8 @@ export async function prepareReplyAgentPayloads(state: {
       fallbackNoticeText = buildFallbackNotice({
         selectedProvider,
         selectedModel,
-        activeProvider: providerUsed,
-        activeModel: modelUsed,
+        activeProvider: sessionModel.provider,
+        activeModel: sessionModel.model,
         attempts: fallbackAttempts,
         cfg,
       });
@@ -360,8 +363,8 @@ export async function prepareReplyAgentPayloads(state: {
         phase: "fallback_cleared",
         selectedProvider,
         selectedModel,
-        activeProvider: providerUsed,
-        activeModel: modelUsed,
+        activeProvider: sessionModel.provider,
+        activeModel: sessionModel.model,
         previousActiveModel: fallbackTransition.previousState.activeModel,
       },
     });
@@ -444,6 +447,8 @@ export async function prepareReplyAgentPayloads(state: {
         "run_failed",
         new Error("interactive agent run completed without a visible reply"),
       );
+      // Filtering can turn a successful model result into a failed reply.
+      opts?.onAgentRunTerminalOutcome?.("failed");
     }
   }
 
@@ -519,7 +524,6 @@ export async function prepareReplyAgentPayloads(state: {
       throw new Error("accepted continuation status could not be prepared for delivery");
     }
     const settlement: PendingContinuationSettlement = {
-      statusPayload,
       settle: async (statusDelivered) => {
         const { settleRequesterAfterSessionSpawns } =
           await import("../../agents/subagents/registry/subagent-registry.js");
@@ -554,13 +558,13 @@ export async function prepareReplyAgentPayloads(state: {
       promptTokens,
       usage,
     });
-    const costConfig = resolveModelCostConfig({
+    const costUsd = estimateAggregateUsageCost({
+      usage: diagnosticUsage,
       provider: providerUsed,
       model: modelUsed,
       config: cfg,
       agentDir: followupRun.run.agentDir,
     });
-    const costUsd = estimateAggregateUsageCost({ usage: diagnosticUsage, cost: costConfig });
     emitTrustedDiagnosticEvent({
       type: "model.usage",
       ...(runResult.diagnosticTrace
