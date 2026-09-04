@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -118,7 +119,7 @@ suite.define(() => {
       const capacityKey = "agent:main:dashboard:capacity";
       const capacityRequested = async () =>
         (await gateway.getRequests("board.get")).some(
-          (request) => request.params.sessionKey === capacityKey,
+          (request) => isRecord(request.params) && request.params.sessionKey === capacityKey,
         );
       expect(await capacityRequested()).toBe(false);
       const capacityCard = gallery.locator(`[data-dashboard-session="${capacityKey}"]`);
