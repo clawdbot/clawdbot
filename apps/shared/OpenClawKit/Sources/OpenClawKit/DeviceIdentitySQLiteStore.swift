@@ -743,8 +743,7 @@ enum DeviceIdentitySQLiteStore {
             }.joined(separator: ", ")
             throw DeviceIdentityStore.storageError(
                 "Legacy device identity sources conflict across [\(descriptions)]; all sources preserved. " +
-                "Align device.json across Application Support and Group Containers or run openclaw doctor."
-            )
+                    "Align device.json across Application Support and Group Containers or run openclaw doctor.")
         }
     }
 
