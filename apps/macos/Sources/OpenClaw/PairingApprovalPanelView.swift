@@ -318,11 +318,16 @@ enum PairingCardPresentation {
             let isSystemRun = { (command: String) in
                 command == "system.run" || command == "system.which" || command.hasPrefix("system.run.")
             }
-            if card.commands.contains(where: isSystemRun) {
+            let canRunCommands = card.commands.contains(where: isSystemRun)
+            // Approval privilege belongs to Gateway. Its request-level fact
+            // covers command families this client may not recognize yet.
+            if canRunCommands || card.requiredApproveScopes?.contains("operator.admin") == true {
                 rows.append(AccessRow(
-                    id: "system-run",
+                    id: "node-approval",
                     symbol: "exclamationmark.shield",
-                    text: "Can run system commands",
+                    text: canRunCommands
+                        ? String(localized: "Can run system commands")
+                        : String(localized: "Requires administrator approval"),
                     isElevated: true))
             }
             rows.append(contentsOf: self.friendlyCapNames(card.caps).map {

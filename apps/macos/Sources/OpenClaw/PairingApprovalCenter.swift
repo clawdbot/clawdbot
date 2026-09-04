@@ -53,6 +53,8 @@ final class PairingApprovalCenter {
         /// trust claim must never come from a stale snapshot.
         let previouslyPaired: Bool?
         let requestedAt: Date
+        /// Gateway-owned requirements for approving this node request, not granted device scopes.
+        var requiredApproveScopes: [String]?
         var source: PairingPromptSupport.Source?
 
         var id: ID {
