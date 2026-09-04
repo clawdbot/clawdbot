@@ -24,6 +24,7 @@ import {
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
@@ -437,7 +438,7 @@ export function renderToolCard(
   const outcome = resolveToolCardOutcome(card, opts.runActive);
   const progressReceipt = renderProgressCardReceipt(card, outcome);
   if (progressReceipt) {
-    return progressReceipt;
+    return renderPluginToolResult(card, opts, progressReceipt);
   }
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
@@ -460,51 +461,86 @@ export function renderToolCard(
     <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
   `;
 
-  return html`
-    <div class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}">
-      ${
-        isFileRow
-          ? html`<div
-              class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${
-                isRunning ? "chat-tool-row--running" : ""
-              }"
-              @pointerenter=${syncToolDisclosureOverflow}
-              @focusin=${syncToolDisclosureOverflow}
-            >
-              <button
-                class="chat-tool-row__toggle"
+  return renderPluginToolResult(
+    card,
+    opts,
+    html`
+      <div
+        class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${expanded ? "is-open" : ""}"
+      >
+        ${
+          isFileRow
+            ? html`<div
+                class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row chat-tool-row--file ${
+                  isRunning ? "chat-tool-row--running" : ""
+                }"
+                @pointerenter=${syncToolDisclosureOverflow}
+                @focusin=${syncToolDisclosureOverflow}
+              >
+                <button
+                  class="chat-tool-row__toggle"
+                  type="button"
+                  aria-expanded=${String(expanded)}
+                  aria-label=${resolveToolRowText(card, opts.runActive)}
+                  @click=${() => opts.onToggleExpanded(card.id)}
+                ></button>
+                ${rowContent}
+              </div>`
+            : html`<button
+                class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${
+                  isRunning ? "chat-tool-row--running" : ""
+                }"
                 type="button"
                 aria-expanded=${String(expanded)}
-                aria-label=${resolveToolRowText(card, opts.runActive)}
-                @click=${() => opts.onToggleExpanded(card.id)}
-              ></button>
-              ${rowContent}
-            </div>`
-          : html`<button
-              class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row ${
-                isRunning ? "chat-tool-row--running" : ""
-              }"
-              type="button"
-              aria-expanded=${String(expanded)}
-              @pointerenter=${syncToolDisclosureOverflow}
-              @focus=${syncToolDisclosureOverflow}
-              @click=${(event: MouseEvent) => {
-                if (shouldToggleSelectableDisclosure(event)) {
-                  opts.onToggleExpanded(card.id);
-                }
-              }}
-            >
-              ${rowContent}
-            </button>`
-      }
-      ${
-        expanded
-          ? html`
-              <div class="chat-tool-msg-body">${renderExpandedToolCardContent(card, opts)}</div>
-            `
-          : nothing
-      }
-      ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
-    </div>
-  `;
+                @pointerenter=${syncToolDisclosureOverflow}
+                @focus=${syncToolDisclosureOverflow}
+                @click=${(event: MouseEvent) => {
+                  if (shouldToggleSelectableDisclosure(event)) {
+                    opts.onToggleExpanded(card.id);
+                  }
+                }}
+              >
+                ${rowContent}
+              </button>`
+        }
+        ${
+          expanded
+            ? html`
+                <div class="chat-tool-msg-body">${renderExpandedToolCardContent(card, opts)}</div>
+              `
+            : nothing
+        }
+        ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
+      </div>
+    `,
+  );
+}
+
+export function renderPluginToolResult(
+  card: ToolCard | null | undefined,
+  opts: ToolRenderOptions & { expanded: boolean },
+  defaultView: unknown,
+) {
+  if (!card) {
+    return defaultView;
+  }
+  return renderPluginSurface(
+    "tool-result",
+    {
+      sessionKey: opts.sessionKey ?? "",
+      agentId: opts.agentId,
+      toolName: card.name,
+      toolCallId: card.callId ?? card.id,
+      input: card.args,
+      output: {
+        text: card.outputText,
+        details: card.details,
+        isError: card.isError,
+        completed: card.completed,
+      },
+      expanded: opts.expanded,
+    },
+    defaultView,
+    opts.presented ?? true,
+  );
 }

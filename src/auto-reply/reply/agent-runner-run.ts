@@ -1,10 +1,15 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
+import {
+  getGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -96,6 +101,10 @@ export async function runReplyAgent(
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
   } = params;
+  const resolveGatewayContext = providedReplyOperation
+    ? getGatewayContextResolver(providedReplyOperation)
+    : (readChannelContextGatewayContextResolver(sessionCtx) ??
+      getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext);
   // One lifecycle for all adoption sites in this run.
   const turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
   const releaseAdmissionTicket = () => opts?.[REPLY_ADMISSION_TICKET]?.release();
@@ -252,6 +261,7 @@ export async function runReplyAgent(
   };
 
   const queuedRunFollowupTurn = createFollowupRunner({
+    resolveGatewayContext,
     opts,
     typing,
     typingMode,
@@ -473,6 +483,7 @@ export async function runReplyAgent(
   } else {
     const replyTurnKind = resolveReplyTurnKind(opts);
     const admission = await admitReplyTurn({
+      resolveGatewayContext,
       sessionId: followupRun.run.sessionId,
       sessionKey: replySessionKey ?? "",
       expectedSessionId: activeSessionEntry?.sessionId,

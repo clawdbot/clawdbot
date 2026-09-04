@@ -123,15 +123,40 @@ def group_alive(pgid, deadline):
         return False
     except PermissionError:
         pass  # EPERM can mean zombie-only; the census must still prove extinction.
-    # Zombies are terminated, not writers. A failed/ambiguous inspection
-    # never authorizes checkout reuse, including after a denied signal probe.
-    result = subprocess.run(
-        ["ps", "-axo", "pgid=,stat="], stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, text=True, check=True,
-        timeout=max(0.001, deadline - time.monotonic()),
-    )
-    return any(int(group) == pgid and not state.startswith("Z")
-               for group, state in (line.split() for line in result.stdout.splitlines()))
+    # Darwin -g selects a group; procps selects its session (a superset because
+    # run_git starts a new session). Pin Darwin's standard, not legacy, -g syntax.
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "pgid=,stat=", "-g", str(pgid)], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env={**os.environ, "COMMAND_MODE": "unix2003"},
+            timeout=max(0.001, deadline - time.monotonic()),
+        )
+    except subprocess.TimeoutExpired as error:
+        print((error.stderr or b"").decode(errors="replace"), end="", file=sys.stderr)
+        raise
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    states = []
+    if result.returncode != 1 or result.stdout or result.stderr:
+        result.check_returncode()
+        # Validate the complete census before ignoring zombies; Darwin ps can
+        # report sysctl errors on stderr with exit 0. Neither permits reuse.
+        if result.stderr or not re.fullmatch(
+            r"(?:[ \t]*[1-9][0-9]*[ \t]+[RSDTtXZxKWPIU?][<+NLlsEVWX]*[ \t]*\n)+", result.stdout
+        ):
+            raise RuntimeError("Invalid process group census")
+        states = [state for group, state in (line.split() for line in result.stdout.splitlines())
+                  if int(group) == pgid]
+    if states:
+        return any(not state.startswith("Z") for state in states)
+    # Empty selection (exit 1), or a session with only other groups, can race
+    # extinction. Require native ESRCH; a bare status 1 or EPERM proves nothing.
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    raise RuntimeError("Process group census missed a present group")
 
 
 def drain(child, job):

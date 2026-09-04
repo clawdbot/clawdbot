@@ -491,6 +491,7 @@ export async function prepareGatewayLifecycle(params: {
       const transport = transportBridge.current();
       await transport?.portalService.closeAll();
       await shutdownRuntime.createGatewayCloseHandler({
+        resolveGatewayContext: runtime.resolvePluginGatewayContext,
         bonjourStop: kernel.swapDiscovery(null)?.stop ?? null,
         tailscaleCleanup: runtimeState.tailscaleCleanup,
         clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,

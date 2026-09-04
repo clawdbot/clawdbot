@@ -24,7 +24,6 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { listMemorySessionTombstones } from "../memory-entry-origins.js";
 import { runInMemoryBackgroundContext } from "./background-context.js";
-import { isMemoryDatabaseReadOnly } from "./manager-db.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
   isMemorySessionIndexable,
@@ -76,7 +75,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
   }
 
   protected async listSessionCorpusEntries(): Promise<SessionTranscriptCorpusEntry[]> {
-    const readOnly = isMemoryDatabaseReadOnly(this.db);
+    const readOnly = this.database.readOnly;
     const entries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId, {
       includeContentRevision: !readOnly,
       readOnly,
@@ -198,7 +197,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       db: this.db,
       source: "sessions",
     }).rows;
-    const readOnly = isMemoryDatabaseReadOnly(this.db);
+    const readOnly = this.database.readOnly;
     const sqliteCorpusEntries = readOnly
       ? corpusEntries.filter((entry) => entry.transcriptSource === "sqlite")
       : [];

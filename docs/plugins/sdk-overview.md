@@ -22,7 +22,29 @@ reference for **what to import** and **what you can register**.
 Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins). Use [Channel plugins](/plugins/sdk-channel-plugins) for channels, [Provider plugins](/plugins/sdk-provider-plugins) for model providers, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, [Agent harness plugins](/plugins/sdk-agent-harness) for native agent executors, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hooks.
 </Tip>
 
+## API stability
+
+All OpenClaw plugin APIs are **experimental**. This includes every
+`openclaw/plugin-sdk/*` subpath, registration and runtime APIs, channel and
+provider contracts, hooks, and native Control UI APIs. These contracts can
+change between OpenClaw releases.
+
+Pin the OpenClaw version used to develop and deploy your plugin, and test each
+host version you declare compatible. Set package compatibility ranges from
+those tested versions; do not assume a working build supports future releases.
+Existing [compatibility windows and upgrade migrations](/plugins/compatibility)
+still apply. Experimental status does not remove a documented migration path.
+
+Native UI from user-installed plugins also requires the default-off
+[Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui).
+Backend plugin APIs and ordinary plugin loading do not require that setting.
+
 ## Import convention
+
+For features with native Control UI, use [Feature plugins](/plugins/feature-plugins):
+`feature-contract` defines shared operations, `feature-plugin` registers their
+backend implementations, and `control-ui` exposes browser contribution and
+replacement contracts.
 
 Always import from a specific subpath:
 
@@ -452,6 +474,20 @@ sandbox, theme, and ticket-bound action bridge. Registrations exist only while
 their plugin is active; invalid, reserved, or duplicate kinds fail plugin load.
 Use `dashboard.dataBindings` and `dashboard.actionVerbs` for host capabilities,
 not for renderer registration.
+
+For inline rendering, `resources.readPublicResource(path)` can optionally return
+`{ body: Uint8Array, contentType: string }` for the registered resource paths.
+These bytes are public: the isolated sandbox listener serves them with no
+Gateway credentials. Return only static renderer assets, never user data or
+secrets. Unregistered paths and registrations without this callback stay private.
+Opting in reserves every declared path in one global sandbox namespace: no other
+content kind may declare the same path, even without a public reader. Registration
+rejects these collisions regardless of order; only private registrations may
+share paths. Public paths must already be canonical URL pathnames, without dot
+segments, backslashes, query strings, or fragments. The sandbox host endpoint
+`/mcp-app-sandbox` is reserved. These additional path restrictions apply only to
+registrations with `readPublicResource`; private paths retain their capability
+URL encoding.
 
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway

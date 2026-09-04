@@ -407,6 +407,59 @@ describe("provider model route adapter", () => {
     });
   });
 
+  it("captures separate override facts for canonical duplicate rows", () => {
+    const firstHeaders: Record<string, string> = {};
+    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
+      kind: "indeterminate" as const,
+    }));
+    const resolveRoutes = createProviderModelRoutesResolver({
+      provider: "openai",
+      env: {},
+      config: {
+        models: {
+          providers: {
+            openai: {
+              models: [
+                { id: "gpt-5.4", api: "openai-responses", headers: firstHeaders },
+                {
+                  id: "gpt-5.4-codex",
+                  api: "openai-completions",
+                  baseUrl: "https://model.example.test/v1",
+                  headers: { "x-later-row": "ignored" },
+                },
+                { id: "second", params: { azureApiVersion: "2025-01-01" } },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      surface: {
+        normalizeModelCatalogId: ({ modelId }) =>
+          modelId === "gpt-5.4-codex" ? "gpt-5.4" : modelId,
+        resolveModelRoutes,
+      },
+    });
+
+    firstHeaders["x-after-preparation"] = "not part of the prepared route";
+    for (const modelId of ["gpt-5.4-codex", "second", "missing"]) {
+      resolveRoutes({ modelId });
+    }
+    expect(
+      resolveModelRoutes.mock.calls.map(([context]) => [
+        context.modelId,
+        context.requestTransportOverrides,
+      ]),
+    ).toEqual([
+      ["gpt-5.4", "none"],
+      ["second", "present"],
+      ["missing", "none"],
+    ]);
+    expect(resolveModelRoutes.mock.calls[0]?.[0].configuredModel).toEqual({
+      api: "openai-responses",
+      baseUrl: "https://model.example.test/v1",
+    });
+  });
+
   it("keeps case-distinct provider keys and unknown model ids separate", () => {
     const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
       kind: "indeterminate" as const,

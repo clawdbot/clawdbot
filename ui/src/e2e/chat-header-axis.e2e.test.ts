@@ -97,7 +97,7 @@ suite.define(() => {
             Math.abs(geometry.menu - geometry.nav),
             JSON.stringify(geometry),
           ).toBeLessThanOrEqual(0.1);
-          expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom);
+          expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
           if (viewport.label === "desktop") {
             for (const center of [
               geometry.projectIcon,

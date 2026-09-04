@@ -88,6 +88,18 @@ export function bindGatewayContextResolver(
 
 export const getGatewayContextResolver = (owner: object) => gatewayContextResolvers.get(owner);
 
+/** Match the host owner without invoking a possibly retired execution resolver. */
+export function hasGatewayContextOwner(
+  owner: object,
+  gatewayOwner: GatewayContextResolver,
+): boolean {
+  const resolver = gatewayContextResolvers.get(owner);
+  // A lifetime wrapper records one canonical host owner; it remains the execution binding.
+  return (
+    resolver !== undefined && (gatewayContextResolvers.get(resolver) ?? resolver) === gatewayOwner
+  );
+}
+
 export const clearGatewayContextResolver = (owner: object) => gatewayContextResolvers.delete(owner);
 
 /** Carry only closure-bound node authorities into a nested request scope. */
@@ -139,9 +151,9 @@ export function withPluginRuntimeGatewayRequestScope<T>(
   return pluginRuntimeGatewayRequestScope.run(scope, run);
 }
 
-/** Runs detached plugin work against one lifecycle-fenced Gateway instance. */
+/** Runs detached work with its captured Gateway binding, including an explicitly unbound owner. */
 export function withPluginRuntimeGatewayContextResolver<T>(
-  resolveGatewayContext: GatewayContextResolver,
+  resolveGatewayContext: GatewayContextResolver | undefined,
   run: () => T,
   options?: { inheritRequestScope?: boolean },
 ): T {

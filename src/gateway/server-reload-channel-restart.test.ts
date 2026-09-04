@@ -16,13 +16,9 @@ afterEach(async () => {
   resetGatewayWorkAdmission();
 });
 
-it.each(
-  (["channel", "accounts"] as const).flatMap((scope) =>
-    (["idle", "stopped", "racing"] as const).map((state) => ({ scope, state })),
-  ),
-)(
-  "$scope rollback preserves $state manual stops while explicit starts resume",
-  async ({ scope, state }) => {
+it.each(["idle", "stopped", "racing"] as const)(
+  "channel rollback preserves %s manual stops while explicit starts resume",
+  async (state) => {
     const starts: string[] = [];
     const configuring = createDeferred();
     const releaseConfiguration = createDeferred();
@@ -64,15 +60,11 @@ it.each(
     if (state !== "racing") {
       await manager.stopChannel("discord", "manual");
     }
-    const channels = new Set<ChannelKind>(scope === "channel" ? ["discord"] : []);
-    const accounts = new Map<ChannelKind, Set<string>>(
-      scope === "accounts" ? [["discord", new Set(["manual", "running"])]] : [],
-    );
+    const channels = new Set<ChannelKind>(["discord"]);
     const logChannels = { info: vi.fn(), error: vi.fn() };
     const reload = rollbackStoppedGatewayChannels(
       { startChannel: manager.startChannel, logChannels },
       channels,
-      accounts,
       "cancelled plugin reload",
     );
     if (state === "racing") {
@@ -83,7 +75,6 @@ it.each(
     }
     expect(await reload).toEqual([]);
     expect(channels.size).toBe(0);
-    expect(accounts.size).toBe(0);
     expect(logChannels.error).not.toHaveBeenCalled();
     expect(manager.isManuallyStopped("discord", "manual")).toBe(true);
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.manual?.running).toBe(false);

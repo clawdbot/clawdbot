@@ -21,11 +21,12 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { borrowOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { runInMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { closeMemoryDatabase, memoryDatabaseTableExists } from "./manager-db.js";
+import { memoryDatabaseTableExists, openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
 import {
   clearMemoryEmbeddingProbeCache,
   resolveEffectiveMemorySearchSettings,
@@ -170,7 +171,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
               }
               return manager;
             },
-            reuse: (manager) => !manager.closing && !manager.closed,
+            reuse: (manager) => !manager.closing && !manager.closed && manager.db.isOpen,
           };
         },
       },
@@ -202,7 +203,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     for (const source of effectiveSettings.sources) {
       this.sources.add(source);
     }
-    this.publishedDatabase = new MemoryIndexDatabase(this.openDatabase(this.purpose === "status"));
+    const dbPath = resolveUserPath(effectiveSettings.store.databasePath);
+    const vectorEnabled = effectiveSettings.store.vector.enabled;
+    const readOnly = this.purpose === "status";
+    const connection = readOnly
+      ? openMemoryDatabaseReadOnlyAtPath(dbPath, vectorEnabled, this.agentId)
+      : borrowOpenClawAgentDatabase({ agentId: this.agentId, path: dbPath });
+    this.publishedDatabase = new MemoryIndexDatabase(connection.db, connection.release, readOnly);
     try {
       this.providerKey = this.computeProviderKey();
       this.cache = {
@@ -262,7 +269,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         });
       }
     } catch (err) {
-      closeMemoryDatabase(this.db);
+      this.publishedDatabase.release();
       throw err;
     }
   }
@@ -654,7 +661,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     try {
       await this.retryFailedClose();
     } finally {
-      closeMemoryDatabase(this.db);
+      this.publishedDatabase.release();
       this.closeTeardownComplete = true;
     }
   }

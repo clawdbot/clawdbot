@@ -370,9 +370,77 @@ describe("diagnostics-prometheus managed install runtime", () => {
     expect(body).toContain(
       'openclaw_telemetry_exporter_total{exporter="diagnostics-prometheus",reason="configured",signal="metrics",status="started"} 1',
     );
+    const scrapeEventLoopMetrics = async () => {
+      const response = await fetch(url, {
+        headers: { authorization: `Bearer ${gatewayToken}` },
+      });
+      expect(response.status).toBe(200);
+      const lines = (await response.text())
+        .split("\n")
+        .filter((line) => line.startsWith("openclaw_gateway_event_loop_"));
+      const value = (name: string) =>
+        Number(
+          lines
+            .find((line) => line.startsWith(`${name} `))
+            ?.split(" ")
+            .at(-1),
+        );
+      return {
+        lines,
+        count: value("openclaw_gateway_event_loop_delay_max_seconds_count"),
+        sum: value("openclaw_gateway_event_loop_delay_max_seconds_sum"),
+        observed: value("openclaw_gateway_event_loop_observed_seconds_total"),
+      };
+    };
+    const readCompletedWindow = async () => {
+      // Healthy monitor windows complete after one second; readiness owns this read.
+      await delay(1_100);
+      const response = await fetch(`http://127.0.0.1:${gatewayPort}/readyz`, {
+        headers: { authorization: `Bearer ${gatewayToken}` },
+      });
+      expect(response.status).toBe(200);
+      const readiness = (await response.json()) as {
+        ready: boolean;
+        eventLoop?: { intervalMs: number; delayMaxMs: number };
+      };
+      expect(readiness.ready).toBe(true);
+      expect(readiness.eventLoop?.intervalMs).toBeGreaterThanOrEqual(1_000);
+      expect(readiness.eventLoop?.delayMaxMs).toBeGreaterThanOrEqual(0);
+      return readiness.eventLoop!;
+    };
+
+    await readCompletedWindow();
+    await expect.poll(async () => (await scrapeEventLoopMetrics()).count).toBeGreaterThan(0);
+    const firstWindow = await scrapeEventLoopMetrics();
+    expect(firstWindow.observed).toBeGreaterThan(0);
+    const nextWindow = await readCompletedWindow();
+    await expect
+      .poll(async () => (await scrapeEventLoopMetrics()).count)
+      .toBeGreaterThan(firstWindow.count);
+    const retainedWindows = await scrapeEventLoopMetrics();
+    // Prometheus renders 12 significant digits; tolerate only serialization rounding.
+    expect(retainedWindows.observed).toBeGreaterThanOrEqual(
+      firstWindow.observed + nextWindow.intervalMs / 1_000 - 1e-9,
+    );
+    expect(retainedWindows.sum).toBeGreaterThanOrEqual(
+      firstWindow.sum + nextWindow.delayMaxMs / 1_000 - 1e-9,
+    );
+    expect(retainedWindows.lines.join("\n")).not.toMatch(/\{(?!le=)/u);
+    // Background health readers may complete windows between full-Gateway scrapes.
+    let previous = retainedWindows;
+    for (let scrape = 0; scrape < 2; scrape++) {
+      const current = await scrapeEventLoopMetrics();
+      expect(current.count).toBeGreaterThanOrEqual(previous.count);
+      expect(current.sum).toBeGreaterThanOrEqual(previous.sum);
+      expect(current.observed).toBeGreaterThanOrEqual(previous.observed);
+      previous = current;
+    }
     const gatewayLogs = await fs.readFile(gatewayLog, "utf8");
     expect(gatewayLogs).not.toContain(
       "diagnostics-prometheus: internal diagnostics capability unavailable",
     );
+    await stopChildProcess(gateway, 5_000);
+    expect(gateway.exitCode).toBe(0);
+    expect(gateway.signalCode).toBeNull();
   }, 300_000);
 });

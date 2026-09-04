@@ -29,12 +29,12 @@ import {
   settleSubagentCompletionDelivery,
   SUSPENDED_RETENTION_MS,
 } from "./subagent-completion-admission.store.js";
+import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "./subagent-completion-instructions.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 const CLAIM_LEASE_MS = 125_000;
 const MAX_DELIVERY_GENERATION = 10;
-const CANONICAL_RESULT_PROMPT =
-  "A completed subagent task is ready for parent review. The canonical result follows.";
+const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The canonical result follows.`;
 type CompletionDeliveryRecoveryResult = {
   ok: boolean;
   reason?: string;

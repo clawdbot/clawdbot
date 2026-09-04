@@ -8,8 +8,9 @@ import {
   createSlackReadClient,
   createSlackStartupAuthClient,
   createSlackWebClient,
-  getSlackListenerUploadCompletionClient,
+  getSlackListenerWriteClient,
 } from "./client.js";
+import { startSlackStream } from "./streaming.js";
 
 const SLACK_API_URL_KEYS = ["SLACK_API_URL"] as const;
 const PROXY_KEYS = [
@@ -161,6 +162,51 @@ afterEach(() => {
 });
 
 describe("Slack Web API routing", () => {
+  it.each([undefined, "TENTERPRISE1"])(
+    "keeps lost stream responses one-shot without changing listener reads (team=%s)",
+    async (teamId) => {
+      for (const key of TEST_ENV_KEYS) {
+        delete process.env[key];
+      }
+      const requests: SlackApiRequest[] = [];
+      const server = await startDroppedResponseSlackApiServer(requests);
+      try {
+        const clientOptions = {
+          slackApiUrl: `${server.baseUrl}/api/`,
+          teamId,
+          retryConfig: { retries: 2, minTimeout: 1, maxTimeout: 1 },
+        };
+        const listenerClient = new WebClient("listener-stream-fixture", clientOptions);
+
+        await expect(
+          startSlackStream({
+            client: listenerClient,
+            clientOptions,
+            channel: "C123",
+            threadTs: "1700000000.000100",
+            teamId: "TRECIPIENT",
+            text: "one committed answer",
+            chunks: [],
+          }),
+        ).rejects.toThrow();
+
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toMatchObject({
+          authorization: "Bearer listener-stream-fixture",
+          url: "/api/chat.startStream",
+        });
+        const payload = new URLSearchParams(requests[0]?.body);
+        expect(payload.get("team_id")).toBe(teamId ?? null);
+        expect(payload.get("recipient_team_id")).toBe("TRECIPIENT");
+
+        await expect(listenerClient.auth.test()).rejects.toThrow();
+        expect(requests.filter((request) => request.url === "/api/auth.test")).toHaveLength(3);
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
   it("omits the empty body emitted by auth.test", async () => {
     for (const key of TEST_ENV_KEYS) {
       delete process.env[key];
@@ -308,7 +354,7 @@ describe("Slack Web API routing", () => {
         retryConfig: { retries: 2 },
       };
       const listenerClient = new WebClient("listener-fixture", clientOptions);
-      const completionClient = getSlackListenerUploadCompletionClient({
+      const completionClient = getSlackListenerWriteClient({
         listenerClient,
         teamId: "TENTERPRISE1",
         clientOptions,
@@ -318,14 +364,14 @@ describe("Slack Web API routing", () => {
         throw new Error("missing Enterprise upload completion client");
       }
       expect(
-        getSlackListenerUploadCompletionClient({
+        getSlackListenerWriteClient({
           listenerClient,
           teamId: "TENTERPRISE1",
           clientOptions,
         }),
       ).toBe(completionClient);
       expect(
-        getSlackListenerUploadCompletionClient({
+        getSlackListenerWriteClient({
           listenerClient,
           teamId: "TENTERPRISE2",
           clientOptions,
@@ -365,7 +411,7 @@ describe("Slack Web API routing", () => {
         timeout: 20,
       };
       const listenerClient = new WebClient("listener-fixture", clientOptions);
-      const completionClient = getSlackListenerUploadCompletionClient({
+      const completionClient = getSlackListenerWriteClient({
         listenerClient,
         teamId: "TENTERPRISE1",
         clientOptions,

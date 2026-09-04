@@ -76,7 +76,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     resolveRuntimeOptionsForCurrentBinding,
     startupAuthProfileId,
     startupAuthRequirement,
-    abortFromUpstream,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
   const loopDetectionEnabled =
@@ -257,9 +256,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     await runCleanupStep(
       "codex-start-failure-shared-client-release",
       releaseSharedClientLeaseAndRetireOneShotClient,
-    );
-    await runCleanupStep("codex-start-failure-abort-listener", () =>
-      params.abortSignal?.removeEventListener("abort", abortFromUpstream),
     );
     throw error instanceof CodexThreadPolicyHandoffError
       ? error
