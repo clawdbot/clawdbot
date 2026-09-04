@@ -52,23 +52,9 @@ function collectAcpOwnerMappings(cfg: OpenClawConfig): {
     owners.add(ownerAgentId);
     ownersByHarness.set(harnessAgentId, owners);
   }
-  const defaultAgentId = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
-  const allowedAgentIds = new Set(
-    (cfg.acp?.allowedAgents ?? []).flatMap((entry) => {
-      const normalized = normalizeOptionalAgentId(entry);
-      return normalized ? [normalized] : [];
-    }),
-  );
-  const allowsConfiguredAgents = cfg.acp?.allowedAgents?.some((entry) => entry.trim() === "*");
   for (const agent of configuredAgents) {
     const ownerAgentId = normalizeOptionalAgentId(agent.id);
-    if (
-      !ownerAgentId ||
-      agent.runtime?.type === "acp" ||
-      (ownerAgentId !== defaultAgentId &&
-        !allowsConfiguredAgents &&
-        !allowedAgentIds.has(ownerAgentId))
-    ) {
+    if (!ownerAgentId || agent.runtime?.type === "acp") {
       continue;
     }
     ownersByHarness.get(ownerAgentId)?.add(ownerAgentId);
@@ -200,6 +186,25 @@ async function moveSessionEntry(params: {
         storePath: params.sourceStorePath,
       });
       if (result.removedSessionKeys.includes(params.sourceKey)) {
+        return "moved";
+      }
+      const sourceAfterRemoval = loadExactSessionEntryReadOnly({
+        agentId: params.sourceAgentId,
+        env: params.env,
+        sessionKey: params.sourceKey,
+        storePath: params.sourceStorePath,
+      })?.entry;
+      const targetAfterRemoval = loadExactSessionEntryReadOnly({
+        agentId: params.targetAgentId,
+        env: params.env,
+        sessionKey: params.targetKey,
+        storePath: params.targetStorePath,
+      })?.entry;
+      if (
+        !sourceAfterRemoval &&
+        targetAfterRemoval &&
+        sameSessionEntry(targetAfterRemoval, params.entry)
+      ) {
         return "moved";
       }
     } catch (error) {

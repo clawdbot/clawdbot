@@ -234,6 +234,29 @@ describe("Doctor ACP owner migration", () => {
     });
   });
 
+  it("fails closed when a configured non-ACP owner is no longer allowed", async () => {
+    await withStateDirEnv("openclaw-doctor-acp-configured-owner-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const cfg = createConfig(stateDir);
+      cfg.acp = { allowedAgents: ["reviewer"] };
+      cfg.agents?.list?.push({ id: "codex" });
+      const sourceStorePath = seedLegacySession({ cfg, env });
+
+      const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
+
+      expect(report).toMatchObject({ ambiguous: 1, eligible: 0, migrated: 0 });
+      expect(report.warnings.join("\n")).toContain("multiple owners (codex, reviewer)");
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "codex",
+          env,
+          sessionKey: sourceKey,
+          storePath: sourceStorePath,
+        }),
+      ).toBeDefined();
+    });
+  });
+
   it("cannot replay a consumed legacy peer through a later alias", async () => {
     await withStateDirEnv("openclaw-doctor-acp-consumed-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -458,6 +481,51 @@ describe("Doctor ACP owner migration", () => {
           storePath: targetStorePath,
         })?.entry,
       ).toMatchObject(concurrentEntry);
+    });
+  });
+
+  it("preserves a canonical target completed by a concurrent migration", async () => {
+    await withStateDirEnv("openclaw-doctor-acp-concurrent-finish-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const cfg = createConfig(stateDir);
+      const sourceStorePath = seedLegacySession({ cfg, env });
+      const targetStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+        agentId: "reviewer",
+        env,
+      });
+      let removedConcurrently = false;
+      sessionAccessorTestHooks.applyLifecycleMutation.mockImplementation(async (params) => {
+        if (
+          !removedConcurrently &&
+          params.storePath === sourceStorePath &&
+          params.removals?.some((removal) => removal.sessionKey === sourceKey)
+        ) {
+          removedConcurrently = true;
+          await sessionAccessorTestHooks.applyLifecycleMutationDelegate!(params);
+        }
+        return await sessionAccessorTestHooks.applyLifecycleMutationDelegate!(params);
+      });
+
+      const report = await migrateLegacyAcpOwnerSessions({ apply: true, cfg, env });
+
+      expect(report.warnings).toEqual([]);
+      expect(report).toMatchObject({ conflicts: 0, eligible: 1, migrated: 1 });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "codex",
+          env,
+          sessionKey: sourceKey,
+          storePath: sourceStorePath,
+        }),
+      ).toBeUndefined();
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "reviewer",
+          env,
+          sessionKey: targetKey,
+          storePath: targetStorePath,
+        })?.entry,
+      ).toMatchObject(entry);
     });
   });
 
