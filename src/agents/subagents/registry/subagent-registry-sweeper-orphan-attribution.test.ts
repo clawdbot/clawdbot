@@ -161,6 +161,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     expect(source).toBe("sweeper-orphaned-by-gateway-death");
     // sendFarewell is what carries the outcome back to the requester session.
     expect(completion.sendFarewell).toBe(true);
+    expect(completion.recoverInterrupted).toBe(true);
     expect(completion.outcome.status).toBe("error");
     expect(completion.outcome.error).toContain("host rebooted under the gateway");
     expect(completion.outcome.error).toContain("boot-minus-5 ended without a clean stop");
@@ -181,6 +182,24 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     // the restart. It must never be the reap timestamp.
     expect(completion.endedAt).toBe(GATEWAY_RESTARTED_AT);
     expect(completion.endedAt).not.toBe(RUN_REAPED_AT);
+  });
+
+  it("marks a delayed attributed death as recovery after its explicit deadline", async () => {
+    const { completeSubagentRunWithRecovery, sweeper } = createHarness({
+      runTimeoutSeconds: 60,
+    });
+
+    await sweeper.sweepOnce();
+    sweeper.reset();
+
+    const [completion] = completeSubagentRunWithRecovery.mock.calls[0]!;
+    expect(completion.endedAt).toBe(GATEWAY_RESTARTED_AT);
+    expect(completion.endedAt).toBeGreaterThan(RUN_STARTED_AT + 60_000);
+    expect(completion.recoverInterrupted).toBe(true);
+    expect(completion.outcome).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("gateway"),
+    });
   });
 
   it("uses the run's own last activity as the death when it recorded one", async () => {

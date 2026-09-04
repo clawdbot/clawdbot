@@ -263,6 +263,7 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       "worker_session_placement_moves.abandon_source INTEGER",
       "worker_session_placement_moves.target_machine_class TEXT",
       "worktrees.run_end_cleanup_json TEXT",
+      "gateway_boot_lifecycle.host_boot_id TEXT",
       "device_bootstrap_tokens.setup_id TEXT",
       "session_groups.cwd TEXT",
       "session_groups.worktree INTEGER",

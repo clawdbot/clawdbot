@@ -34,6 +34,7 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
     tableName: "worker_session_placement_moves",
   },
   { columnName: "run_end_cleanup_json", dataType: "TEXT", tableName: "worktrees" },
+  { columnName: "host_boot_id", dataType: "TEXT", tableName: "gateway_boot_lifecycle" },
   { columnName: "setup_id", dataType: "TEXT", tableName: "device_bootstrap_tokens" },
   { columnName: "cwd", dataType: "TEXT", tableName: "session_groups" },
   { columnName: "worktree", dataType: "INTEGER", tableName: "session_groups" },
