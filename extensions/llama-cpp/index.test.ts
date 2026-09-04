@@ -25,6 +25,12 @@ const mocks = vi.hoisted(() => ({
   prepareServer: vi.fn(),
   inspectRuntime: vi.fn(),
   genericCreate: vi.fn(),
+  detectHardware: vi.fn(),
+}));
+
+vi.mock("./src/hardware.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/hardware.js")>()),
+  detectLlamaCppHardware: mocks.detectHardware,
 }));
 
 vi.mock("openclaw/plugin-sdk/embedding-providers", async (importOriginal) => ({
@@ -59,6 +65,7 @@ let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
 beforeEach(() => {
   previousPluginRegistry = getActivePluginRegistry();
+  mocks.detectHardware.mockReset();
   mocks.discoverServer.mockReset();
   mocks.ensureModel.mockResolvedValue("/models/model.gguf");
   mocks.ensureChat.mockResolvedValue(undefined);
@@ -397,7 +404,16 @@ describe("llama.cpp provider plugin", () => {
         },
       },
     };
-    const ram = vi.spyOn(os, "totalmem").mockReturnValue(16 * 1024 ** 3);
+    mocks.detectHardware.mockResolvedValue({
+      platform: "linux",
+      arch: "x64",
+      totalMemoryBytes: 16 * 1024 ** 3,
+      availableMemoryBytes: 16 * 1024 ** 3,
+      availableDiskBytes: 100 * 1024 ** 3,
+      availableRuntimeDiskBytes: 100 * 1024 ** 3,
+      sharedDisk: true,
+      accelerator: { kind: "cpu", reason: "CPU fixture" },
+    });
     mocks.ensureModel.mockImplementation(async ({ source, download }) => {
       if (!download) {
         throw new Error("not cached");
@@ -405,31 +421,27 @@ describe("llama.cpp provider plugin", () => {
       return source.includes("Qwen3.5-9B-GGUF") ? "/models/chat.gguf" : "/models/embedding.gguf";
     });
 
-    try {
-      const result = await method.run({
-        config,
-        prompter: {
-          confirm: vi.fn(async () => true),
-          note: vi.fn(async () => {}),
-          progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-        },
-        runtime: {},
-      } as never);
+    const result = await method.run({
+      config,
+      prompter: {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => {}),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+      runtime: {},
+    } as never);
 
-      expect(result.defaultModel).toBe(`${LLAMA_CPP_PROVIDER_ID}/qwen3.5-9b-q4_k_m`);
-      expect(mocks.prepareServer).toHaveBeenCalledWith(
-        expect.objectContaining({
-          chatModel: expect.objectContaining({
-            mode: "configure",
-            id: "qwen3.5-9b-q4_k_m",
-            path: "/models/chat.gguf",
-          }),
-          embeddingModelPath: "/models/embedding.gguf",
+    expect(result.defaultModel).toBe(`${LLAMA_CPP_PROVIDER_ID}/qwen3.5-9b-q4_k_m`);
+    expect(mocks.prepareServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatModel: expect.objectContaining({
+          mode: "configure",
+          id: "qwen3.5-9b-q4_k_m",
+          path: "/models/chat.gguf",
         }),
-      );
-    } finally {
-      ram.mockRestore();
-    }
+        embeddingModelPath: "/models/embedding.gguf",
+      }),
+    );
   });
 
   it("preserves default local index identity across old and managed cache paths", () => {
