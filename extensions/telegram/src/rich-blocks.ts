@@ -405,9 +405,12 @@ function emitSegments(
     segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
   const orderedSegments = [
     ...segments,
-    ...findTelegramHtmlIslands(htmlNodes).map(
-      (node): StructuralSegment => ({ kind: "html", start: node.start, end: node.end, node }),
-    ),
+    ...findTelegramHtmlIslands(htmlNodes).map((node): StructuralSegment => ({
+      kind: "html",
+      start: node.start,
+      end: node.end,
+      node,
+    })),
   ].toSorted((left, right) => {
     if (left.start !== right.start) {
       return left.start - right.start;
