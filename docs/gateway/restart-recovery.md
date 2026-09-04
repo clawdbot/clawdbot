@@ -118,21 +118,42 @@ diagnostics without launching an agent; `--update-result <path>` includes an
 updater's saved failure artifact. Printed handoff commands preserve installation
 selectors and use PowerShell on Windows or POSIX shells on macOS, Linux, and WSL.
 
-Git updates may restore and verify the original source and runtime before Doctor
-starts. Once candidate Doctor starts, subsequent failures retain that candidate
-and explicitly refuse recovery: code rollback cannot reverse state migrations.
-Package-manager and lifecycle commands can change state even while npm stages
-the candidate. After those commands start, restoring the original package and
-launchers does not authorize restarting them against possibly changed state.
-Only a fully verified candidate, including the required nonblocking Doctor
-result, can authorize activation. Failures before hooks can run, such as staging
-directory preparation errors, can still recover a verified original runtime.
+Staging and validation run while the old Gateway serves. The candidate runs
+Doctor lint, config and plugin planning, and an isolated canary boot against
+copied configuration and verified database snapshots. Migrations on these
+copies rehearse the upgrade without changing live state. A validation failure
+leaves the old Gateway running; an `already-current` no-op never stops it.
+The detached helper also waits for the `activating` phase before parking its
+parent Gateway. Only the swap, required live migrations, and service start
+belong in the activation window.
 
-An update failure does not by itself authorize a Gateway restart. The updater
-must explicitly verify that the installation is safe to activate. A blocking
-Doctor result leaves the Gateway stopped, including when a detached managed
-update helper is still running. Re-enabling Windows task autostart cannot
-bypass that decision.
+After activation, the updater verifies the managed service, the expected
+version/build identity, a 12-probe health settle, plugin activation, channels,
+and HTTP 200 from `/readyz`. A 15-second inference probe is advisory; provider
+unavailability alone records a warning and does not cause rollback. Verification
+facts and measured downtime are retained in the [update run report](/cli/update#run-history-and-reports).
+
+When a package fails verification, the updater compares the shared and affected
+per-agent SQLite `user_version` values with their pre-activation values. If they
+are unchanged, it stops the candidate, restores the retained previous package,
+refreshes service metadata, then starts and verifies that runtime with the same
+checks. Successful recovery finishes `rolled-back`, with the failing check kept
+as the reason. If a schema version changed, it records
+`state-migrated-no-rollback`: a reachable candidate remains running for diagnosis,
+and an unreachable candidate remains stopped. Code rollback cannot reverse
+state migrations. An unavailable schema comparison records
+`rollback-state-unverified` and also prevents automatic rollback. After migration,
+a fresh candidate process finishes verification and the same durable run report;
+the old updater does not reopen the newer database. Git activation failures before live migrations can restore
+the previous source and retained built runtime; later Git failures retain the
+candidate for diagnosis.
+
+An update failure does not by itself authorize a candidate restart. Candidate
+activation still requires successful validation; a blocking live Doctor result
+does not become a restart grant. The previous runtime was verified before the
+update, so a schema-neutral rollback may restart it under that prior verification
+and must verify it again afterward. A detached helper or Windows task autostart
+cannot bypass this decision.
 
 On macOS, a terminated update helper can leave the selected Gateway LaunchAgent
 installed but unloaded and disabled across logins. `openclaw doctor` and
@@ -156,10 +177,10 @@ than older helpers that restarted after an unclassified failure. Installing a ne
 target does not change an already-running historical helper; these checks apply
 to the helper version that started the update.
 
-A skipped update, such as a Git checkout with no upstream, can still require
-restoring the service parked by its detached helper. The helper uses the child's
-verified recovery decision and preserves the skip reason. A zero exit is retained
-only if recovery succeeds or the child already verified it; failed foreground
+A skipped update before activation does not park or restart the Gateway. If an
+interruption occurs after parking, the helper uses the child's verified recovery
+decision and preserves the original reason. A zero exit is retained only if
+required recovery succeeds or the child already verified it; failed foreground
 recovery is terminal and is not retried.
 
 A failed update still exits nonzero when service recovery or the repair agent
