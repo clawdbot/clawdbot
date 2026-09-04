@@ -3,8 +3,10 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
+  ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
@@ -27,6 +29,17 @@ const SLACK_TOOL_DELIVERY_ACTIONS = new Set([
   "uploadFile",
 ]);
 
+// SAFETY: management actions map 1:1 to ChannelMessageActionName values declared in
+// message-tool-api.ts; the shared dispatcher uses this set to require a trusted
+// requester sender before owner authority can reach Slack workspace mutations.
+const SLACK_CHANNEL_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
+  "channel-create",
+  "channel-edit",
+  "addParticipant",
+  "kick",
+  "channel-delete",
+]);
+
 const loadSlackActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.runtime.js"));
 
 function resolveSlackActionContext(
@@ -40,7 +53,9 @@ function resolveSlackActionContext(
     !ctx.mediaReadFile &&
     !ctx.conversationReadOrigin &&
     !ctx.requesterAccountId &&
-    !ctx.requesterSenderId
+    !ctx.requesterSenderId &&
+    ctx.senderIsOwner !== true &&
+    !ctx.gatewayClientScopes
   ) {
     return undefined;
   }
@@ -54,6 +69,8 @@ function resolveSlackActionContext(
     conversationReadOrigin: ctx.conversationReadOrigin,
     requesterAccountId: ctx.requesterAccountId ?? undefined,
     requesterSenderId: ctx.requesterSenderId ?? undefined,
+    senderIsOwner: ctx.senderIsOwner === true ? true : undefined,
+    gatewayClientScopes: ctx.gatewayClientScopes,
   };
 }
 
@@ -67,6 +84,9 @@ export function createSlackActions(
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     isToolDeliveryAction: ({ args }) =>
       typeof args.action === "string" && SLACK_TOOL_DELIVERY_ACTIONS.has(args.action),
+    requiresTrustedRequesterSender: ({ action, toolContext }) =>
+      normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() === providerId &&
+      SLACK_CHANNEL_MANAGEMENT_ACTIONS.has(action),
     prepareSendPayload: ({ ctx, to, payload }) =>
       ctx.action === "send" && !shouldUseWorkspaceAwareSlackActionSend(to, ctx.toolContext)
         ? payload

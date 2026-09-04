@@ -60,6 +60,17 @@ const sendSlackMessage = vi.fn(
   }),
 );
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const addSlackChannelMember = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
+const archiveSlackChannel = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
+const createSlackChannel = vi.fn(async (..._args: unknown[]) => ({
+  channelId: "C123",
+  name: "new-channel",
+}));
+const removeSlackChannelMember = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
+const renameSlackChannel = vi.fn(async (..._args: unknown[]) => ({
+  channelId: "C123",
+  name: "renamed",
+}));
 
 describe("handleSlackAction", () => {
   function slackConfig(overrides?: Record<string, unknown>): OpenClawConfig {
@@ -425,6 +436,9 @@ describe("handleSlackAction", () => {
     resolveSlackConversationName.mockReset().mockResolvedValue(undefined);
     resolveSlackConversationInfo.mockClear();
     Object.assign(slackActionRuntime, originalSlackActionRuntime, {
+      addSlackChannelMember,
+      archiveSlackChannel,
+      createSlackChannel,
       deleteSlackMessage,
       downloadSlackFile,
       editSlackMessage,
@@ -437,11 +451,192 @@ describe("handleSlackAction", () => {
       reactSlackMessage,
       readSlackMessages,
       removeOwnSlackReactions,
+      removeSlackChannelMember,
       removeSlackReaction,
+      renameSlackChannel,
       resolveSlackConversationName,
       resolveSlackConversationInfo,
       sendSlackMessage,
       unpinSlackMessage,
+    });
+  });
+
+  describe("channel management authorization", () => {
+    const ownerContext: SlackActionContext = {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+      requesterSenderId: "U_OWNER",
+      senderIsOwner: true,
+    };
+    const mgmtConfig = (overrides?: Record<string, unknown>) =>
+      slackConfig({ actions: { permissions: true }, ...overrides });
+
+    it.each([
+      { action: "createChannel", params: { name: "new-channel" } },
+      { action: "renameChannel", params: { channelId: "C123", name: "renamed" } },
+      { action: "addMember", params: { channelId: "C123", userId: "U1" } },
+      { action: "removeMember", params: { channelId: "C123", userId: "U1" } },
+      { action: "archiveChannel", params: { channelId: "C123" } },
+    ])(
+      "rejects $action from a non-owner non-admin requester without touching Slack",
+      async ({ action, params }) => {
+        const cfg = mgmtConfig();
+        await expect(
+          handleSlackAction({ action, ...params }, cfg, {
+            currentChannelProvider: "slack",
+            currentChannelId: "team:T123:channel:C123",
+            requesterAccountId: "default",
+            requesterSenderId: "U_OTHER",
+          }),
+        ).rejects.toThrow(
+          "Slack channel management requires an owner or operator.admin requester.",
+        );
+        expect(createSlackChannel).not.toHaveBeenCalled();
+        expect(renameSlackChannel).not.toHaveBeenCalled();
+        expect(addSlackChannelMember).not.toHaveBeenCalled();
+        expect(removeSlackChannelMember).not.toHaveBeenCalled();
+        expect(archiveSlackChannel).not.toHaveBeenCalled();
+      },
+    );
+
+    it("rejects channel management when the permissions gate is disabled", async () => {
+      const cfg = slackConfig({ actions: { permissions: false } });
+      await expect(
+        handleSlackAction({ action: "createChannel", name: "new-channel" }, cfg, ownerContext),
+      ).rejects.toThrow("Slack channel management is disabled.");
+      expect(createSlackChannel).not.toHaveBeenCalled();
+    });
+
+    it("allows an owner requester to create a channel", async () => {
+      const cfg = mgmtConfig();
+      const result = await handleSlackAction(
+        { action: "createChannel", name: "new-channel", isPrivate: true },
+        cfg,
+        ownerContext,
+      );
+      expect(requireDetails(result)).toEqual({
+        ok: true,
+        created: { channelId: "C123", name: "new-channel" },
+      });
+      expect(createSlackChannel).toHaveBeenCalledWith("new-channel", {
+        cfg,
+        teamId: "T123",
+        isPrivate: true,
+      });
+    });
+
+    it("allows an operator.admin gateway client to rename a channel", async () => {
+      const cfg = mgmtConfig();
+      const result = await handleSlackAction(
+        { action: "renameChannel", channelId: "C123", name: "renamed" },
+        cfg,
+        {
+          currentChannelProvider: "slack",
+          currentChannelId: "team:T123:channel:C123",
+          requesterAccountId: "default",
+          gatewayClientScopes: ["operator.admin"],
+        },
+      );
+      expect(requireDetails(result).ok).toBe(true);
+      expect(renameSlackChannel).toHaveBeenCalledWith("C123", "renamed", {
+        cfg,
+        teamId: "T123",
+      });
+    });
+
+    it.each([
+      { action: "createChannel", params: { name: "new-channel" } },
+      { action: "renameChannel", params: { channelId: "C123", name: "renamed" } },
+      { action: "addMember", params: { channelId: "C123", userId: "U1" } },
+      { action: "removeMember", params: { channelId: "C123", userId: "U1" } },
+      { action: "archiveChannel", params: { channelId: "C123" } },
+    ])(
+      "rejects $action from a direct-operator read origin without touching Slack",
+      async ({ action, params }) => {
+        const cfg = mgmtConfig();
+        await expect(
+          handleSlackAction({ action, ...params }, cfg, {
+            conversationReadOrigin: "direct-operator",
+          }),
+        ).rejects.toThrow(
+          "Slack channel management requires an owner or operator.admin requester.",
+        );
+        expect(createSlackChannel).not.toHaveBeenCalled();
+        expect(renameSlackChannel).not.toHaveBeenCalled();
+        expect(addSlackChannelMember).not.toHaveBeenCalled();
+        expect(removeSlackChannelMember).not.toHaveBeenCalled();
+        expect(archiveSlackChannel).not.toHaveBeenCalled();
+      },
+    );
+
+    it("archives a channel for an owner requester", async () => {
+      const cfg = mgmtConfig();
+      const result = await handleSlackAction(
+        { action: "archiveChannel", channelId: "C123" },
+        cfg,
+        ownerContext,
+      );
+      expect(requireDetails(result)).toEqual({
+        ok: true,
+        archived: { channelId: "C123" },
+      });
+      expect(archiveSlackChannel).toHaveBeenCalledWith("C123", { cfg, teamId: "T123" });
+    });
+
+    it("archives a channel without requiring a userId", async () => {
+      const cfg = mgmtConfig();
+      const result = await handleSlackAction(
+        { action: "archiveChannel", channelId: "C123" },
+        cfg,
+        ownerContext,
+      );
+      expect(requireDetails(result).ok).toBe(true);
+      expect(archiveSlackChannel).toHaveBeenCalledTimes(1);
+      const call = archiveSlackChannel.mock.calls[0] as unknown[];
+      expect(call[0]).toBe("C123");
+      expect(call).toHaveLength(2);
+    });
+
+    it("splits a team-qualified channel target into a bare channel id and team", async () => {
+      const cfg = mgmtConfig();
+      const result = await handleSlackAction(
+        { action: "renameChannel", channelId: "team:T123:channel:C456", name: "renamed" },
+        cfg,
+        ownerContext,
+      );
+      expect(requireDetails(result).ok).toBe(true);
+      expect(renameSlackChannel).toHaveBeenCalledWith("C456", "renamed", {
+        cfg,
+        teamId: "T123",
+      });
+    });
+
+    it("archives a team-qualified channel target without a userId", async () => {
+      const cfg = mgmtConfig();
+      const result = await handleSlackAction(
+        { action: "archiveChannel", channelId: "team:T123:channel:C456" },
+        cfg,
+        ownerContext,
+      );
+      expect(requireDetails(result).ok).toBe(true);
+      expect(archiveSlackChannel).toHaveBeenCalledWith("C456", { cfg, teamId: "T123" });
+    });
+
+    it("requires a name for createChannel", async () => {
+      const cfg = mgmtConfig();
+      await expect(
+        handleSlackAction({ action: "createChannel" }, cfg, ownerContext),
+      ).rejects.toThrow();
+      expect(createSlackChannel).not.toHaveBeenCalled();
+    });
+
+    it("requires a userId for addMember", async () => {
+      const cfg = mgmtConfig();
+      await expect(
+        handleSlackAction({ action: "addMember", channelId: "C123" }, cfg, ownerContext),
+      ).rejects.toThrow();
+      expect(addSlackChannelMember).not.toHaveBeenCalled();
     });
   });
 

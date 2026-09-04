@@ -64,6 +64,13 @@ export function listSlackMessageActions(
   if (isActionEnabled("emojiList")) {
     actions.add("emoji-list");
   }
+  if (isActionEnabled("permissions", false)) {
+    actions.add("channel-create");
+    actions.add("channel-edit");
+    actions.add("addParticipant");
+    actions.add("kick");
+    actions.add("channel-delete");
+  }
   return Array.from(actions);
 }
 

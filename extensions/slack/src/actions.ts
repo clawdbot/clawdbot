@@ -219,7 +219,7 @@ function hasSlackPlatformError(err: unknown, code: string): boolean {
   return (data as { error?: unknown }).error === code;
 }
 
-async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
+export async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
   if (opts.client) {
     return opts.client;
   }

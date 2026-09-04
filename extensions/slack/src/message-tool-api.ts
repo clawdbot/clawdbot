@@ -10,6 +10,37 @@ import { listSlackMessageActions } from "./message-actions.js";
 
 const SLACK_MESSAGE_ID_ACTIONS = ["react", "reactions", "edit", "delete", "pin", "unpin"] as const;
 
+const SLACK_CHANNEL_MANAGEMENT_ACTIONS = [
+  "channel-create",
+  "channel-edit",
+  "addParticipant",
+  "kick",
+  "channel-delete",
+] as const;
+
+function createSlackChannelManagementSchema(): Record<string, TSchema> {
+  return {
+    name: Type.Optional(
+      Type.String({
+        description:
+          'Slack channel name. Required for action="channel-create" and action="channel-edit" (rename). Lowercase, no spaces.',
+      }),
+    ),
+    isPrivate: Type.Optional(
+      Type.Boolean({
+        description:
+          'Slack-only flag for action="channel-create". Set true to create a private channel instead of a public one.',
+      }),
+    ),
+    userId: Type.Optional(
+      Type.String({
+        description:
+          'Slack user id (for example U0G9QF9C6). Required for action="addParticipant" and action="kick".',
+      }),
+    ),
+  };
+}
+
 function createSlackFileActionSchema(): Record<string, TSchema> {
   return {
     fileId: Type.Optional(
@@ -156,6 +187,18 @@ export function describeSlackMessageTool({
     schema.push({
       properties: createSlackMessageIdActionSchema(),
       actions: messageIdActions,
+    });
+  }
+  const channelManagementActions: ChannelMessageActionName[] = [];
+  for (const action of SLACK_CHANNEL_MANAGEMENT_ACTIONS) {
+    if (actions.includes(action)) {
+      channelManagementActions.push(action);
+    }
+  }
+  if (channelManagementActions.length > 0) {
+    schema.push({
+      properties: createSlackChannelManagementSchema(),
+      actions: channelManagementActions,
     });
   }
   return {

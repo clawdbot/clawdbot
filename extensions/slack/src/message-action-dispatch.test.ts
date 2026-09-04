@@ -1344,5 +1344,80 @@ describe("extractSlackToolSend", () => {
       threadId: "999.000",
     });
   });
+
+  it("dispatches channel-delete as archiveChannel without a userId", async () => {
+    const invoke = createInvokeSpy();
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "channel-delete",
+        cfg: {},
+        params: { channelId: "C1" },
+      } as never,
+      invoke: invoke as never,
+    });
+    expect(firstAction(invoke)).toEqual({
+      action: "archiveChannel",
+      accountId: undefined,
+      channelId: "C1",
+    });
+  });
+
+  it("dispatches channel-create with name and isPrivate", async () => {
+    const invoke = createInvokeSpy();
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "channel-create",
+        cfg: {},
+        params: { name: "new-room", isPrivate: true },
+      } as never,
+      invoke: invoke as never,
+    });
+    expect(firstAction(invoke)).toEqual({
+      action: "createChannel",
+      accountId: undefined,
+      name: "new-room",
+      isPrivate: true,
+    });
+  });
+
+  it("dispatches channel-edit with channelId and name", async () => {
+    const invoke = createInvokeSpy();
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "channel-edit",
+        cfg: {},
+        params: { channelId: "C1", name: "renamed" },
+      } as never,
+      invoke: invoke as never,
+    });
+    expect(firstAction(invoke)).toEqual({
+      action: "renameChannel",
+      accountId: undefined,
+      channelId: "C1",
+      name: "renamed",
+    });
+  });
+
+  it("dispatches addParticipant with channelId and userId", async () => {
+    const invoke = createInvokeSpy();
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "addParticipant",
+        cfg: {},
+        params: { channelId: "C1", userId: "U1" },
+      } as never,
+      invoke: invoke as never,
+    });
+    expect(firstAction(invoke)).toEqual({
+      action: "addMember",
+      accountId: undefined,
+      channelId: "C1",
+      userId: "U1",
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

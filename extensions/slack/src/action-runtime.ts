@@ -13,7 +13,10 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeModule,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -53,11 +56,21 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+const channelManagementActions = new Set([
+  "createChannel",
+  "renameChannel",
+  "addMember",
+  "removeMember",
+  "archiveChannel",
+]);
 const SLACK_REACTION_RESULT_LIMIT = 100;
 
 type SlackActionsRuntimeModule = typeof import("./actions.js");
 
 const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.js"));
+const loadSlackChannelManagementRuntime = createLazyRuntimeModule(
+  () => import("./channel-management-actions.js"),
+);
 
 const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
 const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./channel-type.js"));
@@ -72,7 +85,14 @@ function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
   }) as SlackActionsRuntimeModule[K];
 }
 
+const bindSlackChannelManagementAction = createLazyRuntimeMethodBinder(
+  loadSlackChannelManagementRuntime,
+);
+
 export const slackActionRuntime = {
+  addSlackChannelMember: bindSlackChannelManagementAction((m) => m.addSlackChannelMember),
+  archiveSlackChannel: bindSlackChannelManagementAction((m) => m.archiveSlackChannel),
+  createSlackChannel: bindSlackChannelManagementAction((m) => m.createSlackChannel),
   deleteSlackMessage: createLazySlackAction("deleteSlackMessage"),
   downloadSlackFile: createLazySlackAction("downloadSlackFile"),
   editSlackMessage: createLazySlackAction("editSlackMessage"),
@@ -86,7 +106,9 @@ export const slackActionRuntime = {
   reactSlackMessage: createLazySlackAction("reactSlackMessage"),
   readSlackMessages: createLazySlackAction("readSlackMessages"),
   removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
+  removeSlackChannelMember: bindSlackChannelManagementAction((m) => m.removeSlackChannelMember),
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
+  renameSlackChannel: bindSlackChannelManagementAction((m) => m.renameSlackChannel),
   resolveSlackConversationName: createLazySlackAction("resolveSlackConversationName"),
   resolveSlackConversationInfo: async (params: {
     cfg: OpenClawConfig;
@@ -109,6 +131,10 @@ export type SlackActionContext = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAccountId?: string;
   requesterSenderId?: string;
+  /** Trusted owner identity bit from command/channel-action auth. */
+  senderIsOwner?: boolean;
+  /** Server-owned gateway client scopes, used for channel-management authorization. */
+  gatewayClientScopes?: readonly string[];
   currentChannelProvider?: string;
   /** Current channel ID for auto-threading. */
   currentChannelId?: string;
@@ -255,6 +281,22 @@ function assertSlackMemberInfoAllowed(params: {
   ) {
     throw new Error("Delegated Slack member info is limited to the current requester.");
   }
+}
+
+function assertSlackChannelManagementAllowed(params: {
+  account: ResolvedSlackAccount;
+  context?: SlackActionContext;
+}) {
+  // A direct-operator read origin only proves conversation-read visibility; it must
+  // not authorize workspace mutations. Match the Teams sibling boundary by requiring
+  // senderIsOwner or operator.admin for every channel-management write.
+  if (params.context?.senderIsOwner === true) {
+    return;
+  }
+  if (params.context?.gatewayClientScopes?.includes("operator.admin")) {
+    return;
+  }
+  throw new Error("Slack channel management requires an owner or operator.admin requester.");
 }
 
 function resolveSlackChannelReadPolicy(params: {
@@ -1038,6 +1080,52 @@ export async function handleSlackAction(
           : { name, identifier: name },
       );
     return jsonResult({ ok: true, emojis });
+  }
+
+  if (channelManagementActions.has(action)) {
+    if (!isActionEnabled("permissions", false)) {
+      throw new Error("Slack channel management is disabled.");
+    }
+    assertSlackChannelManagementAllowed({ account, context });
+    if (action === "createChannel") {
+      const teamId = resolveTrustedCurrentSlackTeamId({ account, context });
+      assertSlackDetachedTargetAllowed(account.accountId, teamId);
+      const writeOpts = buildActionOpts("write", teamId);
+      const name = readStringParam(params, "name", { required: true });
+      const isPrivate = readBooleanParam(params, "isPrivate") === true;
+      const result = await slackActionRuntime.createSlackChannel(name, {
+        ...writeOpts,
+        isPrivate,
+      });
+      return jsonResult({ ok: true, created: result });
+    }
+    const target = resolveChannelTarget();
+    const writeOpts = buildActionOpts("write", target.teamId);
+    if (action === "renameChannel") {
+      const name = readStringParam(params, "name", { required: true });
+      const result = await slackActionRuntime.renameSlackChannel(target.channelId, name, writeOpts);
+      return jsonResult({ ok: true, renamed: result });
+    }
+    if (action === "addMember") {
+      const userId = readStringParam(params, "userId", { required: true });
+      const result = await slackActionRuntime.addSlackChannelMember(
+        target.channelId,
+        userId,
+        writeOpts,
+      );
+      return jsonResult({ ok: true, added: result });
+    }
+    if (action === "removeMember") {
+      const userId = readStringParam(params, "userId", { required: true });
+      const result = await slackActionRuntime.removeSlackChannelMember(
+        target.channelId,
+        userId,
+        writeOpts,
+      );
+      return jsonResult({ ok: true, removed: result });
+    }
+    const result = await slackActionRuntime.archiveSlackChannel(target.channelId, writeOpts);
+    return jsonResult({ ok: true, archived: result });
   }
 
   throw new Error(`Unknown action: ${action}`);
