@@ -98,6 +98,7 @@ type TestDispatchSequenceEntry =
 let mockedDispatchSequence: TestDispatchSequenceEntry[] = [];
 let mockedQueuedDispatchCounts: TestDispatchCounts = { tool: 0, block: 0, final: 0 };
 let mockedAgentRunTerminalOutcome: "completed" | "failed" | undefined;
+let mockedSourceReplyDelivered = false;
 let mockedDispatchError: Error | undefined;
 
 let mockedProgressEvents: string[] = [];
@@ -1129,6 +1130,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         dispatchResult: {
           queuedFinal: false,
           counts: { ...mockedQueuedDispatchCounts },
+          observedReplyDelivery: mockedSourceReplyDelivered,
         },
       };
     },
@@ -1183,6 +1185,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedQueuedDispatchCounts = { tool: 0, block: 0, final: 0 };
     mockedAgentRunTerminalOutcome = undefined;
+    mockedSourceReplyDelivered = false;
     mockedDispatchError = undefined;
     mockedProgressEvents = [];
     mockedEmptyProgressToolName = undefined;
@@ -4588,6 +4591,36 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       draftStream.clear.mock.invocationCallOrder[0]!,
     );
   });
+
+  it.each([false, true])(
+    "clears compact progress after a tool-delivered reply only when the turn succeeds (failed=%s)",
+    async (failed) => {
+      const draftStream = createDraftStreamStub();
+      createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      mockedSlackStreamingMode = "progress";
+      mockedDispatchSequence = [];
+      mockedSourceReplyDelivered = true;
+      mockedAgentRunTerminalOutcome = failed ? "failed" : "completed";
+      mockedReplyOptionEvents = [{ kind: "partial", text: "Preparing the video attachment." }];
+
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: {
+            streaming: { mode: "progress", progress: { style: "compact", commentary: true } },
+          },
+        }),
+      );
+
+      expect(deliverRepliesMock).not.toHaveBeenCalled();
+      expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+      expect(draftStream.clear).toHaveBeenCalledTimes(failed ? 0 : 1);
+      if (!failed) {
+        expect(draftStream.discardPending.mock.invocationCallOrder[0]).toBeLessThan(
+          draftStream.clear.mock.invocationCallOrder[0]!,
+        );
+      }
+    },
+  );
 
   it("preserves a compact preview when final delivery fails", async () => {
     const draftStream = createDraftStreamStub();
