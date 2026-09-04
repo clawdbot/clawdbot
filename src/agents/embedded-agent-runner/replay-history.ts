@@ -27,7 +27,7 @@ import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcrip
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
@@ -891,9 +891,10 @@ export async function sanitizeSessionHistory(params: {
         normalizeOpenAIResponsesToolCallIds(
           // Keep the pre-switch prompt prefix byte-stable: once rs_*/msg_* ids are
           // invalidated by a switch, every later replay must keep dropping them.
-          downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
-            dropReplayableReasoningBefore: latestModelSwitchTimestamp ?? undefined,
-          }),
+          dropStaleOpenAIReasoning(
+            openAIRepairedToolCalls,
+            latestModelSwitchTimestamp ?? undefined,
+          ),
         ),
       )
     : sanitizedToolCalls;

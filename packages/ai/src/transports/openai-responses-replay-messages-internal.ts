@@ -524,6 +524,19 @@ function convertResponsesMessagesWithStyle(
           previousReplayItemWasReasoning = false;
         }
       }
+      // Completed encrypted reasoning is self-contained, including steered async
+      // fragments. After route checks strip ciphertext, bare ids still need a following item.
+      while (true) {
+        const last = output.at(-1);
+        if (
+          last?.type !== "reasoning" ||
+          !last.id?.startsWith("rs_") ||
+          (typeof last.encrypted_content === "string" && last.encrypted_content.length > 0)
+        ) {
+          break;
+        }
+        output.pop();
+      }
       appendAssistant(messages, output, msg);
       if (output.length === 0 && providerStyle) {
         continue;
