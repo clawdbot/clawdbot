@@ -421,7 +421,6 @@ export function beginAgentDeletionJournal(
         cleanupCompleted: false,
         deleteFiles: normalized.deleteFiles,
       };
-      deleteAgentProvenanceForAgent(database.db, normalized.agentId);
       return;
     }
     const createdAt = Date.now();
@@ -441,7 +440,6 @@ export function beginAgentDeletionJournal(
       }),
     );
     persisted = { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false };
-    deleteAgentProvenanceForAgent(database.db, normalized.agentId);
   }, options);
   if (!persisted) {
     throw new Error(`Failed to record deletion journal for agent ${normalized.agentId}.`);
@@ -528,7 +526,13 @@ export function completeAgentDeletionJournalInDatabase(
       .where("agent_id", "=", id)
       .where("operation_id", "=", operationId),
   );
-  return Number(result.numAffectedRows ?? 0) > 0;
+  const completed = Number(result.numAffectedRows ?? 0) > 0;
+  // The journal already fences authority. Keep creation history through refusals and
+  // partial cleanup, and remove it only when this exact deletion owner completes.
+  if (completed) {
+    deleteAgentProvenanceForAgent(database.db, id);
+  }
+  return completed;
 }
 
 export function removeAgentDeletionJournal(

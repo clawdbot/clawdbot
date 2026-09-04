@@ -47,7 +47,7 @@ const mocks = vi.hoisted(() => ({
   resolveOpenClawAgentSqlitePath: vi.fn(
     (params?: { path?: string }) => params?.path ?? "/agents/test-agent/openclaw-agent.sqlite",
   ),
-  closeOpenClawAgentDatabaseByPath: vi.fn((_pathname?: string) => true),
+  closeOpenClawAgentDatabaseByPath: vi.fn((_pathname?: string, _expectedAgentId?: string) => true),
   listOpenClawRegisteredAgentDatabases: vi.fn(() => [] as Array<Record<string, unknown>>),
   unregisterOpenClawAgentDatabase: vi.fn(),
   assertNoOpenClawAgentDatabaseLeases: vi.fn(),
@@ -1428,6 +1428,7 @@ describe("agents.delete", () => {
     );
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/agents/test-agent/openclaw-agent.sqlite",
+      "test-agent",
     );
     expect(mocks.unregisterOpenClawAgentDatabase).toHaveBeenCalledWith({
       agentId: "test-agent",
@@ -1573,6 +1574,7 @@ describe("agents.delete", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/journal/agent/openclaw-agent.sqlite",
+      "test-agent",
     );
     expect(mocks.unregisterResolvedAgentDir).toHaveBeenCalledWith({
       agentId: "test-agent",
@@ -2344,6 +2346,7 @@ describe("agents.delete", () => {
     });
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/journal/agent/openclaw-agent.sqlite",
+      "test-agent",
     );
     expect(mocks.movePathToTrash).toHaveBeenCalledWith("/journal/agent");
     expect(directoryOwners.has("/journal/agent")).toBe(false);
@@ -2400,8 +2403,11 @@ describe("agents.delete", () => {
 
     expectRespondOk(respond, { ok: true });
     expect(mocks.listOpenClawRegisteredAgentDatabases).toHaveBeenCalled();
-    expect(mocks.closeOpenClawAgentDatabaseByPath).not.toHaveBeenCalled();
-    expect(mocks.assertNoOpenClawAgentDatabaseLeases).toHaveBeenCalledWith("test-agent");
+    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
+      "/journal/agent/openclaw-agent.sqlite",
+      "test-agent",
+    );
+    expect(mocks.assertNoOpenClawAgentDatabaseLeases).toHaveBeenCalledWith("test-agent", {});
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/journal/agent");
     expect(mocks.unregisterOpenClawAgentDatabase).toHaveBeenCalledWith({
       agentId: "test-agent",
@@ -2480,9 +2486,10 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondOk(respond, { ok: true });
-    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledTimes(1);
+    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledTimes(2);
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/relocated/deleted.sqlite",
+      "test-agent",
     );
     expect(mocks.unregisterOpenClawAgentDatabase).toHaveBeenCalledWith({
       agentId: "test-agent",
@@ -2512,7 +2519,10 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondOk(respond, { ok: true, removed: [], failed: [] });
-    expect(mocks.closeOpenClawAgentDatabaseByPath).not.toHaveBeenCalled();
+    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
+      "/journal/agent/openclaw-agent.sqlite",
+      "test-agent",
+    );
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
@@ -2543,12 +2553,14 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondOk(respond, { ok: true });
-    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledTimes(1);
+    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledTimes(2);
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/agents/test-agent/openclaw-agent.sqlite",
+      "test-agent",
     );
-    expect(mocks.closeOpenClawAgentDatabaseByPath).not.toHaveBeenCalledWith(
+    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/linked/shared/agent.sqlite",
+      "test-agent",
     );
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/linked/shared/agent.sqlite");
     expect(databaseRows).toEqual([{ agentId: "other-agent", path: "/real/shared/agent.sqlite" }]);
@@ -2566,13 +2578,14 @@ describe("agents.delete", () => {
     expectRespondOk(respond, { ok: true });
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/agents/test-agent/openclaw-agent.sqlite",
+      "test-agent",
     );
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/agents/test-agent");
     expect(mocks.movePathToTrash).toHaveBeenCalledWith("/agents/test-agent/openclaw-agent.sqlite");
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
   });
 
-  it("does not close a database whose companion file is registered to another agent", async () => {
+  it("retains database files whose companion file is registered to another agent", async () => {
     mocks.listOpenClawRegisteredAgentDatabases.mockReturnValue([
       { agentId: "test-agent", path: "/shared/deleted.sqlite" },
       { agentId: "other-agent", path: "/shared/deleted.sqlite-wal" },
@@ -2582,8 +2595,9 @@ describe("agents.delete", () => {
     await promise;
 
     expectRespondOk(respond, { ok: true });
-    expect(mocks.closeOpenClawAgentDatabaseByPath).not.toHaveBeenCalledWith(
+    expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/shared/deleted.sqlite",
+      "test-agent",
     );
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/shared/deleted.sqlite-wal");
     expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
@@ -2628,6 +2642,7 @@ describe("agents.delete", () => {
     expect(mocks.movePathToTrash).not.toHaveBeenCalledWith("/journal/agent");
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/journal/agent/openclaw-agent.sqlite",
+      "test-agent",
     );
     expect(mocks.unregisterOpenClawAgentDatabase).toHaveBeenCalledWith({
       agentId: "test-agent",
@@ -2779,12 +2794,15 @@ describe("agents.delete", () => {
 
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/agents/test-agent/openclaw-agent.sqlite",
+      "test-agent",
     );
     expect(mocks.closeOpenClawAgentDatabaseByPath).toHaveBeenCalledWith(
       "/relocated/test-agent.sqlite",
+      "test-agent",
     );
     expect(mocks.closeOpenClawAgentDatabaseByPath).not.toHaveBeenCalledWith(
       "/relocated/other-agent.sqlite",
+      "test-agent",
     );
     expect(mocks.movePathToTrash).toHaveBeenCalledWith("/relocated/test-agent.sqlite");
     expect(mocks.unregisterOpenClawAgentDatabase).toHaveBeenCalledWith({

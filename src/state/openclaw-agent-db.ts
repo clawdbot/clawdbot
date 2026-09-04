@@ -633,12 +633,15 @@ export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; pa
 }
 
 /** Close one cached agent database identified by its exact resolved pathname. */
-export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
+export function closeOpenClawAgentDatabaseByPath(
+  pathname: string,
+  expectedAgentId?: string,
+): boolean {
   // Cache keys are lexical resolved paths. Do not realpath aliases here: a
   // symlink swap must never redirect cleanup onto a different cached database.
   const resolvedPath = path.resolve(pathname);
   const database = cache.databases.get(resolvedPath);
-  if (!database) {
+  if (!database || (expectedAgentId !== undefined && database.agentId !== expectedAgentId)) {
     return false;
   }
   const incognito = cache.incognito.has(database);
