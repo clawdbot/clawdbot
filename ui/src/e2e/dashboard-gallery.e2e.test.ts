@@ -27,13 +27,28 @@ const dashboardRows = [
   createdActor: { type: "human", id: String(actorId), label: String(actorLabel) },
 }));
 
-const boardSnapshot = {
-  sessionKey: selectedSessionKey,
+const previewMarkup = encodeURIComponent(
+  `<!doctype html><html><body style="margin:0;background:#111827;color:#f8fafc;font:16px sans-serif"><main style="padding:24px"><h1>Live Gateway Pulse</h1><strong>All systems nominal</strong></main></body></html>`,
+);
+const boardSnapshots = dashboardRows.map((row) => ({
+  sessionKey: row.key,
   revision: 1,
   tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-  widgets: [],
-};
-
+  widgets: [
+    {
+      name: "gateway-pulse",
+      tabId: "main",
+      title: "Live Gateway Pulse",
+      contentKind: "html",
+      sizeW: 12,
+      sizeH: 6,
+      position: 0,
+      grantState: "granted",
+      revision: 1,
+      frameUrl: `data:text/html,${previewMarkup}`,
+    },
+  ],
+}));
 suite.define(() => {
   it("opens a responsive gallery card in its owning chat with the dashboard expanded", async () => {
     const proofDir = process.env.OPENCLAW_UI_E2E_RECORD === "1" ? suite.artifactDir : null;
@@ -43,11 +58,22 @@ suite.define(() => {
     });
     const page = await context.newPage();
     try {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         sessionKey: selectedSessionKey,
         featureMethods: ["board.get", "chat.metadata", "chat.startup", "sessions.resolve"],
         methodResponses: {
-          "board.get": boardSnapshot,
+          "sessions.describe": {
+            cases: dashboardRows.map((row) => ({
+              match: { key: row.key },
+              response: { session: row },
+            })),
+          },
+          "board.get": {
+            cases: boardSnapshots.map((snapshot) => ({
+              match: { sessionKey: snapshot.sessionKey },
+              response: snapshot,
+            })),
+          },
           "sessions.resolve": {
             ok: true,
             key: selectedSessionKey,
@@ -80,6 +106,10 @@ suite.define(() => {
       await releaseCard.waitFor();
       expect(await gallery.locator("[data-dashboard-session]").count()).toBe(6);
       expect(await gallery.getByText("By Mira", { exact: true }).count()).toBe(3);
+      await releaseCard.locator('iframe[title="Live Gateway Pulse"]').waitFor();
+      await expect
+        .poll(() => gateway.getRequests("board.get"))
+        .toSatisfy((requests) => requests.length >= dashboardRows.length);
       expect(await releaseCard.locator("a").getAttribute("href")).toBe(
         "/chat/main/release-health-12345678?dashboard=expanded",
       );

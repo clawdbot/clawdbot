@@ -84,7 +84,10 @@ describe("DashboardsPage", () => {
     const selectionState = { selectedId: "main", scopeId: null as string | null };
     const context = {
       basePath: "",
-      gateway: { snapshot: { client: {}, phase: "connected", hello: null } },
+      gateway: {
+        snapshot: { client: {}, phase: "connected", hello: null },
+        subscribe: () => () => undefined,
+      },
       sessions: {
         listSnapshot(query: SessionListOptions) {
           return snapshots.get(queryKey(query))!;
@@ -194,7 +197,10 @@ describe("DashboardsPage", () => {
     const list = vi.fn(async () => second);
     const context = {
       basePath: "",
-      gateway: { snapshot: { client: {}, phase: "connected", hello: null } },
+      gateway: {
+        snapshot: { client: {}, phase: "connected", hello: null },
+        subscribe: () => () => undefined,
+      },
       sessions: {
         list,
         listSnapshot: () => snapshot,
