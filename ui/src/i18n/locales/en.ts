@@ -9,6 +9,8 @@ export const en: TranslationMap & {
   debug: TranslationMap & { overlay: TranslationMap };
   // Lazy en-devices.ts assigns into this namespace.
   devices: TranslationMap;
+  desktop: TranslationMap &
+    Record<"title" | "openWindow" | "unavailable" | "toggle" | "reconnect", string>;
   updates: TranslationMap;
 } = {
   capacityMeter: {
@@ -152,6 +154,7 @@ export const en: TranslationMap & {
       terminalPanel: "Toggle terminal panel",
       homePanel: "Talk to your Home agent",
       workspaceFiles: "Toggle workspace files",
+      sideChat: "Toggle side chat",
       approveOnce: "Approve once",
       approveAlways: "Always allow",
       denyApproval: "Deny approval",
@@ -2238,49 +2241,7 @@ export const en: TranslationMap & {
     openWindow: "Open desktop in new window",
     unavailable: "Desktop viewing is unavailable for this connection.",
     toggle: "Toggle desktop panel",
-    hide: "Hide desktop panel",
-    resize: "Resize desktop panel",
-    dockBottom: "Dock to bottom",
-    dockRight: "Dock to right",
-    enterFullscreen: "Enter fullscreen",
-    exitFullscreen: "Exit fullscreen",
-    fullscreenUnavailable: "Fullscreen is unavailable in this browser",
-    pickerTitle: "Desktop sources",
-    thisMachine: "This machine",
-    refresh: "Refresh",
-    refreshing: "Refreshing…",
-    loading: "Loading desktop sources…",
-    empty: "No desktop-capable sources are available.",
-    sourceUnavailable: "The requested desktop source is unavailable. Choose another source.",
-    connect: "Connect",
-    connecting: "Connecting to desktop…",
-    takeControl: "Take control",
-    switchToViewOnly: "Switch to view only",
-    viewOnly: "View only",
-    control: "Control",
-    keyboard: "Keyboard",
-    keyboardInput: "Remote desktop keyboard input",
-    touchControls: "Remote desktop controls",
-    fit: "Fit",
-    fitScreen: "Fit screen",
-    actualSize: "Use actual size",
-    back: "Back",
-    disconnect: "Disconnect",
     reconnect: "Reconnect",
-    passwordPrompt: "Enter the VNC password for this machine.",
-    passwordLabel: "VNC password",
-    accountPrompt: "Enter a macOS account to authenticate Screen Sharing.",
-    usernameLabel: "macOS username",
-    accountPasswordLabel: "macOS password",
-    controlTaken: "Another operator took control",
-    disconnected: "Desktop disconnected: {reason}",
-    closeCode: "connection closed with code {code}",
-    unknownReason: "unknown reason",
-    errors: {
-      listFailed: "Could not load desktop sources: {error}",
-      fullscreenFailed: "Could not change fullscreen mode: {error}",
-      securityFailed: "Desktop security negotiation failed: {reason}",
-    },
   },
   routeTitles: {
     modelProviders: "Models",
@@ -5120,7 +5081,7 @@ export const en: TranslationMap & {
       outboxPayloadCapacity:
         "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
       outboxPayloadUnavailable:
-        "Browser attachment storage is unavailable. Use HTTPS or localhost, allow browser storage, and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
+        "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
       outboxPayloadMissing:
         "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",

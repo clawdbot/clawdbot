@@ -572,6 +572,15 @@ or headless node host). This uses `skills.bins` over the Gateway RPC to
 fetch the skill bin list. Disable this if you want strict manual
 allowlists.
 
+Skill trust belongs to the Gateway that supplied it. Switching Gateways retires
+the previous cache, including the Mac app's trusted-binary list and an approval
+check that is still in progress. A failed refresh can keep the last known trust
+from the same Gateway; it cannot import another Gateway's trust.
+
+The Mac's Exec Approvals pane refreshes its trusted binaries and agent choices
+when the selected Gateway connects. Local policy, the selected scope, and
+unfinished allowlist edits stay on the Mac.
+
 <Warning>
 - This is an **implicit convenience allowlist**, separate from manual path allowlist entries.
 - It is intended for trusted operator environments where Gateway and node are in the same trust boundary.

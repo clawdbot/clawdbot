@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Locator, Page } from "playwright";
@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
+  waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProofEnabled,
@@ -13,6 +14,8 @@ import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
+  requireRecord,
+  requireString,
 } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
@@ -42,6 +45,172 @@ async function expectInsideProgressBody(item: Locator): Promise<void> {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("collapses each enabled run, expands its final, and preserves manual disclosure", async () => {
+    const sessionKey = "agent:main:progress-final-expand";
+    const proofDir = captureUiProofEnabled
+      ? path.join(suite.artifactDir, "session-progress-live-placement")
+      : null;
+    if (proofDir) {
+      await mkdir(proofDir, { recursive: true });
+    }
+    const context = await suite.newBrowserContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(proofDir ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } } : {}),
+    });
+    const page = await context.newPage();
+    const video = page.video();
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.send",
+        "chat.startup",
+        "config.get",
+        "progressCard.get",
+      ],
+      methodResponses: {
+        "progressCard.get": { card: null },
+        "sessions.list": chatSessionListResponse([
+          {
+            key: sessionKey,
+            kind: "direct",
+            label: "Progress final expansion",
+            updatedAt: 1,
+          },
+        ]),
+      },
+      sessionKey,
+    });
+    const card = page.locator('[data-progress-card-placement="composer"]');
+    const captureLifecycleState = async (fileName: string) => {
+      if (captureUiProofEnabled) {
+        await page.waitForTimeout(250);
+      }
+      await captureProof(page, fileName);
+      if (captureUiProofEnabled) {
+        await page.waitForTimeout(500);
+      }
+    };
+    const setProgressCard = async (
+      revision: number,
+      markdown: string,
+      steps: Array<{ status: "completed" | "in_progress" | "pending"; step: string }>,
+    ) => {
+      await gateway.setMethodResponse("progressCard.get", {
+        card: { markdown, revision, sessionKey, steps, updatedAt: Date.now() },
+      });
+      await gateway.emitGatewayEvent("progressCard.changed", { revision, sessionKey });
+      await expect.poll(() => card.textContent()).toContain(markdown);
+    };
+    const send = async (message: string) => {
+      const requestCount = (await gateway.getRequests("chat.send")).length;
+      await page.locator(".agent-chat__composer-combobox textarea").fill(message);
+      await page.getByRole("button", { name: "Send message" }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.send")).length)
+        .toBe(requestCount + 1);
+      const requests = await gateway.getRequests("chat.send");
+      return requireString(
+        requireRecord(requests[requestCount]!.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+    };
+
+    try {
+      await page.goto(
+        `${suite.server.baseUrl}settings/appearance?section=__appearance__#settings-appearance-chat`,
+      );
+      await waitForControlUiSettingsTakeover(page);
+      const settingRow = page
+        .locator(".settings-row")
+        .filter({
+          has: page.locator(".settings-row__title", {
+            hasText: "Collapse task progress by default",
+          }),
+        })
+        .first();
+      const settingSwitch = settingRow.locator("wa-switch");
+      await expect
+        .poll(() =>
+          settingSwitch.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
+        )
+        .toBe(false);
+      await settingRow.click();
+      await expect
+        .poll(() =>
+          settingSwitch.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
+        )
+        .toBe(true);
+      await captureLifecycleState("01-setting-enabled.png");
+
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const runOneId = await send("Run the first progress cycle");
+      await setProgressCard(1, "Run one started", [
+        { status: "in_progress", step: "Inspect first run" },
+        { status: "pending", step: "Verify first run" },
+      ]);
+      await expect.poll(() => card.getAttribute("open")).toBeNull();
+      await captureLifecycleState("02-run-one-collapsed.png");
+
+      await card.locator("summary").click();
+      await expect.poll(() => card.getAttribute("open")).toBe("");
+      await setProgressCard(2, "Run one revised", [
+        { status: "completed", step: "Inspect first run" },
+        { status: "in_progress", step: "Verify first run" },
+      ]);
+      await expect.poll(() => card.getAttribute("open")).toBe("");
+      await captureLifecycleState("03-run-one-manual-open-survives-update.png");
+
+      await card.locator("summary").click();
+      await expect.poll(() => card.getAttribute("open")).toBeNull();
+      await captureLifecycleState("04-run-one-manual-close-before-final.png");
+
+      await gateway.emitChatFinal({
+        runId: runOneId,
+        sessionKey,
+        text: "The first progress cycle is complete.",
+      });
+      await page
+        .locator(".chat-bubble p", { hasText: "The first progress cycle is complete." })
+        .waitFor();
+      await expect.poll(() => card.getAttribute("open")).toBe("");
+      await captureLifecycleState("05-run-one-final-auto-expanded.png");
+
+      await card.locator("summary").click();
+      await expect.poll(() => card.getAttribute("open")).toBeNull();
+      await setProgressCard(3, "Run one final card revision", [
+        { status: "completed", step: "Inspect first run" },
+        { status: "completed", step: "Verify first run" },
+      ]);
+      await expect.poll(() => card.getAttribute("open")).toBeNull();
+      await captureLifecycleState("06-run-one-manual-close-survives-rerender.png");
+
+      await card.locator("summary").click();
+      await expect.poll(() => card.getAttribute("open")).toBe("");
+      await captureLifecycleState("07-run-one-manual-reopen-before-next-run.png");
+
+      await send("Run the second progress cycle");
+      await expect.poll(() => card.getAttribute("open")).toBeNull();
+      await captureLifecycleState("08-run-two-active-collapsed.png");
+      await setProgressCard(4, "Run two started", [
+        { status: "in_progress", step: "Inspect second run" },
+        { status: "pending", step: "Verify second run" },
+      ]);
+      await expect.poll(() => card.getAttribute("open")).toBeNull();
+      await captureLifecycleState("09-run-two-progress-collapsed.png");
+    } finally {
+      await page.close();
+      if (proofDir && video) {
+        const recordingPath = await video.path();
+        await video.saveAs(path.join(proofDir, "task-progress-final-expand-cycle.webm"));
+        await unlink(recordingPath);
+      }
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps one live card placement and a compact transcript receipt", async () => {
     const sessionKey = "agent:main:progress-placement";
     const updatedAt = Date.now() - 5 * 60_000;

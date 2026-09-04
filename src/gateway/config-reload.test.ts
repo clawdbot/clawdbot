@@ -426,6 +426,7 @@ describe("buildGatewayReloadPlan", () => {
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
     "gateway.auth.mode",
+    "discovery.wideArea.domain",
     "secrets.egressProxy.enabled",
     "secrets.egressProxy.allowedHosts",
     "secrets.egressProxy.bypassHosts",
@@ -438,6 +439,11 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it.each([
+    "gateway.auth.rateLimit.maxAttempts",
+    "gateway.auth.rateLimit.windowMs",
+    "gateway.auth.rateLimit.lockoutMs",
+    "gateway.auth.rateLimit.exemptLoopback",
+    "discovery.mdns.mode",
     "gateway.http.securityHeaders.strictTransportSecurity",
     "gateway.nodes.pairing.autoApproveLocal",
     "gateway.nodes.pairing.autoApproveCidrs",
@@ -497,7 +503,9 @@ describe("buildGatewayReloadPlan", () => {
           controlUi: { environment: { label: "Test", color: "teal" }, sessionObserver: false },
           nodes: { browser: { mode: "off" }, pairing: { autoApproveLocal: false } },
           terminal: { enabled: false, shell: "/bin/sh" },
+          auth: { rateLimit: { maxAttempts: 5 } },
         },
+        discovery: { mdns: { mode: "off" } },
       },
       restartReasons: [],
     },

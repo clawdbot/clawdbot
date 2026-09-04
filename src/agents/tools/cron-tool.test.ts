@@ -8,14 +8,6 @@ const { callGatewayMock, extractDeliveryInfoMock } = vi.hoisted(() => ({
   extractDeliveryInfoMock: vi.fn(),
 }));
 
-vi.mock("../agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
-  return {
-    ...actual,
-    resolveSessionAgentId: actual.resolveSessionAgentId,
-  };
-});
-
 vi.mock("../../config/sessions/delivery-info.js", () => ({
   extractDeliveryInfo: extractDeliveryInfoMock,
 }));
@@ -26,8 +18,8 @@ import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
-  type CronCreatorAuthorityGrant,
 } from "../../gateway/cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
@@ -245,25 +237,6 @@ describe("cron tool", () => {
     return payload?.sessionKey;
   }
 
-  async function executeAddAndReadAgentId(params: {
-    callId: string;
-    agentSessionKey: string;
-    agentId?: unknown;
-    includeAgentId?: boolean;
-  }): Promise<unknown> {
-    const tool = createTestCronTool({ agentSessionKey: params.agentSessionKey });
-    await tool.execute(params.callId, {
-      action: "add",
-      job: {
-        name: "reminder",
-        schedule: { at: new Date(123).toISOString() },
-        payload: { kind: "agentTurn", message: "hello" },
-        ...(params.includeAgentId ? { agentId: params.agentId } : {}),
-      },
-    });
-    return readGatewayCall().params?.agentId;
-  }
-
   async function executeAddWithContextMessages(callId: string, contextMessages: number) {
     const tool = createTestCronTool({ agentSessionKey: "main" });
     await tool.execute(callId, {
@@ -457,7 +430,6 @@ describe("cron tool", () => {
     expect(params).toEqual({
       includeDisabled: true,
       compact: true,
-      agentId: "agent-123",
       limit: 200,
       offset: 0,
     });
@@ -517,7 +489,6 @@ describe("cron tool", () => {
       params: {
         includeDisabled: true,
         compact: true,
-        agentId: "agent-123",
         limit: 200,
         offset: 0,
       },
@@ -527,7 +498,6 @@ describe("cron tool", () => {
       params: {
         includeDisabled: true,
         compact: true,
-        agentId: "agent-123",
         limit: 200,
         offset: 200,
       },
@@ -651,7 +621,6 @@ describe("cron tool", () => {
     expect(readGatewayCall().params).toEqual({
       includeDisabled: false,
       compact: true,
-      agentId: "agent-123",
       limit: 200,
       offset: 0,
     });
@@ -677,7 +646,12 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("filters cron list by the requester agent session", async () => {
+  it("forwards caller identity for Gateway-scoped listing without imposing an agent filter", async () => {
+    let identity: ReturnType<typeof getGatewayToolCallerIdentity>;
+    callGatewayMock.mockImplementation(async () => {
+      identity = getGatewayToolCallerIdentity();
+      return { jobs: [] };
+    });
     const tool = createTestCronTool({
       agentSessionKey: "agent:agent-123:telegram:direct:channing",
     });
@@ -690,24 +664,11 @@ describe("cron tool", () => {
     expect(params).toEqual({
       includeDisabled: false,
       compact: true,
+    });
+    expect(identity).toMatchObject({
       agentId: "agent-123",
+      sessionKey: "agent:agent-123:telegram:direct:channing",
     });
-  });
-
-  it("rejects explicit cron list agent id outside the requester session", async () => {
-    const tool = createTestCronTool({
-      agentSessionKey: "agent:agent-123:telegram:direct:channing",
-    });
-
-    await expect(
-      tool.execute("call-list-explicit", {
-        action: "list",
-        agentId: "ops",
-        includeDisabled: true,
-      }),
-    ).rejects.toThrow("cron list agentId must match the calling agent");
-
-    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("preserves explicit agentId for sessionless cron list callers", async () => {
@@ -768,7 +729,6 @@ describe("cron tool", () => {
       params: {
         includeDisabled: false,
         compact: true,
-        agentId: "agent-123",
         limit: 200,
         offset: 0,
       },
@@ -778,13 +738,20 @@ describe("cron tool", () => {
       params: {
         includeDisabled: false,
         compact: true,
-        agentId: "agent-123",
         limit: 200,
         offset: 200,
       },
     });
-    expect(firstResult.details).toEqual(firstPage);
-    expect(secondResult.details).toEqual(secondPage);
+    for (const [result, page] of [
+      [firstResult, firstPage],
+      [secondResult, secondPage],
+    ] as const) {
+      expect(result.details).toEqual({
+        ...page,
+        scope: "caller",
+        scopeHint: expect.stringContaining("fresh authenticated Control UI administrator turn"),
+      });
+    }
   });
 
   it.each([
@@ -828,14 +795,12 @@ describe("cron tool", () => {
       params: {
         includeDisabled: false,
         compact: true,
-        agentId: "agent-123",
       },
     });
     expect(readGatewayCall(1)).toEqual({
       method: "cron.list",
       params: {
         includeDisabled: false,
-        agentId: "agent-123",
       },
     });
   });
@@ -861,48 +826,20 @@ describe("cron tool", () => {
       });
     });
 
-    it("rejects an explicit cross-agent sessionKey", async () => {
-      const tool = createTestCronTool({
-        agentSessionKey: "agent:agent-123:telegram:direct:channing",
-      });
-      await expect(
-        tool.execute("call-wake-cross-agent", {
-          action: "wake",
-          text: "follow up",
-          sessionKey: "agent:agent-456:discord:thread-xyz",
-        }),
-      ).rejects.toThrow("automations sessionKey must match the calling agent");
-      expect(callGatewayMock).not.toHaveBeenCalled();
-    });
-
-    it("rejects an explicit cross-agent agentId", async () => {
-      const tool = createTestCronTool({
-        agentSessionKey: "agent:agent-123:telegram:direct:channing",
-      });
-      await expect(
-        tool.execute("call-wake-cross-agent-id", {
-          action: "wake",
-          text: "follow up",
-          agentId: "agent-456",
-        }),
-      ).rejects.toThrow("wake agentId must match the calling agent");
-      expect(callGatewayMock).not.toHaveBeenCalled();
-    });
-
-    it("rejects a contradictory explicit agentId + agent-prefixed sessionKey pair", async () => {
-      // The gateway target resolver treats agentId as authoritative, so a
-      // contradictory pair would silently canonicalize the wake onto a session
-      // the caller never named. The tool rejects instead of guessing.
+    it("preserves a contradictory explicit target for Gateway-owned validation", async () => {
       const tool = createTestCronTool();
-      await expect(
-        tool.execute("call-wake-explicit-pair", {
-          action: "wake",
-          text: "manual",
-          sessionKey: "agent:agent-456:discord:thread-xyz",
-          agentId: "ops",
-        }),
-      ).rejects.toThrow(/contradicts/);
-      expect(callGatewayMock).not.toHaveBeenCalled();
+      await tool.execute("call-wake-explicit-pair", {
+        action: "wake",
+        text: "manual",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "ops",
+      });
+      expect(expectSingleGatewayCallMethod("wake")).toEqual({
+        mode: "next-heartbeat",
+        text: "manual",
+        sessionKey: "agent:agent-456:discord:thread-xyz",
+        agentId: "ops",
+      });
     });
 
     it("accepts a different session owned by the calling agent", async () => {
@@ -924,7 +861,7 @@ describe("cron tool", () => {
       });
     });
 
-    it("binds an unparseable explicit sessionKey to the calling agent", async () => {
+    it("forwards an unparseable explicit sessionKey for Gateway-owned caller binding", async () => {
       const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
       });
@@ -938,7 +875,6 @@ describe("cron tool", () => {
         mode: "next-heartbeat",
         text: "x",
         sessionKey: "subagent:weird:format",
-        agentId: "agent-123",
       });
     });
 
@@ -1269,23 +1205,6 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("rejects null agentId on add from the scoped agent cron tool", async () => {
-    const tool = createTestCronTool({ agentSessionKey: "main" });
-    await expect(
-      tool.execute("call-null", {
-        action: "add",
-        job: {
-          name: "wake-up",
-          schedule: { at: new Date(123).toISOString() },
-          payload: { kind: "systemEvent", text: "hello" },
-          agentId: null,
-        },
-      }),
-    ).rejects.toThrow("automation agentId must match the calling agent");
-
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
   it("preserves explicit agentId for sessionless cron add callers", async () => {
     const tool = createTestCronTool();
 
@@ -1308,74 +1227,35 @@ describe("cron tool", () => {
     expect(params).not.toHaveProperty("callerScope");
   });
 
-  it("infers session agentId when job.agentId is omitted", async () => {
-    await expect(
-      executeAddAndReadAgentId({
-        callId: "call-omitted-agent-id",
+  it.each([
+    ["omitted", {}],
+    ["undefined", { agentId: undefined }],
+    ["explicit", { agentId: "agent-123" }],
+    ["null", { agentId: null }],
+  ])(
+    "forwards %s add ownership separately from authenticated caller identity",
+    async (_name, fields) => {
+      let identity: ReturnType<typeof getGatewayToolCallerIdentity>;
+      callGatewayMock.mockImplementation(async () => {
+        identity = getGatewayToolCallerIdentity();
+        return { ok: true };
+      });
+      const tool = createTestCronTool({
         agentSessionKey: "agent:agent-123:telegram:direct:channing",
-      }),
-    ).resolves.toBe("agent-123");
-  });
-
-  it("infers session agentId when job.agentId is undefined", async () => {
-    await expect(
-      executeAddAndReadAgentId({
-        callId: "call-undefined-agent-id",
-        agentSessionKey: "agent:agent-123:telegram:direct:channing",
-        includeAgentId: true,
-        agentId: undefined,
-      }),
-    ).resolves.toBe("agent-123");
-  });
-
-  it("accepts matching explicit agentId on add", async () => {
-    await expect(
-      executeAddAndReadAgentId({
-        callId: "call-matching-agent-id",
-        agentSessionKey: "agent:agent-123:telegram:direct:channing",
-        includeAgentId: true,
+      });
+      await tool.execute("call-add-ownership", {
+        action: "add",
+        job: { ...buildReminderAgentTurnJob(), ...fields },
+      });
+      expect(expectSingleGatewayCallMethod("cron.add")?.agentId).toBe(
+        "agentId" in fields ? fields.agentId : undefined,
+      );
+      expect(identity).toMatchObject({
         agentId: "agent-123",
-      }),
-    ).resolves.toBe("agent-123");
-  });
-
-  it("rejects foreign explicit agentId on add", async () => {
-    const tool = createTestCronTool({
-      agentSessionKey: "agent:agent-123:telegram:direct:channing",
-    });
-
-    await expect(
-      tool.execute("call-foreign-agent-id", {
-        action: "add",
-        job: {
-          name: "foreign",
-          schedule: { at: new Date(123).toISOString() },
-          payload: { kind: "agentTurn", message: "hello" },
-          agentId: "worker",
-        },
-      }),
-    ).rejects.toThrow("automation agentId must match the calling agent");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects foreign agent-prefixed session refs on add", async () => {
-    const tool = createTestCronTool({
-      agentSessionKey: "agent:agent-123:telegram:direct:channing",
-    });
-
-    await expect(
-      tool.execute("call-foreign-session-ref", {
-        action: "add",
-        job: {
-          name: "foreign session",
-          schedule: { at: new Date(123).toISOString() },
-          payload: { kind: "agentTurn", message: "hello" },
-          sessionTarget: "session:agent:worker:telegram:direct:alice",
-        },
-      }),
-    ).rejects.toThrow("automations sessionTarget must match the calling agent");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
+        sessionKey: "agent:agent-123:telegram:direct:channing",
+      });
+    },
+  );
 
   it("does not forward model-supplied callerScope", async () => {
     const tool = createTestCronTool({
@@ -2383,25 +2263,6 @@ describe("cron tool", () => {
     expect(text).not.toContain("Recent context:");
   });
 
-  it("rejects explicit agentId null on add", async () => {
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
-    const tool = createTestCronTool({ agentSessionKey: "main" });
-    await expect(
-      tool.execute("call6", {
-        action: "add",
-        job: {
-          name: "reminder",
-          schedule: { at: new Date(123).toISOString() },
-          agentId: null,
-          payload: { kind: "systemEvent", text: "Reminder: the thing." },
-        },
-      }),
-    ).rejects.toThrow("automation agentId must match the calling agent");
-
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
   it("strips null clears from add jobs before the strict gateway create contract (#121606)", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
     const tool = createTestCronTool();
@@ -2976,26 +2837,6 @@ describe("cron tool", () => {
     });
   });
 
-  it.each(["agent-123", "worker", null])(
-    "rejects scoped update agentId %j in either shape",
-    async (agentId) => {
-      const tool = createTestCronTool({
-        agentSessionKey: "agent:agent-123:telegram:direct:channing",
-      });
-
-      for (const fields of [{ job: { agentId, enabled: false } }, { agentId, enabled: false }]) {
-        await expect(
-          tool.execute("call-update-agent-id", {
-            action: "update",
-            id: "job-1",
-            ...fields,
-          }),
-        ).rejects.toThrow("automation patch agentId cannot be changed");
-      }
-      expect(callGatewayMock).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
     ["nested", "worker"],
     ["flat", "worker"],
@@ -3018,21 +2859,6 @@ describe("cron tool", () => {
       id: "job-1",
       patch: { agentId },
     });
-  });
-
-  it("rejects foreign sessionTarget retargeting on update", async () => {
-    const tool = createTestCronTool({
-      agentSessionKey: "agent:agent-123:telegram:direct:channing",
-    });
-
-    await expect(
-      tool.execute("call-update-session-target", {
-        action: "update",
-        id: "job-1",
-        job: { sessionTarget: "session:agent:worker:telegram:direct:alice" },
-      }),
-    ).rejects.toThrow("automations sessionTarget must match the calling agent");
-    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("recovers additional flat patch params for update action", async () => {

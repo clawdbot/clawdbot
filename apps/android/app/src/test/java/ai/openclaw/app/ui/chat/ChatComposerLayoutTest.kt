@@ -18,7 +18,9 @@ import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.provider.Settings
 import android.speech.SpeechRecognizer
 import android.view.KeyEvent
@@ -29,6 +31,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -43,6 +48,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
@@ -68,6 +74,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
 import androidx.core.os.LocaleListCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -88,6 +97,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowSpeechRecognizer
@@ -107,6 +117,7 @@ class ChatComposerLayoutTest {
   private var originalRuntime: NodeRuntime? = null
   private val viewModelStore = ViewModelStore()
   private var originalAnimatorScale: String? = null
+  private var renderedCanvasColor = Color.Unspecified
 
   @Before
   fun setUp() {
@@ -762,7 +773,7 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun progressCardSharesComposerSurfaceAndExpandsUpward() {
+  fun progressCardDocksBehindIndependentComposerAndExpandsUpward() {
     showChat()
     showProgressCard(listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
 
@@ -777,21 +788,75 @@ class ChatComposerLayoutTest {
     val expandedCard = card.getUnclippedBoundsInRoot()
     val composerAfter = composer.getUnclippedBoundsInRoot()
     val editorAfter = editor.getUnclippedBoundsInRoot()
+    val expectedUnderlap = 18.dp
     assertTrue(
-      "The collapsed progress card must live inside the composer surface",
-      collapsedCard.top >= composerBefore.top && collapsedCard.bottom <= composerBefore.bottom,
+      "The collapsed progress card must start above the independent composer surface",
+      collapsedCard.top < composerBefore.top,
     )
+    assertEquals(
+      "The progress card must underlap the composer by the shared dock depth",
+      expectedUnderlap.value,
+      (collapsedCard.bottom - composerBefore.top).value,
+      0.5f,
+    )
+    assertEquals("Expanding progress must not move the composer top", composerBefore.top.value, composerAfter.top.value, 0.5f)
     assertEquals("Expanding progress must not move the composer bottom", composerBefore.bottom.value, composerAfter.bottom.value, 0.5f)
     assertEquals("Expanding progress must not move the editor top", editorBefore.top.value, editorAfter.top.value, 0.5f)
     assertEquals("Expanding progress must not move the editor bottom", editorBefore.bottom.value, editorAfter.bottom.value, 0.5f)
     assertEquals(
-      "The expanded progress card must share the composer surface top",
-      composerAfter.top.value,
-      expandedCard.top.value,
+      "The attached progress edge must stay docked while its body expands upward",
+      collapsedCard.bottom.value,
+      expandedCard.bottom.value,
       0.5f,
     )
-    assertTrue("The composer surface must expand upward", composerAfter.top < composerBefore.top)
+    assertTrue("The progress surface must expand upward", expandedCard.top < collapsedCard.top)
     assertComposerControlsVisible()
+  }
+
+  @Test
+  fun progressCardStaysUndecoratedWhileRecordingVoiceNote() {
+    val permission = Manifest.permission.RECORD_AUDIO
+    val permissionWasGranted = app.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+    shadowOf(app).grantPermissions(permission)
+    val lifecycleOwner =
+      object : LifecycleOwner {
+        override val lifecycle = LifecycleRegistry(this).apply { currentState = Lifecycle.State.RESUMED }
+      }
+    try {
+      prefs.gatewayRegistry.upsert(
+        GatewayRegistryEntry(
+          stableId = AndroidScreenshotFixture.gatewayId,
+          kind = GatewayRegistryEntryKind.MANUAL,
+          name = "Test gateway",
+        ),
+      )
+      prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+      val viewModel = showChat()
+      composeRule.runOnIdle {
+        viewModel.attachRuntimeUi(lifecycleOwner, app.permissionRequester)
+        controller.handleGatewayEvent(
+          "agent",
+          """{"sessionKey":"${AndroidScreenshotFixture.mainSessionKey}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
+        )
+      }
+      showProgressCard(listOf("Keep voice-note progress independent"))
+      composeRule
+        .onNode(
+          SemanticsMatcher("voice-note long press") { node ->
+            node.config.getOrNull(SemanticsActions.OnLongClick)?.label == nativeString("Record voice note")
+          },
+        ).performSemanticsAction(SemanticsActions.OnLongClick) { action -> action() }
+      composeRule.onNodeWithContentDescription(nativeString("Cancel voice note")).assertIsDisplayed()
+
+      val pixels = composeRule.onNodeWithTag("chat-progress-card").captureToImage().toPixelMap()
+      assertEquals(
+        "Standalone voice-note progress must not paint the attached-surface border",
+        renderedCanvasColor.toArgb(),
+        pixels[pixels.width / 2, 0].toArgb(),
+      )
+    } finally {
+      if (!permissionWasGranted) shadowOf(app).denyPermissions(permission)
+    }
   }
 
   @Test
@@ -1117,6 +1182,7 @@ class ChatComposerLayoutTest {
     composeRule.setContent {
       DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale())) {
         ClawDesignTheme {
+          renderedCanvasColor = ClawTheme.colors.canvas
           // The default viewport models a portrait phone after its IME opens.
           Box(
             Modifier

@@ -25,14 +25,12 @@ import {
   isClaudeCliAuthError,
   isExactUnknownNoDetailsError,
   isGenericUnknownStreamErrorMessage,
-  isTransientHttpError,
   isUnsupportedImageInputErrorMessage,
   toPluginClassification,
   toReasonClassification,
 } from "./classification-rules.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow.js";
 import {
-  GENERIC_MODEL_NOT_FOUND_RE,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
   isBillingErrorMessage,
@@ -152,11 +150,6 @@ function classifyFailoverClassificationFromMessage(
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
   }
-  // Billing/plan entitlement wording owns "model ... not available" first;
-  // the generic provider phrase should only displace unclassified/rate-limit text.
-  if (GENERIC_MODEL_NOT_FOUND_RE.test(raw)) {
-    return toReasonClassification("model_not_found");
-  }
   if (isRateLimitErrorMessage(raw)) {
     return toReasonClassification("rate_limit");
   }
@@ -177,13 +170,6 @@ function classifyFailoverClassificationFromMessage(
     !isAuthErrorMessage(raw)
   ) {
     return toReasonClassification("server_error");
-  }
-  if (isTransientHttpError(raw)) {
-    const status = extractLeadingHttpStatus(raw.trim());
-    if (status?.code === 529) {
-      return toReasonClassification("overloaded");
-    }
-    return toReasonClassification("timeout");
   }
   if (isGenericProviderInternalError(raw)) {
     return toReasonClassification("timeout");
@@ -226,7 +212,13 @@ function classifyFailoverClassificationFromMessage(
   if (apiErrorReason) {
     return toReasonClassification(apiErrorReason);
   }
-  return null;
+  return classifyFailoverClassificationFromHttpStatus(
+    inferSignalStatus({ message: raw }),
+    raw,
+    null,
+    undefined,
+    provider,
+  );
 }
 function classificationReason(
   classification: FailoverClassification | null,

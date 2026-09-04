@@ -1,6 +1,7 @@
 import { resolveEmbeddedAgentRunProgressState } from "../../agents/embedded-agent-runner/runs.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
+  isSubagentRunLive,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { isSwarmRunWaitingForCapacity } from "../../agents/subagents/swarm/swarm-scheduler.js";
@@ -204,27 +205,32 @@ export function resolveVisibleActiveSessionRunState(params: {
   const runIds = matchingTrackedRuns
     .filter((active) => !active.terminalPersistence)
     .map((active) => active.runId);
-  const queuedSubagent = getLatestLiveSubagentRunByChildSessionKey(params.canonicalKey);
-  const hasQueuedSubagent = Boolean(
-    queuedSubagent &&
-    isSubagentRunQueued(queuedSubagent) &&
+  const directSubagent = getLatestLiveSubagentRunByChildSessionKey(params.canonicalKey);
+  const matchesDirectSubagentSession = Boolean(
+    directSubagent &&
     isTrackedActiveSessionRunForKey(
-      { sessionKey: queuedSubagent.childSessionKey },
+      { sessionKey: directSubagent.childSessionKey },
       params.canonicalKey,
       resolvedAgentId,
       params.defaultAgentId,
     ),
   );
-  if (hasQueuedSubagent && queuedSubagent && !runIds.includes(queuedSubagent.runId)) {
-    runIds.push(queuedSubagent.runId);
+  const hasLiveSubagent = matchesDirectSubagentSession && isSubagentRunLive(directSubagent);
+  const hasQueuedSubagent = matchesDirectSubagentSession && isSubagentRunQueued(directSubagent);
+  if (
+    (hasLiveSubagent || hasQueuedSubagent) &&
+    directSubagent &&
+    !runIds.includes(directSubagent.runId)
+  ) {
+    runIds.push(directSubagent.runId);
   }
   const subagentCapacityWait =
-    hasQueuedSubagent &&
-    queuedSubagent &&
-    (isAgentRunWaitingForCapacity(queuedSubagent.runId) ||
+    (hasLiveSubagent || hasQueuedSubagent) &&
+    directSubagent &&
+    (isAgentRunWaitingForCapacity(directSubagent.runId) ||
       isSwarmRunWaitingForCapacity(
-        queuedSubagent.schedulerSlotId ?? queuedSubagent.runId,
-        queuedSubagent,
+        directSubagent.schedulerSlotId ?? directSubagent.runId,
+        directSubagent,
       ));
   const projectedRunState = resolveProjectedAgentRunProgressState({
     sessionKeys: [params.requestedKey, params.canonicalKey],
@@ -238,7 +244,7 @@ export function resolveVisibleActiveSessionRunState(params: {
   // Connection, worker-lifecycle, and embedded registries are independent owners.
   // Settlement in one must not hide live work owned by another.
   const running =
-    (hasQueuedSubagent && !subagentCapacityWait) ||
+    ((hasLiveSubagent || hasQueuedSubagent) && !subagentCapacityWait) ||
     matchingTrackedRuns.some((active) => !isAgentRunWaitingForCapacity(active.runId)) ||
     projectedRunState === "running" ||
     embeddedRunState === "running";

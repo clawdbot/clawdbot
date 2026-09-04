@@ -1,7 +1,8 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runManagedCommand, terminateManagedChild } from "./lib/managed-child-process.mts";
 
 const DEFAULT_HEAP_MB = 768;
 const DEFAULT_RSS_MB = 1024;
@@ -82,15 +83,6 @@ function processGroupRssBytes(pid) {
     bytes: samples.reduce((total, value) => total + value, 0) * 1024,
     status: "measured",
   };
-}
-
-function killProcessGroup(child) {
-  if (!child.pid) {
-    return;
-  }
-  try {
-    process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGKILL");
-  } catch {}
 }
 
 function processExists(pid) {
@@ -192,15 +184,21 @@ async function run(argv) {
 
   let stdout = Buffer.alloc(0);
   let stderr = Buffer.alloc(0);
-  let rssMeasurementFailed = false;
-  let rssExceeded = false;
-  let timedOut = false;
-  const child = spawn(
-    process.execPath,
-    [`--max-old-space-size=${heapMb}`, "--import", "tsx", scannerPath, ...argv],
-    {
+  let rssFailure;
+  let cancellationSignal;
+  let child;
+  let rssTimer;
+  let exitCode = 1;
+  let failure;
+  try {
+    exitCode = await runManagedCommand({
+      bin: process.execPath,
+      args: [`--max-old-space-size=${heapMb}`, "--import", "tsx", scannerPath, ...argv],
       cwd: process.cwd(),
-      detached: process.platform !== "win32",
+      shell: false,
+      requireProcessTreeExit: process.platform !== "win32",
+      timeoutMs,
+      timeoutKillGraceMs: 0,
       env: {
         CI: "1",
         HOME: process.env.HOME,
@@ -208,38 +206,41 @@ async function run(argv) {
         PATH: process.env.PATH,
       },
       stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  child.stdout.on("data", (chunk) => {
-    stdout = boundedAppend(stdout, chunk);
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr = boundedAppend(stderr, chunk);
-  });
-  const rssLimitBytes = rssMb * 1024 * 1024;
-  const rssTimer = setInterval(() => {
-    if (child.exitCode !== null || child.signalCode !== null || !child.pid) {
-      return;
-    }
-    const rssMeasurement = processGroupRssBytes(child.pid);
-    if (rssMeasurement.status === "failed") {
-      rssMeasurementFailed = true;
-      killProcessGroup(child);
-    } else if (rssMeasurement.status === "measured" && rssMeasurement.bytes > rssLimitBytes) {
-      rssExceeded = true;
-      killProcessGroup(child);
-    }
-  }, 250);
-  const timer = setTimeout(() => {
-    timedOut = true;
-    killProcessGroup(child);
-  }, timeoutMs);
-  const result = await new Promise((resolve) => {
-    child.on("error", (error) => resolve({ error, status: null }));
-    child.on("close", (status, signal) => resolve({ error: undefined, signal, status }));
-  });
-  clearTimeout(timer);
-  clearInterval(rssTimer);
+      onSignal: (signal) => {
+        cancellationSignal ??= signal;
+      },
+      onReady: (scanner) => {
+        child = scanner;
+        scanner.stdout.on("data", (chunk) => {
+          stdout = boundedAppend(stdout, chunk);
+        });
+        scanner.stderr.on("data", (chunk) => {
+          stderr = boundedAppend(stderr, chunk);
+        });
+        rssTimer = setInterval(() => {
+          if (scanner.exitCode !== null || scanner.signalCode !== null || !scanner.pid) {
+            return;
+          }
+          const rssMeasurement = processGroupRssBytes(scanner.pid);
+          if (rssMeasurement.status === "failed") {
+            rssFailure ??= "could not measure RSS";
+          } else if (
+            rssMeasurement.status === "measured" &&
+            rssMeasurement.bytes > rssMb * 1024 * 1024
+          ) {
+            rssFailure ??= "exceeded its RSS limit";
+          } else {
+            return;
+          }
+          terminateManagedChild(scanner, "SIGKILL");
+        }, 250);
+      },
+    });
+  } catch (error) {
+    failure = error;
+  } finally {
+    clearInterval(rssTimer);
+  }
 
   const safeStdout = sanitizeOutput(stdout, args);
   const safeStderr = sanitizeOutput(stderr, args);
@@ -249,27 +250,25 @@ async function run(argv) {
   if (safeStderr) {
     process.stderr.write(safeStderr);
   }
-  if (timedOut) {
-    writeFailureReport(args, "timed out");
+  // Failed physical cleanup must not look like a successfully joined cancellation or timeout.
+  if (failure && failure.code !== "ETIMEDOUT") {
+    writeFailureReport(args, child?.pid ? "could not complete process cleanup" : "could not start");
     return 1;
   }
-  if (rssMeasurementFailed) {
-    writeFailureReport(args, "could not measure RSS");
-    return 1;
-  }
-  if (rssExceeded) {
-    writeFailureReport(args, "exceeded its RSS limit");
-    return 1;
-  }
-  if (result.error) {
-    writeFailureReport(args, "could not start");
-    return 1;
+  const failureCategory = cancellationSignal
+    ? `cancelled by ${String(cancellationSignal)}`
+    : failure
+      ? "timed out"
+      : rssFailure;
+  if (failureCategory) {
+    writeFailureReport(args, failureCategory);
+    return cancellationSignal ? exitCode : 1;
   }
   const reportStatus = existingReportStatus(args);
   if (!reportStatus) {
     writeFailureReport(
       args,
-      result.signal
+      child?.signalCode
         ? "exceeded its process limit"
         : existsSync(args.report)
           ? "wrote an invalid report"
@@ -277,7 +276,7 @@ async function run(argv) {
     );
     return 1;
   }
-  return result.status === 0 && reportStatus === "pass" ? 0 : 1;
+  return exitCode === 0 && reportStatus === "pass" ? 0 : 1;
 }
 
 try {

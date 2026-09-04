@@ -280,8 +280,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           activeSession?.status,
           activeSession?.startedAt,
           activeSession?.endedAt,
-          props.progressCardHasActiveRun,
+          props.runActive,
           props.collapseTaskProgress,
+          {
+            activeRunId: props.runId,
+            completedRunId: props.runStatus?.phase === "done" ? props.runStatus.runId : null,
+          },
         )}
       </div>`
     : nothing;

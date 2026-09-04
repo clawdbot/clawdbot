@@ -5,7 +5,9 @@ import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runt
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 // Slack tests cover Agent View lifecycle handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSlackAccount } from "../../accounts.js";
 import { appendSlackStream, markSlackStreamsStopped, startSlackStream } from "../../streaming.js";
+import { resolveSlackRoutingContext } from "../message-handler/prepare-routing.js";
 import { deliverSlackSlashReplies } from "../replies.js";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "../slash.test-harness.js";
 import { registerSlackAgentEvents } from "./agent.js";
@@ -27,7 +29,7 @@ vi.mock("../../streaming.js", async (importOriginal) => {
 
 const slashMocks = getSlackSlashMocks();
 
-function createSessionEventHarness(channelType: "im" | "channel" = "im") {
+function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im") {
   const harness = createSlackSystemEventTestHarness({ channelType, allowFrom: ["*"] });
   const client = new WebClient("xoxb-synthetic");
   const postMessage = vi.spyOn(client.chat, "postMessage").mockResolvedValue({
@@ -234,6 +236,63 @@ describe("registerSlackAgentEvents", () => {
         appendSlackStream({ session, text: "Remaining reply", chunks: [] }),
       ).rejects.toBe(appendError);
       expect(session.pendingText).toBe("Remaining reply");
+    },
+  );
+
+  it.each(["im", "mpim"] as const)(
+    "routes native events to the original %s session",
+    async (channelType) => {
+      const harness = createSessionEventHarness(channelType);
+      const channelId = channelType === "im" ? "D123" : "G123";
+      harness.ctx.isSlackAgentView = async () => false;
+      harness.ctx.isSlackManagedViewThread = async () => false;
+      harness.ctx.getSlackAssistantThreadContext = () => undefined;
+      const threadTs = "1712345678.000001";
+      const owner = resolveSlackRoutingContext({
+        ctx: harness.ctx,
+        account: resolveSlackAccount({ cfg: harness.ctx.cfg, accountId: harness.ctx.accountId }),
+        message: { type: "message", channel: channelId, user: "U123", ts: threadTs },
+        isDirectMessage: channelType === "im",
+        isGroupDm: channelType === "mpim",
+        isRoom: false,
+        isRoomish: channelType === "mpim",
+      });
+      if (channelType === "mpim") {
+        harness.ctx.getSlackSessionRoute = () => ({ ...owner.route, sessionKey: owner.sessionKey });
+      }
+
+      await harness.getHandler("agent_session_stopped")?.({
+        event: {
+          type: "agent_session_stopped",
+          channel: channelId,
+          thread_ts: threadTs,
+          user: "U123",
+          event_ts: "1712345679.000001",
+          streaming_message_ts: ["1712345678.000002"],
+        },
+        body: {},
+      });
+
+      expect(slashMocks.dispatchMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ctx: expect.objectContaining({ CommandTargetSessionKey: owner.sessionKey }),
+        }),
+      );
+      await harness.getHandler("agent_session_title_changed")?.({
+        event: {
+          type: "agent_session_title_changed",
+          channel: channelId,
+          thread_ts: threadTs,
+          user: "U123",
+          event_ts: "1712345680.000001",
+          team_id: "T_TEST",
+          title: "Renamed conversation",
+        },
+        body: {},
+      });
+      expect(patchSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey: owner.sessionKey }),
+      );
     },
   );
 
