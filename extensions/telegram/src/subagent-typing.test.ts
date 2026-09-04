@@ -129,6 +129,20 @@ describe("Telegram detached-subagent typing", () => {
     expect(sendTyping).not.toHaveBeenCalled();
   });
 
+  it("ignores channel Direct Messages because Telegram does not support typing there", async () => {
+    const { controller, sendTyping } = createController();
+
+    controller.handle(
+      startEvent("direct-topic-run", {
+        channel: "telegram",
+        to: "telegram:group:-100123:direct-topic:77",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(TELEGRAM_CHAT_ACTION_INTERVAL_MS);
+
+    expect(sendTyping).not.toHaveBeenCalled();
+  });
+
   it("stops all route timers when the plugin runtime is disposed", async () => {
     const { controller, sendTyping } = createController();
     controller.handle(startEvent("run-1", { channel: "telegram", to: "42" }));

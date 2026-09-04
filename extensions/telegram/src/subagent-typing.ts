@@ -4,6 +4,7 @@ import {
   TELEGRAM_CHAT_ACTION_INTERVAL_MS,
   TELEGRAM_SUBAGENT_TYPING_MAX_DURATION_MS,
 } from "./chat-action-timing.js";
+import { parseTelegramTarget } from "./targets.js";
 
 type TelegramSubagentTypingRoute = {
   accountId?: string;
@@ -38,7 +39,11 @@ function resolveTelegramTypingRoute(
 ): TelegramSubagentTypingRoute | undefined {
   const requester = event.requester;
   const to = requester?.to?.trim();
-  if (requester?.channel !== "telegram" || !to) {
+  if (
+    requester?.channel !== "telegram" ||
+    !to ||
+    parseTelegramTarget(to).directMessagesTopicId != null
+  ) {
     return undefined;
   }
   return {
