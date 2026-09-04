@@ -11,7 +11,7 @@ function normalizeDetail(detail?: string): string {
   return normalizeLowercaseStringOrEmpty(detail);
 }
 
-export function isSystemctlMissingDetail(detail?: string): boolean {
+function isSystemctlMissingDetail(detail?: string): boolean {
   const normalized = normalizeDetail(detail);
   return (
     normalized.includes("not found") ||

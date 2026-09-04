@@ -17,15 +17,15 @@ import {
   uninstallLegacySystemdUnits,
   uninstallUserSystemdGatewayUnit,
 } from "./systemd-lifecycle.js";
+import { readSystemdServiceRuntime } from "./systemd-runtime.js";
 import {
   classifySystemdUnavailableDetail,
-  isSystemctlMissingDetail,
   isSystemdUserBusUnavailableDetail,
 } from "./systemd-unavailable.js";
 
 describe("classifySystemdUnavailableDetail", () => {
   it("classifies missing systemctl details", () => {
-    expect(isSystemctlMissingDetail("spawn systemctl ENOENT")).toBe(true);
+    expect(classifySystemdUnavailableDetail("spawn systemctl ENOENT")).toBe("missing_systemctl");
     expect(classifySystemdUnavailableDetail("systemctl not available")).toBe("missing_systemctl");
   });
 
@@ -76,6 +76,67 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
       DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(dir, "bus")}`,
     };
   }
+
+  // Debian without dbus-user-session: `--user` cannot reach the bus and the
+  // machine-scope retry fails too, so the merged stderr carries the socket's ENOENT.
+  async function writeUserBusFailureSystemctl(dir: string) {
+    await fs.writeFile(
+      path.join(dir, "systemctl"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--machine" ]; then',
+        '  printf "Failed to connect to system scope bus via machine transport: Permission denied\\nCall failed: Transport endpoint is not connected\\n" >&2',
+        "else",
+        '  printf "Failed to connect to user scope bus via local transport: No such file or directory\\n" >&2',
+        "fi",
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+  }
+
+  it("keeps a reachable systemctl available when both user scopes report bus failures", async () => {
+    await withTempDir("openclaw-systemctl-user-bus-", async (dir) => {
+      await writeUserBusFailureSystemctl(dir);
+      const env = systemctlEnv(dir);
+      await expect(isSystemctlAvailable(env)).resolves.toBe(true);
+      const failure = await assertSystemdAvailable(env).then(
+        () => "systemd unexpectedly available",
+        (error: unknown) => String(error),
+      );
+      expect(failure).toContain("systemctl --user unavailable");
+      expect(classifySystemdUnavailableDetail(failure)).toBe("user_bus_unavailable");
+      const runtime = await readSystemdServiceRuntime(env);
+      expect(runtime.status).toBe("unknown");
+      expect(classifySystemdUnavailableDetail(runtime.detail)).toBe("user_bus_unavailable");
+    });
+  });
+
+  it("refuses a file-only removal while systemctl is reachable", async () => {
+    await withTempDir("openclaw-systemctl-user-bus-cleanup-", async (dir) => {
+      await writeUserBusFailureSystemctl(dir);
+      const env = systemctlEnv(dir);
+      const unitPath = path.join(dir, ".config/systemd/user", "openclaw-gateway.service");
+      const definition = "[Unit]\nDescription=Gateway user-bus fixture\n";
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, definition);
+      let output = "";
+      const stdout = new Writable({
+        write(chunk, _encoding, callback) {
+          output += chunk.toString();
+          callback();
+        },
+      });
+
+      // Deleting the unit file alone leaves a loaded unit running, so an unreachable
+      // bus must fail the removal instead of reporting systemctl unavailable.
+      await expect(uninstallUserSystemdGatewayUnit({ env, stdout })).rejects.toThrow(
+        "systemctl disable failed:",
+      );
+      expect(output).not.toContain("systemctl unavailable");
+      await expect(fs.readFile(unitPath, "utf8")).resolves.toBe(definition);
+    });
+  });
 
   it.each(["ENOENT", "EACCES"])("rejects unavailable systemctl with %s", async (errorCode) => {
     await withTempDir("openclaw-systemctl-", async (dir) => {
