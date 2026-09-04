@@ -28,6 +28,15 @@ debug signal rather than a guess.
 5. Patch the root cause.
 6. Rerun the exact failing probe, then broaden only if the contract requires it.
 
+## Interrupted-Run Recovery
+
+When a gateway restart, upgrade, or handoff interrupts debugging:
+
+1. Inspect the branch, worktree status, current head, and relevant file history before acting. Confirm which changes and destructive steps already completed.
+2. Compare the original evidence with current-head owners and tests. Confirm the suspected gap still exists before editing code.
+3. If a focused test fails in shared temporary state, rerun the same probe under a fresh private temporary root. Treat it as a product failure only when the isolated rerun reproduces it.
+4. Verify the smallest relevant current-head test set and the production diff. Finish with either a grounded patch or an explicit no-op when the repair is already present.
+
 ## Model Transport Logs
 
 Use targeted env flags instead of global debug when the model request shape or
