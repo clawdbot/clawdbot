@@ -343,7 +343,7 @@ describe("qa suite runtime flow", () => {
       123,
       { accountId: "qa-channel" },
     );
-    expect(call.deps.markGatewayLogCursor()).toBe(0);
+    expect(call.deps.markGatewayLogCursor()).toBe(-1);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
     await call.deps.runRuntimeToolFixture(env, { toolName: "read" });
     expect(runRuntimeToolFixture).toHaveBeenCalledWith(
@@ -395,16 +395,21 @@ describe("qa suite runtime flow", () => {
     expect(readLogsSince).toHaveBeenCalledWith(70_000);
 
     markLogs.mockReturnValueOnce(-1);
+    legacyLogs = "x".repeat(70_000);
     const legacyCursor = deps.markGatewayLogCursor();
-    legacyLogs += "\nfresh after invalid mark";
-    expect(deps.readGatewayLogs(legacyCursor)).toBe("\nfresh after invalid mark");
+    legacyLogs = `${"y".repeat(70_000)}\ncodex_app_server progress stalled\n`;
+    expect(legacyCursor).toBe(-1);
+    expect(deps.readGatewayLogs(legacyCursor)).toBe(legacyLogs);
+    expect(deps.scanGatewayLogSentinels({ since: legacyCursor })).toEqual([
+      expect.objectContaining({ kind: "stalled-agent-run" }),
+    ]);
     expect(readLogsSince).toHaveBeenCalledTimes(3);
   });
 
   it.each(["mark only", "read only"] as const)(
-    "keeps legacy gateway log offsets when the child exposes %s",
+    "reads full bounded gateway snapshots when the child exposes %s",
     async (surface) => {
-      let logs = "prior line\n";
+      let logs = "x".repeat(70_000);
       const markLogs = vi.fn(() => 70_000);
       const readLogsSince = vi.fn(() => "fresh logs");
       const deps = await captureQaGatewayLogDeps({
@@ -413,9 +418,9 @@ describe("qa suite runtime flow", () => {
       });
 
       const cursor = deps.markGatewayLogCursor();
-      expect(cursor).toBe(logs.length);
-      logs += "codex_app_server progress stalled\n";
-      expect(deps.readGatewayLogs(cursor)).toBe("codex_app_server progress stalled\n");
+      expect(cursor).toBe(-1);
+      logs = `${"y".repeat(70_000)}\ncodex_app_server progress stalled\n`;
+      expect(deps.readGatewayLogs(cursor)).toBe(logs);
       expect(deps.scanGatewayLogSentinels({ since: cursor })).toEqual([
         expect.objectContaining({
           kind: "stalled-agent-run",

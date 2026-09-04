@@ -207,15 +207,12 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
       : undefined;
   const isValidGatewayLogMark = (mark: number | undefined): mark is number =>
     Number.isSafeInteger(mark) && (mark ?? -1) >= 0;
-  const readLegacyGatewayLogs = (mark?: number) => {
-    const logs = params.env.gateway.logs?.() ?? "";
-    return isValidGatewayLogMark(mark) ? logs.slice(mark) : logs;
-  };
+  const fullLegacyGatewayLogSnapshotMark = -1;
   const readGatewayLogs = (mark?: number) => {
     if (monotonicGatewayLogs && isValidGatewayLogMark(mark)) {
       return monotonicGatewayLogs.readSince(mark);
     }
-    return readLegacyGatewayLogs(mark);
+    return params.env.gateway.logs?.() ?? "";
   };
   const readGatewayLogsForSentinels = (options?: Parameters<typeof scanGatewayLogSentinels>[1]) => {
     if (monotonicGatewayLogs && isValidGatewayLogMark(options?.since)) {
@@ -226,7 +223,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     }
     return {
       logs: params.env.gateway.logs?.(),
-      options,
+      options: { ...options, since: 0 },
     };
   };
   return {
@@ -258,8 +255,9 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
           return mark;
         }
         monotonicGatewayLogs = undefined;
+        return fullLegacyGatewayLogSnapshotMark;
       }
-      return (params.env.gateway.logs?.() ?? "").length;
+      return fullLegacyGatewayLogSnapshotMark;
     },
     scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) => {
       const input = readGatewayLogsForSentinels(options);
