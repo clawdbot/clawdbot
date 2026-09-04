@@ -60,4 +60,28 @@ describe("PDF document extractor completeness", () => {
       },
     });
   });
+
+  it("extracts page 21 when the page budget is one selected page", async () => {
+    const result = await createPdfDocumentExtractor().extract({
+      buffer: createPdf(Array.from({ length: 21 }, (_, index) => `PAGE ${index + 1}`)),
+      mimeType: "application/pdf",
+      pageNumbers: [21],
+      maxPages: 1,
+      maxPixels: 1_000_000,
+      minTextChars: 1,
+    });
+
+    expect(result).toMatchObject({
+      text: "PAGE 21",
+      metadata: {
+        pages: {
+          processed: [21],
+          total: 21,
+          selection: "explicit",
+          truncated: false,
+        },
+        textTruncated: false,
+      },
+    });
+  });
 });

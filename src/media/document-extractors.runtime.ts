@@ -12,12 +12,12 @@ import { createConfigScopedPromiseLoader } from "../plugins/plugin-cache-primiti
 const documentExtractorLoader = createConfigScopedPromiseLoader((config?: OpenClawConfig) =>
   resolvePluginDocumentExtractors(config ? { config } : undefined),
 );
-const extractionIntegerSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const extractionIntegerSchema = z.number().int().max(Number.MAX_SAFE_INTEGER);
 const extractionMetadataSchema = z.object({
   pages: z
     .object({
-      processed: z.array(extractionIntegerSchema),
-      total: extractionIntegerSchema,
+      processed: z.array(extractionIntegerSchema.positive()),
+      total: extractionIntegerSchema.nonnegative(),
       selection: z.enum(["automatic", "explicit"]),
       truncated: z.boolean(),
     })
@@ -60,9 +60,36 @@ export async function extractDocumentContent(
       if (result) {
         const { metadata, ...content } = result;
         const validatedMetadata = extractionMetadataSchema.safeParse(metadata);
+        const parsedMetadata = validatedMetadata.success ? validatedMetadata.data : undefined;
+        const pages = parsedMetadata?.pages;
+        const selectedPages = request.pageNumbers
+          ? request.pageNumbers
+              .filter((page) => pages && Number.isInteger(page) && page >= 1 && page <= pages.total)
+              .slice(0, request.maxPages)
+          : Array.from(
+              { length: Math.min(pages?.total ?? 0, request.maxPages) },
+              (_, index) => index + 1,
+            );
+        const selectedPageSet = new Set(selectedPages);
+        const expectedPageTruncation = request.pageNumbers
+          ? request.pageNumbers.length > selectedPages.length
+          : (pages?.total ?? 0) > request.maxPages;
+        // Completeness metadata becomes trusted prompt text; bind page claims to the
+        // request that produced them so plugin output cannot fabricate a notice.
+        const trustedMetadata =
+          parsedMetadata &&
+          (!pages ||
+            (pages.selection === (request.pageNumbers ? "explicit" : "automatic") &&
+              pages.processed.length <= request.maxPages &&
+              new Set(pages.processed).size === pages.processed.length &&
+              pages.processed.every((page) => page <= pages.total && selectedPageSet.has(page)) &&
+              pages.truncated === expectedPageTruncation &&
+              (parsedMetadata.textTruncated || pages.processed.length === selectedPageSet.size)))
+            ? parsedMetadata
+            : undefined;
         return {
           ...content,
-          ...(validatedMetadata.success ? { metadata: validatedMetadata.data } : {}),
+          ...(trustedMetadata ? { metadata: trustedMetadata } : {}),
           extractor: extractor.id,
         };
       }
