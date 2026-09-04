@@ -201,6 +201,8 @@ export type MemoryFlushPlan = {
   forceFlushTranscriptBytes: number;
   reserveTokensFloor: number;
   model?: string;
+  /** Fallback refs for `model`; empty or absent keeps the exact-override default. */
+  fallbacks?: string[];
   prompt: string;
   systemPrompt: string;
   relativePath: string;
