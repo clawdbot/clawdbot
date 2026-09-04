@@ -216,18 +216,24 @@ describe("sidebar attention source publication", () => {
 
     failing = true;
     harness.emitEvent("cron", {});
-    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
     expect(store.entries).toMatchObject([{ label: "overdue" }]);
     store.dismiss({ kind: "cronOverdue", signature: "overdue@1" });
     harness.emitEvent("cron", {});
-    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
     expect(loadDismissals(harness.gateway.connection.gatewayUrl)).toEqual({
       cronOverdue: ["overdue@1"],
     });
 
     failing = false;
     harness.emitEvent("cron", {});
-    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
     expect(store.entries).toEqual([]);
   });
 
@@ -247,12 +253,16 @@ describe("sidebar attention source publication", () => {
     const harness = createGatewayHarness(mockClient(request));
     store = createStore(harness.gateway);
     store.activate(SidebarAttentionStoreController);
-    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
     expect(store.entries).toEqual([]);
 
     failing = true;
     harness.emitEvent("cron", {});
-    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
     expect(store.entries).toEqual([]);
   });
 
@@ -301,7 +311,9 @@ describe("sidebar attention source publication", () => {
         publish.mockClear();
         pendingList.resolve(cronPage("retired"));
         pendingStatus.resolve(cronStatus);
-        await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => {
+          globalThis.setTimeout(resolve, 0);
+        });
 
         expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
         expect(request.mock.calls.filter(([method]) => method === "cron.status")).toHaveLength(1);
