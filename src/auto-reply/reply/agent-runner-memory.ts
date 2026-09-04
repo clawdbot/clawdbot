@@ -83,6 +83,8 @@ import {
   resolveMemoryFlushContextWindowTokens,
   resolveCompactionThreshold,
   resolveResponsesServerCompactionThreshold,
+  hasAlreadyFlushedForCliRearmBucket,
+  resolveCliMemoryFlushRearmBucket,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -1270,7 +1272,10 @@ export async function runMemoryFlushIfNeeded(params: {
   const isCli =
     followupUsesCliRuntime(runtimeParams, runtimeId) ||
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  // CLI backends were excluded here because their compaction watermark can
+  // never advance; resolveCliMemoryFlushRearmBucket gives them a working
+  // anchor, so the exclusion is no longer what keeps the dedup honest.
+  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat;
   if (!canAttemptFlush) {
     return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
   }
@@ -1354,6 +1359,10 @@ export async function runMemoryFlushIfNeeded(params: {
   const transcriptByteSize = sessionLogSnapshot?.byteSize;
   const shouldForceFlushByTranscriptSize =
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
+
+  const cliRearmBucket = resolveCliMemoryFlushRearmBucket({ isCli, transcriptByteSize });
+  const cliAlreadyFlushed =
+    cliRearmBucket !== undefined && hasAlreadyFlushedForCliRearmBucket(entry, cliRearmBucket);
 
   const transcriptUsageSnapshot = sessionLogSnapshot?.usage;
   const transcriptOutputTokens = transcriptUsageSnapshot?.outputTokens;
@@ -1443,14 +1452,20 @@ export async function runMemoryFlushIfNeeded(params: {
   );
 
   const shouldFlushMemory =
-    shouldRunMemoryFlush({
-      entry,
-      tokenCount: tokenCountForFlush,
-      threshold: flushThreshold,
-    }) ||
-    (shouldForceFlushByTranscriptSize &&
-      entry != null &&
-      !hasAlreadyFlushedForCurrentCompaction(entry));
+    cliRearmBucket !== undefined
+      ? (shouldForceFlushByTranscriptSize ||
+          (typeof tokenCountForFlush === "number" &&
+            flushThreshold > 0 &&
+            tokenCountForFlush >= flushThreshold)) &&
+        !cliAlreadyFlushed
+      : shouldRunMemoryFlush({
+          entry,
+          tokenCount: tokenCountForFlush,
+          threshold: flushThreshold,
+        }) ||
+        (shouldForceFlushByTranscriptSize &&
+          entry != null &&
+          !hasAlreadyFlushedForCurrentCompaction(entry));
 
   if (!shouldFlushMemory) {
     return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
@@ -1525,7 +1540,9 @@ export async function runMemoryFlushIfNeeded(params: {
     sessionFile: params.followupRun.run.sessionFile,
     abortSignal,
   });
-  const flushedCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+  // On a CLI backend the stored watermark is the transcript bucket, which is
+  // what re-arms the next flush there; elsewhere it stays the compaction count.
+  const flushedCompactionCount = cliRearmBucket ?? activeSessionEntry?.compactionCount ?? 0;
   const compaction: AgentTurnCompaction = { count: 0, durable: [] };
   let visibleErrorPayloads: ReplyPayload[] = [];
   // Only runnable maintenance owns a run context. The matching finally is
