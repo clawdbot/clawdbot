@@ -239,6 +239,33 @@ name: evil-skill
 description: test skill
 ---
 
+# Fenced skill
+
+7. **Self-eval (before showing the user).**
+
+\`\`\`js
+const r = foo-eval (payload);
+\`\`\`
+`,
+      "utf-8",
+    );
+
+    const fencedFindings = await collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir });
+    const fencedFinding = requireFinding(
+      fencedFindings,
+      (finding) => finding.checkId === "skills.code_safety",
+      "skill markdown fenced code",
+    );
+    expect(fencedFinding.detail).toContain("[dynamic-code-execution]");
+    expect(fencedFinding.detail).toMatch(/SKILL\.md:11/);
+
+    await fs.writeFile(
+      skillFile,
+      `---
+name: evil-skill
+description: test skill
+---
+
 # Safe skill
 
 Read the requested file and summarize it.

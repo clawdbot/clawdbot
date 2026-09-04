@@ -441,6 +441,27 @@ run("node a.js"); run("node b.js");
     expectRulePresence(scanSource("eval(payload)", "SKILL.md"), "dynamic-code-execution", true);
   });
 
+  it("keeps the source eval rule for Markdown code", () => {
+    // A fenced or inline example is code even inside SKILL.md, so the
+    // subtraction shape prose tolerates must stay critical there.
+    const fenced = [
+      "7. **Self-eval (before showing the user).**",
+      "",
+      "```js",
+      "const r = foo-eval (payload);",
+      "```",
+    ].join("\n");
+    const fencedFindings = scanSource(fenced, "SKILL.md").filter(
+      (finding) => finding.ruleId === "dynamic-code-execution",
+    );
+    expect(fencedFindings.map((finding) => finding.line)).toEqual([4]);
+    expectRulePresence(
+      scanSource("Run `foo-eval (payload)` first.", "SKILL.md"),
+      "dynamic-code-execution",
+      true,
+    );
+  });
+
   it("does not flag child_process import without exec/spawn call", () => {
     const source = `
 // This module wraps child_process for safety
