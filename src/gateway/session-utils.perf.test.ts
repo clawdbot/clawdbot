@@ -24,7 +24,7 @@ import { resolveEstimatedSessionCostUsd } from "./session-utils-core.js";
 import { resolveGatewaySessionThinkingProjectionInternal } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import * as rowProjection from "./session-utils-row.js";
-import { listSessionsFromStoreAsync } from "./session-utils.js";
+import { filterAndSortSessionEntries, listSessionsFromStoreAsync } from "./session-utils.js";
 
 /**
  * Regression smoke for the per-list rowContext resolver cache. The bug we are
@@ -38,6 +38,42 @@ import { listSessionsFromStoreAsync } from "./session-utils.js";
  * are the actual scaling failure mode we care about.
  */
 describe("session list resolver cache", () => {
+  test("bounds owner roster traversal by agents rather than stored sessions", () => {
+    let rosterReads = 0;
+    const agents = Array.from({ length: 30 }, (_, index) => ({
+      get id() {
+        rosterReads += 1;
+        return `agent-${index}`;
+      },
+      identity: { name: `Agent ${index}` },
+    }));
+    const cfg: OpenClawConfig = { agents: { list: agents } };
+    const store = Object.fromEntries(
+      Array.from({ length: 80 }, (_, index) => [
+        `agent:agent-29:dashboard:${index}`,
+        {
+          sessionId: `owned-${index}`,
+          updatedAt: index + 1,
+          createdActor: { type: "agent" as const, id: "agent-29" },
+        },
+      ]),
+    );
+    const result = filterAndSortSessionEntries({
+      cfg,
+      store,
+      now: 100,
+      opts: { ownerId: "agent-29", limit: 10 },
+    });
+    expect(result.map(([key]) => key)).toEqual(Object.keys(store).toReversed().slice(0, 10));
+    expect(rosterReads).toBeLessThanOrEqual(agents.length * 3);
+
+    // Each request observes the current roster, including a removed owner.
+    cfg.agents!.list = agents.slice(0, -1);
+    expect(
+      filterAndSortSessionEntries({ cfg, store, now: 100, opts: { ownerId: "agent-29" } }),
+    ).toEqual([]);
+  });
+
   test.each([
     { rowWorkMs: 0, shouldYield: false },
     { rowWorkMs: 20, shouldYield: true },

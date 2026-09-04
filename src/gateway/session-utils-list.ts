@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   countActiveDescendantRuns,
@@ -426,7 +426,12 @@ function selectSessionEntries(params: {
   involvingActorId?: string;
   ownerFirstActorId?: string;
 }): SessionEntrySelection {
-  const { ownerEntries, entries: filtered, ...facets } = filterSessionEntries(params);
+  // Owner/participant projections share one roster walk; the batch ends before any list yield.
+  const {
+    ownerEntries,
+    entries: filtered,
+    ...facets
+  } = withAgentRosterFactsBatch(params.cfg, () => filterSessionEntries(params));
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
   const offset = resolveSessionsListOffset(params.opts);
   const windowLimit = resolveSessionsListWindowLimit(limit, offset);
