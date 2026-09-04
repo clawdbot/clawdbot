@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { markGatewayRestartTrace, measureGatewayRestartTrace } from "./restart-trace.js";
 
 type GatewayShutdownStep = {
   name: string;
@@ -12,7 +13,10 @@ export async function runGatewayShutdownSteps(params: {
 }): Promise<void> {
   for (const step of params.steps) {
     try {
-      await step.run();
+      // Trace consumers parse one phase token; keep the human label for errors.
+      const phase = `shutdown.${step.name.replace(/\s+/gu, "-")}`;
+      markGatewayRestartTrace(`${phase}.begin`);
+      await measureGatewayRestartTrace(phase, () => step.run());
     } catch (error) {
       params.onError(`shutdown step failed (${step.name}): ${formatErrorMessage(error)}`);
     }

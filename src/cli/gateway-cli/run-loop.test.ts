@@ -648,7 +648,9 @@ describe("runGatewayLoop", () => {
           expect(hostedStopExecute).not.toHaveBeenCalled();
           finishJoin();
           await expect(exited).resolves.toBe(0);
-          expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, undefined);
+          expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+            onSnapshot: expect.any(Function),
+          });
           expect(hostedStopExecute).toHaveBeenCalledTimes(mode === "native" ? 1 : 0);
           await expect(host!.request("start", () => {})).resolves.toMatchObject({ ok: false });
         } finally {
@@ -1086,50 +1088,129 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it.each(["SIGTERM", "SIGINT"] as const)(
-    "drains rootless embedded work before closing on direct %s stop",
-    async (signal) => {
+  it.each([
+    { signal: "SIGTERM", trace: undefined },
+    { signal: "SIGINT", trace: "0" },
+    { signal: "SIGTERM", trace: "1" },
+  ] as const)(
+    "reports only category counts while direct $signal stop is pending (trace=$trace)",
+    async ({ signal, trace }) => {
       vi.clearAllMocks();
-
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { close, runtime, exited } = await createSignaledLoopHarness();
-        let releaseDrain: (() => void) | undefined;
-        const pendingDrain = new Promise<void>((resolve) => {
-          releaseDrain = resolve;
-        });
-        const activeSnapshot = createActiveWorkSnapshot({ embeddedRuns: 1 }, [
-          { kind: "embedded-run", count: 1, message: "1 active embedded run(s)" },
-        ]);
-        waitForGatewayActiveWork.mockImplementationOnce(async (_timeoutMs, options) => {
-          options?.onSnapshot?.(activeSnapshot);
-          await pendingDrain;
-          return { drained: true, snapshot: idleActiveWorkSnapshot };
-        });
-
-        try {
-          captureSignal(signal)();
-          await waitForLoopCondition(
-            () => waitForGatewayActiveWork.mock.calls.length === 1,
-            `expected ${signal} to drain canonical active work`,
+      const traceEnv = captureEnv(["OPENCLAW_GATEWAY_RESTART_TRACE"]);
+      if (trace === undefined) {
+        deleteTestEnvValue("OPENCLAW_GATEWAY_RESTART_TRACE");
+      } else {
+        process.env.OPENCLAW_GATEWAY_RESTART_TRACE = trace;
+      }
+      try {
+        await withIsolatedSignals(async ({ captureSignal }) => {
+          const { close, runtime, exited } = await createSignaledLoopHarness();
+          const { startGatewayRestartTrace } = await import("../../gateway/restart-trace.js");
+          startGatewayRestartTrace("prior.sequence");
+          const pendingDrain = createDeferredCore();
+          const enteredDrain = createDeferredCore();
+          const activeSnapshot = createActiveWorkSnapshot(
+            {
+              queueSize: 1,
+              pendingReplies: 2,
+              embeddedRuns: 3,
+              backgroundExecSessions: 4,
+              cronRuns: 5,
+              activeTasks: 6,
+              rootRequests: 7,
+              sessionAdmissions: 8,
+              sessionMutations: 9,
+              chatRuns: 10,
+              queuedTurns: 11,
+              terminalPersistence: 12,
+              terminalSessions: 13,
+            },
+            [
+              { kind: "root-request", count: 7, message: "private-root-holder-origin" },
+              {
+                kind: "task",
+                count: 6,
+                message: "private-task-message",
+                task: {
+                  taskId: "private-task-id",
+                  runId: "private-run-id",
+                  status: "running",
+                  runtime: "cron",
+                  label: "private-task-label",
+                  title: "private-task-title",
+                },
+              },
+            ],
           );
-
-          expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
-          expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, undefined);
-          expect(close).not.toHaveBeenCalled();
-          expect(runtime.exit).not.toHaveBeenCalled();
-
-          releaseDrain?.();
-
-          await expect(exited).resolves.toBe(0);
-          expect(close).toHaveBeenCalledWith({
-            reason: "gateway stopping",
-            restartExpectedMs: null,
+          const counts =
+            "queueSize=1 pendingReplies=2 embeddedRuns=3 backgroundExecSessions=4 cronRuns=5 activeTasks=6 rootRequests=7 sessionAdmissions=8 sessionMutations=9 chatRuns=10 queuedTurns=11 terminalPersistence=12 terminalSessions=13";
+          waitForGatewayActiveWork.mockImplementationOnce(async (_timeoutMs, options) => {
+            options?.onSnapshot?.(activeSnapshot);
+            enteredDrain.resolve();
+            await pendingDrain.promise;
+            return { drained: true, snapshot: idleActiveWorkSnapshot };
           });
-        } finally {
-          releaseDrain?.();
-          await exited;
-        }
-      });
+          let now = Date.now();
+          const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+          try {
+            captureSignal(signal)();
+            await enteredDrain.promise;
+            expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
+            expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+              onSnapshot: expect.any(Function),
+            });
+            expect(createGatewayActiveWorkSnapshot).not.toHaveBeenCalled();
+            expect(close).not.toHaveBeenCalled();
+            expect(runtime.exit).not.toHaveBeenCalled();
+            expect(gatewayLog.info).toHaveBeenCalledWith(
+              `draining active work before stop with timeout 315000ms: ${counts}`,
+            );
+            captureSignal(signal)();
+            expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
+            const onSnapshot = waitForGatewayActiveWork.mock.calls[0]?.[1]?.onSnapshot;
+            now += 29_999;
+            onSnapshot?.(activeSnapshot);
+            expect(gatewayLog.warn).not.toHaveBeenCalled();
+            now += 1;
+            onSnapshot?.(activeSnapshot);
+            onSnapshot?.(activeSnapshot);
+            expect(gatewayLog.warn).toHaveBeenCalledExactlyOnceWith(
+              `still draining active work before stop: ${counts}`,
+            );
+            clock.mockRestore();
+            pendingDrain.resolve();
+            await expect(exited).resolves.toBe(0);
+            expect(abortEmbeddedAgentRun).not.toHaveBeenCalled();
+            expect(gatewayLog.info).toHaveBeenCalledWith(
+              "active-work drain settled; beginning server close",
+            );
+            const output = [...gatewayLog.info.mock.calls, ...gatewayLog.warn.mock.calls]
+              .flat()
+              .join("\n");
+            expect(output).not.toContain("private-");
+            expect(output).not.toContain("totalActive");
+            expect(output.includes("restart trace:")).toBe(trace === "1");
+            const starts = gatewayLog.info.mock.calls
+              .flat()
+              .filter((line) => String(line).includes("stop.signal.received "));
+            expect(starts).toEqual(
+              trace === "1"
+                ? [`restart trace: stop.signal.received 0.0ms total=0.0ms signal=${signal}`]
+                : [],
+            );
+            expect(close).toHaveBeenCalledWith({
+              reason: "gateway stopping",
+              restartExpectedMs: null,
+            });
+          } finally {
+            clock.mockRestore();
+            pendingDrain.resolve();
+            await exited;
+          }
+        });
+      } finally {
+        traceEnv.restore();
+      }
     },
   );
 
@@ -1149,9 +1230,11 @@ describe("runGatewayLoop", () => {
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, undefined);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+        onSnapshot: expect.any(Function),
+      });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
-        "gateway active-work drain timeout reached; proceeding with shutdown: 2 active embedded run(s)",
+        "gateway active-work drain timeout reached; proceeding with shutdown: embeddedRuns=2",
       );
       expect(close).toHaveBeenCalledWith({
         reason: "gateway stopping",
@@ -1171,7 +1254,9 @@ describe("runGatewayLoop", () => {
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, undefined);
+      expect(waitForGatewayActiveWork).toHaveBeenCalledWith(315_000, {
+        onSnapshot: expect.any(Function),
+      });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "gateway active-work drain failed; proceeding with shutdown: active-work drain unavailable",
       );
@@ -1443,7 +1528,7 @@ describe("runGatewayLoop", () => {
         DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS,
       );
       expect(gatewayLog.warn).toHaveBeenCalledWith(
-        "active-work drain timeout reached; proceeding with restart: 1 active background task run(s); 1 active embedded run(s)",
+        "active-work drain timeout reached; proceeding with restart: embeddedRuns=1 activeTasks=1",
       );
       expectRestartCloseCall(close, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
       expect(start).toHaveBeenCalledTimes(2);
@@ -1517,10 +1602,9 @@ describe("runGatewayLoop", () => {
 
       expect(waitForGatewayActiveWork).not.toHaveBeenCalled();
       expect(gatewayLog.info).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "taskId=task-force runId=run-force status=running runtime=cron label=forced",
-        ),
+        expect.stringContaining("embeddedRuns=1 activeTasks=1"),
       );
+      expect(gatewayLog.info.mock.calls.flat().join("\n")).not.toContain("task-force");
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "forced restart requested; skipping active work drain",
       );
@@ -1644,7 +1728,7 @@ describe("runGatewayLoop", () => {
         DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS,
       );
       expect(gatewayLog.warn).toHaveBeenCalledWith(
-        "active-work drain timeout reached; proceeding with restart: 2 active background task run(s); 1 active embedded run(s)",
+        "active-work drain timeout reached; proceeding with restart: embeddedRuns=1 activeTasks=2",
       );
       expectRestartCloseCall(closeFirst, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
       await startedThird;

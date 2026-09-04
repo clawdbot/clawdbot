@@ -246,6 +246,7 @@ describe("createGatewayCloseHandler", () => {
   });
 
   afterEach(() => {
+    finishGatewayRestartTrace("test.finish");
     resetPluginRuntimeStateForTest();
     vi.useRealTimers();
     if (originalRestartTraceEnv === undefined) {
@@ -480,58 +481,78 @@ describe("createGatewayCloseHandler", () => {
     expect(nextSupervisor).not.toBe(supervisor);
   });
 
-  it("joins an in-flight config reload before mutable runtime teardown", async () => {
-    const events: string[] = [];
-    mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockImplementation(() => {
-      events.push("session-suspension-timers");
-      return 1;
-    });
-    let releaseReload!: () => void;
-    const reloadStopped = new Promise<void>((resolve) => {
-      releaseReload = resolve;
-    });
-    const configReloader = {
-      stop: vi.fn(async () => {
-        events.push("reload:stopping");
-        await reloadStopped;
-        events.push("reload:stopped");
-      }),
-    };
-    const pluginServices = {
-      stop: vi.fn(async () => {
-        events.push("plugins:stopped");
-      }),
-    };
-    const stopChannel = vi.fn(async () => {
-      events.push("channel:stopped");
-    });
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({
-        channelIds: ["discord"],
-        configReloader,
-        pluginServices: pluginServices as never,
-        stopChannel,
-      }),
-    );
+  it.each([false, true])(
+    "reports and joins an in-flight config reload before teardown (trace=%s)",
+    async (trace) => {
+      process.env.OPENCLAW_GATEWAY_RESTART_TRACE = trace ? "1" : "0";
+      startGatewayRestartTrace("stop.signal.received");
+      const events: string[] = [];
+      mocks.fenceSessionSuspensionWritesForGatewayShutdown.mockImplementation(() => {
+        events.push("session-suspension-timers");
+        return 1;
+      });
+      let releaseReload!: () => void;
+      const reloadStopped = new Promise<void>((resolve) => {
+        releaseReload = resolve;
+      });
+      const configReloader = {
+        stop: vi.fn(async () => {
+          events.push("reload:stopping");
+          await reloadStopped;
+          events.push("reload:stopped");
+        }),
+      };
+      const pluginServices = {
+        stop: vi.fn(async () => {
+          events.push("plugins:stopped");
+        }),
+      };
+      const stopChannel = vi.fn(async () => {
+        events.push("channel:stopped");
+      });
+      const close = createGatewayCloseHandler(
+        createGatewayCloseTestDeps({
+          channelIds: ["discord"],
+          configReloader,
+          pluginServices: pluginServices as never,
+          stopChannel,
+        }),
+      );
 
-    const closePromise = close({ reason: "test" });
-    await vi.waitFor(() => {
-      expect(events).toEqual(["session-suspension-timers", "reload:stopping"]);
-    });
-    expect(pluginServices.stop).not.toHaveBeenCalled();
-    expect(stopChannel).not.toHaveBeenCalled();
+      const closePromise = close({ reason: "test" });
+      await vi.waitFor(() => {
+        expect(events).toEqual(["session-suspension-timers", "reload:stopping"]);
+      });
+      try {
+        expect(pluginServices.stop).not.toHaveBeenCalled();
+        expect(stopChannel).not.toHaveBeenCalled();
+        const messages = mocks.logInfo.mock.calls.map(([message]) => String(message));
+        expect(messages.some((line) => line.includes("restart.close.config-reloader.begin "))).toBe(
+          trace,
+        );
+        expect(messages.some((line) => line.includes("restart.close.config-reloader "))).toBe(
+          false,
+        );
+        expect(messages.some((line) => line.includes("restart.close.channels"))).toBe(false);
+      } finally {
+        releaseReload();
+        await closePromise;
+      }
+      expect(
+        mocks.logInfo.mock.calls.some(([message]) =>
+          String(message).includes("restart.close.config-reloader "),
+        ),
+      ).toBe(trace);
 
-    releaseReload();
-    await closePromise;
-
-    expect(events).toEqual([
-      "session-suspension-timers",
-      "reload:stopping",
-      "reload:stopped",
-      "plugins:stopped",
-      "channel:stopped",
-    ]);
-  });
+      expect(events).toEqual([
+        "session-suspension-timers",
+        "reload:stopping",
+        "reload:stopped",
+        "plugins:stopped",
+        "channel:stopped",
+      ]);
+    },
+  );
 
   it("disposes ACP sessions before plugin services and channel runtimes", async () => {
     const events: string[] = [];
