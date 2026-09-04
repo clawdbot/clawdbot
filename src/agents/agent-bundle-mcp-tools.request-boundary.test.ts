@@ -520,6 +520,32 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: true,
     },
     {
+      label: "the same full-length inner literal in a config and a runtime allow glob",
+      tools: { allow: [`memos__*${"n".repeat(57)}*`] },
+      toolsAllow: [`memos__*${"n".repeat(57)}*`],
+      toolNames: ["n".repeat(57)],
+      visible: true,
+    },
+    {
+      label: "twenty same-shaped allow globs in two layers with every one denied",
+      tools: {
+        allow: Array.from(
+          { length: 20 },
+          (_, index) => `memos__*d${String(index + 1).padStart(2, "0")}*`,
+        ),
+        deny: Array.from(
+          { length: 20 },
+          (_, index) => `memos__*d${String(index + 1).padStart(2, "0")}*`,
+        ),
+      },
+      toolsAllow: Array.from(
+        { length: 20 },
+        (_, index) => `memos__*d${String(index + 1).padStart(2, "0")}*`,
+      ),
+      toolNames: ["d01x"],
+      visible: false,
+    },
+    {
       label: "sixty-five same-shaped allow globs with the first sixty-four denied",
       tools: {
         allow: Array.from(

@@ -2,7 +2,7 @@
  * Runtime matcher for sandbox tool policies. Deny patterns always win, then
  * an empty allow list means "allow everything not denied".
  */
-import { couldMaterializeToolName } from "./agent-bundle-mcp-names.js";
+import { couldMaterializeToolName, TOOL_NAME_MAX_TOTAL } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
@@ -98,103 +98,184 @@ export function isToolAllowedByPolicies(
   return policies.every((policy) => isToolAllowedByPolicyName(name, policy));
 }
 
-// Outside the sanitized tool-name alphabet (`[A-Za-z0-9_-]`), so a policy entry
-// can cover a witness only through a wildcard, never by a literal that happens
-// to spell the placeholder while missing the server's real tools.
-const NAMESPACE_WITNESS = "~";
-
-/**
- * The shortest name a witness stands for: wildcards match nothing, except that
- * a wildcard opening the suffix supplies the letter every generated tool name
- * begins with. A suffix that opens with a literal non-letter names no tool at
- * all. Length and alphabet are then judged on that realization.
- */
-function shortestWitnessRealization(witness: string, namespace: string): string | undefined {
-  const suffix = witness.slice(namespace.length);
-  const literal = suffix.replaceAll(NAMESPACE_WITNESS, "");
-  if (/^[a-z]/.test(literal)) {
-    return namespace + literal;
-  }
-  return suffix.startsWith(NAMESPACE_WITNESS) ? `${namespace}a${literal}` : undefined;
-}
 // Entries a provider-safe tool name could ever match once `expandToolGroups`
 // has trimmed and lowercased them (letters, digits, `_`, interior `-`, and
-// `*`); anything else, including one spelling the placeholder, authorizes or
-// denies no real tool.
+// `*`); anything else authorizes or denies no real tool.
 const REALIZABLE_ENTRY_RE = /^[a-z0-9_*-]+$/;
 
 function realizableEntries(list: string[] | undefined): string[] {
   return expandToolGroups(list).filter((entry) => REALIZABLE_ENTRY_RE.test(entry));
 }
 
-/** A glob split at its wildcards: literal head, inner literals, literal tail. */
-type GlobShape = { head: string; inner: string[]; tail: string };
+// Distinct simulation states visited before the search gives up. Real policies
+// stay far below this; past it the namespace counts as admitted, because naming
+// an unavailable server the policy might not admit is the cheaper error than
+// hiding an outage it does admit (the silent retry loop this matcher exists to
+// stop).
+const MAX_NAMESPACE_SEARCH_STATES = 10_000;
 
-/** How an allow entry reaches the namespace: a concrete name as itself, a glob as its shape. */
-function namespaceReach(entry: string, namespace: string): string | GlobShape | undefined {
-  const parts = entry.split("*");
-  const head = parts[0] ?? "";
-  if (parts.length === 1) {
-    return entry.length > namespace.length && entry.startsWith(namespace) ? entry : undefined;
+/**
+ * Positions a glob can occupy after reading input, closed over `*` matching
+ * nothing: a position at a `*` also stands one past it. A glob accepts when its
+ * length is among them.
+ */
+function closeGlobPositions(glob: string, positions: Iterable<number>): number[] {
+  const closed = new Set<number>();
+  for (const position of positions) {
+    let cursor = position;
+    closed.add(cursor);
+    while (glob[cursor] === "*") {
+      cursor += 1;
+      closed.add(cursor);
+    }
   }
-  if (!head.startsWith(namespace) && !namespace.startsWith(head)) {
-    return undefined;
+  return [...closed].toSorted((a, b) => a - b);
+}
+
+/** Positions after one more character: a `*` keeps consuming, a literal must match. */
+function stepGlobPositions(glob: string, positions: readonly number[], char: string): number[] {
+  const next: number[] = [];
+  for (const position of positions) {
+    const symbol = glob[position];
+    if (symbol === "*") {
+      next.push(position);
+    } else if (symbol === char) {
+      next.push(position + 1);
+    }
   }
+  return closeGlobPositions(glob, next);
+}
+
+/** One glob list run in lockstep: `positions[i]` tracks `globs[i]`. */
+type GlobRun = { globs: readonly string[]; positions: number[][] };
+
+function stepGlobRun(run: GlobRun, char: string): GlobRun {
   return {
-    head: head.length >= namespace.length ? head : namespace,
-    inner: parts.slice(1, -1),
-    tail: parts.at(-1) ?? "",
+    globs: run.globs,
+    positions: run.positions.map((positions, index) =>
+      stepGlobPositions(run.globs[index] ?? "", positions, char),
+    ),
   };
 }
 
+/** A glob sitting on its trailing `*` accepts every extension; a deny there ends the search. */
+function globRunAcceptsForever(run: GlobRun): boolean {
+  return run.positions.some((positions, index) => {
+    const glob = run.globs[index] ?? "";
+    return glob.endsWith("*") && positions.includes(glob.length - 1);
+  });
+}
+
+function globRunAccepts(run: GlobRun): boolean {
+  return run.positions.some((positions, index) =>
+    positions.includes(run.globs[index]?.length ?? -1),
+  );
+}
+
 /**
- * Whether some way of picking one glob from every glob layer yields an admitted
- * name. Globs combine only when their heads nest and their tails nest; the
- * witness is the longest head, every inner literal in order, and the longest
- * tail joined by the placeholder, which every chosen glob matches at once
- * (`memos__read*` with `memos__*note` gives `memos__read~note`). The search
- * stops at the first admitted witness, so only a policy that denies every
- * candidate walks the full product of same-shaped globs across layers.
+ * Whether some provider-safe tool name under `namespace` is matched by a glob
+ * of every allow layer and by no deny glob. Every glob is simulated together
+ * over one candidate name at a time, breadth-first over the suffix, so the
+ * decision is exact: no synthetic witness, no cap that drops a candidate.
+ * Characters outside every literal behave alike, so the alphabet is the
+ * literal characters plus one fresh letter, and the search revisits no state.
  */
-function globLayersAdmitWitness(
-  layers: GlobShape[][],
-  namespace: string,
-  admits: (witness: string) => boolean,
-): boolean {
-  const judged = new Set<string>();
-  const visit = (depth: number, combined: GlobShape): boolean => {
-    if (depth === layers.length) {
-      const witness = [combined.head, ...combined.inner, combined.tail].join(NAMESPACE_WITNESS);
-      if (judged.has(witness)) {
-        return false;
+function globLayersAdmitSomeName(params: {
+  namespace: string;
+  layers: readonly (readonly string[])[];
+  denies: readonly string[];
+}): boolean {
+  const { namespace, denies } = params;
+  const literals = new Set<string>();
+  for (const glob of [...params.layers.flat(), ...denies]) {
+    for (const char of glob) {
+      if (char !== "*") {
+        literals.add(char);
       }
-      judged.add(witness);
-      return admits(witness);
     }
-    for (const shape of layers[depth] ?? []) {
-      const head = combined.head.length >= shape.head.length ? combined.head : shape.head;
-      const tail = combined.tail.length >= shape.tail.length ? combined.tail : shape.tail;
-      const nests =
-        head.startsWith(combined.head) &&
-        head.startsWith(shape.head) &&
-        tail.endsWith(combined.tail) &&
-        tail.endsWith(shape.tail);
-      if (nests && visit(depth + 1, { head, inner: [...combined.inner, ...shape.inner], tail })) {
+  }
+  const freshLetter = "abcdefghijklmnopqrstuvwxyz".split("").find((char) => !literals.has(char));
+  const alphabet = [...literals, ...(freshLetter ? [freshLetter] : [])];
+  const startRun = (globs: readonly string[]): GlobRun => {
+    let run: GlobRun = { globs, positions: globs.map((glob) => closeGlobPositions(glob, [0])) };
+    for (const char of namespace) {
+      run = stepGlobRun(run, char);
+    }
+    return run;
+  };
+  type SearchState = { layers: GlobRun[]; deny: GlobRun; suffix: string };
+  const initial: SearchState = {
+    layers: params.layers.map(startRun),
+    deny: startRun(denies),
+    suffix: "",
+  };
+  // A layer none of whose globs survived the namespace can never accept, and a
+  // deny already on its trailing `*` covers every name under it.
+  if (
+    initial.layers.some((run) => run.positions.every((positions) => positions.length === 0)) ||
+    globRunAcceptsForever(initial.deny)
+  ) {
+    return false;
+  }
+  // Positions decide the future; the suffix matters only through "started yet",
+  // since a shorter suffix reaching the same positions can do anything a longer
+  // one can within the same name budget.
+  const keyOf = (state: SearchState) =>
+    [state.suffix.length === 0 ? "" : "+", ...state.layers, state.deny]
+      .map((run) =>
+        typeof run === "string" ? run : run.positions.map((p) => p.join(".")).join(","),
+      )
+      .join("|");
+
+  const visited = new Set<string>([keyOf(initial)]);
+  const queue: SearchState[] = [initial];
+  // `for…of` sees states pushed during iteration, so the queue needs no index.
+  for (const state of queue) {
+    const candidate = namespace + state.suffix;
+    if (
+      state.suffix.length > 0 &&
+      state.layers.every(globRunAccepts) &&
+      !globRunAccepts(state.deny) &&
+      couldMaterializeToolName(candidate, namespace)
+    ) {
+      return true;
+    }
+    if (candidate.length >= TOOL_NAME_MAX_TOTAL) {
+      continue;
+    }
+    for (const char of alphabet) {
+      // Generated names open their suffix with a letter; nothing else can follow.
+      if (state.suffix.length === 0 && !/[a-z]/.test(char)) {
+        continue;
+      }
+      const next: SearchState = {
+        layers: state.layers.map((run) => stepGlobRun(run, char)),
+        deny: stepGlobRun(state.deny, char),
+        suffix: state.suffix + char,
+      };
+      // Once a deny sits on its trailing `*`, no extension escapes it.
+      if (globRunAcceptsForever(next.deny)) {
+        continue;
+      }
+      const key = keyOf(next);
+      if (visited.has(key)) {
+        continue;
+      }
+      if (visited.size >= MAX_NAMESPACE_SEARCH_STATES) {
         return true;
       }
+      visited.add(key);
+      queue.push(next);
     }
-    return false;
-  };
-  return visit(0, { head: namespace, inner: [], tail: "" });
+  }
+  return false;
 }
 
 /**
  * Whether layered policies could still admit some tool inside a namespace prefix
  * (an MCP `server__`) whose tool names are unknown after a failed catalog load.
- * Allow entries reaching the prefix stand in for tools they could match: concrete
- * names as themselves, globs through one witness per way of satisfying every
- * glob layer at once. The real matcher then judges those witnesses with deny
- * precedence across all layers, so `allow: ["memos__read*"]` plus
+ * The allow globs of every layer and every deny glob are decided together over
+ * the provider-safe name language, so `allow: ["memos__read*"]` plus
  * `deny: ["memos__read*"]` hides the namespace exactly as it hides the tools.
  */
 export function policiesAdmitToolNamespace(
@@ -202,50 +283,18 @@ export function policiesAdmitToolNamespace(
   policies: Array<SandboxToolPolicy | undefined>,
 ): boolean {
   const namespace = normalizeToolPolicyName(prefix);
-  const names = new Set<string>();
-  const globLayers: GlobShape[][] = [];
-  const judged: SandboxToolPolicy[] = [];
+  const layers: string[][] = [];
+  const denies: string[] = [];
   for (const policy of policies) {
     const allow = realizableEntries(policy?.allow);
     // A layer whose allow list names nothing realizable admits no real tool.
     if (allow.length === 0 && expandToolGroups(policy?.allow).length > 0) {
       return false;
     }
-    judged.push({ allow, deny: realizableEntries(policy?.deny) });
-    if (allow.length === 0) {
-      continue;
-    }
-    const shapes: GlobShape[] = [];
-    let reached = false;
-    for (const entry of allow) {
-      const reach = namespaceReach(entry, namespace);
-      if (reach === undefined) {
-        continue;
-      }
-      reached = true;
-      if (typeof reach !== "string") {
-        shapes.push(reach);
-      } else if (couldMaterializeToolName(reach, namespace)) {
-        names.add(reach);
-      }
-    }
-    if (!reached) {
-      return false;
-    }
-    if (shapes.length > 0) {
-      globLayers.push(shapes);
+    denies.push(...realizableEntries(policy?.deny));
+    if (allow.length > 0) {
+      layers.push(allow);
     }
   }
-  // `memos__1*` (no tool starts with a digit) and literals past the name budget
-  // yield no witness and fall closed; a trailing wildcard on a full-length name
-  // still passes because it may match nothing.
-  const admits = (witness: string) => {
-    const shortest = shortestWitnessRealization(witness, namespace);
-    return (
-      shortest !== undefined &&
-      couldMaterializeToolName(shortest, namespace) &&
-      isToolAllowedByPolicies(witness, judged)
-    );
-  };
-  return [...names].some(admits) || globLayersAdmitWitness(globLayers, namespace, admits);
+  return globLayersAdmitSomeName({ namespace, layers, denies });
 }

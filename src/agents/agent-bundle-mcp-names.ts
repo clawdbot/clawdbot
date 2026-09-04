@@ -9,7 +9,7 @@ import {
 const TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_-]/g;
 export const TOOL_NAME_SEPARATOR = "__";
 const TOOL_NAME_MAX_PREFIX = 30;
-const TOOL_NAME_MAX_TOTAL = 64;
+export const TOOL_NAME_MAX_TOTAL = 64;
 
 /** Builds stable node-ID prefixes capped at 32 characters. */
 export function sanitizeNodeIdFragment(value: string): string {
