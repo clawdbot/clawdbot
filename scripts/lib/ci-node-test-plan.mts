@@ -766,8 +766,8 @@ function estimateCompactStripeSeconds(
     : blacksmithSeconds;
 }
 
-// Split siblings must stay in different jobs, including nested children of
-// deliberately separated fixed stripes.
+// Identify split siblings, including nested children of deliberately separated
+// fixed stripes. Packing may share only affordable serial CLI runtime children.
 function compactStripeFamily(group: NodeTestShardGroup): string | undefined {
   if (
     /^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite))?(?:-hosted-\d+)?$/u.test(
@@ -2713,9 +2713,16 @@ function createCompactNodeTestShardBundles(
         combined.every((entry) => estimateBinSeconds([entry]) <= serialSecondsCap);
       const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
       const family = compactStripeFamily(group);
+      // CLI runtime children retain separate serial processes but can share the
+      // prerequisite within the full 150s budget. Fixed stripe families stay apart.
+      const sharesCliRuntimeBuild =
+        /^agentic-cli-process-hosted-\d+$/u.test(group.shard_name) &&
+        group.pretestBuildMode === "runtime" &&
+        candidate.every((entry) => entry.pretestBuildMode === group.pretestBuildMode);
       return (
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
         (family === undefined ||
+          sharesCliRuntimeBuild ||
           candidate.every((entry) => compactStripeFamily(entry) !== family)) &&
         (parallel || candidate.length < COMPACT_NODE_TEST_JOB_GROUPS) &&
         estimateBinSeconds(combined) <= secondsCap

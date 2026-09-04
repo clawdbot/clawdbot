@@ -753,6 +753,52 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it("shares runtime preparation between affordable serial split groups", () => {
+    const originalShards = fullSuiteVitestShards.slice();
+    const config = "test/vitest/vitest.cli-process.config.ts";
+    const selected = originalShards
+      .map((shard) => ({ ...shard, projects: shard.projects.filter((entry) => entry === config) }))
+      .filter((shard) => shard.projects.length > 0);
+    fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...selected);
+    const timings = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+    const options = {
+      includeReleaseOnlyPluginShards: false,
+      compactMode: "push" as const,
+      runnerBackend: "hybrid",
+    };
+    try {
+      const plan = createNodeTestShardBundles(options);
+      const runtimeJobs = plan.filter((job) => job.pretestBuildMode);
+      expect(runtimeJobs).toHaveLength(1);
+      const [runtimeJob] = runtimeJobs;
+      expect(runtimeJob).toMatchObject({ planConcurrency: 1, pretestBuildMode: "runtime" });
+      expect(runtimeJob!.predictedSeconds).toBeLessThanOrEqual(150);
+      expect(runtimeJob!.groups).toHaveLength(2);
+      for (const group of runtimeJob!.groups) {
+        expect(group.configs).toEqual([config]);
+        expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+      }
+      expect(
+        plan
+          .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
+          .toSorted(),
+      ).toEqual(listMatchedTestFiles(createCliProcessVitestConfig({})).toSorted());
+
+      // A measured child can raise its floor, but shared preparation must never
+      // reunite expensive siblings beyond the unchanged exclusive wall budget.
+      timings.mockReturnValue(
+        Object.fromEntries(runtimeJob!.groups.map((group) => [group.timing_key!, 100])),
+      );
+      const expensive = createNodeTestShardBundles(options).filter((job) => job.pretestBuildMode);
+      expect(expensive).toHaveLength(2);
+      expect(expensive.every((job) => job.groups.length === 1 && job.planConcurrency === 1)).toBe(
+        true,
+      );
+    } finally {
+      fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
+    }
+  });
+
   it("preserves coverage and execution policies with committed compact measurements", () => {
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
     const compact = createNodeTestShardBundles({
@@ -911,7 +957,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             group.configs.includes("test/vitest/vitest.cli-process.config.ts"),
           ),
         );
-        expect(cliProcessJobs, profile.name).toHaveLength(7);
         const gatewayJobs = new Set(
           gatewayFiles.map((file) => {
             const gatewayJob = cliProcessJobs.find((shard) =>
@@ -924,7 +969,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           }),
         );
         const runtimeCliJobs = cliProcessJobs.filter((shard) => shard.pretestBuildMode);
-        expect(runtimeCliJobs).toHaveLength(2);
         expect(runtimeCliJobs).toEqual(
           expect.arrayContaining(
             [
@@ -1125,9 +1169,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           continue;
         }
         const jobs = groups.map((group) => plan.findIndex((shard) => shard.groups.includes(group)));
-        expect(new Set(jobs).size, `${owner.shardName}: split children stay separate`).toBe(
-          groups.length,
-        );
+        for (const jobIndex of new Set(jobs)) {
+          const job = plan[jobIndex]!;
+          const siblings = groups.filter((group) => job.groups.includes(group));
+          if (siblings.length === 1) {
+            continue;
+          }
+          expect(job).toMatchObject({ planConcurrency: 1, requiresDist: false });
+          expect(job.predictedSeconds).toBeLessThanOrEqual(150);
+          expect(job.groups.every((group) => isExclusiveCompactShardName(group.shard_name))).toBe(
+            true,
+          );
+          expect(job.pretestBuildMode).toBe("runtime");
+          expect(
+            siblings.every((group) => /^agentic-cli-process-hosted-\d+$/u.test(group.shard_name)),
+          ).toBe(true);
+          expect(siblings.every((group) => group.pretestBuildMode === job.pretestBuildMode)).toBe(
+            true,
+          );
+        }
         const actual = groups.flatMap((group) => group.includePatterns ?? []);
         expect(new Set(actual).size, owner.shardName).toBe(actual.length);
         if (owner.includePatterns) {

@@ -259,7 +259,10 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   serial bins retain that cutoff. Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
   exclusive bins retain 150s, and groups above their serial cap stay alone.
   Runtime consumers in ordinary bins share preparation only with other consumers;
-  hybrid exclusive/dist sharing is unchanged. Complete inventories remain intact.
+  Affordable generated CLI runtime children may share one preparation in an
+  exclusive serial bin within the same 150s budget; fixed stripe families remain
+  separate. Other hybrid exclusive/dist sharing is unchanged. Complete inventories
+  remain intact.
   The canonical shard executor admits two CI children only with at least eight
   available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
   parallelism stays one and each overlapping child keeps two Vitest workers.
