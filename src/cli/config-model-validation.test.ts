@@ -1060,6 +1060,6 @@ describe("config model validation", () => {
       resolveModelRef,
     });
 
-    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(result).toEqual({ refsChecked: 2, refsTotal: 2, errors: [] });
   });
 });
