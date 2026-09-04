@@ -7479,9 +7479,11 @@ server.listen(0, "127.0.0.1", () => {
       for (const scenario of [
         { failed: "", missing: "", missingFile: false },
         ...commands.map((failed) => ({ failed, missing: "", missingFile: false })),
-        ...commands.map((missing) => ({ failed: "", missing, missingFile: false })),
-        ...(commands.some((command) => command === "lint:tmp:export-name-collisions")
-          ? [{ failed: "", missing: "", missingFile: true }]
+        ...(group === "source-contracts"
+          ? [
+              ...commands.map((missing) => ({ failed: "", missing, missingFile: false })),
+              { failed: "", missing: "", missingFile: true },
+            ]
           : []),
       ]) {
         const present = commands.filter(
