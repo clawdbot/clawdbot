@@ -10,7 +10,12 @@ import {
   renderMarkdownIRChunksWithinLimit,
   renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
-import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+
+// Escape special characters for Slack mrkdwn format.
+// Preserve Slack's angle-bracket tokens so mentions and links stay intact.
+function escapeSlackMrkdwnSegment(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
 
@@ -31,10 +36,7 @@ function isAllowedSlackAngleToken(token: string): boolean {
   );
 }
 
-function escapeSlackMrkdwnContent(text: string, mentions?: "escape"): string {
-  if (mentions === "escape") {
-    return escapeSlackMrkdwn(text);
-  }
+function escapeSlackMrkdwnContent(text: string): string {
   if (!text) {
     return "";
   }
@@ -52,17 +54,17 @@ function escapeSlackMrkdwnContent(text: string, mentions?: "escape"): string {
     match = SLACK_ANGLE_TOKEN_RE.exec(text)
   ) {
     const matchIndex = match.index ?? 0;
-    out.push(escapeSlackMrkdwn(text.slice(lastIndex, matchIndex)));
+    out.push(escapeSlackMrkdwnSegment(text.slice(lastIndex, matchIndex)));
     const token = match[0] ?? "";
-    out.push(isAllowedSlackAngleToken(token) ? token : escapeSlackMrkdwn(token));
+    out.push(isAllowedSlackAngleToken(token) ? token : escapeSlackMrkdwnSegment(token));
     lastIndex = matchIndex + token.length;
   }
 
-  out.push(escapeSlackMrkdwn(text.slice(lastIndex)));
+  out.push(escapeSlackMrkdwnSegment(text.slice(lastIndex)));
   return out.join("");
 }
 
-function escapeSlackMrkdwnText(text: string, mentions?: "escape"): string {
+function escapeSlackMrkdwnText(text: string): string {
   if (!text) {
     return "";
   }
@@ -74,11 +76,15 @@ function escapeSlackMrkdwnText(text: string, mentions?: "escape"): string {
     .split("\n")
     .map((line) => {
       if (line.startsWith("> ")) {
-        return `> ${escapeSlackMrkdwnContent(line.slice(2), mentions)}`;
+        return `> ${escapeSlackMrkdwnContent(line.slice(2))}`;
       }
-      return escapeSlackMrkdwnContent(line, mentions);
+      return escapeSlackMrkdwnContent(line);
     })
     .join("\n");
+}
+
+function isSlackLinkHref(href: string): boolean {
+  return /^(?:https?:\/\/|mailto:|tel:|#)/i.test(href);
 }
 
 function buildSlackLink(link: MarkdownLinkSpan, text: string) {
@@ -94,7 +100,13 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
   if (!useMarkup) {
     return null;
   }
-  const safeHref = escapeSlackMrkdwn(href);
+  // Slack mrkdwn serializes any nonempty href as a native `<href|label>` link;
+  // collapse non-web schemes (e.g. file:) to plain label text so they cannot
+  // become clickable/inert native links. Mirrors Telegram's isTelegramRichLinkHref.
+  if (!isSlackLinkHref(href)) {
+    return null;
+  }
+  const safeHref = escapeSlackMrkdwnSegment(href);
   return {
     start: link.start,
     end: link.end,
@@ -105,10 +117,6 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
 
 type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
-  /** The caller wraps the output in this emphasis; Slack cannot nest the same style, so inner markers are dropped. */
-  enclosingStyle?: "bold" | "italic";
-  /** Escape every Slack angle token (mentions, special commands, links) instead of preserving it. */
-  mentions?: "escape";
 };
 
 const SLACK_MRKDWN_WORD_CHARACTER_RE = /[\p{L}\p{M}\p{N}_]/u;
@@ -407,7 +415,7 @@ function protectSlackAssistantTranscriptRoleHeaders(text: string): string {
   return `${SLACK_ASSISTANT_TRANSCRIPT_PREFIX}${text}`;
 }
 
-function buildSlackRenderOptions({ enclosingStyle, mentions }: SlackMarkdownOptions = {}) {
+function buildSlackRenderOptions() {
   return {
     annotationMarkers: {
       assistant_transcript_role: {
@@ -417,14 +425,13 @@ function buildSlackRenderOptions({ enclosingStyle, mentions }: SlackMarkdownOpti
       },
     },
     styleMarkers: {
-      // Slack cannot nest the same emphasis style inside a caller-provided wrapper.
-      ...(enclosingStyle !== "bold" ? { bold: { open: "*", close: "*" } } : {}),
-      ...(enclosingStyle !== "italic" ? { italic: { open: "_", close: "_" } } : {}),
+      bold: { open: "*", close: "*" },
+      italic: { open: "_", close: "_" },
       strikethrough: { open: "~", close: "~" },
       code: { open: "`", close: "`" },
       code_block: { open: "```\n", close: "```" },
     },
-    escapeText: (text: string) => escapeSlackMrkdwnText(text, mentions),
+    escapeText: escapeSlackMrkdwnText,
     buildLink: buildSlackLink,
   };
 }
@@ -444,7 +451,7 @@ export function normalizeSlackOutboundText(
     }),
   );
   return protectSlackAssistantTranscriptRoleHeaders(
-    renderMarkdownWithMarkers(ir, buildSlackRenderOptions(options), SLACK_FORMAT_PROFILE),
+    renderMarkdownWithMarkers(ir, buildSlackRenderOptions(), SLACK_FORMAT_PROFILE),
   );
 }
 
@@ -508,9 +515,13 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
           );
         } else {
           chunks.push(
-            ...chunkTextForOutbound(escapeSlackMrkdwn(token), Math.max(1, Math.floor(limit)), {
-              preserveWhitespace: true,
-            }),
+            ...chunkTextForOutbound(
+              escapeSlackMrkdwnSegment(token),
+              Math.max(1, Math.floor(limit)),
+              {
+                preserveWhitespace: true,
+              },
+            ),
           );
         }
         continue;

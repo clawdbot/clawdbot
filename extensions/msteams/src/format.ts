@@ -35,10 +35,7 @@ const MSTEAMS_MARKERS = {
 } as const;
 
 function createTokenPrefix(text: string, label: string): string {
-  // With these parser options, the leading marker must be literal or entity-decoded.
-  const normalized = /[\u{E000}&]/u.test(text)
-    ? markdownToIR(text, { autolink: false, linkify: false }).text
-    : "";
+  const normalized = markdownToIR(text, { autolink: false, linkify: false }).text;
   let prefix: string;
   do {
     prefix = `\u{E000}${label}-${randomUUID()}\u{E001}`;
@@ -506,6 +503,10 @@ function protectMSTeamsCode(
   };
 }
 
+function isMSTeamsLinkHref(href: string): boolean {
+  return /^(?:https?:\/\/|mailto:|tel:|#)/i.test(href);
+}
+
 export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTableMode): string {
   const rawTables: string[] = [];
   const escapedMarkdown: string[] = [];
@@ -551,12 +552,21 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     {
       styleMarkers: MSTEAMS_MARKERS,
       escapeText: (text) => text,
-      buildLink: (link) => ({
-        start: link.start,
-        end: link.end,
-        open: "[",
-        close: `](${serializeMarkdownDestination(link.href)})`,
-      }),
+      buildLink: (link) => {
+        const href = link.href.trim();
+        // MSTeams serializes any href into markdown `[label](href)`; collapse
+        // non-web schemes (e.g. file:) to label text so they cannot become
+        // clickable/inert links. Mirrors Telegram's isTelegramRichLinkHref.
+        if (!isMSTeamsLinkHref(href)) {
+          return null;
+        }
+        return {
+          start: link.start,
+          end: link.end,
+          open: "[",
+          close: `](${serializeMarkdownDestination(link.href)})`,
+        };
+      },
     },
     MSTEAMS_FORMAT_CAPABILITIES,
   );
