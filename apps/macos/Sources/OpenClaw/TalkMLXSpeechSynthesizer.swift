@@ -616,7 +616,7 @@ private enum MLXTTSTransportError: Error {
 private actor ProcessMLXTTSTransport: MLXTTSTransport {
     private let process: ManagedProcess
     private let input: FileHandle
-    private let output: FileHandle
+    private let output: PipeReadStream
     private let chunkContinuation: AsyncStream<Data>.Continuation
     private let chunks: MLXChunkIterator
     private var decoder = MLXTTSFrameDecoder()
@@ -626,7 +626,7 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
     private init(
         process: ManagedProcess,
         input: FileHandle,
-        output: FileHandle,
+        output: PipeReadStream,
         chunks: AsyncStream<Data>,
         chunkContinuation: AsyncStream<Data>.Continuation)
     {
@@ -642,23 +642,18 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
     {
         let inputPipe = Pipe()
         let outputPipe = Pipe()
+        // The helper child can exit at any time; without this a racing
+        // send() to its stdin raises SIGPIPE and kills the app.
+        inputPipe.fileHandleForWriting.disableSIGPIPE()
 
-        let output = outputPipe.fileHandleForReading
         let (stream, continuation) = AsyncStream<Data>.makeStream()
-        output.readabilityHandler = { handle in
-            // Throwing read wrapper; availableData can raise ObjC exceptions on
-            // closed/invalid handles and abort the process (FileHandle+SafeRead).
-            let data = handle.readSafely(upToCount: 64 * 1024)
-            if data.isEmpty {
-                handle.readabilityHandler = nil
-                continuation.finish()
-            } else {
-                continuation.yield(data)
-            }
-        }
+        let output = try PipeReadStream(
+            handle: outputPipe.fileHandleForReading,
+            onData: { continuation.yield($0) },
+            onClose: { continuation.finish() })
 
         let configuration = Subprocess.Configuration(
-            .path(.init(invocation.executableURL.path)),
+            executable: .path(.init(invocation.executableURL.path)),
             arguments: Arguments(invocation.argumentPrefix))
         let process = ManagedProcess.launch(
             configuration: configuration,
@@ -671,13 +666,17 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
             error: .currentStandardError,
             closeAfterSpawn: [
                 inputPipe.fileHandleForReading,
+                outputPipe.fileHandleForReading,
                 outputPipe.fileHandleForWriting,
             ])
         do {
             _ = try await process.waitUntilStarted()
         } catch {
-            output.readabilityHandler = nil
+            // The detached launch can still spawn; reap it before closing inherited pipes.
+            await process.terminate(gracefully: false)
+            output.close()
             continuation.finish()
+            await output.finish()
             throw error
         }
 
@@ -709,11 +708,11 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
     func close() async {
         guard !self.isClosed else { return }
         self.isClosed = true
-        self.output.readabilityHandler = nil
+        self.output.close()
         self.chunkContinuation.finish()
         self.input.closeFile()
-        self.output.closeFile()
         await self.process.terminate()
+        await self.output.finish()
     }
 }
 

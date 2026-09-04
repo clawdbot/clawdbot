@@ -4,17 +4,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLocalSqliteSnapshotProvider } from "../../src/snapshot/local-repository.js";
-import type { ReliabilityReport, ReliabilityStateProof } from "./sqlite-reliability-contract.js";
+import {
+  assertSameCompactionPayload,
+  formatReliabilityStderr,
+  type CompactionPayloadProof,
+  type ReliabilityReport,
+  type ReliabilityStateProof,
+} from "./sqlite-reliability-contract.js";
 
 type RestoreCrashPoint = "after-publish" | "before-publish";
 type RestoreExit =
   ReliabilityReport["maintenanceProof"]["restoreInterruption"]["beforePublish"]["exit"];
-type RestorePayloadProof =
-  ReliabilityReport["maintenanceProof"]["restoreInterruption"]["beforePublish"]["payloadAfterRecovery"];
 type RestoreCrashResult = {
   existingTargetPreserved: boolean;
   exit: RestoreExit;
-  payloadAfterRecovery: RestorePayloadProof;
+  payloadAfterRecovery: CompactionPayloadProof;
   recoveryVerified: true;
   repositoryVerified: true;
   retryRestored: boolean;
@@ -50,22 +54,6 @@ function assertSameState(
   }
 }
 
-function assertSamePayload(
-  actual: RestorePayloadProof,
-  expected: RestorePayloadProof,
-  label: string,
-): void {
-  if (
-    actual.bytes !== expected.bytes ||
-    actual.idSum !== expected.idSum ||
-    actual.rows !== expected.rows
-  ) {
-    throw new Error(
-      `${label} changed compaction payload: expected rows=${expected.rows} bytes=${expected.bytes} idSum=${expected.idSum}, got rows=${actual.rows} bytes=${actual.bytes} idSum=${actual.idSum}`,
-    );
-  }
-}
-
 function assertNoSqliteSidecars(targetPath: string): void {
   for (const suffix of ["-journal", "-shm", "-wal"]) {
     if (fs.existsSync(`${targetPath}${suffix}`)) {
@@ -92,11 +80,6 @@ function hasPublicationStaging(scratchPath: string): boolean {
   );
 }
 
-function formatWorkerStderr(stderr: string): string {
-  const text = stderr.trim();
-  return text ? ` stderr=${JSON.stringify(text)}` : "";
-}
-
 async function waitForWorkerReady(params: {
   child: ChildProcess;
   readStderr: () => string;
@@ -106,7 +89,7 @@ async function waitForWorkerReady(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite restore worker did not become ready.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite restore worker did not become ready.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     }, 30_000);
@@ -128,7 +111,7 @@ async function waitForWorkerReady(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite restore worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite restore worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     };
@@ -200,7 +183,7 @@ async function waitForCrashPoint(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite restore worker did not reach ${params.crashPoint}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite restore worker did not reach ${params.crashPoint}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     }, RESTORE_TIMEOUT_MS);
@@ -219,7 +202,7 @@ async function waitForCrashPoint(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite restore worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite restore worker exited before ${params.crashPoint}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     };
@@ -267,7 +250,7 @@ async function assertRepositorySnapshotAvailable(params: {
 
 async function runCrashPoint(params: {
   crashPoint: RestoreCrashPoint;
-  expectedPayload: RestorePayloadProof;
+  expectedPayload: CompactionPayloadProof;
   expectedSnapshotBytes: number;
   expectedState: ReliabilityStateProof;
   provider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
@@ -275,7 +258,7 @@ async function runCrashPoint(params: {
   scratchPath: string;
   snapshotPath: string;
   validationRootPath: string;
-  verifyPayload: (databasePath: string) => RestorePayloadProof;
+  verifyPayload: (databasePath: string) => CompactionPayloadProof;
   verifyState: (databasePath: string) => ReliabilityStateProof;
 }): Promise<RestoreCrashResult> {
   const targetPath = path.join(params.scratchPath, `${params.crashPoint}.sqlite`);
@@ -370,7 +353,11 @@ async function runCrashPoint(params: {
     const stateAfterRecovery = params.verifyState(targetPath);
     assertSameState(stateAfterRecovery, params.expectedState, `${params.crashPoint} restore`);
     const payloadAfterRecovery = params.verifyPayload(targetPath);
-    assertSamePayload(payloadAfterRecovery, params.expectedPayload, `${params.crashPoint} restore`);
+    assertSameCompactionPayload(
+      payloadAfterRecovery,
+      params.expectedPayload,
+      `${params.crashPoint} restore`,
+    );
     await assertRepositorySnapshotAvailable({
       expectedSnapshotBytes: params.expectedSnapshotBytes,
       provider: params.provider,
@@ -407,14 +394,14 @@ async function runCrashPoint(params: {
 }
 
 export async function runRestoreInterruptionProof(params: {
-  expectedPayload: RestorePayloadProof;
+  expectedPayload: CompactionPayloadProof;
   expectedSnapshotBytes: number;
   expectedState: ReliabilityStateProof;
   repositoryPath: string;
   scratchPath: string;
   snapshotPath: string;
   validationRootPath: string;
-  verifyPayload: (databasePath: string) => RestorePayloadProof;
+  verifyPayload: (databasePath: string) => CompactionPayloadProof;
   verifyState: (databasePath: string) => ReliabilityStateProof;
 }): Promise<ReliabilityReport["maintenanceProof"]["restoreInterruption"]> {
   if (params.expectedSnapshotBytes < MIN_STAGED_RESTORE_BYTES * 2) {

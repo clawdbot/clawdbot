@@ -12,9 +12,8 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX } from "./control-ui-contract.js";
+import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
-import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sendMethodNotAllowed } from "./http-common.js";
 import {
   HTTP_IMAGE_MAX_BYTES,
@@ -174,32 +173,6 @@ function readPreparedSessionWorkspaceIcon(
   return prepared;
 }
 
-/** `matched` claims the response so a malformed key 404s instead of reaching the SPA. */
-type WorkspaceIconRequest = { matched: false } | { matched: true; sessionKey: string | null };
-
-function parseWorkspaceIconRequest(
-  urlRaw: string | undefined,
-  basePath: string | undefined,
-): WorkspaceIconRequest {
-  if (!urlRaw) {
-    return { matched: false };
-  }
-  const pathname = new URL(urlRaw, "http://localhost").pathname;
-  const prefix = `${normalizeControlUiBasePath(basePath)}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/`;
-  if (!pathname.startsWith(prefix)) {
-    return { matched: false };
-  }
-  const encoded = pathname.slice(prefix.length);
-  if (!encoded || encoded.includes("/")) {
-    return { matched: true, sessionKey: null };
-  }
-  try {
-    return { matched: true, sessionKey: decodeURIComponent(encoded) || null };
-  } catch {
-    return { matched: true, sessionKey: null };
-  }
-}
-
 /**
  * Serves the icon snapshot prepared when the chat opened. The request names a
  * session, never a path, and performs no filesystem or session-store work.
@@ -215,7 +188,8 @@ export async function handleWorkspaceIconHttpRequest(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
-  const parsed = parseWorkspaceIconRequest(req.url, opts.basePath);
+  const pathname = req.url ? new URL(req.url, "http://localhost").pathname : undefined;
+  const parsed = parseControlUiResourcePath("workspaceIcon", pathname, opts.basePath);
   if (!parsed.matched) {
     return false;
   }
@@ -236,12 +210,12 @@ export async function handleWorkspaceIconHttpRequest(
     return true;
   }
 
-  if (!parsed.sessionKey) {
+  if (!parsed.value) {
     res.setHeader("cache-control", "no-store");
     respondNotFound(res);
     return true;
   }
-  const prepared = readPreparedSessionWorkspaceIcon(parsed.sessionKey);
+  const prepared = readPreparedSessionWorkspaceIcon(parsed.value);
   if (!prepared) {
     // The header can paint before chat.startup finishes. Keep this state
     // retryable so it cannot be cached as the workspace's resolved fallback.

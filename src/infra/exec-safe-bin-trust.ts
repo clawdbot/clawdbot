@@ -6,6 +6,7 @@ import {
   sortUniqueStrings,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { sameFsObject, swapAsciiCase } from "./path-case.js";
 
 // Keep defaults to OS-managed immutable bins only.
 // User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
@@ -28,17 +29,6 @@ export type WritableTrustedSafeBinDir = {
 };
 
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
-
-function swapAsciiCase(value: string): string {
-  return value.replace(/[A-Za-z]/g, (char) => {
-    const lower = char.toLowerCase();
-    return char === lower ? char.toUpperCase() : lower;
-  });
-}
-
-function sameFsObject(a: fs.Stats, b: fs.Stats): boolean {
-  return a.dev === b.dev && a.ino === b.ino;
-}
 
 function pathCaseInsensitive(value: string): boolean {
   let candidate = value;

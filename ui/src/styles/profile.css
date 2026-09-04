@@ -57,7 +57,8 @@
   font-size: var(--control-ui-text-md);
 }
 
-.profile-hero__badge {
+.profile-hero__badge,
+.model-accounts__provider {
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-transform: uppercase;
@@ -76,17 +77,41 @@
   gap: var(--space-3);
 }
 
-.identity-github-control {
+/* Personal connected accounts and sign-in steps. */
+
+.model-accounts__id {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  color: var(--text-strong);
+}
+
+.model-accounts__provider {
+  margin-left: var(--space-2);
+  vertical-align: middle;
+}
+
+.model-accounts-flow,
+.model-accounts-choice {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-2);
-  min-width: 0;
+  gap: var(--space-3);
+  width: 100%;
 }
 
-.identity-github-form {
+.model-accounts-form {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+}
+
+.model-accounts-form .settings-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.model-accounts-error .settings-row__desc {
+  color: var(--danger);
 }

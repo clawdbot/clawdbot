@@ -92,9 +92,11 @@ export function renderPanelEmptyState(params: {
     .heading=${params.heading}
     .description=${params.description}
   >
-    ${params.icon}${params.action != null && params.action !== nothing
-      ? html`<span slot="action">${params.action}</span>`
-      : nothing}
+    ${params.icon}${
+      params.action != null && params.action !== nothing
+        ? html`<span slot="action">${params.action}</span>`
+        : nothing
+    }
   </openclaw-panel-empty-state>`;
 }
 

@@ -1,57 +1,22 @@
 // Normalizes error objects for codes, names, messages, and redacted logs.
-import { formatErrorMessage as formatSharedErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import {
+  extractErrorCode,
+  formatErrorMessage as formatSharedErrorMessage,
+} from "@openclaw/normalization-core/error-coercion";
 import { redactSensitiveText } from "../logging/redact.js";
+export {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  readErrorName,
+} from "@openclaw/normalization-core/error-coercion";
 export { hasErrnoCode, isErrno, isMissingPathError } from "./errno.js";
 
-export function extractErrorCode(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
+export function readErrorCause(error: unknown): unknown {
+  if (!error || typeof error !== "object") {
     return undefined;
   }
-  const code = (err as { code?: unknown }).code;
-  if (typeof code === "string") {
-    return code;
-  }
-  if (typeof code === "number") {
-    return String(code);
-  }
-  return undefined;
-}
-
-export function readErrorName(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  const name = (err as { name?: unknown }).name;
-  return typeof name === "string" ? name : "";
-}
-
-export function collectErrorGraphCandidates(
-  err: unknown,
-  resolveNested?: (current: Record<string, unknown>) => Iterable<unknown>,
-): unknown[] {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current == null || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
-    if (!current || typeof current !== "object" || !resolveNested) {
-      continue;
-    }
-    for (const nested of resolveNested(current as Record<string, unknown>)) {
-      if (nested != null && !seen.has(nested)) {
-        queue.push(nested);
-      }
-    }
-  }
-
-  return candidates;
+  // SAFETY: The object guard permits direct optional cause access without coercion.
+  return (error as { cause?: unknown }).cause;
 }
 
 export function formatErrorMessage(err: unknown): string {

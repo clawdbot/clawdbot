@@ -38,15 +38,6 @@ function hasStructuredToolInvocation(message: AssistantMessage): boolean {
   });
 }
 
-function extractAssistantTextForDiagnostics(message: AssistantMessage): string {
-  return (
-    extractTextFromChatContent(message.content, {
-      joinWith: "\n",
-      normalizeText: (text) => text.trim(),
-    }) ?? ""
-  );
-}
-
 function isRegisteredToolName(
   toolName: string | undefined,
   registeredToolNames: ReadonlySet<string> | undefined,
@@ -63,45 +54,38 @@ function isRegisteredToolName(
   return false;
 }
 
-/** Log a diagnostic when assistant text resembles a tool call but is not structured. */
-function warnIfAssistantEmittedToolText(
+/** Log safe metadata for suspicious assistant-authored text shapes. */
+export function warnIfAssistantEmittedSuspiciousText(
   ctx: EmbeddedAgentSubscribeContext,
   assistantMessage: AssistantMessage,
 ) {
-  if (hasStructuredToolInvocation(assistantMessage)) {
-    return;
+  const structuredToolInvocation = hasStructuredToolInvocation(assistantMessage);
+  const text =
+    extractTextFromChatContent(assistantMessage.content, {
+      joinWith: "\n",
+      normalizeText: (chunk) => chunk.trim(),
+    }) ?? "";
+  const toolDetection = structuredToolInvocation ? null : detectToolCallShapedText(text);
+  if (toolDetection) {
+    const provider = normalizeOptionalString((assistantMessage as { provider?: unknown }).provider);
+    const model = normalizeOptionalString((assistantMessage as { model?: unknown }).model);
+    const registeredTool = isRegisteredToolName(toolDetection.toolName, ctx.builtinToolNames);
+    const sessionId = normalizeOptionalString((ctx.params.session as { id?: unknown }).id);
+    ctx.log.warn(
+      "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
+      {
+        runId: ctx.params.runId,
+        ...(sessionId ? { sessionId } : {}),
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
+        pattern: toolDetection.kind,
+        ...(toolDetection.toolName ? { toolName: toolDetection.toolName } : {}),
+        ...(registeredTool !== undefined ? { registeredTool } : {}),
+      },
+    );
   }
-  const detection = detectToolCallShapedText(extractAssistantTextForDiagnostics(assistantMessage));
-  if (!detection) {
-    return;
-  }
-  const provider = normalizeOptionalString((assistantMessage as { provider?: unknown }).provider);
-  const model = normalizeOptionalString((assistantMessage as { model?: unknown }).model);
-  const registeredTool = isRegisteredToolName(detection.toolName, ctx.builtinToolNames);
-  const sessionId = normalizeOptionalString((ctx.params.session as { id?: unknown }).id);
-  ctx.log.warn(
-    "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
-    {
-      runId: ctx.params.runId,
-      ...(sessionId ? { sessionId } : {}),
-      ...(provider ? { provider } : {}),
-      ...(model ? { model } : {}),
-      pattern: detection.kind,
-      ...(detection.toolName ? { toolName: detection.toolName } : {}),
-      ...(registeredTool !== undefined ? { registeredTool } : {}),
-    },
-  );
-}
-
-/** Log a diagnostic when assistant text resembles a fresh transcript role turn. */
-function warnIfAssistantEmittedTranscriptRoleHeader(
-  ctx: EmbeddedAgentSubscribeContext,
-  assistantMessage: AssistantMessage,
-) {
-  const detection = detectAssistantTranscriptRoleHeaderText(
-    extractAssistantTextForDiagnostics(assistantMessage),
-  );
-  if (!detection) {
+  const roleDetection = detectAssistantTranscriptRoleHeaderText(text);
+  if (!roleDetection) {
     return;
   }
   const provider = normalizeOptionalString((assistantMessage as { provider?: unknown }).provider);
@@ -114,17 +98,8 @@ function warnIfAssistantEmittedTranscriptRoleHeader(
       ...(sessionId ? { sessionId } : {}),
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
-      pattern: detection.kind,
-      role: detection.role,
+      pattern: roleDetection.kind,
+      role: roleDetection.role,
     },
   );
-}
-
-/** Log safe metadata for suspicious assistant-authored text shapes. */
-export function warnIfAssistantEmittedSuspiciousText(
-  ctx: EmbeddedAgentSubscribeContext,
-  assistantMessage: AssistantMessage,
-) {
-  warnIfAssistantEmittedToolText(ctx, assistantMessage);
-  warnIfAssistantEmittedTranscriptRoleHeader(ctx, assistantMessage);
 }

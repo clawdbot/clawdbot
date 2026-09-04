@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { requestSkillWorkshopRevisionAdmission } from "../pages/skill-workshop/revision-admission.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
@@ -17,6 +17,8 @@ const input = (instructions: string): SkillWorkshopRevisionAdmissionInput => ({
   useCurrentChatForRevisions: false,
 });
 
+type AdmittedExecutorResult = { sessionKey: string; status: "admitted" };
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -27,15 +29,50 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
+function revisionContext(params: {
+  agentId: string;
+  client: GatewayBrowserClient;
+  sessionId: string;
+  sessionKey: string;
+}): ApplicationContext {
+  const snapshot = {
+    client: params.client,
+    phase: "connected",
+    hello: gatewayHelloForMethods([]),
+    assistantAgentId: params.agentId,
+  } as unknown as ApplicationGatewaySnapshot;
+  return {
+    gateway: { snapshot },
+    sessions: {
+      state: {
+        agentId: params.agentId,
+        result: {
+          sessions: [
+            {
+              key: params.sessionKey,
+              sessionId: params.sessionId,
+              agentId: params.agentId,
+              archived: false,
+              hasActiveRun: false,
+            },
+          ],
+        },
+        loading: false,
+        error: null,
+      },
+    },
+  } as unknown as ApplicationContext;
+}
+
 describe("Skill Workshop revision admission owner", () => {
   it("removes only the exact ACK-admitted entry", async () => {
     const owner = createSkillWorkshopRevisionAdmissions();
-    const first = deferred<{ sessionKey: string }>();
-    const second = deferred<{ sessionKey: string }>();
+    const first = deferred<AdmittedExecutorResult>();
+    const second = deferred<AdmittedExecutorResult>();
     const runA = owner.start(input("first"), () => first.promise);
     const runB = owner.start(input("second"), () => second.promise);
 
-    second.resolve({ sessionKey: "agent:main:second" });
+    second.resolve({ sessionKey: "agent:main:second", status: "admitted" });
     await expect(runB.completion).resolves.toEqual({
       id: runB.entry.id,
       sessionKey: "agent:main:second",
@@ -48,11 +85,11 @@ describe("Skill Workshop revision admission owner", () => {
 
   it("retains failure and retries the same record and idempotency key", async () => {
     const owner = createSkillWorkshopRevisionAdmissions();
-    const attempts: Array<ReturnType<typeof deferred<{ sessionKey: string }>>> = [];
+    const attempts: Array<ReturnType<typeof deferred<AdmittedExecutorResult>>> = [];
     const idempotencyKeys: string[] = [];
     const run = owner.start(input("retry exactly"), (entry) => {
       idempotencyKeys.push(entry.idempotencyKey);
-      const attempt = deferred<{ sessionKey: string }>();
+      const attempt = deferred<AdmittedExecutorResult>();
       attempts.push(attempt);
       return attempt.promise;
     });
@@ -72,15 +109,71 @@ describe("Skill Workshop revision admission owner", () => {
       phase: "pending",
     });
     expect(idempotencyKeys).toEqual([run.entry.idempotencyKey, run.entry.idempotencyKey]);
-    attempts[1]!.resolve({ sessionKey: "agent:main:retry" });
+    attempts[1]!.resolve({ sessionKey: "agent:main:retry", status: "admitted" });
     await expect(retry?.completion).resolves.toMatchObject({ status: "admitted" });
     expect(owner.get(run.entry.id)).toBeNull();
   });
 
+  it("retires a changed proposal revision instead of making the stale decision retryable", async () => {
+    const owner = createSkillWorkshopRevisionAdmissions();
+    const run = owner.start(input("retry exactly"), async () => ({
+      status: "revision-changed",
+    }));
+
+    await expect(run.completion).resolves.toEqual({
+      id: run.entry.id,
+      status: "revision-changed",
+    });
+    expect(owner.get(run.entry.id)).toBeNull();
+    expect(owner.retry(run.entry.id)).toBeNull();
+    expect(owner.firstFailed("main")).toBeNull();
+  });
+
+  it("classifies a typed stale Gateway reply at the lazy request boundary without replaying", async () => {
+    const request = vi.fn(async () => {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Skill proposal revision changed",
+        details: {
+          code: "SKILL_PROPOSAL_REVISION_CHANGED",
+          currentRevisionHash: "b".repeat(64),
+          expectedRevisionHash: "a".repeat(64),
+        },
+      });
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = revisionContext({
+      agentId: "main",
+      client,
+      sessionId: "session-main-workshop",
+      sessionKey: "agent:main:workshop",
+    });
+    const entry = {
+      ...input("preserve reviewed content"),
+      id: "revision-admission",
+      idempotencyKey: "revision-idempotency",
+      phase: "pending" as const,
+      proposalOriginSessionKey: "agent:main:workshop",
+    };
+
+    await expect(
+      requestSkillWorkshopRevisionAdmission({ context, entry, materialize: vi.fn() }),
+    ).resolves.toEqual({ status: "revision-changed" });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "skills.proposals.requestRevision",
+      expect.objectContaining({
+        expectedRevisionHash: "a".repeat(64),
+        idempotencyKey: "revision-idempotency",
+        sessionKey: "agent:main:workshop",
+      }),
+    );
+  });
+
   it("keeps overlapping failures independent and reveals them in insertion order", async () => {
     const owner = createSkillWorkshopRevisionAdmissions();
-    const first = deferred<{ sessionKey: string }>();
-    const second = deferred<{ sessionKey: string }>();
+    const first = deferred<AdmittedExecutorResult>();
+    const second = deferred<AdmittedExecutorResult>();
     const runA = owner.start(input("first failed"), () => first.promise);
     const runB = owner.start(input("second failed"), () => second.promise);
 
@@ -132,33 +225,12 @@ describe("Skill Workshop revision admission owner", () => {
       return { status: "started" };
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const snapshot = {
+    const context = revisionContext({
+      agentId: "research",
       client,
-      phase: "connected",
-      hello: gatewayHelloForMethods([]),
-      assistantAgentId: "research",
-    } as unknown as ApplicationGatewaySnapshot;
-    const context = {
-      gateway: { snapshot },
-      sessions: {
-        state: {
-          agentId: "research",
-          result: {
-            sessions: [
-              {
-                key: "agent:research:second",
-                sessionId: "session-second",
-                agentId: "research",
-                archived: false,
-                hasActiveRun: false,
-              },
-            ],
-          },
-          loading: false,
-          error: null,
-        },
-      },
-    } as unknown as ApplicationContext;
+      sessionId: "session-second",
+      sessionKey: "agent:research:second",
+    });
     const owner = createSkillWorkshopRevisionAdmissions();
     const run = owner.start(
       {

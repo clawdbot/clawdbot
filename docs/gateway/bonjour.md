@@ -27,7 +27,7 @@ If the node and gateway are on different networks, multicast mDNS can't cross th
 }
 ```
 
-Setting `discovery.wideArea.domain` enables wide-area discovery. OpenClaw also accepts the `OPENCLAW_WIDE_AREA_DOMAIN` env var as a fallback when the config key is unset.
+Setting `discovery.wideArea.domain` enables Gateway wide-area publishing. The `OPENCLAW_WIDE_AREA_DOMAIN` environment variable supplies a default for CLI discovery and DNS setup; it does not enable Gateway publishing by itself.
 
 ### One-time DNS server setup (gateway host, macOS only)
 
@@ -82,7 +82,6 @@ Only the gateway advertises `_openclaw-gw._tcp`. LAN multicast advertising comes
 | `gatewayTls=1`                | Only when TLS is enabled.                                                      |
 | `gatewayTlsSha256=<sha256>`   | Only when TLS is enabled and a fingerprint is available.                       |
 | `gatewayDirectReachable=1`    | Only when the gateway is directly reachable (not only via a relay/proxy path). |
-| `canvasPort=<port>`           | Only when the canvas host is enabled; currently the same as `gatewayPort`.     |
 | `tailnetDns=<magicdns>`       | mDNS full mode only; optional hint when Tailnet is available.                  |
 | `sshPort=<port>`              | Full mode only; omitted in minimal and off modes.                              |
 | `cliPath=<path>`              | Full mode only; omitted in minimal and off modes.                              |
@@ -146,6 +145,11 @@ When enabled, Bonjour uses `discovery.mdns.mode` to decide how much TXT metadata
 | `minimal` (default) | Core TXT keys only; omits `sshPort`, `cliPath`, `tailnetDns`.                                                                            |
 | `full`              | Adds `sshPort`, `cliPath`, `tailnetDns` — use when clients need those hints.                                                             |
 | `off`               | Suppresses LAN multicast without changing plugin enablement; wide-area DNS-SD can still publish when `discovery.wideArea.domain` is set. |
+
+Mode changes hot-apply without restarting the Gateway or disconnecting clients.
+The discovery owner stops the prior advertisements before publishing the new
+mode. Reducing disclosure also updates TXT hints in any configured wide-area
+DNS-SD zone. Changing the mode does not enable a disabled Bonjour plugin.
 
 ## When to disable Bonjour
 

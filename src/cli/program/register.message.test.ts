@@ -106,7 +106,7 @@ describe("registerMessageCommands", () => {
     registerMessageCommands(program, ctx);
 
     const message = requireProgramCommand(program, "message");
-    expect(createMessageCliHelpersMock).toHaveBeenCalledWith(message, "telegram|discord");
+    expect(createMessageCliHelpersMock).toHaveBeenCalledWith("telegram|discord");
 
     const expectedRegistrars = [
       registerMessageSendCommandMock,

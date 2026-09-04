@@ -658,6 +658,7 @@ describe("Hermes migration secret items", () => {
       reportDir,
     });
     const plan = await provider.plan(ctx);
+    const plannedTarget = authProfileTarget(agentDir, "openai:hermes-import");
     writeAuthProfileStore(agentDir, {
       version: 1,
       profiles: {
@@ -677,7 +678,7 @@ describe("Hermes migration secret items", () => {
         kind: "secret",
         action: "create",
         source: path.join(source, ".env"),
-        target: authProfileTarget(agentDir, "openai:hermes-import"),
+        target: plannedTarget,
         status: "conflict",
         sensitive: true,
         reason: HERMES_REASON_AUTH_PROFILE_EXISTS,

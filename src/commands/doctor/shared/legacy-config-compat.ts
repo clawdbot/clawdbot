@@ -7,6 +7,12 @@ import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 export function applyLegacyDoctorMigrations(
   raw: unknown,
   context?: LegacyConfigMigrationContext,
+  options?: {
+    // Plugin doctor contracts resolve the installed-plugin registry, which reads the shared
+    // state database. Preview callers that must stay state-free pass false; the config they
+    // produce is scaffolding only — the committed result always comes from a full run.
+    pluginContracts?: boolean;
+  },
 ): {
   next: Record<string, unknown> | null;
   changes: string[];
@@ -20,7 +26,9 @@ export function applyLegacyDoctorMigrations(
   for (const migration of LEGACY_CONFIG_MIGRATIONS) {
     migration.apply(next, changes, context);
   }
-  const compat = applyChannelDoctorCompatibilityMigrations(next);
+  const compat = applyChannelDoctorCompatibilityMigrations(next, {
+    pluginContracts: options?.pluginContracts !== false,
+  });
   changes.push(...compat.changes);
   if (changes.length === 0) {
     return { next: null, changes: [] };

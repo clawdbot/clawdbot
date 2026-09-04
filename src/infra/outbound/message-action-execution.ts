@@ -1,5 +1,6 @@
 import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import {
@@ -7,6 +8,7 @@ import {
   readStringArrayParam,
   readToolStringParam,
 } from "../../agents/tools/common.js";
+import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -43,9 +45,7 @@ import { executePollAction } from "./outbound-send-service.js";
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
-  isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply,
-  isDeliveredCurrentSourceReplyAction,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 
@@ -71,20 +71,12 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
 ): T {
   // Current-source identity comes from the authorized route and delivery receipt,
   // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  // Reply-type actions and polls are visible source replies too: leaving them
-  // unmarked made dispatch send the no-visible-reply fallback after a delivered
-  // reply or poll.
-  const isReplyActionResult =
-    result.kind === "action" && isCurrentSourceReplyActionName(result.action);
-  if (result.kind !== "send" && result.kind !== "poll" && !isReplyActionResult) {
-    return result;
-  }
   const authorization = params.input.messageActionAuthorization;
-  if (!authorization?.toolContext) {
+  if (result.kind === "broadcast" || !authorization?.toolContext) {
     return result;
   }
   const mirrorParams = {
-    action: isReplyActionResult ? result.action : result.kind === "poll" ? "poll" : "send",
+    action: result.action,
     channel: params.channel,
     actionParams: params.actionParams,
     cfg: params.cfg,
@@ -97,11 +89,7 @@ export function annotateSourceDelivery<T extends MessageActionResult>(
     deliveredPayload: result.payload,
     replyToIsExplicit: params.replyToIsExplicit,
   };
-  if (
-    isReplyActionResult
-      ? !isDeliveredCurrentSourceReplyAction(mirrorParams)
-      : !isDeliveredCurrentSourceReply(mirrorParams)
-  ) {
+  if (!isDeliveredCurrentSourceReply(mirrorParams)) {
     return result;
   }
   const payload = asResultRecord(result.payload);
@@ -212,6 +200,21 @@ function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
   );
 }
 
+export function projectGatewayQueuedDeliveryResult(error: unknown) {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return undefined;
+  }
+  const details = asResultRecord(asResultRecord(error)?.details);
+  if (details?.code !== GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED) {
+    return undefined;
+  }
+  return {
+    status: "delivery_queued",
+    delivered: false as const,
+    message: `Message not delivered: ${error.message}. The gateway queued it and will retry automatically. Do not resend it.`,
+  };
+}
+
 async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {
   if (idempotencyKey) {
     return idempotencyKey;
@@ -289,6 +292,7 @@ export async function executeGatewayAction(params: {
   channel: ChannelId;
   channelPlugin?: ChannelPlugin;
   action: ChannelMessageActionName;
+  reply?: OutboundReplyFacts;
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionGateway;
@@ -334,6 +338,7 @@ export async function executeGatewayAction(params: {
     sessionId: params.input.sessionId,
     agentId: params.agentId,
     toolContext: params.input.messageActionAuthorization?.toolContext,
+    replyToIsExplicit: params.reply?.source === "explicit",
     idempotencyKey,
     sourceReplyFinal: params.input.sourceReplyFinal,
     toolCallId: params.input.sourceReplyToolCallId,
@@ -359,6 +364,7 @@ export async function executeGatewayAction(params: {
         channel: params.channel,
         action: params.action,
         params: params.params,
+        ...(params.reply ? { reply: params.reply } : {}),
         accountId: params.accountId ?? undefined,
         senderIsOwner: params.input.senderIsOwner,
         sessionKey: params.input.sessionKey,
@@ -512,6 +518,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
       return {
         to,
         question,
+        content: readToolStringParam(params, "message", { allowEmpty: true }) ?? undefined,
         options,
         maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
         durationHours: durationHours ?? undefined,
@@ -591,7 +598,9 @@ export async function executeMessagePlugin(
   // gateway or local dispatch to keep both execution modes on the same topic.
   const targetForThreading =
     normalizeOptionalString(params.to) ?? normalizeOptionalString(params.channelId) ?? "";
-  if (targetForThreading) {
+  // File downloads authorize caller-supplied resource scope. Ambient threading
+  // must not silently narrow a channel-only request to the current thread.
+  if (targetForThreading && action !== "download-file") {
     resolveAndApplyOutboundThreadId(params, {
       cfg,
       to: targetForThreading,

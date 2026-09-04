@@ -33,6 +33,7 @@ export type TerminalSession = {
   agentId: string;
   cwd: string;
   shell: string;
+  title?: string;
   backend: TerminalBackend;
   stageUpload: (file: TerminalUploadFile) => Promise<TerminalUploadResult>;
   closed: boolean;
@@ -67,6 +68,7 @@ export type TerminalOpenRequest = {
   agentId: string;
   cwd: string;
   shell: string;
+  title?: string;
   args: string[];
   cols: number;
   rows: number;

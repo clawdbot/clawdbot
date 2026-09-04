@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveConfigForRead } from "../../config/io.read-helpers.js";
+import { setConfigResolutionFacts } from "../../config/resolution-facts.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 let mockStore: AuthProfileStore;
@@ -171,23 +173,29 @@ function withClearedZaiEnv<T>(fn: () => Promise<T>): Promise<T> {
   return withEnvAsync({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, fn);
 }
 
-async function buildAnthropicPlanFromModelsJsonApiKey(apiKey: string) {
-  return await buildProbeTargets({
-    cfg: {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.com/v1",
-            api: "anthropic-messages",
-            apiKey,
-            models: [],
-          },
+async function buildAnthropicPlanFromModelsJsonApiKey(
+  apiKey: string | { source: "env"; provider: string; id: string },
+  includeDirectKeys = false,
+) {
+  const cfg = {
+    models: {
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com/v1",
+          api: "anthropic-messages",
+          apiKey,
+          models: [],
         },
       },
-    } as OpenClawConfig,
+    },
+  } as OpenClawConfig;
+  setConfigResolutionFacts(cfg, new Set());
+  return await buildProbeTargets({
+    cfg,
     providers: ["anthropic"],
     modelCandidates: ["anthropic/claude-sonnet-4-6"],
     options: {
+      ...(includeDirectKeys ? { includeDirectKeys: true } : {}),
       timeoutMs: 5_000,
       concurrency: 1,
       maxTokens: 16,
@@ -276,30 +284,40 @@ describe("buildProbeTargets reason codes", () => {
     ]);
   });
 
-  it("reports unresolved_ref when a ref-only profile cannot resolve its SecretRef", async () => {
-    mockStore = {
-      version: 1,
-      profiles: {
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          tokenRef: { source: "env", provider: "default", id: "MISSING_ANTHROPIC_TOKEN" },
+  it.each([
+    ["token", "token", "tokenRef", false],
+    ["api_key", "key", "keyRef", true],
+    ["token", "token", "tokenRef", true],
+  ] as const)(
+    "reports unresolved_ref for %s profiles with retained plaintext: %s %s %s",
+    async (type, valueField, refField, retainedPlaintext) => {
+      const profileId = "anthropic:default";
+      const refId = type === "api_key" ? "MISSING_ANTHROPIC_KEY" : "MISSING_ANTHROPIC_TOKEN";
+      const ref = { source: "env" as const, provider: "default", id: refId };
+      mockStore = {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type,
+            provider: "anthropic",
+            ...(retainedPlaintext ? { [valueField]: "retained-plaintext" } : {}),
+            [refField]: ref,
+          },
         },
-      },
-      order: {
-        anthropic: ["anthropic:default"],
-      },
-    };
-    mockAllowedProfiles = ["anthropic:default"];
-    resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing secret"));
+        order: { anthropic: [profileId] },
+      } as AuthProfileStore;
+      mockAllowedProfiles = [profileId];
+      resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing secret"));
 
-    const plan = await buildAnthropicProbePlan(["anthropic:default"]);
+      const plan = await buildAnthropicProbePlan([profileId]);
 
-    expect(plan.targets).toHaveLength(0);
-    expect(plan.results).toHaveLength(1);
-    expectLegacyMissingCredentialsError(plan.results[0], "unresolved_ref");
-    expect(plan.results[0]?.error).toContain("env:default:MISSING_ANTHROPIC_TOKEN");
-  });
+      expect(plan.targets).toStrictEqual([]);
+      expect(plan.results).toHaveLength(1);
+      expectLegacyMissingCredentialsError(plan.results[0], "unresolved_ref");
+      expect(plan.results[0]?.error).toContain(`env:default:${refId}`);
+      expect(resolveSecretRefStringMock).toHaveBeenCalledWith(ref, expect.any(Object));
+    },
+  );
 
   it("skips marker-only models.json credentials when building probe targets", async () => {
     mockStore = {
@@ -412,68 +430,94 @@ describe("buildProbeTargets reason codes", () => {
     );
   });
 
-  it("resolves configured SecretRefs before binding a direct probe", async () => {
-    mockStore = { version: 1, profiles: {}, order: {} };
-    const plan = await buildProbeTargets({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com/v1",
-              api: "anthropic-messages",
-              apiKey: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      providers: ["anthropic"],
-      modelCandidates: ["anthropic/claude-sonnet-4-6"],
-      options: {
-        includeDirectKeys: true,
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
+  it.each([
+    ["resolved SecretRef", "ref", true, false, false],
+    ["unresolved SecretRef", "ref", true, true, false],
+    ["normal-mode SecretRef", "ref", false, false, false],
+    ["plaintext", "configured-provider-credential", true, false, true],
+    ["template-shaped literal", "${CONFIGURED_PROVIDER_VALUE}", true, false, true],
+  ] as const)(
+    "preserves configured provider credential ownership for %s",
+    async (_description, input, includeDirectKeys, rejectRef, expectAmbient) => {
+      mockStore = { version: 1, profiles: {}, order: {} };
+      const apiKey =
+        input === "ref"
+          ? { source: "env" as const, provider: "default", id: "CONFIGURED_ANTHROPIC_CREDENTIAL" }
+          : input;
+      if (rejectRef) {
+        resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing configured secret"));
+      }
+      const plan = await withEnvAsync(
+        Object.fromEntries([["ANTHROPIC_API_KEY", "ambient-provider-credential"]]),
+        () => buildAnthropicPlanFromModelsJsonApiKey(apiKey, includeDirectKeys),
+      );
 
-    expect(plan.targets).toContainEqual(
-      expect.objectContaining({
-        boundValue: "resolved-secret",
-        label: "config",
-        source: "models.json",
-      }),
-    );
-  });
+      expect(plan.targets.some((target) => target.source === "env")).toBe(expectAmbient);
+      if (rejectRef) {
+        expect(plan.targets).toStrictEqual([]);
+        expect(plan.results).toEqual([
+          expect.objectContaining({ source: "models.json", reasonCode: "unresolved_ref" }),
+        ]);
+      } else if (includeDirectKeys) {
+        const boundValue = input === "ref" ? "resolved-secret" : apiKey;
+        expect(plan.targets).toContainEqual(
+          expect.objectContaining({ source: "models.json", label: "config", boundValue }),
+        );
+      }
+    },
+  );
+
+  it.each([
+    ["missing bare with authored provider spelling", "$MISSING", undefined, null, "AnThRoPiC"],
+    ["missing braced", "${MISSING}", undefined, null, "anthropic"],
+    ["ordinary substitution", "${SOURCE}", "resolved-secret", "resolved-secret", "anthropic"],
+    ["bare-looking literal", "${SOURCE}", "$OTHER", "$OTHER", "anthropic"],
+    ["braced-looking literal", "${SOURCE}", "${OTHER}", "${OTHER}", "anthropic"],
+    ["escaped template literal", "$${OTHER}", undefined, "${OTHER}", "anthropic"],
+  ] as const)(
+    "preserves authored credential provenance: %s",
+    async (_name, authored, sourceValue, expected, providerKey) => {
+      mockStore = { version: 1, profiles: {}, order: {} };
+      resolveSecretRefStringMock.mockRejectedValue(new Error("missing secret"));
+      const providerConfig = {
+        baseUrl: "https://api.anthropic.com/v1",
+        apiKey: authored,
+        models: [],
+      };
+      const read = resolveConfigForRead(
+        { models: { providers: { [providerKey]: providerConfig } } },
+        sourceValue === undefined ? {} : { SOURCE: sourceValue },
+      );
+      const cfg = read.resolvedConfigRaw as OpenClawConfig;
+      setConfigResolutionFacts(cfg, read.resolutionFacts);
+
+      const plan = await withClearedAnthropicEnv(async () =>
+        buildProbeTargets({
+          cfg,
+          providers: ["anthropic"],
+          modelCandidates: ["anthropic/claude-sonnet-4-6"],
+          options: { includeDirectKeys: true, timeoutMs: 5_000, concurrency: 1, maxTokens: 16 },
+        }),
+      );
+
+      if (expected === null) {
+        expect(plan.targets).toEqual([]);
+        expect(plan.results[0]).toMatchObject({ label: "config", reasonCode: "unresolved_ref" });
+        return;
+      }
+      expect(plan.results).toEqual([]);
+      expect(plan.targets[0]).toMatchObject({ label: "config", boundValue: expected });
+    },
+  );
 
   it("deduplicates matching config and environment credentials", async () => {
     mockStore = { version: 1, profiles: {}, order: {} };
     resolveSecretRefStringMock.mockResolvedValueOnce("same-value");
-    const plan = await withEnvAsync(
-      Object.fromEntries([["ANTHROPIC_API_KEY", "same-value"]]),
-      async () =>
-        await buildProbeTargets({
-          cfg: {
-            models: {
-              providers: {
-                anthropic: {
-                  baseUrl: "https://api.anthropic.com/v1",
-                  api: "anthropic-messages",
-                  apiKey: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
-                  models: [],
-                },
-              },
-            },
-          } as OpenClawConfig,
-          providers: ["anthropic"],
-          modelCandidates: ["anthropic/claude-sonnet-4-6"],
-          options: {
-            includeDirectKeys: true,
-            timeoutMs: 5_000,
-            concurrency: 1,
-            maxTokens: 16,
-          },
-        }),
+    const plan = await withEnvAsync(Object.fromEntries([["ANTHROPIC_API_KEY", "same-value"]]), () =>
+      buildAnthropicPlanFromModelsJsonApiKey(
+        { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+        true,
+      ),
     );
 
     expect(plan.targets).toEqual([

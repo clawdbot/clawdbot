@@ -1,7 +1,7 @@
-// Signal tests cover ordered control delivery around active inbound work.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   dispatchInboundMessageMock,
@@ -111,7 +111,22 @@ const dispatchResult = {
   counts: { tool: 0, block: 0, final: 1 },
 };
 
+const pendingTasks: Promise<void>[] = [];
+const activeGates: Array<() => void> = [];
+let pendingDebounceMs = 0;
+
+function holdNextDispatch() {
+  const gate = createDeferred<void>();
+  activeGates.push(gate.resolve);
+  dispatchInboundMessageMock.mockImplementationOnce(async () => {
+    await gate.promise;
+    return dispatchResult;
+  });
+  return gate.resolve;
+}
+
 function createHandler(debounceMs: number) {
+  pendingDebounceMs = Math.max(pendingDebounceMs, debounceMs);
   const dmPolicy = "allowlist";
   const allowFrom = ["+15550001111"];
   return createSignalEventHandler(
@@ -123,6 +138,9 @@ function createHandler(debounceMs: number) {
       dmPolicy,
       allowFrom,
       historyLimit: 0,
+      runTrackedTask: (task) => {
+        pendingTasks.push(task());
+      },
     }),
   );
 }
@@ -155,25 +173,35 @@ function dispatchedCommandBody(index: number): string | undefined {
   return (call[0] as DispatchParams).ctx.CommandBody;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 describe("Signal active-run control lane", () => {
   beforeEach(() => {
-    vi.useRealTimers();
+    vi.useFakeTimers();
     dispatchInboundMessageMock.mockReset().mockResolvedValue(dispatchResult);
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
     sendTypingMock.mockReset().mockResolvedValue(true);
   });
 
+  afterEach(async () => {
+    try {
+      for (const release of activeGates.splice(0)) {
+        release();
+      }
+      // Shared runtime timers can recur; advance only this fixture's debounce window.
+      await vi.advanceTimersByTimeAsync(pendingDebounceMs);
+      // Debounce admission can finish before dispatch; drain the tracked completion.
+      await Promise.all(pendingTasks.splice(0));
+    } finally {
+      pendingDebounceMs = 0;
+      vi.useRealTimers();
+    }
+  });
+
   it("collects both authorized messages through one debounce dispatch", async () => {
     const handler = createHandler(10);
     await Promise.all([handler(signalText("first", 1)), handler(signalText("second", 2))]);
-    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
     expect(dispatchedCommandBody(0)).toBe("first\nsecond");
   });
@@ -186,21 +214,16 @@ describe("Signal active-run control lane", () => {
     "/QUEUE",
     "/steer keep going",
   ])("dispatches active-run-safe control %s while normal work is active", async (controlText) => {
-    let releaseActive!: () => void;
-    const activeGate = new Promise<void>((resolve) => {
-      releaseActive = resolve;
-    });
-    dispatchInboundMessageMock.mockImplementationOnce(async () => {
-      await activeGate;
-      return dispatchResult;
-    });
+    const releaseActive = holdNextDispatch();
     const handler = createHandler(5);
 
     await handler(signalText("start a long task", 1));
-    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(5);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
     const controlHandled = handler(signalText(controlText, 2));
-    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
     expect(dispatchedCommandBody(1)).toBe(controlText);
 
     releaseActive();
@@ -208,20 +231,14 @@ describe("Signal active-run control lane", () => {
   });
 
   it("serializes repeated aborts on the control lane", async () => {
-    let releaseFirstAbort!: () => void;
-    const firstAbortGate = new Promise<void>((resolve) => {
-      releaseFirstAbort = resolve;
-    });
-    dispatchInboundMessageMock.mockImplementationOnce(async () => {
-      await firstAbortGate;
-      return dispatchResult;
-    });
+    const releaseFirstAbort = holdNextDispatch();
     const handler = createHandler(0);
 
     const first = handler(signalText("stop", 1));
-    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     const second = handler(signalText("halt", 2));
-    await delay(20);
+    await vi.advanceTimersByTimeAsync(20);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
     releaseFirstAbort();
@@ -233,20 +250,15 @@ describe("Signal active-run control lane", () => {
   it.each(["one more detail", "/reset"])(
     "leaves zero-debounce turn %s to core session admission",
     async (followupText) => {
-      let releaseActive!: () => void;
-      const activeGate = new Promise<void>((resolve) => {
-        releaseActive = resolve;
-      });
-      dispatchInboundMessageMock.mockImplementationOnce(async () => {
-        await activeGate;
-        return dispatchResult;
-      });
+      const releaseActive = holdNextDispatch();
       const handler = createHandler(0);
 
       const active = handler(signalText("start a long task", 1));
-      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       const followup = handler(signalText(followupText, 2));
-      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(dispatchedCommandBody(1)).toBe(followupText);
 
       releaseActive();
@@ -309,20 +321,14 @@ describe("Signal active-run control lane", () => {
     "/queue cap:5",
     "/queue drop:summarize",
   ])("keeps stateful command %s behind active conversation work", async (commandText) => {
-    let releaseActive!: () => void;
-    const activeGate = new Promise<void>((resolve) => {
-      releaseActive = resolve;
-    });
-    dispatchInboundMessageMock.mockImplementationOnce(async () => {
-      await activeGate;
-      return dispatchResult;
-    });
+    const releaseActive = holdNextDispatch();
     const handler = createHandler(5);
 
     const active = handler(signalText("start a long task", 1));
-    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(5);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     const statefulCommand = handler(signalText(commandText, 2));
-    await delay(20);
+    await vi.advanceTimersByTimeAsync(20);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
     releaseActive();
@@ -339,7 +345,7 @@ describe("Signal active-run control lane", () => {
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     expect(dispatchedCommandBody(0)).toBe("stop");
 
-    await delay(75);
+    await vi.advanceTimersByTimeAsync(75);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
   });
 
@@ -351,32 +357,26 @@ describe("Signal active-run control lane", () => {
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     expect(dispatchedCommandBody(0)).toBe("stop");
 
-    await delay(75);
+    await vi.advanceTimersByTimeAsync(75);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
   });
 
   it("cancels ordinary text released from debounce but still waiting on active work", async () => {
-    let releaseActive!: () => void;
-    const activeGate = new Promise<void>((resolve) => {
-      releaseActive = resolve;
-    });
-    dispatchInboundMessageMock.mockImplementationOnce(async () => {
-      await activeGate;
-      return dispatchResult;
-    });
+    const releaseActive = holdNextDispatch();
     const handler = createHandler(5);
 
     await handler(signalText("start a long task", 1));
-    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(5);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
     await handler(signalText("queued followup", 2));
-    await delay(20);
+    await vi.advanceTimersByTimeAsync(20);
 
     await handler(signalText("stop", 3));
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
     expect(dispatchedCommandBody(1)).toBe("stop");
 
     releaseActive();
-    await delay(20);
+    await vi.advanceTimersByTimeAsync(20);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
   });
 });

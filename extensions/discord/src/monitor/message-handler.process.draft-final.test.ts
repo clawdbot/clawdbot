@@ -147,6 +147,28 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expect(draftStream.messageId()).toBeUndefined();
   });
 
+  it("preserves a delivered final when its first stale-preview cleanup fails", async () => {
+    const draftStream = createMockDraftStream();
+    draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
+    createDiscordDraftStream.mockReturnValueOnce(draftStream);
+    const runtimeError = vi.fn();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
+      runtime: { log: vi.fn(), error: runtimeError },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(2);
+    expect(runtimeError).not.toHaveBeenCalled();
+    expectFreshFinalText("Hello\nWorld");
+  });
+
   it("delivers a fresh message instead of a preview edit when the final reply resolves a mention alias", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "On it @Sentinel" });
@@ -214,6 +236,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
       allowedMentions: { parse: ["users", "roles"] },
+      onPlatformSendDispatch: expect.any(Function),
     });
   });
 
@@ -259,7 +282,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 5 },
+      discordConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+        maxLinesPerMessage: 5,
+      },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -303,7 +329,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     const ctx = await createAutomaticDraftContext({
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
-      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 5 },
+      discordConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+        maxLinesPerMessage: 5,
+      },
       route: BASE_CHANNEL_ROUTE,
     });
 
@@ -366,7 +395,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 5 },
+      discordConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+        maxLinesPerMessage: 5,
+      },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -392,7 +424,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "progress" } },
+      discordConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
     await runProcessDiscordMessage(ctx);
   });
@@ -403,7 +435,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling", narration: false } },
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", narration: false },
+        },
       },
     });
 
@@ -419,7 +454,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling", commandText: "status" } },
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", commandText: "status" },
+        },
       },
     });
 
@@ -448,7 +486,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 5 },
+      discordConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+        maxLinesPerMessage: 5,
+      },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -473,7 +514,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 5 },
+      discordConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+        maxLinesPerMessage: 5,
+      },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -493,7 +537,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
 
     const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "progress" } },
+      discordConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -520,7 +564,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling", thinking: true } },
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", thinking: true },
+        },
       },
     });
 
@@ -549,7 +596,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling", thinking: true } },
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", thinking: true },
+        },
       },
     });
 
@@ -587,7 +637,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } },
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", commentary: true },
+        },
       },
     });
 
@@ -618,7 +671,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
         maxLinesPerMessage: 5,
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 
@@ -651,7 +704,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
         maxLinesPerMessage: 5,
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
     });
 

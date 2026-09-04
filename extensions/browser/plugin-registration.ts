@@ -45,6 +45,9 @@ const logger = createSubsystemLogger("browser");
 const loadBrowserRegistrationRuntimeModule = createLazyRuntimeModule(
   () => import("./register.runtime.js"),
 );
+const loadBrowserUploadCleanupRuntimeModule = createLazyRuntimeModule(
+  () => import("./src/browser-proxy-upload-cleanup.runtime.js"),
+);
 
 function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
@@ -74,6 +77,7 @@ function createLazyBrowserTool(
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
     agentSessionKey?: string;
+    agentId?: string;
     agentDir?: string;
     workspaceDir?: string;
     activeModel?: {
@@ -135,6 +139,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -156,6 +161,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
       ? { allowHostControl: ctx.browser.allowHostControl }
       : {}),
     ...(ctx.sessionKey ? { agentSessionKey: ctx.sessionKey } : {}),
+    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
     ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
     ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
     ...(ctx.activeModel?.provider || ctx.activeModel?.modelId
@@ -184,7 +190,19 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
 /** Browser plugin reload policy. */
 export const browserPluginReload = {
   restartPrefixes: ["browser"],
-  hotPrefixes: ["browser.profiles"],
+  hotPrefixes: [
+    "browser.profiles",
+    "browser.defaultProfile",
+    "browser.headless",
+    "browser.executablePath",
+    "browser.attachOnly",
+    "browser.cdpUrl",
+    "browser.noSandbox",
+    "browser.extraArgs",
+    "browser.snapshotDefaults",
+    "browser.tabCleanup",
+    "browser.allowSystemProfileImport",
+  ],
 };
 
 /** Node-host command descriptors exposed by the Browser plugin. */
@@ -201,7 +219,7 @@ function createBrowserProxyNodeHostCommand(command: string): OpenClawPluginNodeH
     ...(command === BROWSER_PROXY_UPLOAD_COMMAND
       ? {
           watchAvailability: () => {
-            void loadBrowserRegistrationRuntimeModule()
+            void loadBrowserUploadCleanupRuntimeModule()
               .then(({ ensureBrowserProxyUploadCleanup }) => ensureBrowserProxyUploadCleanup())
               .catch((error: unknown) => {
                 logger.warn(`browser proxy upload cleanup startup failed: ${String(error)}`);

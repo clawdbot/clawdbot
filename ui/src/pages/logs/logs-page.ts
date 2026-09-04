@@ -12,6 +12,7 @@ import {
   failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { downloadTextFile } from "../../lib/download.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -142,13 +143,16 @@ class LogsPage extends OpenClawLightDomElement {
       this.logsTaskQuiet = false;
       void this.logsTask.run([null, null, null, null, false, false]);
     },
-    onSnapshot: (change) => {
-      this.syncPolling();
-      if (change.becameConnected && this.logsFile !== null) {
-        void this.loadLogs({ reset: true, quiet: true });
-        return;
-      }
-      this.ensureInitialLogs();
+    onSnapshot: () => this.syncPolling(),
+    // Only connection/identity transitions own automatic resets. Metadata snapshots
+    // must not supersede an in-flight tail or reload a successfully empty log.
+    ensureInitialData: () => {
+      const quiet = this.logsStatus.hasLoaded;
+      void this.loadLogs({ reset: true, quiet }).then((current) => {
+        if (current && !quiet) {
+          this.streamFollow.schedule(true);
+        }
+      });
     },
   });
   private readonly streamFollow = new StreamAutoFollowController(this, {
@@ -213,17 +217,6 @@ class LogsPage extends OpenClawLightDomElement {
     this.polling.start();
   }
 
-  private ensureInitialLogs() {
-    if (!this.gateway.connected || !this.gateway.client || this.logsEntries.length > 0) {
-      return;
-    }
-    void this.loadLogs({ reset: true }).then((current) => {
-      if (current) {
-        this.streamFollow.schedule(true);
-      }
-    });
-  }
-
   private async loadLogs(opts?: { reset?: boolean; quiet?: boolean }): Promise<boolean> {
     const quiet = opts?.quiet === true;
     const gateway = this.gateway.gateway;
@@ -238,27 +231,17 @@ class LogsPage extends OpenClawLightDomElement {
     }
     this.logsTaskQuiet = quiet;
     this.logsStatus = beginPanelRefresh(this.logsStatus, { clearError: !quiet });
+    // Task suppresses stale results, but an old run can resolve after a new one.
+    // Keep completion-triggered scroll work in the request's connection epoch.
+    const epoch = this.gateway.epoch;
     await this.logsTask.run(this.logsTaskArgs(opts));
-    return this.logsTask.status === TaskStatus.COMPLETE;
-  }
-
-  private exportLogs(lines: string[], label: string) {
-    if (lines.length === 0) {
-      return;
-    }
-    const blob = new Blob([`${lines.join("\n")}\n`], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    anchor.href = url;
-    anchor.download = `openclaw-logs-${label}-${stamp}.log`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    return this.gateway.epoch === epoch && this.logsTask.status === TaskStatus.COMPLETE;
   }
 
   override render() {
     const body = renderLogs({
       loading: this.logsTask.status === TaskStatus.PENDING && !this.logsTaskQuiet,
+      refreshDisabled: !this.gateway.connected || this.logsTask.status === TaskStatus.PENDING,
       status: this.logsStatus,
       file: this.logsFile,
       entries: this.logsEntries,
@@ -277,7 +260,10 @@ class LogsPage extends OpenClawLightDomElement {
             this.streamFollow.schedule(true);
           }
         }),
-      onExport: (lines, label) => this.exportLogs(lines, label),
+      onExport: (lines, label) => {
+        const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+        downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
+      },
       onScroll: (event) => this.streamFollow.handleScroll(event),
     });
     return html`

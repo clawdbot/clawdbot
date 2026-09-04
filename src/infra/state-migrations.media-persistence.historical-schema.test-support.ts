@@ -29,9 +29,9 @@ function restoreHistoricalAgentLeaseSchema(sql: string): string {
   return sql.replace(marker, `${HISTORICAL_AGENT_LEASE_SCHEMA}${marker}`);
 }
 
-function removeSchemaRange(sql: string, startMarker: string, endMarker: string): string {
+function removeSchemaRange(sql: string, startMarker: string, endMarker?: string): string {
   const start = sql.indexOf(startMarker);
-  const end = sql.indexOf(endMarker, start);
+  const end = endMarker === undefined ? sql.length : sql.indexOf(endMarker, start);
   if (start === -1 || end === -1) {
     throw new Error(`Historical agent schema marker is missing: ${startMarker}`);
   }
@@ -40,8 +40,19 @@ function removeSchemaRange(sql: string, startMarker: string, endMarker: string):
 
 /** Exact schema bytes from 509a5f0373764, derived from current SQL with later additions removed. */
 export function historicalV15AgentSchemaSql(): string {
-  let sql = restoreHistoricalAgentLeaseSchema(OPENCLAW_AGENT_SCHEMA_SQL)
+  const withoutPendingInputs = removeSchemaRange(
+    OPENCLAW_AGENT_SCHEMA_SQL,
+    "\n-- Accepted input stays outside the active transcript until its exact turn owns execution.",
+  );
+  let sql = restoreHistoricalAgentLeaseSchema(withoutPendingInputs)
     .replace("  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),\n", "")
+    .replace("  project_id TEXT,\n", "")
+    .replace("  route_context_json TEXT,\n", "")
+    .replace("  context_eligible INTEGER,\n", "")
+    .replace(
+      "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_active\n  ON session_nodes(session_key)\n  WHERE archived_at IS NULL;\n\n",
+      "",
+    )
     .replace(
       "  owner_actor_type TEXT,\n  owner_actor_id TEXT,\n  owner_assigned_by_type TEXT,\n  owner_assigned_by_id TEXT,\n  owner_assigned_at INTEGER,\n",
       "",
@@ -58,8 +69,28 @@ export function historicalV15AgentSchemaSql(): string {
   );
   sql = removeSchemaRange(
     sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_windows_session_key",
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_windows_created_at",
+  );
+  sql = removeSchemaRange(
+    sql,
+    "-- Older same-version writers preserve the envelope while updating the association.",
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation",
+  );
+  sql = removeSchemaRange(
+    sql,
     "CREATE TABLE IF NOT EXISTS message_tool_run_outcomes (",
     "CREATE TABLE IF NOT EXISTS transcript_events (",
+  );
+  sql = removeSchemaRange(
+    sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_identity_sequence",
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent",
+  );
+  sql = removeSchemaRange(
+    sql,
+    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending",
+    "CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts",
   );
   sql = removeSchemaRange(
     sql,

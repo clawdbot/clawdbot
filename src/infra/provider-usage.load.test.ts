@@ -280,7 +280,9 @@ describe("provider-usage.load", () => {
     const summary = await loadProviderUsageSummary({
       providers: ["anthropic", "openai"],
       config: {},
-      env: {},
+      // Credential sources keep both providers past the plugin-auth gate so the
+      // sibling-isolation behavior under test is actually exercised.
+      env: { ANTHROPIC_API_KEY: "sk-ant-test", OPENAI_API_KEY: "sk-openai-test" },
     });
 
     expect(summary.providers).toEqual([

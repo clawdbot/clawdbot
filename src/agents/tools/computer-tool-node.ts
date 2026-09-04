@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseScreenSnapshotPayload } from "../../cli/nodes-screen.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   ComputerActParams,
@@ -12,8 +11,14 @@ import type {
 } from "../../plugins/computer-use-contract.js";
 import {
   COMPUTER_CONTRACT_MISMATCH,
+  COMPUTER_STALE_OBSERVATION,
   parseComputerActResult,
+  parseScreenSnapshotResult,
 } from "../../plugins/computer-use-contract.js";
+import {
+  type EligibleNodeMessages,
+  resolveEligibleNodeFromList,
+} from "../../shared/node-resolve.js";
 import { computerActionNeedsFrame, validateCapabilityBoundInput } from "./computer-tool-request.js";
 import type {
   ComputerContextEpoch,
@@ -21,6 +26,7 @@ import type {
   ComputerObservationState,
   ComputerTarget,
   ComputerToolAction,
+  ComputerToolTransport,
   ResolvedComputerTarget,
   ScreenshotCapture,
 } from "./computer-tool-shared.js";
@@ -30,12 +36,7 @@ import {
   SCREEN_SNAPSHOT_COMMAND,
 } from "./computer-tool-shared.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
-import {
-  type EligibleNodeMessages,
-  listNodes,
-  type NodeListNode,
-  resolveEligibleNodeFromList,
-} from "./nodes-utils.js";
+import { listNodes, type NodeListNode } from "./nodes-utils.js";
 
 type ComputerState =
   | { kind: "unbound" }
@@ -65,7 +66,7 @@ function isEligibleComputerNode(node: NodeListNode): boolean {
   );
 }
 
-const COMPUTER_NODE_MESSAGES: EligibleNodeMessages = {
+const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
   ineligibleExact: (query, eligibleIds) =>
     `node "${query}" is not computer-capable (needs a connected node advertising ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT}; ` +
     `eligible node ids: ${eligibleIds})`,
@@ -112,6 +113,13 @@ async function invokeNodeCommand(params: {
   return raw && typeof raw === "object" && Object.hasOwn(raw, "payload")
     ? (raw as { payload: unknown }).payload
     : raw;
+}
+
+function createGatewayComputerTransport(gatewayOpts: GatewayCallOptions): ComputerToolTransport {
+  return {
+    resolveNode: (query, signal) => resolveComputerNode(gatewayOpts, query, signal),
+    invoke: (params) => invokeNodeCommand({ ...params, gatewayOpts }),
+  };
 }
 
 function parseComputerActPayload(value: unknown): ComputerActResult {
@@ -198,7 +206,7 @@ export class ComputerToolSession {
   private observationState: ComputerObservationState | undefined;
   private computerState: ComputerState = { kind: "unbound" };
   private heldButtonTarget: ComputerTarget | undefined;
-  private readonly executionNodes = new Map<string, GatewayCallOptions>();
+  private readonly executionNodes = new Map<string, ComputerToolTransport>();
   private disposePromise: Promise<void> | undefined;
 
   constructor(
@@ -206,6 +214,7 @@ export class ComputerToolSession {
       executionId: string;
       idempotencyScope?: string;
       contextEpoch?: ComputerContextEpoch;
+      transport?: ComputerToolTransport;
       availableActions: (
         actions: readonly ComputerUseV2ActionName[],
       ) => readonly ComputerUseV2ActionName[];
@@ -218,8 +227,16 @@ export class ComputerToolSession {
     options.registerRunCleanup?.((reason) => this.dispose(reason));
   }
 
-  private bindNodeCapabilities(node: NodeListNode): void {
-    const next = node.computerUse;
+  private assertOpen(): void {
+    if (this.disposePromise) {
+      throw new Error("computer: execution is closed");
+    }
+  }
+
+  private bindNodeCapabilities(
+    node: Awaited<ReturnType<ComputerToolTransport["resolveNode"]>>,
+  ): void {
+    const next = this.options.transport?.computerUse ?? node.computerUse;
     const changed =
       this.selectedCapabilityNodeId !== node.nodeId ||
       this.selectedCapabilities?.provider.generation !== next?.provider.generation;
@@ -244,6 +261,47 @@ export class ComputerToolSession {
 
   setTarget(target: ComputerTarget): void {
     this.setComputerState({ kind: "target", target });
+  }
+
+  private prepareScreenshotTarget(target: ComputerTarget): void {
+    const frame = this.computerState;
+    const contextEpoch = this.options.contextEpoch;
+    // Retain the visible frame only until replacement pixels are verified; failures clear it.
+    if (
+      contextEpoch?.frameImageIdentity &&
+      frame.kind === "frame" &&
+      frame.target.nodeId === target.nodeId &&
+      frame.target.screenIndex === target.screenIndex &&
+      frame.contextEpoch === contextEpoch.value
+    ) {
+      return;
+    }
+    this.setTarget(target);
+  }
+
+  refreshUnchangedFrame(params: {
+    target: ComputerTarget;
+    capture: ScreenshotCapture;
+    imageIdentity?: string;
+    modelHasVision?: boolean;
+  }): ComputerFrame | undefined {
+    const frame = this.computerState;
+    const contextEpoch = this.options.contextEpoch;
+    // Without context tracking, the earlier screenshot may already have been pruned.
+    if (
+      params.modelHasVision === false ||
+      !contextEpoch?.frameImageIdentity ||
+      contextEpoch.frameImageIdentity !== params.imageIdentity ||
+      frame.kind !== "frame" ||
+      frame.target.nodeId !== params.target.nodeId ||
+      frame.target.screenIndex !== params.target.screenIndex ||
+      frame.contextEpoch !== contextEpoch.value
+    ) {
+      return undefined;
+    }
+    // Keep the model's original image/frame binding while refreshing the node's capture token.
+    frame.displayFrameId = params.capture.displayFrameId;
+    return frame;
   }
 
   bindDeliveredFrame(params: {
@@ -271,13 +329,18 @@ export class ComputerToolSession {
     }
   }
 
-  recordObservation(resolved: ResolvedComputerTarget, result: ComputerActResult): void {
+  recordObservation(
+    resolved: ResolvedComputerTarget,
+    result: ComputerActResult,
+    imageCoordinates?: ComputerObservationState["imageCoordinates"],
+  ): void {
     const observationId = result.observation?.observationId;
     if (observationId && resolved.capabilities) {
       this.observationState = {
         nodeId: resolved.target.nodeId,
         providerGeneration: resolved.capabilities.provider.generation,
         observationId,
+        imageCoordinates,
       };
     }
   }
@@ -288,6 +351,8 @@ export class ComputerToolSession {
     gatewayOpts: GatewayCallOptions;
     signal?: AbortSignal;
   }): Promise<ResolvedComputerTarget> {
+    this.assertOpen();
+    const transport = this.options.transport ?? createGatewayComputerTransport(params.gatewayOpts);
     const explicitNode = typeof params.input.node === "string" ? params.input.node : undefined;
     const explicitScreenIndex = (() => {
       if (params.input.screenIndex === undefined) {
@@ -307,20 +372,17 @@ export class ComputerToolSession {
       this.computerState.kind === "unbound" ? undefined : this.computerState.target;
     const implicitTarget = this.heldButtonTarget ?? priorTarget;
     let nodeId: string;
-    if (explicitNode !== undefined) {
-      const node = await resolveComputerNode(params.gatewayOpts, explicitNode, params.signal);
-      nodeId = node.nodeId;
-      this.bindNodeCapabilities(node);
-    } else if (implicitTarget) {
+    if (explicitNode === undefined && implicitTarget) {
       nodeId = implicitTarget.nodeId;
     } else {
-      const node = await resolveComputerNode(params.gatewayOpts, undefined, params.signal);
+      const node = await transport.resolveNode(explicitNode, params.signal);
+      this.assertOpen();
       nodeId = node.nodeId;
       this.bindNodeCapabilities(node);
     }
     const capabilities =
       this.selectedCapabilityNodeId === nodeId ? this.selectedCapabilities : undefined;
-    this.executionNodes.set(nodeId, params.gatewayOpts);
+    this.executionNodes.set(nodeId, transport);
     const advertisedActions = this.options.availableActions(
       capabilities?.actions ?? this.options.defaultActions,
     );
@@ -391,6 +453,8 @@ export class ComputerToolSession {
     refWidth: number,
     signal?: AbortSignal,
   ): Promise<ScreenshotCapture> {
+    this.assertOpen();
+    this.prepareScreenshotTarget(resolved.target);
     const commandParams: ScreenSnapshotParams = {
       executionId: this.options.executionId,
       screenIndex: resolved.target.screenIndex,
@@ -398,26 +462,30 @@ export class ComputerToolSession {
       quality: SCREENSHOT_QUALITY,
       format: "jpeg",
     };
-    const payload = await invokeNodeCommand({
-      gatewayOpts: this.executionNodes.get(resolved.target.nodeId)!,
-      nodeId: resolved.target.nodeId,
-      command: SCREEN_SNAPSHOT_COMMAND,
-      commandParams,
-      signal,
-    });
-    const parsed = parseScreenSnapshotPayload(payload);
-    if (!parsed.displayFrameId) {
-      throw new Error(
-        "screen.snapshot response missing displayFrameId; update the node app before computer use",
-      );
+    try {
+      const payload = await this.executionNodes.get(resolved.target.nodeId)!.invoke({
+        nodeId: resolved.target.nodeId,
+        command: SCREEN_SNAPSHOT_COMMAND,
+        commandParams,
+        signal,
+      });
+      const parsed = parseScreenSnapshotResult(payload);
+      if (!parsed.displayFrameId) {
+        throw new Error(
+          "screen.snapshot response missing displayFrameId; update the node app before computer use",
+        );
+      }
+      return {
+        base64: parsed.base64,
+        displayFrameId: parsed.displayFrameId,
+        mimeType: imageMimeFromFormat(parsed.format) ?? "image/jpeg",
+        width: parsed.width,
+        height: parsed.height,
+      };
+    } catch (error) {
+      this.setTarget(resolved.target);
+      throw error;
     }
-    return {
-      base64: parsed.base64,
-      displayFrameId: parsed.displayFrameId,
-      mimeType: imageMimeFromFormat(parsed.format) ?? "image/jpeg",
-      width: parsed.width,
-      height: parsed.height,
-    };
   }
 
   async invokeComputerAct(params: {
@@ -426,24 +494,50 @@ export class ComputerToolSession {
     toolCallId: string;
     signal?: AbortSignal;
   }): Promise<ComputerActResult> {
+    this.assertOpen();
     const durationMs =
       "durationMs" in params.wireParams && typeof params.wireParams.durationMs === "number"
         ? params.wireParams.durationMs
         : undefined;
     const invokeTimeoutMs = durationMs ? durationMs + 10_000 : undefined;
     params.signal?.throwIfAborted();
-    this.setTarget(params.resolved.target);
+    const commandParams: Record<string, unknown> = { ...params.wireParams };
+    const imageCoordinates =
+      commandParams.windowRef &&
+      commandParams.observationId === this.observationState?.observationId
+        ? this.observationState?.imageCoordinates
+        : undefined;
+    if (imageCoordinates) {
+      // Map only the image bound to this validated observation. Browser CSS requests
+      // have no windowRef; native coordinate spaces and element refs remain unchanged.
+      for (const [x, y] of [
+        ["x", "y"],
+        ["fromX", "fromY"],
+        ["x1", "y1"],
+        ["x2", "y2"],
+      ] as const) {
+        if (typeof commandParams[x] === "number" && typeof commandParams[y] === "number") {
+          if (imageCoordinates.kind === "unavailable") {
+            throw new Error(
+              `${COMPUTER_STALE_OBSERVATION}: take a fresh image observation and retry`,
+            );
+          }
+          commandParams[x] *= imageCoordinates.scaleX;
+          commandParams[y] *= imageCoordinates.scaleY;
+        }
+      }
+    }
+    this.prepareScreenshotTarget(params.resolved.target);
     if (params.wireParams.action === "left_mouse_down") {
       this.heldButtonTarget = params.resolved.target;
     }
     let actResult: ComputerActResult;
     try {
       actResult = parseComputerActPayload(
-        await invokeNodeCommand({
-          gatewayOpts: this.executionNodes.get(params.resolved.target.nodeId)!,
+        await this.executionNodes.get(params.resolved.target.nodeId)!.invoke({
           nodeId: params.resolved.target.nodeId,
           command: COMPUTER_ACT_COMMAND,
-          commandParams: { ...params.wireParams },
+          commandParams,
           timeoutMs: invokeTimeoutMs,
           idempotencyKey: computerActIdempotencyKey({
             scope: this.options.idempotencyScope,
@@ -460,6 +554,7 @@ export class ComputerToolSession {
         this.heldButtonTarget = undefined;
         actResult = { ok: true };
       } else {
+        this.setTarget(params.resolved.target);
         throw withComputerEnablementHint(err);
       }
     }
@@ -479,10 +574,9 @@ export class ComputerToolSession {
       .then(async () => {
         const nodes = [...this.executionNodes.entries()];
         this.executionNodes.clear();
-        await Promise.allSettled(
-          nodes.map(async ([nodeId, gatewayOpts]) => {
-            await invokeNodeCommand({
-              gatewayOpts,
+        const results = await Promise.allSettled(
+          nodes.map(async ([nodeId, transport]) => {
+            await transport.invoke({
               nodeId,
               command: COMPUTER_ACT_COMMAND,
               commandParams: {
@@ -494,6 +588,16 @@ export class ComputerToolSession {
             });
           }),
         );
+        // Ordinary paired nodes can disconnect during best-effort cleanup.
+        // A bound session owner must observe cleanup failure before acknowledging its turn.
+        if (this.options.transport) {
+          const failures = results.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : [],
+          );
+          if (failures.length > 0) {
+            throw new AggregateError(failures, "computer: session desktop cleanup failed");
+          }
+        }
       });
     return await this.disposePromise;
   }

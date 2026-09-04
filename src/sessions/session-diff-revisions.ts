@@ -1,5 +1,8 @@
 import type { SessionsDiffResult } from "../../packages/gateway-protocol/src/index.js";
 import { runGit } from "../agents/worktrees/git.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+
+const emptyTreesInFlight = new Map<string, Promise<string>>();
 
 type GitOutput = (
   cwd: string,
@@ -51,8 +54,17 @@ export async function resolveSessionDiffEmptyTree(
   root: string,
 ): Promise<{ base: string; baseRef?: string } | null> {
   try {
-    const result = await runGit(root, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
-    const emptyTree = result.code === 0 ? result.stdout.trim() : "";
+    // Concurrent starts share this immutable hash, never HEAD or file contents.
+    // Evict on settlement so a replaced repository or failed command is read afresh.
+    const emptyTree = await getOrCreatePromise(
+      emptyTreesInFlight,
+      root,
+      async () => {
+        const result = await runGit(root, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
+        return result.code === 0 ? result.stdout.trim() : "";
+      },
+      { evictOnSettled: true },
+    );
     return emptyTree ? { base: emptyTree } : null;
   } catch {
     return null;

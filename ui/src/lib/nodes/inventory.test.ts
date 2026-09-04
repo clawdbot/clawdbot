@@ -22,6 +22,16 @@ function firstGroup(groups: ReturnType<typeof buildDeviceInventory>) {
   return expectDefined(groups[0], "first device inventory group");
 }
 
+const hostStats = {
+  cpuCount: 24,
+  loadAverage: [3.2, 2.8, 2.4],
+  memoryTotalBytes: 192 * 1024 ** 3,
+  memoryFreeBytes: 41 * 1024 ** 3,
+  diskTotalBytes: 2 * 1024 ** 4,
+  diskAvailableBytes: 1.2 * 1024 ** 4,
+  updatedAtMs: 1_700_000_000_000,
+};
+
 describe("buildDeviceInventory", () => {
   it("joins device records with node catalog rows by id", () => {
     const groups = buildDeviceInventory({
@@ -30,6 +40,7 @@ describe("buildDeviceInventory", () => {
           deviceId: "node-1",
           displayName: "megaclaw",
           roles: ["operator", "node"],
+          connected: true,
           lastSeenAtMs: 1_000,
         }),
       ],
@@ -37,7 +48,7 @@ describe("buildDeviceInventory", () => {
         {
           nodeId: "node-1",
           displayName: "megaclaw",
-          connected: true,
+          connected: false,
           paired: true,
           caps: ["screen"],
           commands: ["system.run"],
@@ -46,6 +57,7 @@ describe("buildDeviceInventory", () => {
           workerSlots: { total: 2, available: 1 },
           workerBundle: { status: "installed", version: "2026.8.9" },
           uiVersion: "19.5",
+          hostStats,
         },
       ],
     });
@@ -54,6 +66,7 @@ describe("buildDeviceInventory", () => {
     const entry = firstGroup(groups).primary;
     expect(entry.id).toBe("node-1");
     expect(entry.connected).toBe(true);
+    expect(entry.node?.connected).toBe(false);
     expect(entry.roles).toEqual(["operator", "node"]);
     expect(entry.version).toBe("2026.6.11");
     expect(entry.node?.caps).toEqual(["screen"]);
@@ -61,6 +74,49 @@ describe("buildDeviceInventory", () => {
     expect(entry.node?.uiVersion).toBe("19.5");
     expect(entry.node?.workerSlots).toEqual({ total: 2, available: 1 });
     expect(entry.node?.workerBundle).toEqual({ status: "installed", version: "2026.8.9" });
+    expect(entry.node?.hostStats).toEqual(hostStats);
+  });
+
+  it("preserves host stats when optional load and disk inputs are absent", () => {
+    const stats = {
+      cpuCount: 8,
+      memoryTotalBytes: 16 * 1024 ** 3,
+      memoryFreeBytes: 4 * 1024 ** 3,
+      updatedAtMs: 1_700_000_000_000,
+    };
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [{ nodeId: "node-1", hostStats: stats }],
+    });
+
+    expect(firstGroup(groups).primary.node?.hostStats).toEqual(stats);
+  });
+
+  it.each([
+    ["missing fields", {}],
+    ["numeric strings", { ...hostStats, cpuCount: "24" }],
+    ["zero cores", { ...hostStats, cpuCount: 0 }],
+    ["fractional cores", { ...hostStats, cpuCount: 1.5 }],
+    ["nonfinite memory", { ...hostStats, memoryTotalBytes: Number.POSITIVE_INFINITY }],
+    ["negative memory", { ...hostStats, memoryFreeBytes: -1 }],
+    [
+      "free memory exceeds total",
+      { ...hostStats, memoryFreeBytes: hostStats.memoryTotalBytes + 1 },
+    ],
+    ["incomplete load tuple", { ...hostStats, loadAverage: [3.2, 2.8] }],
+    ["invalid load average", { ...hostStats, loadAverage: [3.2, Number.NaN, 2.4] }],
+    ["negative load average", { ...hostStats, loadAverage: [-1, 2.8, 2.4] }],
+    ["zero disk size", { ...hostStats, diskTotalBytes: 0 }],
+    ["free disk exceeds total", { ...hostStats, diskAvailableBytes: hostStats.diskTotalBytes + 1 }],
+    ["missing timestamp", { ...hostStats, updatedAtMs: undefined }],
+  ])("drops malformed host stats (%s) while retaining the node", (_description, stats) => {
+    const groups = buildDeviceInventory({
+      paired: [],
+      nodes: [{ nodeId: "node-1", connected: true, hostStats: stats }],
+    });
+
+    expect(firstGroup(groups).primary.node).toMatchObject({ nodeId: "node-1", connected: true });
+    expect(firstGroup(groups).primary.node?.hostStats).toBeUndefined();
   });
 
   it("preserves a valid missing worker bundle status", () => {

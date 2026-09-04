@@ -843,7 +843,9 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(payload).toMatchObject({ prompt_cache_key: "stable-cache-key" });
   });
 
-  it("does not retry the ChatGPT transport when maxRetries is zero", async () => {
+  // The embedded runner owns transient retries; the transport must surface the
+  // first failure untouched even when the provider supplies a Retry-After hint.
+  it("never retries in the transport even when the provider sends Retry-After", async () => {
     const jwt = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } });
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response("rate limited", {
@@ -856,128 +858,11 @@ describe("streamOpenAICodexResponses transport", () => {
 
     const result = await streamOpenAICodexResponses(model, context, {
       apiKey: jwt,
-      maxRetries: 0,
       transport: "sse",
     }).result();
 
     expect(result.stopReason).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(setTimeoutSpy).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    "1.5",
-    "0x10",
-    "Sun, 31 Feb 2027 00:00:00 GMT",
-    "Sunday, 31-Feb-27 00:00:00 GMT",
-    "Mon, 06 Nov 1994 08:49:37 GMT",
-    "Monday, 06-Nov-94 08:49:37 GMT",
-  ])("ignores invalid Retry-After header delay values: %s", async (retryAfter) => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response("rate limited", {
-          status: 429,
-          headers: { "retry-after": retryAfter },
-        }),
-      )
-      .mockRejectedValueOnce(new Error("usage limit: stop after retry delay"));
-    vi.stubGlobal("fetch", fetchMock);
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback: TimerHandler) => {
-        if (typeof callback === "function") {
-          callback();
-        }
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      });
-
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "acct-1",
-        },
-      }),
-      transport: "sse",
-    });
-
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1000);
-  });
-
-  it("honors retry-after-ms ahead of Retry-After", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response("rate limited", {
-          status: 429,
-          headers: { "retry-after-ms": "1250", "retry-after": "9" },
-        }),
-      )
-      .mockRejectedValueOnce(new Error("usage limit: stop after retry delay"));
-    vi.stubGlobal("fetch", fetchMock);
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback: TimerHandler) => {
-        if (typeof callback === "function") {
-          callback();
-        }
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      });
-
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "acct-1",
-        },
-      }),
-      transport: "sse",
-    });
-
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1250);
-  });
-
-  it("honors RFC 850 Retry-After years within the 50-year future window", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-06T00:00:00.000Z"));
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response("rate limited", {
-          status: 429,
-          headers: { "retry-after": "Sunday, 06-Nov-50 00:00:00 GMT" },
-        }),
-      )
-      .mockRejectedValueOnce(new Error("usage limit: stop after retry delay"));
-    vi.stubGlobal("fetch", fetchMock);
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback: TimerHandler) => {
-        if (typeof callback === "function") {
-          callback();
-        }
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      });
-
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "acct-1",
-        },
-      }),
-      transport: "sse",
-    });
-
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });

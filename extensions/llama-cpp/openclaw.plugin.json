@@ -1,19 +1,25 @@
 {
   "id": "llama-cpp",
   "name": "llama.cpp Provider",
-  "description": "Managed local llama.cpp server for GGUF chat and embeddings.",
-  "doctorContract": {
-    "configRepair": true
-  },
+  "description": "Managed and external llama.cpp servers for GGUF chat and embeddings.",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
+  "autoEnableWhenConfiguredProviders": ["llama-cpp"],
   "providers": ["llama-cpp"],
+  "modelCatalog": {
+    "discovery": {
+      "llama-cpp": "refreshable"
+    }
+  },
   "providerRequest": {
     "providers": {
       "llama-cpp": {
-        "family": "llama-cpp"
+        "family": "llama-cpp",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
       }
     }
   },
@@ -26,6 +32,14 @@
   },
   "syntheticAuthRefs": ["llama-cpp"],
   "nonSecretAuthMarkers": ["llama-cpp-local"],
+  "setup": {
+    "providers": [
+      {
+        "id": "llama-cpp",
+        "envVars": ["LLAMA_SERVER_API_KEY"]
+      }
+    ]
+  },
   "providerAuthChoices": [
     {
       "provider": "llama-cpp",
@@ -33,11 +47,27 @@
       "choiceId": "llama-cpp",
       "appGuidedDiscovery": true,
       "appGuidedActionLabel": "Set up model",
-      "choiceLabel": "llama.cpp",
-      "choiceHint": "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
+      "choiceLabel": "Managed local server",
+      "choiceHint": "Choose a Qwen, Gemma, or Muse model for this Gateway's hardware and install llama.cpp",
       "groupId": "llama-cpp",
       "groupLabel": "Local llama.cpp",
-      "groupHint": "No API key required"
+      "groupHint": "Managed or external llama.cpp server"
+    },
+    {
+      "provider": "llama-cpp",
+      "method": "existing-server",
+      "choiceId": "llama-cpp-existing-server",
+      "appGuidedDiscovery": true,
+      "appGuidedSecret": true,
+      "choiceLabel": "Existing llama-server",
+      "choiceHint": "Connect to a llama.cpp server managed outside OpenClaw",
+      "groupId": "llama-cpp",
+      "groupLabel": "Local llama.cpp",
+      "groupHint": "Managed or external llama.cpp server",
+      "optionKey": "llamaServerApiKey",
+      "cliFlag": "--llama-server-api-key",
+      "cliOption": "--llama-server-api-key <key>",
+      "cliDescription": "llama-server API key"
     }
   ],
   "contracts": {

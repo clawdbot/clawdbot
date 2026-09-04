@@ -18,7 +18,7 @@ import {
   ReplyRunSuccessorAdmissionBlockedError,
   type ReplyOperation,
   type ReplyOperationPhase,
-  type ReplyToolAuthorityProjector,
+  type ReplyToolAuthoritySnapshot,
   type ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
 import {
@@ -99,17 +99,10 @@ export function createReplyOperation(params: {
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
   let toolAuthorityFingerprint: string | undefined;
-  let toolAuthorityProjector: ReplyToolAuthorityProjector | undefined;
+  let toolAuthoritySnapshot: ReplyToolAuthoritySnapshot | undefined;
   let toolAuthorityRoute: { provider: string; model: string } | undefined;
   const ownerSettlement = createDeferredCore();
-  let ownerSettled = false;
-  const settleOwner = () => {
-    if (ownerSettled) {
-      return;
-    }
-    ownerSettled = true;
-    ownerSettlement.resolve(undefined);
-  };
+  const settleOwner = () => ownerSettlement.resolve(undefined);
   const startedAtMs = Date.now();
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   let lastActivityAtMs = startedAtMs;
@@ -233,9 +226,7 @@ export function createReplyOperation(params: {
     get originatingLeafEntryId() {
       return params.originatingLeafEntryId;
     },
-    get abortSignal() {
-      return controller.signal;
-    },
+    abortSignal: controller.signal,
     get resetTriggered() {
       return params.resetTriggered;
     },
@@ -334,39 +325,48 @@ export function createReplyOperation(params: {
     markAcceptedSteeredInboundAudio() {
       acceptedSteeredInboundAudio = true;
     },
-    bindToolAuthorityFingerprint(fingerprint) {
-      const normalized = normalizeOptionalString(fingerprint);
-      if (!normalized) {
-        throw new Error("Reply operation tool authority fingerprint is required");
-      }
-      if (toolAuthorityFingerprint && toolAuthorityFingerprint !== normalized) {
+    bindToolAuthoritySnapshot(snapshot) {
+      if (result || (toolAuthoritySnapshot && toolAuthoritySnapshot !== snapshot)) {
         throw new Error("Reply operation cannot change tool authority after admission");
       }
-      toolAuthorityFingerprint = normalized;
-    },
-    bindToolAuthorityProjector(projector) {
-      if (toolAuthorityProjector && toolAuthorityProjector !== projector) {
-        throw new Error("Reply operation cannot change tool authority projector after admission");
+      if (toolAuthoritySnapshot) {
+        return;
       }
-      toolAuthorityProjector = projector;
+      const fingerprint = normalizeOptionalString(snapshot.fingerprint());
+      if (!fingerprint) {
+        throw new Error("Reply operation tool authority fingerprint is required");
+      }
+      toolAuthoritySnapshot = snapshot;
+      toolAuthorityFingerprint = fingerprint;
     },
     projectToolAuthorityFingerprint(overlay) {
-      if (result || !toolAuthorityProjector || !toolAuthorityRoute) {
+      if (result || !toolAuthoritySnapshot || !toolAuthorityRoute) {
         return undefined;
       }
       try {
-        return normalizeOptionalString(toolAuthorityProjector(overlay, toolAuthorityRoute));
+        return normalizeOptionalString(toolAuthoritySnapshot.project(overlay, toolAuthorityRoute));
       } catch {
         return undefined;
       }
     },
     bindToolAuthorityRoute(route) {
+      if (
+        result ||
+        !toolAuthoritySnapshot ||
+        replyRunState.activeRunsByKey.get(currentSessionKey) !== operation
+      ) {
+        throw new Error("Reply operation has no active tool authority snapshot");
+      }
       const provider = normalizeOptionalString(route.provider);
       const model = normalizeOptionalString(route.model);
       if (!provider || !model) {
         throw new Error("Reply operation tool authority route is required");
       }
-      toolAuthorityRoute = { provider, model };
+      const preparedRoute = { provider, model };
+      const fingerprint = toolAuthoritySnapshot.fingerprint(preparedRoute);
+      toolAuthorityRoute = preparedRoute;
+      toolAuthorityFingerprint = fingerprint;
+      return fingerprint;
     },
     updateSessionId(nextSessionId) {
       if (result) {
@@ -543,18 +543,17 @@ export function createReplyOperation(params: {
       abortOperation("restart", createAgentRunRestartAbortError(), "aborted_for_restart");
       return true;
     },
-    supersede() {
-      if (result || stateCleared) {
+    supersede(beforeSupersede) {
+      const abortFrozen = abortFrozenOperations.has(operation);
+      if (result || stateCleared || (!abortFrozen && !isReplyOperationAbortable(operation))) {
         return false;
       }
-      if (abortFrozenOperations.has(operation)) {
+      beforeSupersede?.();
+      if (abortFrozen) {
         setResult({ kind: "aborted", code: "aborted_for_supersession" });
         phase = "aborted";
         scheduleTerminalSettle();
         return true;
-      }
-      if (!isReplyOperationAbortable(operation)) {
-        return false;
       }
       abortOperation("superseded", createSupersededError(), "aborted_for_supersession");
       return true;

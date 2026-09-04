@@ -16,7 +16,10 @@
   flex-direction: column;
   flex: 1 1 auto;
   box-sizing: border-box;
+  width: 100%;
+  max-width: 1120px;
   height: 100%;
+  margin-inline: auto;
   min-height: 0;
   overflow: hidden;
   padding-bottom: 16px;
@@ -140,7 +143,9 @@
 /* ── Triage two-pane card ───────────────────────────────────────────── */
 .sw-triage {
   display: grid;
-  grid-template-columns: minmax(260px, var(--sw-queue-width, 360px)) 8px minmax(0, 1fr);
+  grid-template-columns:
+    minmax(260px, var(--sw-queue-width, 360px)) var(--resize-handle-size)
+    minmax(0, 1fr);
   gap: 0;
   flex: 1;
   min-height: 0;
@@ -159,20 +164,6 @@
   min-width: 0;
   min-height: 0;
   align-self: stretch;
-}
-
-.sw-queue-resizer {
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-  cursor: col-resize;
-  min-width: 8px;
-  touch-action: none;
-}
-
-.sw-queue-resizer:hover,
-.sw-queue-resizer:focus-visible {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  outline: none;
 }
 
 .sw-queue__search {

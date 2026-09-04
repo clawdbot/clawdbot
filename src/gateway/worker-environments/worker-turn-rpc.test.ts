@@ -1,72 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
+import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { hashWorkerCredential } from "./credential.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
+import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
-
-function claimWorkerPlacement(params: {
-  environmentId: string;
-  ownerEpoch: number;
-  runId?: string;
-  sessionId: string;
-}): { claim: WorkerSessionTurnClaim; store: ReturnType<typeof createWorkerSessionPlacementStore> } {
-  const store = createWorkerSessionPlacementStore({
-    database: support.testState.stateDb,
-    now: () => support.testState.nowMs,
-  });
-  const identity = {
-    sessionId: params.sessionId,
-    agentId: "main",
-    sessionKey: `agent:main:${params.sessionId}`,
-  };
-  let placement = store.startDispatch(identity);
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: params.environmentId },
-  });
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { workerBundleHash: support.BUNDLE_HASH },
-  });
-  placement = store.transition({
-    sessionId: params.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
-      workspaceBaseManifestRef: `manifest-${params.sessionId}`,
-      remoteWorkspaceDir: `/workspace/${params.sessionId}`,
-    },
-  });
-  store.transition({
-    sessionId: params.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: params.ownerEpoch },
-  });
-  const claim = store.claimTurn({
-    ...identity,
-    claimId: `claim-${params.sessionId}`,
-    runId: params.runId ?? "run-1",
-    owner: {
-      kind: "worker",
-      environmentId: params.environmentId,
-      ownerEpoch: params.ownerEpoch,
-    },
-  });
-  return { claim, store };
-}
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -178,6 +129,172 @@ describe("worker environment service", () => {
     await expect(
       workerService.commitTranscript(identity, support.transcriptRequest(identity, "fenced")),
     ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+  });
+
+  it("records credential, build, owner-epoch, and successful worker admission gates", async () => {
+    const environmentId = "worker-sensitive-environment";
+    const sessionId = "session-sensitive-worker";
+    const environmentIdentity = support.seedAttachedIdentity(environmentId, sessionId);
+    const { claim, store } = claimWorkerPlacement({
+      environmentId,
+      ownerEpoch: environmentIdentity.ownerEpoch,
+      runId: "run-worker-receipts",
+      sessionId,
+    });
+    const operationalRun = createOperationalRunInstanceRef(claim.runId);
+    const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRun);
+    bindWorkerTurnOwner(
+      store,
+      claim,
+      createExecutionIdentityAdmissionToken(claim.runId, {
+        contextId: "context-worker-receipts",
+        executionId: "execution-worker-receipts",
+        now: 100,
+      }),
+      operationalRun,
+      { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      () => {},
+    );
+    const gate = createWorkerSessionPlacementGate(store);
+    const workerService = support.createService(support.createProvider(), { placementStore: gate });
+    const credential = await workerService.acquireTurnCredential(claim);
+    const admission = {
+      environmentId,
+      credential: credential.credential,
+      sessionId,
+      runId: claim.runId,
+      ownerEpoch: environmentIdentity.ownerEpoch,
+      rpcSetVersion: 1,
+      handshake: support.BOOTSTRAP_RECEIPT,
+    };
+    const receipts: DecisionReceiptV1[] = [];
+    const clear = configureRuntimeActionDecisionSink((receipt) => {
+      receipts.push(receipt);
+      return true;
+    });
+    try {
+      await expect(
+        workerService.admitWorker({ ...admission, credential: "credential-must-not-leak" }),
+      ).resolves.toEqual({ ok: false, reason: "invalid-credential" });
+      await expect(
+        workerService.admitWorker({
+          ...admission,
+          handshake: { ...admission.handshake, bundleHash: "b".repeat(64) },
+        }),
+      ).resolves.toEqual({ ok: false, reason: "bundle-mismatch" });
+      await expect(
+        workerService.admitWorker({ ...admission, ownerEpoch: admission.ownerEpoch + 1 }),
+      ).resolves.toEqual({ ok: false, reason: "invalid-credential" });
+      await expect(workerService.admitWorker(admission)).resolves.toMatchObject({ ok: true });
+    } finally {
+      clear();
+      releaseAgentRunDelegatedAuthority(delegatedAuthority);
+    }
+    expect(receipts.map((receipt) => receipt.decision.reasonCode)).toEqual([
+      "worker_admission_invalid_credential",
+      "worker_admission_bundle_mismatch",
+      "worker_admission_gate_allowed",
+    ]);
+    expect(receipts.map((receipt) => receipt.enforcement.coverageState)).toEqual([
+      "enforced",
+      "enforced",
+      "enforced",
+    ]);
+    const serialized = JSON.stringify(receipts);
+    expect(serialized).not.toContain("credential-must-not-leak");
+    expect(serialized).not.toContain("b".repeat(64));
+    expect(serialized).not.toContain(environmentId);
+    expect(serialized).not.toContain(sessionId);
+  });
+
+  it("does not attribute a late admission result to a replacement using the same run id", async () => {
+    const environmentId = "worker-admission-replacement";
+    const sessionId = "session-admission-replacement";
+    const environmentIdentity = support.seedAttachedIdentity(environmentId, sessionId);
+    const { claim: first, store } = claimWorkerPlacement({
+      environmentId,
+      ownerEpoch: environmentIdentity.ownerEpoch,
+      runId: "run-admission-replacement",
+      sessionId,
+    });
+    const firstOperationalRun = createOperationalRunInstanceRef(first.runId);
+    const firstAuthority = claimAgentRunDelegatedAuthority(firstOperationalRun);
+    bindWorkerTurnOwner(
+      store,
+      first,
+      createExecutionIdentityAdmissionToken(first.runId, {
+        contextId: "context-admission-first",
+        executionId: "execution-admission-first",
+        now: 100,
+      }),
+      firstOperationalRun,
+      { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      () => {},
+    );
+    const installation = createDeferredCore<typeof support.BUNDLE_ARTIFACT>();
+    support.testState.prepareInstallation = vi.fn(() => installation.promise);
+    const gate = createWorkerSessionPlacementGate(store);
+    const workerService = support.createService(support.createProvider(), { placementStore: gate });
+    const firstCredential = await workerService.acquireTurnCredential(first);
+    const receipts: DecisionReceiptV1[] = [];
+    const clear = configureRuntimeActionDecisionSink((receipt) => {
+      receipts.push(receipt);
+      return true;
+    });
+    const admission = {
+      environmentId,
+      credential: firstCredential.credential,
+      sessionId,
+      runId: first.runId,
+      ownerEpoch: environmentIdentity.ownerEpoch,
+      rpcSetVersion: 1,
+      handshake: support.BOOTSTRAP_RECEIPT,
+    };
+    let secondAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
+    const pendingAdmission = workerService.admitWorker(admission);
+    try {
+      await support.waitForFast(() =>
+        expect(support.testState.prepareInstallation).toHaveBeenCalledOnce(),
+      );
+
+      store.releaseTurn(first);
+      releaseAgentRunDelegatedAuthority(firstAuthority);
+      const placement = store.get(sessionId)!;
+      const second = store.claimTurn({
+        sessionId,
+        agentId: placement.agentId,
+        sessionKey: placement.sessionKey,
+        claimId: "claim-admission-replacement",
+        runId: first.runId,
+        owner: { kind: "worker", environmentId, ownerEpoch: environmentIdentity.ownerEpoch },
+      });
+      const secondOperationalRun = createOperationalRunInstanceRef(second.runId);
+      secondAuthority = claimAgentRunDelegatedAuthority(secondOperationalRun);
+      bindWorkerTurnOwner(
+        store,
+        second,
+        createExecutionIdentityAdmissionToken(second.runId, {
+          contextId: "context-admission-second",
+          executionId: "execution-admission-second",
+          now: 101,
+        }),
+        secondOperationalRun,
+        { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+        () => {},
+      );
+      installation.resolve(support.BUNDLE_ARTIFACT);
+
+      await expect(pendingAdmission).resolves.toEqual({ ok: false, reason: "invalid-credential" });
+      expect(receipts).toEqual([]);
+    } finally {
+      installation.resolve(support.BUNDLE_ARTIFACT);
+      await Promise.allSettled([pendingAdmission]);
+      clear();
+      releaseAgentRunDelegatedAuthority(firstAuthority);
+      if (secondAuthority) {
+        releaseAgentRunDelegatedAuthority(secondAuthority);
+      }
+    }
   });
 
   it("keeps restart-inherited claims recovery-only across every worker authority surface", async () => {
@@ -513,34 +630,6 @@ describe("worker environment service", () => {
       claim: identity.turnClaim,
       liveSeq: 1,
     });
-  });
-
-  it("does not ACK a transcript commit after its worker claim is fenced", async () => {
-    let finishCommit: (() => void) | undefined;
-    const commitBlocked = new Promise<void>((resolve) => {
-      finishCommit = resolve;
-    });
-    const applyTranscriptCommit = support.successfulTranscriptCommit(
-      "entry-placement-race",
-      () => commitBlocked,
-    );
-    const { identity, placementStore, workerService } = support.placementHarness(
-      "worker-placement-race",
-      "session-placement-race",
-      { applyTranscriptCommit },
-    );
-
-    const commit = workerService.commitTranscript(
-      identity,
-      support.transcriptRequest(identity, "commit before claim fence"),
-    );
-    await support.waitForFast(() => expect(applyTranscriptCommit).toHaveBeenCalledOnce());
-    placementStore.validateWorkerTurn.mockReturnValue(false);
-    finishCommit?.();
-
-    await expect(commit).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    expect(placementStore.validateWorkerTurn).toHaveBeenCalledTimes(2);
-    expect(placementStore.updateAckCursors).not.toHaveBeenCalled();
   });
 
   it("advances the transcript cursor when a stale-base commit consumes its sequence", async () => {

@@ -9,8 +9,31 @@ const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path9.default.join(__d
     binPath = import_path9.default.join(packageRoot, "bin");`;
 const PLAYWRIGHT_BROWSER_REGISTRY_INIT =
   '    registry = new Registry(require(import_path20.default.join(packageRoot, "browsers.json")));';
-const WORKER_BROWSER_RUNTIME_COMPOSITION = `import { createAttachedBrowserToolRuntime } from "../../extensions/browser/runtime-api.js";
-export default { createAttachedBrowserToolRuntime };`;
+// Keep Browser and Playwright initialization behind the admitted Browser factory.
+const WORKER_BROWSER_RUNTIME_COMPOSITION = `export default {
+  async createAttachedBrowserToolRuntime(params) {
+    const { createAttachedBrowserToolRuntime } = await import("../../extensions/browser/runtime-api.js");
+    return createAttachedBrowserToolRuntime(params);
+  }
+};`;
+const WORKER_PLAYWRIGHT_RUNTIME = `import * as playwrightCore from "playwright-core";
+import { getUserAgent } from "playwright-core/lib/coreBundle";
+export function getPlaywrightCore() { return playwrightCore; }
+export function getPlaywrightUserAgent() { return getUserAgent(); }`;
+const UNDICI_REQUIRE_BOOTSTRAP = [
+  'import { createRequire } from "node:module";',
+  "const requireUndici = createRequire(import.meta.url);\n",
+  'return requireUndici("undici") as typeof import("undici");',
+] as const;
+const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici";';
+
+export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
+  const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
+  return [
+    path.join(playwrightRoot, "package.json"),
+    path.join(playwrightRoot, "browsers.json"),
+  ] as const;
+}
 
 /** Composes bundled-plugin runtime and removes dependency package reads from the worker build. */
 export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
@@ -19,12 +42,18 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const browserRuntimeBridgePath = fs.realpathSync(
     path.resolve("src/worker/worker-deploy-browser-runtime.ts"),
   );
-  const packageJson = JSON.parse(
-    fs.readFileSync(path.join(playwrightRoot, "package.json"), "utf8"),
-  ) as { name: string; version: string };
-  const browsersJson = JSON.parse(
-    fs.readFileSync(path.join(playwrightRoot, "browsers.json"), "utf8"),
-  ) as unknown;
+  const playwrightRuntimePath = fs.realpathSync(
+    path.resolve("extensions/browser/src/browser/playwright-core.runtime.ts"),
+  );
+  const undiciDispatcherOptionsPath = fs.realpathSync(
+    path.resolve("src/infra/net/undici-dispatcher-options.ts"),
+  );
+  const [packageJsonPath, browsersJsonPath] = resolveWorkerDeployGeneratorInputs(rootDir);
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+    name: string;
+    version: string;
+  };
+  const browsersJson = JSON.parse(fs.readFileSync(browsersJsonPath, "utf8")) as unknown;
   const replacement = `    packageRoot = __dirname;
     packageJSON = ${JSON.stringify({ name: packageJson.name, version: packageJson.version })};
     binPath = packageRoot;`;
@@ -45,6 +74,18 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       }
       if (resolvedId === browserRuntimeBridgePath) {
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
+      }
+      if (resolvedId === playwrightRuntimePath) {
+        return WORKER_PLAYWRIGHT_RUNTIME;
+      }
+      if (resolvedId === undiciDispatcherOptionsPath) {
+        if (UNDICI_REQUIRE_BOOTSTRAP.some((fragment) => !code.includes(fragment))) {
+          this.error("undici dispatcher bootstrap changed; update the worker deploy transform");
+        }
+        return code
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[0], WORKER_UNDICI_IMPORT)
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[1], "")
+          .replace(UNDICI_REQUIRE_BOOTSTRAP[2], "return bundledUndici;");
       }
       if (
         resolvedId !== coreBundlePath ||

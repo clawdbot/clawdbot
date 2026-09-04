@@ -302,6 +302,8 @@ export type ChannelSetupWizard = {
 
 /** Runtime options for selecting and configuring one or more channels. */
 export type SetupChannelsOptions = {
+  /** Workspace already selected by the caller, used for trusted plugin discovery. */
+  workspaceDir?: string;
   allowDisable?: boolean;
   allowIMessageInstall?: boolean;
   allowSignalInstall?: boolean;

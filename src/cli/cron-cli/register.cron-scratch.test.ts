@@ -74,15 +74,14 @@ describe("cron scratch command", () => {
     "rejects non-decimal --expected-revision %j",
     async (revision) => {
       const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      const exitSpy = vi
-        .spyOn(defaultRuntime, "exit")
-        .mockImplementation((() => undefined) as never);
 
       try {
-        await createCronProgram().parseAsync(
-          ["scratch", "job-1", "--set", "x", "--expected-revision", revision],
-          { from: "user" },
-        );
+        await expect(
+          createCronProgram().parseAsync(
+            ["scratch", "job-1", "--set", "x", "--expected-revision", revision],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
         expect(errorSpy).toHaveBeenCalledWith(
           expect.stringContaining("--expected-revision must be a non-negative integer"),
@@ -93,7 +92,6 @@ describe("cron scratch command", () => {
         expect(setCalls).toHaveLength(0);
       } finally {
         errorSpy.mockRestore();
-        exitSpy.mockRestore();
       }
     },
   );

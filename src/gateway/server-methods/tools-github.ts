@@ -2,6 +2,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  validateToolsGitHubAuthorizeCancelParams,
+  validateToolsGitHubAuthorizePollParams,
+  validateToolsGitHubAuthorizeStartParams,
   validateToolsGitHubConfigureParams,
   validateToolsGitHubStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -13,6 +16,7 @@ import {
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
 import { consumeGitHubSetupHandoff } from "../../secrets/store/secret-store.js";
+import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { updateGitHubToolIdentityConfig } from "../github-tool-identity-config.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -37,8 +41,9 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
     respond(
       true,
       await resolveGitHubToolIdentityStatus({
-        config: resolved.cfg,
+        config: context.getRuntimeConfig(),
         agentId: resolved.agentId,
+        selectedScope: params.selectedScope,
       }),
     );
   },
@@ -74,11 +79,15 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
           agentId: resolved.agentId,
           expectedIdentity: previousIdentity ?? null,
         });
+        if (previousIdentity?.kind === "oauth") {
+          context.githubOAuthService?.retireProfile(previousIdentity.profileId);
+        }
         respond(
           true,
           await resolveGitHubToolIdentityStatus({
             config: nextConfig,
             agentId: resolved.agentId,
+            selectedScope: params.scope,
           }),
         );
         return;
@@ -97,10 +106,6 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         throw new Error("temporary GitHub credential is unavailable");
       }
       const profileId = createManagedGitHubProfileId();
-      const identity = {
-        profileId,
-        ...(gitAuthor ? { gitAuthor } : {}),
-      };
       const profileDir = resolveManagedGitHubProfileDir({
         agentId: resolved.agentId,
         scope: params.scope,
@@ -110,7 +115,14 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
       await installManagedGitHubProfile({
         profileDir,
         token,
-        commitConfig: async () => {
+        commitConfig: async (account) => {
+          const identity = {
+            profileId,
+            gitAuthor: gitAuthor ?? {
+              name: account.login,
+              email: `${account.accountId}+${account.login}@users.noreply.github.com`,
+            },
+          };
           nextConfig = await updateGitHubToolIdentityConfig({
             scope: params.scope,
             agentId: resolved.agentId,
@@ -119,15 +131,108 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
           });
         },
       });
+      if (previousIdentity?.kind === "oauth") {
+        context.githubOAuthService?.retireProfile(previousIdentity.profileId);
+      }
       respond(
         true,
         await resolveGitHubToolIdentityStatus({
           config: nextConfig,
           agentId: resolved.agentId,
+          selectedScope: params.scope,
         }),
       );
     } catch {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "GitHub identity setup failed"));
     }
+  },
+  "tools.github.authorize.start": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateToolsGitHubAuthorizeStartParams,
+        "tools.github.authorize.start",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveAgentIdOrRespondError({
+      rawAgentId: params.agentId,
+      respond,
+      cfg: context.getRuntimeConfig(),
+      normalize: normalizeOptionalString,
+    });
+    if (!resolved) {
+      return;
+    }
+    try {
+      const service = context.githubOAuthService;
+      if (!service) {
+        throw new Error("GitHub authorization lifecycle is unavailable.");
+      }
+      respond(
+        true,
+        await service.startAuthorization({ scope: params.scope, agentId: resolved.agentId }),
+      );
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          error instanceof GitHubCliUnavailableError
+            ? error.message
+            : "GitHub authorization could not start",
+        ),
+      );
+    }
+  },
+  "tools.github.authorize.poll": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateToolsGitHubAuthorizePollParams,
+        "tools.github.authorize.poll",
+        respond,
+      )
+    ) {
+      return;
+    }
+    try {
+      const service = context.githubOAuthService;
+      if (!service) {
+        throw new Error("GitHub authorization lifecycle is unavailable.");
+      }
+      respond(true, await service.pollAuthorization(params.requestId));
+    } catch {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "GitHub authorization polling failed"),
+      );
+    }
+  },
+  "tools.github.authorize.cancel": ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateToolsGitHubAuthorizeCancelParams,
+        "tools.github.authorize.cancel",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const service = context.githubOAuthService;
+    if (!service) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "GitHub authorization lifecycle is unavailable"),
+      );
+      return;
+    }
+    respond(true, { cancelled: service.cancelAuthorization(params.requestId) });
   },
 };

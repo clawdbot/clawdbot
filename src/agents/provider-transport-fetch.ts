@@ -8,6 +8,7 @@ import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,
+  isRfc8215LocalUseNat64Ipv6Address,
   parseCanonicalIpAddress,
 } from "@openclaw/net-policy/ip";
 import {
@@ -26,6 +27,7 @@ import {
   mergeSsrFPolicies,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+  SsrFBlockedError,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import type { Model } from "../llm/types.js";
@@ -676,7 +678,8 @@ function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is str
         label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
     ) &&
     !isLinkLocalIpAddress(hostname) &&
-    !isCloudMetadataIpAddress(hostname)
+    !isCloudMetadataIpAddress(hostname) &&
+    !isRfc8215LocalUseNat64Ipv6Address(hostname)
   );
 }
 
@@ -721,6 +724,35 @@ export function resolveProviderTransportSsrFPolicy(params: {
     baseUrlOriginPolicy,
     fakeIpPolicy,
     params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+  );
+}
+
+function withModelProviderNetworkRemediation(
+  error: unknown,
+  params: {
+    baseUrl?: string;
+    providerId: string;
+    url: string;
+  },
+): unknown {
+  const baseOrigin = resolveHttpOrigin(params.baseUrl);
+  const requestOrigin = resolveHttpOrigin(params.url);
+  const hostname = normalizeProviderOriginHostname(params.baseUrl);
+  if (
+    !(error instanceof SsrFBlockedError) ||
+    !baseOrigin ||
+    requestOrigin !== baseOrigin ||
+    !hostname ||
+    !isRfc8215LocalUseNat64Ipv6Address(hostname)
+  ) {
+    return error;
+  }
+  return new SsrFBlockedError(
+    `Configured model provider ${params.providerId} uses local-use NAT64 origin ` +
+      `${baseOrigin}, which OpenClaw blocks by default. Move the provider to a ` +
+      `loopback, LAN, or tailnet address, or set ` +
+      `models.providers.${params.providerId}.request.allowPrivateNetwork=true only for an ` +
+      `operator-controlled endpoint. Original block: ${error.message}`,
   );
 }
 
@@ -890,12 +922,17 @@ export function buildGuardedModelFetch(
           : guardedFetchOptions,
       );
     } catch (error) {
+      const remediatedError = withModelProviderNetworkRemediation(error, {
+        baseUrl: model.baseUrl,
+        providerId: model.provider,
+        url,
+      });
       log.warn(
         `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
-          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
+          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(remediatedError)}`,
       );
       localServiceLease?.release();
-      throw error;
+      throw remediatedError;
     }
     let response = result.response;
     emitModelTransportDebug(

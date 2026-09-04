@@ -1,4 +1,4 @@
-import { existsSync, watch } from "node:fs";
+import { existsSync, symlinkSync, watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 // Covers Tailscale whois, Serve, and Funnel helpers.
@@ -16,6 +16,17 @@ const {
 } = tailscale;
 const tailscaleBin = "tailscale";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function useTailscaleSudoFixture(mode: "password" | "route-error" | "conflict") {
+  const fixture = fileURLToPath(
+    new URL("../../test/fixtures/tailscale-sudo-fixture.mjs", import.meta.url),
+  );
+  const fakeBin = tempDirs.make("openclaw-tailscale-bin-");
+  symlinkSync(fixture, path.join(fakeBin, "sudo"));
+  process.env.PATH = `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`;
+  process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
+  process.env.OPENCLAW_TEST_TAILSCALE_SUDO_FIXTURE_MODE = mode;
+}
 
 function expectExecCall(
   exec: ReturnType<typeof vi.fn>,
@@ -45,7 +56,9 @@ describe("tailscale helpers", () => {
     envSnapshot = captureEnv([
       "OPENCLAW_TEST_TAILSCALE_BINARY",
       "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
+      "OPENCLAW_TEST_TAILSCALE_SUDO_FIXTURE_MODE",
       "NODE_ENV",
+      "PATH",
       "VITEST",
     ]);
     process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "tailscale";
@@ -187,6 +200,24 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenCalledTimes(2);
   });
 
+  it("bypasses existing whois results when the cache TTL is zero", async () => {
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "before@example.com" } }),
+      })
+      .mockRejectedValueOnce(new Error("no longer authorized"));
+
+    await expect(readTailscaleWhoisIdentity("100.64.0.13", exec)).resolves.toEqual({
+      login: "before@example.com",
+    });
+    await expect(
+      readTailscaleWhoisIdentity("100.64.0.13", exec, { cacheTtlMs: 0, errorTtlMs: 0 }),
+    ).resolves.toBeNull();
+
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
   it("does not cache whois results when the cache expiry would exceed Date range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(8_640_000_000_000_000));
@@ -216,12 +247,45 @@ describe("tailscale helpers", () => {
         new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
       );
 
-      const claim = await claimTailscaleRoute("serve", 18789);
+      const claim = await claimTailscaleRoute("serve", 18789, 18789, vi.fn());
       expect(claim.isActive()).toBe(true);
 
       await claim.stop();
       await expect(claim.exited).resolves.toBeUndefined();
       expect(claim.isActive()).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "names the operator fix when the sudo fallback cannot run without a TTY",
+    async () => {
+      useTailscaleSudoFixture("password");
+
+      await expect(claimTailscaleRoute("serve", 18791, 18791, vi.fn())).rejects.toThrow(
+        /sudo: a password is required[\s\S]*sudo tailscale set --operator=\$USER/,
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves an operational error from an authorized sudo retry",
+    async () => {
+      useTailscaleSudoFixture("route-error");
+
+      await expect(claimTailscaleRoute("funnel", 18792, 18792, vi.fn())).rejects.toMatchObject({
+        message: "Funnel is not enabled on your tailnet.",
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves an ownership conflict from the privileged route retry",
+    async () => {
+      useTailscaleSudoFixture("conflict");
+
+      await expect(claimTailscaleRoute("serve", 18789, 18789, vi.fn())).rejects.toThrow(
+        "ownership OpenClaw cannot prove; it was not modified",
+      );
     },
   );
 
@@ -245,7 +309,7 @@ describe("tailscale helpers", () => {
           }
         });
       });
-      const claimPromise = claimTailscaleRoute("funnel", 18790);
+      const claimPromise = claimTailscaleRoute("funnel", 18790, 18790, vi.fn());
       void claimPromise.catch(() => undefined);
       await markerWritten;
       expect(existsSync(marker)).toBe(true);

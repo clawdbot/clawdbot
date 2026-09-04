@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 // Package manifest for the OpenClaw macOS companion (menu bar app + IPC library).
 
 import PackageDescription
@@ -16,14 +16,13 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", exact: "3.0.1"),
-        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.0"),
-        .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
-        .package(url: "https://github.com/apple/swift-log.git", from: "1.12.0"),
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
+        .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "1.0.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"),
         .package(
             url: "https://github.com/openclaw/Peekaboo.git",
-            revision: "d1217a9fdf02d882b7c170f294e1e75e20039320"),
-        .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.3.1"),
+            revision: "44eff916c3330739108cc1d73683338d4250503a"),
+        .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.4.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),
         .package(path: "../swabble"),
@@ -65,7 +64,6 @@ let package = Package(
                 .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
-                .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Sparkle", package: "Sparkle"),
@@ -80,6 +78,7 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/OpenClaw.icns"),
+                .copy("Resources/AppIcons"),
                 .copy("Resources/DeviceModels"),
                 .copy("Resources/ProviderIcons"),
             ],

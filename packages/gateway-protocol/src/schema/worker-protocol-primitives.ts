@@ -5,6 +5,9 @@ export const WORKER_PUBLIC_INGRESS_PATH = "/__openclaw__/worker";
 export const WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH = 256;
 export const WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH = 128;
 export const WORKER_PROTOCOL_MAX_PAYLOAD_BYTES = 64 * 1024;
+// Image-bearing inference, transcript and computer results share this transport ceiling.
+// Non-image control data keeps the ordinary frame budget.
+export const WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES = 25 * 1024 * 1024;
 
 export const WorkerIdentifierSchema = Type.String({
   minLength: 1,

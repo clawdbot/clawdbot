@@ -68,6 +68,7 @@ function backgroundTasks(selectedTask: TaskSummary): BackgroundTasksProps {
     loading: false,
     error: null,
     tasks: [selectedTask],
+    activeCount: selectedTask.status === "queued" || selectedTask.status === "running" ? 1 : 0,
     subagentActivity: {
       rows: [],
       overflowWorking: 0,
@@ -99,7 +100,6 @@ function renderDetail(host: TaskDetailHost, content: SidebarContent, layout: Sid
     backgroundTasks: backgroundTasks(task("running")),
     chat: { paneId: "pane-1" } as ChatProps,
     content,
-    fullMessageLoader: null,
     host: host as ChatPageHost,
     layout,
     transcript: {} as ChatTranscriptController,
@@ -117,18 +117,7 @@ afterEach(() => {
 });
 
 describe("task detail transcript state", () => {
-  it.each([
-    {
-      label: "the detail slot closes",
-      nextContent: taskContent,
-      nextLayout: closeSlot(openSlot({ columns: [] }, "detail"), "detail"),
-    },
-    {
-      label: "the detail slot switches to a file",
-      nextContent: fileContent,
-      nextLayout: openSlot({ columns: [] }, "detail"),
-    },
-  ])("clears transcript state when $label", ({ nextContent, nextLayout }) => {
+  it("clears transcript state when the detail slot closes", () => {
     const pending = deferred<never>();
     const host = hostWith(vi.fn().mockReturnValue(pending.promise));
     const openDetailLayout = openSlot({ columns: [] }, "detail");
@@ -136,7 +125,7 @@ describe("task detail transcript state", () => {
     renderDetail(host, taskContent, openDetailLayout);
     expect(host.taskDetailState).toBeDefined();
 
-    renderDetail(host, nextContent, nextLayout);
+    renderDetail(host, taskContent, closeSlot(openDetailLayout, "detail"));
     expect(host.taskDetailState).toBeUndefined();
   });
 
@@ -176,7 +165,7 @@ describe("task detail transcript state", () => {
     ).toEqual({ status: "loading" });
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "agent:main:subagent:child",
-      limit: 100,
+      limit: 800,
     });
 
     pending.resolve(history("Child transcript loaded."));

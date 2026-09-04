@@ -576,6 +576,23 @@ describe("sendMessageMattermost", () => {
     expect(mockState.createMattermostPost).not.toHaveBeenCalled();
   });
 
+  it("does not fall back to the original image URL after a capped optimized upload fails", async () => {
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.alloc(512),
+      fileName: "optimized.jpg",
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    mockState.uploadMattermostFile.mockRejectedValueOnce(new Error("upload unavailable"));
+    await expect(
+      sendMessageMattermost("channel:town-square", "caption", {
+        cfg: { agents: { defaults: { mediaMaxMb: 1 / 1024 } } },
+        mediaUrl: "https://example.com/original-large.png",
+      }),
+    ).rejects.toThrow("upload unavailable");
+    expect(mockState.createMattermostPost).not.toHaveBeenCalled();
+  });
+
   it("builds interactive button props when buttons are provided", async () => {
     mockState.resolveMattermostAccount.mockReturnValue({
       accountId: "default",
@@ -845,25 +862,6 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(mockState.fetchMattermostUser).not.toHaveBeenCalled();
     expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
     expect(res.channelId).toBe("dm-channel-id");
-  });
-
-  it("observes cache-miss DM resolution but not cached sends", async () => {
-    const userId = "iiiiii9999999999iiiiii9999"; // 26 chars
-    const onDmChannelResolution = vi.fn();
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-dm-observer-t9"));
-
-    await sendMessageMattermost(`user:${userId}`, "first", {
-      cfg: TEST_CFG,
-      onDmChannelResolution,
-    });
-    await sendMessageMattermost(`user:${userId}`, "second", {
-      cfg: TEST_CFG,
-      onDmChannelResolution,
-    });
-
-    expect(onDmChannelResolution).toHaveBeenCalledTimes(1);
-    expect(onDmChannelResolution).toHaveBeenCalledWith(expect.any(Promise));
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
   });
 
   it("does not apply user-first resolution for explicit channel: prefix", async () => {

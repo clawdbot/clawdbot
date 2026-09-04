@@ -1,7 +1,7 @@
 /** Terminal/JSON/plain table renderer for model-list rows. */
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { formatTag, formatTokenK, isRich, padTerminalCell, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
 
@@ -39,7 +39,7 @@ export function printModelTable(
 
   if (opts.plain) {
     for (const row of rows) {
-      runtime.log(sanitizeTerminalText(row.key));
+      writeRuntimeStdout(runtime, sanitizeTerminalText(row.key));
     }
     return;
   }

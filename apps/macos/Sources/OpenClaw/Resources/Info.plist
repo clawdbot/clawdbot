@@ -20,6 +20,8 @@
     <string>2026080100</string>
     <key>CFBundleIconFile</key>
     <string>OpenClaw</string>
+    <key>CFBundleIconName</key>
+    <string>Icon</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

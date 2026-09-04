@@ -24,17 +24,20 @@ import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
+import { isSystemAgentNavigationOperation } from "./operation-types.js";
 import { isInvalidConfigSetOperation } from "./operations-internal.js";
 import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
+  SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
   type SystemAgentCommandDeps,
   type SystemAgentOperation,
   type SystemAgentOperationResult,
 } from "./operations.js";
 import {
+  hashSystemAgentOperation,
   resolveOperatorApprovalDecision,
   resolvePendingOperatorProposal,
   type SystemAgentApprovalIntent,
@@ -60,6 +63,7 @@ type ChatTurnRouterOptions = {
 };
 
 type CaptureRuntime = RuntimeEnv & { read: () => string };
+type PersistentApplyGuard = () => void;
 
 function createCaptureRuntime(): CaptureRuntime {
   const lines: string[] = [];
@@ -158,27 +162,23 @@ export class ChatTurnRouter {
     return describeSystemAgentPersistentOperation(this.pending);
   }
 
-  hasPendingProposal(): boolean {
-    return this.pending !== null;
-  }
-
   getPendingOperatorProposal(): { operation: SystemAgentOperation; hash: string } | null {
-    const proposalOperation = this.agentSession.proposalRef.operation;
-    if (proposalOperation) {
-      const recordedOperation = this.recordCreateAgentRequester(proposalOperation);
-      if (recordedOperation !== proposalOperation) {
-        // Request provenance is part of the exact approval-bound operation.
-        // Replace the model-tool hash before exposing the proposal to the operator.
-        this.agentSession.proposalRef.current = undefined;
-        this.agentSession.proposalRef.operation = recordedOperation;
-      }
+    const proposal = resolvePendingOperatorProposal(this.pending, this.agentSession.proposalRef);
+    if (!proposal) {
+      return null;
     }
-    return resolvePendingOperatorProposal(this.pending, this.agentSession.proposalRef);
+    const operation = this.recordCreateAgentRequester(proposal.operation);
+    // Request provenance participates in approval identity, but reading the
+    // operator projection must not transfer ownership of a host-seeded plan.
+    return operation === proposal.operation
+      ? proposal
+      : { operation, hash: hashSystemAgentOperation(operation) };
   }
 
   async resolveOperatorApproval(
     decision: "allow-once" | "allow-always" | "deny" | null,
     proposalHash: string,
+    beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentChatReply | null> {
     return await resolveOperatorApprovalDecision({
       decision,
@@ -187,17 +187,18 @@ export class ChatTurnRouter {
       clear: () => this.clearPendingProposals(),
       apply: async (operation) => {
         this.proposalResolution = "approved";
-        return await this.applyApprovedPersistentOperation(operation);
+        return await this.applyApprovedPersistentOperation(operation, beforePersistentApply);
       },
-      denied: () => ({ text: "Denied. No change.", action: "none" as const }),
+      denied: () => {
+        this.proposalResolution = "declined";
+        return { text: "Denied. No change.", action: "none" as const, applied: false };
+      },
     });
   }
 
   clearForInferenceLoss(): void {
-    this.pending = null;
+    this.clearPendingProposals();
     this.proposalResolution = undefined;
-    this.agentSession.proposalRef.current = undefined;
-    this.agentSession.proposalRef.operation = undefined;
     this.awaitingSetupChannel = false;
     this.lastSensitiveChannel = undefined;
   }
@@ -257,23 +258,7 @@ export class ChatTurnRouter {
     ) {
       return await this.runOperation(typed, undefined);
     }
-    const typedRefusal = this.refuseDelegatedNavigationDirective(typed.kind);
-    if (typedRefusal) {
-      return { text: typedRefusal, action: "none" };
-    }
-    if (typed.kind === "open-tui") {
-      this.clearPendingProposals();
-      return await this.runOperation(typed, undefined);
-    }
-    if (
-      typed.kind === "open-setup" ||
-      typed.kind === "channel-setup" ||
-      typed.kind === "skills-setup" ||
-      typed.kind === "search-setup" ||
-      typed.kind === "gateway-config-setup" ||
-      typed.kind === "memory-import" ||
-      typed.kind === "model-setup"
-    ) {
+    if (isSystemAgentNavigationOperation(typed)) {
       return await this.runOperation(typed, undefined);
     }
 
@@ -286,13 +271,10 @@ export class ChatTurnRouter {
         return await this.applyPendingProposal(this.pending);
       }
       if (intent === "decline") {
-        const skippedModelSetup = this.pending.kind === "model-setup";
         this.clearPendingProposals();
         this.proposalResolution = "declined";
         return {
-          text: skippedModelSetup
-            ? "Skipped. The current inference route is unchanged."
-            : "Skipped. No barnacles on config today.",
+          text: "Skipped. No barnacles on config today.",
           action: "none",
         };
       }
@@ -327,26 +309,18 @@ export class ChatTurnRouter {
   private async applyPendingProposal(pending: SystemAgentOperation): Promise<SystemAgentChatReply> {
     this.clearPendingProposals();
     this.proposalResolution = "approved";
-    if (pending.kind === "channel-setup") {
-      return await this.startWizard(this.wizard.startChannel(pending.channel));
-    }
-    if (pending.kind === "model-setup") {
-      return this.startModelSetup();
-    }
-    if (!isPersistentSystemAgentOperation(pending)) {
-      return await this.runOperation(pending, undefined);
-    }
     return await this.applyApprovedPersistentOperation(pending);
   }
 
   private async applyApprovedPersistentOperation(
     operation: SystemAgentOperation,
+    beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentChatReply> {
     if (!isPersistentSystemAgentOperation(operation)) {
       throw new Error("OpenClaw host received a non-persistent approved operation.");
     }
     const capture = createCaptureRuntime();
-    const result = await this.executeOperation(operation, capture, true);
+    const result = await this.executeOperation(operation, capture, true, beforePersistentApply);
     const verify = result?.applied ? await this.callbacks.verifyConfigAfterWrite() : null;
     const followUp = this.armFollowUp(result?.followUp);
     const baseText = [capture.read() || "Applied. Audit entry written.", verify, followUp]
@@ -361,9 +335,10 @@ export class ChatTurnRouter {
       return {
         text: [
           baseText,
-          "Your agent is hatching — handing you over now. You can always find me in Settings → Ask OpenClaw.",
+          `Your agent is hatching — handing you over now. ${this.agentHandoffReturnHint()}`,
         ].join("\n\n"),
         action: "open-tui",
+        applied: true,
         agentDraft: "hatch",
         handoff: {
           kind: "open-tui",
@@ -373,7 +348,7 @@ export class ChatTurnRouter {
         },
       };
     }
-    return { text: baseText, action: "none" };
+    return { text: baseText, action: "none", applied: result?.applied === true };
   }
 
   async resolveAssistantTurn(
@@ -402,6 +377,7 @@ export class ChatTurnRouter {
         overview,
         surface: this.options.surface ?? "cli",
         approvalArmed,
+        ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
         session: this.agentSession,
       });
     } catch (error) {
@@ -474,61 +450,20 @@ export class ChatTurnRouter {
   }): Promise<SystemAgentChatReply> {
     await this.callbacks.requireVerifiedInference();
     const directive = loopReply.directive;
-    const refusal = this.refuseDelegatedNavigationDirective(directive?.kind);
-    if (refusal) {
-      return { text: [loopReply.text, refusal].filter(Boolean).join("\n\n"), action: "none" };
+    if (!directive) {
+      return { text: loopReply.text, action: "none" };
     }
-    if (directive?.kind === "approved-operation") {
-      const applied = await this.applyApprovedPersistentOperation(directive.operation);
-      return { ...applied, text: [loopReply.text, applied.text].filter(Boolean).join("\n\n") };
-    }
-    if (directive?.kind === "channel-setup") {
-      return await this.prependWizard(loopReply.text, this.wizard.startChannel(directive.channel));
-    }
-    if (directive?.kind === "skills-setup") {
-      return await this.prependWizard(loopReply.text, this.wizard.startSkills());
-    }
-    if (directive?.kind === "search-setup") {
-      return await this.prependWizard(loopReply.text, this.wizard.startSearch());
-    }
-    if (directive?.kind === "gateway-config-setup") {
-      return await this.prependWizard(loopReply.text, this.wizard.startGateway());
-    }
-    if (directive?.kind === "memory-import") {
-      return await this.prependWizard(loopReply.text, this.wizard.startMemoryImport());
-    }
-    if (directive?.kind === "model-setup") {
-      const setup = this.startModelSetup();
-      return { ...setup, text: [loopReply.text, setup.text].filter(Boolean).join("\n\n") };
-    }
-    if (directive?.kind === "open-tui") {
-      this.clearPendingProposals();
-      return { text: loopReply.text, action: "open-tui", handoff: directive };
-    }
-    if (directive?.kind === "open-setup") {
-      const handoff = await this.runOperation(directive, undefined);
-      return { ...handoff, text: [loopReply.text, handoff.text].filter(Boolean).join("\n\n") };
-    }
-    return { text: loopReply.text, action: "none" };
-  }
-
-  private refuseDelegatedNavigationDirective(kind: string | undefined): string | undefined {
-    if (!this.options.operatorApprovalOnly) {
-      return undefined;
-    }
-    if (
-      kind === "channel-setup" ||
-      kind === "skills-setup" ||
-      kind === "search-setup" ||
-      kind === "gateway-config-setup" ||
-      kind === "memory-import" ||
-      kind === "model-setup" ||
-      kind === "open-setup" ||
-      kind === "open-tui"
-    ) {
-      return "Channel, model, and setup flows need a human operator in the OpenClaw app; they cannot run from a delegated agent request.";
-    }
-    return undefined;
+    const reply =
+      directive.kind === "approved-operation"
+        ? await this.applyApprovedPersistentOperation(directive.operation)
+        : await this.runOperation(directive, undefined);
+    return {
+      ...reply,
+      text:
+        directive.kind === "open-tui" && reply.action === "open-tui"
+          ? loopReply.text
+          : [loopReply.text, reply.text].filter(Boolean).join("\n\n"),
+    };
   }
 
   private async runOperation(
@@ -537,12 +472,31 @@ export class ChatTurnRouter {
   ): Promise<SystemAgentChatReply> {
     const recordedOperation = this.recordCreateAgentRequester(operation);
     await this.callbacks.requireVerifiedInference();
+    // All inputs (typed commands, tool directives, and planner fallback) enter
+    // here before any wizard or handoff starts.
+    if (this.options.operatorApprovalOnly && isSystemAgentNavigationOperation(recordedOperation)) {
+      return {
+        text: SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
+        action: "none",
+      };
+    }
     if (recordedOperation.kind === "open-tui") {
       this.clearPendingProposals();
       return {
-        text: "Opening your normal agent TUI. Use /openclaw there to come back.",
+        text: `Opening a chat with your agent. ${this.agentHandoffReturnHint()}`,
         action: "open-tui",
         handoff: recordedOperation,
+      };
+    }
+    if (recordedOperation.kind === "model-accounts") {
+      this.clearPendingProposals();
+      return {
+        text:
+          this.options.surface === "gateway"
+            ? "Opening Settings → Profile → Connected accounts. Check the Gateway, person, and Personal scope, then sign in or select a saved account. Nothing has changed yet; never paste credentials into this conversation."
+            : "Run `openclaw models accounts list` to see your personal accounts, or `openclaw models accounts login <provider>` for protected sign-in. Check the Gateway and person shown before signing in. You can also use Settings → Profile → Connected accounts in the Control UI. Nothing has changed; never paste credentials into this conversation.",
+        action: "none",
+        ...(this.options.surface === "gateway" ? { handoff: recordedOperation } : {}),
       };
     }
     if (recordedOperation.kind === "open-setup") {
@@ -602,13 +556,20 @@ export class ChatTurnRouter {
     const capture = createCaptureRuntime();
     if (isPersistentSystemAgentOperation(recordedOperation) && !this.options.yes) {
       this.clearPendingProposals();
-      this.pending = recordedOperation;
+      // Validate through the executor before staging; delegated handoff copy must
+      // not turn a forbidden operation into an approvable proposal.
       await executeSystemAgentOperation(recordedOperation, capture, {
         approved: false,
+        operatorApprovalOnly: this.options.operatorApprovalOnly,
         deps: this.commandDeps(),
       });
+      this.pending = recordedOperation;
       return {
-        text: [provenance, capture.read(), approvalQuestion(recordedOperation)]
+        text: [
+          provenance,
+          capture.read(),
+          this.options.operatorApprovalOnly ? undefined : approvalQuestion(recordedOperation),
+        ]
           .filter(Boolean)
           .join("\n\n"),
         action: "none",
@@ -632,15 +593,17 @@ export class ChatTurnRouter {
     operation: SystemAgentOperation,
     capture: CaptureRuntime,
     approved: boolean,
+    beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentOperationResult | undefined> {
     try {
       const execute = this.dependencies.executeOperation ?? executeSystemAgentOperation;
+      if (approved) {
+        await this.callbacks.requirePersistentApplyInference(capture);
+      }
       return await execute(operation, capture, {
         approved,
         deps: this.commandDeps(),
-        beforePersistentApply: async () => {
-          await this.callbacks.requirePersistentApplyInference(capture);
-        },
+        beforePersistentApply,
         onVerifiedInferenceChanged: this.callbacks.rebindVerifiedInference,
       });
     } catch (error) {
@@ -663,14 +626,6 @@ export class ChatTurnRouter {
     return { text: await this.finishWizardText(resolved), action: "none" };
   }
 
-  private async prependWizard(
-    prefix: string,
-    result: Promise<ChatWizardResult>,
-  ): Promise<SystemAgentChatReply> {
-    const reply = await this.startWizard(result);
-    return { ...reply, text: [prefix, reply.text].filter(Boolean).join("\n\n") };
-  }
-
   private async finishWizardText(result: ChatWizardResult): Promise<string> {
     const verify = result.configWritten ? await this.callbacks.verifyConfigAfterWrite() : null;
     return [result.text, verify].filter(Boolean).join("\n");
@@ -687,14 +642,19 @@ export class ChatTurnRouter {
     };
   }
 
-  private commandDeps(): SystemAgentCommandDeps | undefined {
-    if (!this.options.deps && !this.options.surface) {
-      return undefined;
-    }
+  private commandDeps(): SystemAgentCommandDeps {
     return {
       ...this.options.deps,
+      loadOverview: this.callbacks.loadOverview,
       ...(this.options.surface ? { setupSurface: this.options.surface } : {}),
     };
+  }
+
+  private agentHandoffReturnHint(): string {
+    // Only the TUI uses /openclaw for navigation; web chat runs rescue in place.
+    return this.options.surface === "gateway"
+      ? "You can return through Settings → Ask OpenClaw."
+      : "Use /openclaw to come back.";
   }
 
   private clearPendingProposals(): void {

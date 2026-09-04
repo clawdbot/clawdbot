@@ -56,16 +56,32 @@ describe("resolveDeferredCleanupDecision", () => {
 
   it("hard-expires completion-message cleanup when descendants never settle", () => {
     const decision = resolveDecision({
-      entry: makeEntry({ expectsCompletionMessage: true, endedAt: now - (30 * 60_000 + 1) }),
+      entry: makeEntry({ expectsCompletionMessage: true, endedAt: now - 30 * 60_000 }),
       activeDescendantRuns: 1,
     });
 
     expect(decision).toEqual({ kind: "give-up", reason: "expiry" });
   });
 
-  it("keeps regular expiry behavior for non-completion flows", () => {
+  it.each([
+    { name: "before", deadlineAt: now + 1, kind: "retry" },
+    { name: "at", deadlineAt: now, kind: "give-up" },
+  ])("honors a redriven completion $name its delivery deadline", ({ deadlineAt, kind }) => {
     const decision = resolveDecision({
-      entry: makeEntry({ expectsCompletionMessage: false, endedAt: now - (5 * 60_000 + 1) }),
+      entry: makeEntry({
+        expectsCompletionMessage: true,
+        endedAt: now - 60 * 60_000,
+        delivery: { status: "pending", windowStartedAt: now - 1_000, deadlineAt },
+      }),
+      activeDescendantRuns: 0,
+    });
+
+    expect(decision.kind).toBe(kind);
+  });
+
+  it("expires non-completion flows at their deadline", () => {
+    const decision = resolveDecision({
+      entry: makeEntry({ expectsCompletionMessage: false, endedAt: now - 5 * 60_000 }),
       activeDescendantRuns: 0,
     });
 

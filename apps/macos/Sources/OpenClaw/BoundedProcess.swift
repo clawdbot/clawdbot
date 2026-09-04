@@ -129,7 +129,7 @@ enum BoundedProcess {
                 allowedDurationToNextStep: .zero),
         ]
         let configuration = Configuration(
-            .path(.init(path)),
+            executable: .path(.init(path)),
             arguments: Arguments(arguments),
             environment: environment.map(self.environment(from:)) ?? .inherit,
             workingDirectory: workingDirectory.map { .init($0) },
@@ -184,7 +184,7 @@ enum BoundedProcess {
             }
         }
 
-        if executionResult.closureOutput {
+        if executionResult.closureResult {
             throw BoundedProcessError.timedOut
         }
         let data = Data(executionResult.standardOutput)

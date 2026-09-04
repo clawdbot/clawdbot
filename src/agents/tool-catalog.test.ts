@@ -30,6 +30,16 @@ describe("tool-catalog", () => {
     expect(ids({ swarmEnabled: true })).toContain("agents_wait");
   });
 
+  it("lists GitHub publication only with a prepared session capability", () => {
+    const ids = (config?: Parameters<typeof listCoreToolSections>[0]) =>
+      listCoreToolSections(config).flatMap((section) => section.tools.map((tool) => tool.id));
+
+    expect(ids()).not.toContain("github_publish");
+    expect(ids()).not.toContain("github_identity_status");
+    expect(ids({ githubPublicationAvailable: false })).toContain("github_identity_status");
+    expect(ids({ githubPublicationAvailable: true })).toContain("github_publish");
+  });
+
   it("includes code execution, web tools, and progress_card in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
     expect(policy.allow).toEqual([
@@ -40,6 +50,7 @@ describe("tool-catalog", () => {
       "exec",
       "process",
       "code_execution",
+      "secrets",
       "web_search",
       "web_fetch",
       "x_search",
@@ -54,6 +65,8 @@ describe("tool-catalog", () => {
       "conversations_turn",
       "sessions_send",
       "sessions_spawn",
+      "github_identity_status",
+      "github_publish",
       "agents_wait",
       "sessions_yield",
       "subagents",
@@ -82,6 +95,7 @@ describe("tool-catalog", () => {
   it("includes bundle MCP tools in coding and messaging profile policies", () => {
     expect(requirePolicyAllow("coding").at(-1)).toBe("bundle-mcp");
     expect(requirePolicyAllow("messaging")).toEqual([
+      "secrets",
       "sessions",
       "sessions_list",
       "sessions_history",

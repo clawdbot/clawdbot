@@ -54,20 +54,6 @@ function resolveWebSearchRuntimeConfig(params?: {
   });
 }
 
-/** Resolves whether web_search is enabled for the current config/sandbox. */
-function resolveWebSearchEnabled(params: {
-  search?: WebSearchConfig;
-  sandboxed?: boolean;
-}): boolean {
-  if (typeof params.search?.enabled === "boolean") {
-    return params.search.enabled;
-  }
-  if (params.sandboxed) {
-    return true;
-  }
-  return true;
-}
-
 function hasEntryCredential(
   provider: Pick<
     PluginWebSearchProviderEntry,
@@ -235,66 +221,6 @@ function resolveRuntimePreferredWebSearchProviderId(params: {
     : undefined;
 }
 
-function resolveExplicitWebSearchProviderId(params: {
-  search?: WebSearchConfig;
-  runtimeWebSearch?: RuntimeWebSearchMetadata;
-  providerId?: string;
-  includeRuntimeSelection?: boolean;
-}): string | undefined {
-  const callerProviderId = normalizeOptionalLowercaseString(params.providerId);
-  if (callerProviderId) {
-    return callerProviderId;
-  }
-
-  if (params.includeRuntimeSelection && params.runtimeWebSearch?.providerSource === "configured") {
-    const runtimeProviderId = normalizeOptionalLowercaseString(
-      params.runtimeWebSearch.selectedProvider ?? params.runtimeWebSearch.providerConfigured,
-    );
-    if (runtimeProviderId) {
-      return runtimeProviderId;
-    }
-  }
-
-  const configuredProviderId =
-    params.search && "provider" in params.search
-      ? normalizeOptionalLowercaseString(params.search.provider)
-      : undefined;
-  if (configuredProviderId) {
-    return configuredProviderId;
-  }
-  return undefined;
-}
-
-function resolveExplicitWebSearchProviderPluginIds(params: {
-  config?: OpenClawConfig;
-  search?: WebSearchConfig;
-  runtimeWebSearch?: RuntimeWebSearchMetadata;
-  providerId?: string;
-  includeRuntimeSelection?: boolean;
-}): readonly string[] | undefined {
-  const providerId = resolveExplicitWebSearchProviderId(params);
-  if (!providerId) {
-    return undefined;
-  }
-  const ownerPluginId = resolveManifestContractOwnerPluginId({
-    config: params.config,
-    contract: "webSearchProviders",
-    value: providerId,
-  });
-  return ownerPluginId ? [ownerPluginId] : undefined;
-}
-
-function resolveWebSearchProviderLoadScope(params: {
-  config?: OpenClawConfig;
-  search?: WebSearchConfig;
-  runtimeWebSearch?: RuntimeWebSearchMetadata;
-  providerId?: string;
-  includeRuntimeSelection?: boolean;
-}): { onlyPluginIds?: readonly string[] } {
-  const onlyPluginIds = resolveExplicitWebSearchProviderPluginIds(params);
-  return onlyPluginIds ? { onlyPluginIds } : {};
-}
-
 type WebSearchRequestContext = {
   config?: OpenClawConfig;
   search?: WebSearchConfig;
@@ -325,23 +251,31 @@ function loadSortedWebSearchProviders(
     preferRuntimeProviders?: boolean;
   },
 ): PluginWebSearchProviderEntry[] {
-  const loadScope = resolveWebSearchProviderLoadScope({
-    config: params.config,
-    search: params.search,
-    runtimeWebSearch: params.runtimeWebSearch,
-    providerId: params.providerId,
-    includeRuntimeSelection: Boolean(params.preferRuntimeProviders),
-  });
+  const runtimeProviderId =
+    params.preferRuntimeProviders && params.runtimeWebSearch?.providerSource === "configured"
+      ? normalizeOptionalLowercaseString(
+          params.runtimeWebSearch.selectedProvider ?? params.runtimeWebSearch.providerConfigured,
+        )
+      : undefined;
+  const providerId =
+    normalizeOptionalLowercaseString(params.providerId) ??
+    runtimeProviderId ??
+    normalizeOptionalLowercaseString(params.search?.provider);
+  const pluginId = providerId
+    ? resolveManifestContractOwnerPluginId({
+        config: params.config,
+        contract: "webSearchProviders",
+        value: providerId,
+      })
+    : undefined;
+  const resolveProviders = params.preferRuntimeProviders
+    ? resolveRuntimeWebSearchProviders
+    : resolvePluginWebSearchProviders;
   return sortWebSearchProvidersForAutoDetect(
-    params.preferRuntimeProviders
-      ? resolveRuntimeWebSearchProviders({
-          config: params.config,
-          ...loadScope,
-        })
-      : resolvePluginWebSearchProviders({
-          config: params.config,
-          ...loadScope,
-        }),
+    resolveProviders({
+      config: params.config,
+      ...(pluginId ? { onlyPluginIds: [pluginId] } : {}),
+    }),
   );
 }
 
@@ -349,7 +283,7 @@ function resolveWebSearchCandidates(
   options?: ResolveWebSearchDefinitionParams,
 ): PluginWebSearchProviderEntry[] {
   const { config, search, runtimeWebSearch } = resolveWebSearchRequestContext(options);
-  if (!resolveWebSearchEnabled({ search, sandboxed: options?.sandboxed })) {
+  if (search?.enabled === false) {
     return [];
   }
 

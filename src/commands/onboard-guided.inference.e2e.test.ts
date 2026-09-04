@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { listKnownProviderEnvApiKeyNames } from "../agents/model-auth-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -97,7 +98,12 @@ describe("guided onboarding inference composition", () => {
         })}\n`,
       );
 
-      const prompter = createWizardPrompter(undefined, { selectValues: ["full", "use"] });
+      const prompter = createWizardPrompter(
+        {
+          text: vi.fn(async ({ initialValue }) => initialValue ?? ""),
+        },
+        { selectValues: ["full", "use"] },
+      );
       const runSetupMemoryImportStep = vi.fn(async () => ({
         status: "skipped" as const,
         providers: [],
@@ -136,7 +142,7 @@ describe("guided onboarding inference composition", () => {
                 platform: "linux",
                 deps: {
                   probeLocalCommand,
-                  readClaudeCliCredentials: () => null,
+                  detectClaudeLoginState: async () => ({ credentials: false }),
                   readCodexCliCredentials: () => null,
                   readGeminiCliCredentials: () => null,
                   randomInt: () => 0,
@@ -156,9 +162,25 @@ describe("guided onboarding inference composition", () => {
       expect(prompter.select).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
+          initialValue: false,
+          options: [
+            expect.objectContaining({ value: false }),
+            expect.objectContaining({ value: true }),
+          ],
+        }),
+      );
+      expect(prompter.select).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
           options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
         }),
       );
+      const persisted = await configModule.readConfigFileSnapshot();
+      expect(persisted.valid).toBe(true);
+      expect(persisted.sourceConfig).toMatchObject({
+        telemetry: { enabled: false, consentedAt: expect.any(String) },
+        wizard: { accessMode: "full" },
+      });
       expect(mockOpenAi.requestBodies).toHaveLength(1);
       expect(JSON.parse(mockOpenAi.requestBodies[0] ?? "{}")).toMatchObject({
         model: "gpt-5.6-sol",
@@ -266,12 +288,5 @@ function writeMockOpenAiResponse(response: ServerResponse): void {
       },
     },
   ];
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
+  writeOpenAiResponsesSse(response, events);
 }

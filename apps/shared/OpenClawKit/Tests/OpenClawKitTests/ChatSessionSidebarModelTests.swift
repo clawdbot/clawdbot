@@ -307,7 +307,7 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:main:research"])
     }
 
-    @Test(arguments: ["holiday", "KYOTO", "session-123", "  HoLiDaY  "])
+    @Test(arguments: ["holiday", "KYOTO", "session-123", "team planning", "  HoLiDaY  "])
     func `sidebar search matches every canonical gateway session field`(_ query: String) {
         let matching = self.entry(
             key: "agent:main:roadmap",
@@ -315,7 +315,8 @@ struct ChatSessionSidebarModelTests {
             label: "Summer holiday",
             subject: "Kyoto itinerary",
             sessionId: "session-123",
-            updatedAt: 200)
+            updatedAt: 200,
+            category: "Team Planning")
         let other = self.entry(
             key: "agent:main:other",
             displayName: "Unrelated",
@@ -671,7 +672,7 @@ struct ChatSessionSidebarModelTests {
                     agentId: "work",
                     runId: "run-work",
                     revision: 3,
-                    updatedAt: 1_000,
+                    updatedAt: 1000,
                     headline: "Replayed work status",
                     health: "on-track")),
             to: foreign,
@@ -679,6 +680,39 @@ struct ChatSessionSidebarModelTests {
 
         #expect(replayed[0].observerDigest?.headline == "Current work status")
         #expect(replayed[0].observerDigest?.revision == 4)
+    }
+
+    @Test func `global observer events require the active agent owner`() {
+        let running = self.entry(
+            key: "global",
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"])
+        let accepted = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: "global",
+                agentid: "work",
+                runid: "run-work",
+                revision: 1,
+                updatedat: 100,
+                headline: "Work status",
+                health: .onTrack),
+            to: [running],
+            activeAgentId: "work")
+        let rejected = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: "global",
+                agentid: "main",
+                runid: "run-work",
+                revision: 2,
+                updatedat: 200,
+                headline: "Foreign status",
+                health: .stuck),
+            to: accepted,
+            activeAgentId: "work")
+
+        #expect(accepted[0].observerDigest?.headline == "Work status")
+        #expect(rejected[0].observerDigest?.headline == "Work status")
     }
 
     @Test func `run rollover clears a stale digest before the replacement event`() throws {
@@ -774,6 +808,56 @@ struct ChatSessionSidebarModelTests {
         #expect(cleared.observerDigest == nil)
         #expect(cleared.status == nil)
         #expect(cleared.lastRunError == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func `session color survives coding and partial events but clears on tombstone`(nested: Bool) throws {
+        let decoder = JSONDecoder()
+        let entry = try decoder.decode(
+            OpenClawChatSessionEntry.self,
+            from: Data(#"{"key":"agent:main:work","color":"red"}"#.utf8))
+        var sessions = try [decoder.decode(
+            OpenClawChatSessionEntry.self,
+            from: JSONEncoder().encode(entry))]
+        #expect(sessions[0].color == "red")
+        for (field, expected) in [
+            ("", "red"),
+            (#", "color":"blue""#, "blue"),
+            (#", "color":null"#, nil),
+            ("", nil),
+        ] as [(String, String?)] {
+            let row = #"{"key":"agent:main:work"\#(field)}"#
+            let payload = nested ? #"{"reason":"patch","session":\#(row)}"# : row
+            let change = try decoder.decode(OpenClawChatSessionsChangedEvent.self, from: Data(payload.utf8))
+            sessions = try #require(ChatSessionSidebarModel.applying(sessionChange: change, to: sessions))
+            #expect(sessions[0].color == expected)
+        }
+    }
+
+    @Test func `active run id tombstone clears exact ids while omission is inert`() throws {
+        let existing = self.entry(
+            key: "agent:main:work",
+            updatedAt: 100,
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-exact"])
+        let decoder = JSONDecoder()
+
+        let omitted = try decoder.decode(
+            OpenClawChatSessionsChangedEvent.self,
+            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":200,"hasActiveRun":true}}"#.utf8))
+        let retained = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: omitted,
+            to: [existing]))
+        #expect(retained[0].activeRunIds == ["run-exact"])
+
+        let tombstoned = try decoder.decode(
+            OpenClawChatSessionsChangedEvent.self,
+            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":300,"hasActiveRun":true,"activeRunIds":null}}"#.utf8))
+        let cleared = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: tombstoned,
+            to: retained))
+        #expect(cleared[0].activeRunIds == nil)
     }
 
     @Test func `subtitle precedence keeps attention and status above observer digest`() {

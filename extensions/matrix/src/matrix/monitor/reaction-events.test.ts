@@ -46,10 +46,16 @@ type MatrixReactionEvent = MatrixReactionParams["event"];
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: (...args: unknown[]) => resolveMatrixApproval(...args),
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
-  isApprovalNotFoundError: (err: unknown) =>
-    err instanceof Error && /unknown or expired approval id/i.test(err.message),
-}));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: (err: unknown) =>
+      err instanceof Error && /unknown or expired approval id/i.test(err.message),
+  };
+});
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: (...args: unknown[]) => editMessageMatrix(...args),
@@ -364,6 +370,52 @@ describe("matrix approval reactions", () => {
         reactionKey: "❌",
       }),
     ).toBeNull();
+  });
+
+  it("retains approval anchors and propagates transient Gateway failures for replay", async () => {
+    const core = buildCore();
+    const cfg = buildConfig();
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
+      approvalId: "req-123",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once"],
+    });
+    const client = createReactionClient();
+    resolveMatrixApproval.mockRejectedValueOnce(new Error("gateway 503"));
+
+    await expect(handleReaction({ client, core, cfg })).rejects.toThrow("gateway 503");
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).not.toBeNull();
+
+    await handleReaction({ client, core, cfg });
+
+    expect(
+      await resolveMatrixApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).toBeNull();
+    expect(resolveMatrixApproval).toHaveBeenCalledTimes(2);
+    expect(resolveMatrixApproval).toHaveBeenLastCalledWith({
+      cfg,
+      approvalId: "req-123",
+      approvalKind: "exec",
+      decision: "allow-once",
+      channel: "matrix",
+      accountId: "default",
+      senderId: "@owner:example.org",
+    });
+    expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("terminalizes every sibling prompt when this surface wins", async () => {

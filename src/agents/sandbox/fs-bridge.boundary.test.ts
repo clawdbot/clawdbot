@@ -63,27 +63,37 @@ describe("sandbox fs bridge boundary validation", () => {
     });
   });
 
-  it("rejects pre-existing host symlink escapes before docker exec", async () => {
-    // Host-visible symlink escapes are rejected locally so Docker never follows
-    // them inside a privileged bridge command.
-    await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
-      const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
-      if (process.platform === "win32") {
-        return;
-      }
-      await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
+  it.each(["file", "directory"] as const)(
+    "rejects pre-existing host %s symlink escapes before docker exec",
+    async (kind) => {
+      // Host-visible symlink escapes are rejected locally so Docker never follows
+      // them inside a privileged bridge command.
+      await withTempDir("openclaw-fs-bridge-", async (stateDir) => {
+        const { workspaceDir, outsideFile } = await createHostEscapeFixture(stateDir);
+        if (process.platform === "win32") {
+          return;
+        }
+        await fs.symlink(
+          kind === "directory" ? path.dirname(outsideFile) : outsideFile,
+          path.join(workspaceDir, "link.txt"),
+        );
 
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
+        const bridge = createSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+          }),
+        });
+
+        await expect(
+          kind === "directory"
+            ? bridge.mkdirp({ filePath: "link.txt" })
+            : bridge.readFile({ filePath: "link.txt" }),
+        ).rejects.toThrow(/Symlink escapes/);
+        expect(mockedExecDockerRaw).not.toHaveBeenCalled();
       });
-
-      await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/Symlink escapes/);
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 
   it("rejects pre-existing host hardlink escapes before docker exec", async () => {
     // Hardlinks can expose outside files without a symlink marker, so the bridge

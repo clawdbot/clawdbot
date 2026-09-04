@@ -2,6 +2,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 
 type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
 
@@ -80,7 +81,7 @@ vi.mock("../process/exec.js", () => ({
 
 let ensureControlUiAssetsBuilt: typeof import("./control-ui-assets.js").ensureControlUiAssetsBuilt;
 let isControlUiStartupAssetsReady: typeof import("./control-ui-assets.js").isControlUiStartupAssetsReady;
-let resolveControlUiDistIndexHealth: typeof import("./control-ui-assets.js").resolveControlUiDistIndexHealth;
+let resolveControlUiAssetHealth: typeof import("./control-ui-assets.js").resolveControlUiAssetHealth;
 let isPackageProvenControlUiRootSync: typeof import("./control-ui-assets.js").isPackageProvenControlUiRootSync;
 let resolveControlUiRootOverrideSync: typeof import("./control-ui-assets.js").resolveControlUiRootOverrideSync;
 let resolveControlUiRootSync: typeof import("./control-ui-assets.js").resolveControlUiRootSync;
@@ -91,7 +92,7 @@ describe("control UI assets helpers (fs-mocked)", () => {
     ({
       ensureControlUiAssetsBuilt,
       isControlUiStartupAssetsReady,
-      resolveControlUiDistIndexHealth,
+      resolveControlUiAssetHealth,
       isPackageProvenControlUiRootSync,
       resolveControlUiRootOverrideSync,
       resolveControlUiRootSync,
@@ -107,19 +108,30 @@ describe("control UI assets helpers (fs-mocked)", () => {
     vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockReset().mockReturnValue(null);
   });
 
-  it("reports health for missing + existing dist assets", async () => {
+  it("distinguishes unresolved, missing, incomplete, and ready startup bundles", async () => {
     const root = abs("fixtures/health");
     const indexPath = path.join(root, "dist", "control-ui", "index.html");
 
-    await expect(resolveControlUiDistIndexHealth({ root })).resolves.toEqual({
+    await expect(resolveControlUiAssetHealth({ argv1: "" })).resolves.toEqual({
+      kind: "missing-index",
+      indexPath: null,
+    });
+    await expect(resolveControlUiAssetHealth({ root })).resolves.toEqual({
+      kind: "missing-index",
       indexPath,
-      exists: false,
     });
 
-    setFile(indexPath, "<html></html>\n");
-    await expect(resolveControlUiDistIndexHealth({ root })).resolves.toEqual({
+    setFile(indexPath, '<script src="./assets/startup.js"></script>');
+    await expect(resolveControlUiAssetHealth({ root })).resolves.toEqual({
+      kind: "incomplete",
       indexPath,
-      exists: true,
+      missingAsset: "assets/startup.js",
+    });
+
+    setFile(path.join(root, "dist", "control-ui", "assets", "startup.js"));
+    await expect(resolveControlUiAssetHealth({ root })).resolves.toEqual({
+      kind: "ready",
+      indexPath,
     });
   });
 
@@ -305,12 +317,20 @@ describe("control UI assets helpers (fs-mocked)", () => {
       return { stdout: "", stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
     });
 
+    const runtime = { log: vi.fn<RuntimeEnv["log"]>(), error: vi.fn(), exit: vi.fn() };
     await expect(
-      ensureControlUiAssetsBuilt(undefined, {
+      ensureControlUiAssetsBuilt(runtime, {
         argv1: path.join(packagedRoot, "dist", "entry.js"),
         cwd: checkoutRoot,
       }),
     ).resolves.toEqual({ ok: true, built: true });
+    const message = runtime.log.mock.calls.flat().join("\n");
+    const commands = [...message.matchAll(/`(pnpm [^`]+)`/gu)].map((match) => match[1]);
+    expect(commands).toHaveLength(2);
+    for (const command of commands) {
+      expect(command).toContain(checkoutRoot);
+      expect(command).not.toContain(packagedRoot);
+    }
     expect(state.runCommandWithTimeout).toHaveBeenCalledWith(
       [process.execPath, path.join(checkoutRoot, "scripts", "ui.js"), "build"],
       expect.objectContaining({ cwd: checkoutRoot }),

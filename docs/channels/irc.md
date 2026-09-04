@@ -60,7 +60,24 @@ IRC does not provide a replayable delivery ID or resend messages missed by a dis
 | `realname`                    | `OpenClaw`                    | Realname/GECOS field                                        |
 | `password` / `passwordFile`   | none                          | Server password; file must be a regular file                |
 | `channels`                    | none                          | Channels to join (`["#openclaw"]`)                          |
+| `replyToMode`                 | `all`                         | Reply-reference mode: `off`, `first`, `all`, or `batched`   |
 | `accounts` / `defaultAccount` | none                          | Multi-account setup; env vars fill only the default account |
+
+Named accounts inherit the channel-wide reply mode; override it with `channels.irc.accounts.<id>.replyToMode`.
+
+## Outbound text
+
+IRC sends Markdown as plain text, preserving code contents and link destinations.
+Long replies are rendered before splitting into IRC messages, so code fences and
+inline formatting remain consistent across chunk boundaries. `textChunkLimit`
+and `streaming.chunkMode` control text splitting; the socket also enforces
+IRC's line-size limit.
+
+Send directly to a channel or nick with the message CLI:
+
+```bash
+openclaw message send --channel irc --target '#openclaw' --message 'Hello from OpenClaw'
+```
 
 ## Security defaults
 

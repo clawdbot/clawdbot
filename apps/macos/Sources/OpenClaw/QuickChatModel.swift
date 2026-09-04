@@ -280,7 +280,7 @@ final class QuickChatModel {
         },
         modelControlsProvider: @escaping ModelControlsProvider = { target in
             let transport = MacGatewayChatTransport(defaultGlobalAgentID: target.agentID)
-            async let models = transport.listModels()
+            async let models = transport.listModels(agentID: target.agentID)
             async let sessions = transport.listSessions(limit: 200, search: target.sessionKey, archived: false)
             async let agents = GatewayConnection.shared.agentsList()
             return try await QuickChatModelControlLogic.snapshot(
@@ -378,9 +378,9 @@ final class QuickChatModel {
 
     var messagePlaceholder: String {
         if let targetSessionOverride {
-            return "Reply in \(targetSessionOverride.displayName)"
+            return String(format: String(localized: "Reply in %@"), targetSessionOverride.displayName)
         }
-        return "Message \(self.agentDisplay.name)"
+        return String(format: String(localized: "Message %@"), self.agentDisplay.name)
     }
 
     var routingTarget: QuickChatRoutingTarget? {
@@ -653,7 +653,8 @@ final class QuickChatModel {
         }
         let draft = self.text
         let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseMessage = trimmedDraft.isEmpty ? String(localized: "Screenshot: \(label)") : trimmedDraft
+        let baseMessage = trimmedDraft.isEmpty
+            ? String(format: String(localized: "Screenshot: %@"), label) : trimmedDraft
         let textContext = self.textContext
         let message = Self.assembleMessage(draft: baseMessage, context: textContext)
 
@@ -714,7 +715,8 @@ final class QuickChatModel {
     nonisolated static func assembleMessage(draft: String, context: QuickChatTextContext?) -> String {
         let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let context else { return trimmedDraft }
-        let contextLabel = String(localized: "Context from \(context.appName) — \(context.windowTitle)")
+        let contextLabel = String(
+            format: String(localized: "Context from %@ — %@"), context.appName, context.windowTitle)
         let contextBlock = "[\(contextLabel)]\n\(context.text)"
         return trimmedDraft.isEmpty ? contextBlock : "\(trimmedDraft)\n\n\(contextBlock)"
     }
@@ -1072,7 +1074,7 @@ extension QuickChatModel {
         let thinking = self.thinkingOptions.first(where: { $0.id == self.displayedThinkingLevel })?.label
             ?? self.displayedThinkingLevel
             ?? automatic
-        return String(localized: "\(model) · \(thinking)")
+        return "\(model) · \(thinking)"
     }
 
     private func refreshModelControls(for target: QuickChatRoutingTarget) {

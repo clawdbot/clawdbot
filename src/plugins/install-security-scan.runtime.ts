@@ -18,6 +18,10 @@ import { isPathInside } from "../security/scan-paths.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type {
+  InstallSecurityScanResult,
+  SkillInstallSpecMetadata,
+} from "./install-security-scan.js";
+import type {
   InstallPolicyWarningDetails,
   InstallSafetyOverrides,
 } from "./install-security-scan.types.js";
@@ -90,30 +94,6 @@ type PackageTraversalLimits = {
 type InstalledPackageScanRoot = {
   packageDir: string;
   realPath: string;
-};
-
-type SkillInstallSpec = {
-  id?: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label?: string;
-  bins?: string[];
-  os?: string[];
-  formula?: string;
-  package?: string;
-  module?: string;
-  url?: string;
-  archive?: string;
-  extract?: boolean;
-  stripComponents?: number;
-  targetDir?: string;
-};
-
-export type InstallSecurityScanResult = {
-  blocked?: {
-    code?: "security_scan_blocked" | "security_scan_failed";
-    reason: string;
-    installPolicyWarning?: InstallPolicyWarningDetails;
-  };
 };
 
 function failOversizedInstallPolicyWarning(params: {
@@ -582,7 +562,7 @@ async function runBeforeInstallHook(params: {
   requestedSpecifier?: string;
   skill?: {
     installId: string;
-    installSpec?: SkillInstallSpec;
+    installSpec?: SkillInstallSpecMetadata;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file";
@@ -733,7 +713,7 @@ async function runOperatorInstallPolicy(params: {
   requestedSpecifier?: string;
   skill?: {
     installId: string;
-    installSpec?: SkillInstallSpec;
+    installSpec?: SkillInstallSpecMetadata;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file" | "dependency-tree";
@@ -1246,7 +1226,7 @@ export async function preflightPluginGitInstallPolicyRuntime(params: {
 export async function evaluateSkillInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
   installId: string;
-  installSpec?: SkillInstallSpec;
+  installSpec?: SkillInstallSpecMetadata;
   logger: InstallScanLogger;
   mode?: "install" | "update";
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];

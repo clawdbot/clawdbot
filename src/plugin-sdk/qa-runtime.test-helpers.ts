@@ -42,7 +42,7 @@ export function makePrivateQaSourceRoot(tempDirs: string[], prefix: string): str
 function makeQaRuntimeSurface() {
   return {
     defaultQaRuntimeModelForMode: vi.fn(),
-    startQaLiveLaneGateway: vi.fn(),
+    createQaLiveLaneGateway: vi.fn(),
   };
 }
 

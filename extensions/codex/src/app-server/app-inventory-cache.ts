@@ -486,6 +486,7 @@ async function readInstalledApps(
         appIds: apps
           .slice(index * CODEX_APP_READ_BATCH_LIMIT, (index + 1) * CODEX_APP_READ_BATCH_LIMIT)
           .map((app) => app.id),
+        includeTools: true,
       }),
     ),
   );
@@ -519,6 +520,7 @@ async function readInstalledApps(
           isAccessible: true,
           isEnabled: installedApp.enabled,
           pluginDisplayNames: metadata.pluginDisplayNames,
+          ...(metadata.toolSummaries ? { toolSummaries: metadata.toolSummaries } : {}),
         },
       ];
     }),

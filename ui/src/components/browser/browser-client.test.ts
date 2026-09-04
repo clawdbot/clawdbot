@@ -13,18 +13,21 @@ describe("fetchBrowserScreenshotDataUrl", () => {
   it("returns the fetched screenshot as a data URL", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const screenshot = new Blob(["image-bytes"], { type: "image/png" });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => ({ ok: true, blob: async () => screenshot }) as Response),
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => ({ ok: true, blob: async () => screenshot }) as Response,
     );
+    vi.stubGlobal("fetch", fetchMock);
 
     await expect(
       fetchBrowserScreenshotDataUrl({
-        basePath: "/openclaw/",
+        resourceBasePath: "",
         authToken: null,
         path: "/tmp/browser shot.png",
       }),
     ).resolves.toBe("data:image/png;base64,aW1hZ2UtYnl0ZXM=");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/__openclaw__/assistant-media?source=%2Ftmp%2Fbrowser+shot.png",
+    );
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -37,7 +40,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
 
     await expect(
       fetchBrowserScreenshotDataUrl({
-        basePath: "/openclaw",
+        resourceBasePath: "/openclaw",
         authToken: null,
         path: "/tmp/missing.png",
       }),
@@ -56,7 +59,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
 
     await expect(
       fetchBrowserScreenshotDataUrl({
-        basePath: "/openclaw",
+        resourceBasePath: "/openclaw",
         authToken: null,
         path: "/tmp/missing.png",
       }),
@@ -78,7 +81,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
 
     await expect(
       fetchBrowserScreenshotDataUrl({
-        basePath: "/openclaw",
+        resourceBasePath: "/openclaw",
         authToken: null,
         path: "/tmp/missing.png",
       }),
@@ -109,7 +112,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const request = fetchBrowserScreenshotDataUrl({
-      basePath: "/openclaw",
+      resourceBasePath: "/openclaw",
       authToken: null,
       path: "/tmp/browser shot.png",
     });
@@ -152,7 +155,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const request = fetchBrowserScreenshotDataUrl({
-      basePath: "/openclaw",
+      resourceBasePath: "/openclaw",
       authToken: null,
       path: "/tmp/browser shot.png",
     });
@@ -188,7 +191,7 @@ describe("fetchBrowserScreenshotDataUrl", () => {
 
     await expect(
       fetchBrowserScreenshotDataUrl({
-        basePath: "/openclaw",
+        resourceBasePath: "/openclaw",
         authToken: null,
         path: "/tmp/missing.png",
       }),

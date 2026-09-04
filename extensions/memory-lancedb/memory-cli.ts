@@ -212,13 +212,13 @@ export function registerMemoryCli(
               return 0;
             });
             rows = rows.slice(0, limit);
-            if (!outputColumns.includes(order.column)) {
-              for (const row of rows) {
-                delete row[order.column];
-              }
-            }
           }
-          defaultRuntime.writeJson(rows);
+          // Arrow rows are schema-backed proxies; project output without mutating them.
+          defaultRuntime.writeJson(
+            rows.map((row) =>
+              Object.fromEntries(outputColumns.map((column) => [column, row[column]])),
+            ),
+          );
         });
 
       memory

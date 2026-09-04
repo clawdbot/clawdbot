@@ -1,5 +1,7 @@
 // Comfy plugin module implements workflow runtime behavior.
+import { randomInt } from "node:crypto";
 import fs from "node:fs/promises";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -13,11 +15,13 @@ import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
   readProviderJsonResponse,
+  redactProviderResponseErrorText,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeSecretInputString,
+  resolveConfiguredSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
@@ -41,8 +45,11 @@ const DEFAULT_COMFY_LOCAL_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_COMFY_CLOUD_BASE_URL = "https://cloud.comfy.org";
 const DEFAULT_PROMPT_INPUT_NAME = "text";
 const DEFAULT_INPUT_IMAGE_INPUT_NAME = "image";
+const DEFAULT_SEED_INPUT_NAME = "seed";
 const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+// randomInt requires a range below 2**48; these seeds also round-trip through JSON exactly.
+const RANDOM_SEED_EXCLUSIVE_MAX = 2 ** 48 - 1;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
 
@@ -252,6 +259,43 @@ function setWorkflowInput(params: {
   inputs[params.inputName] = params.value;
 }
 
+async function resolveComfyHeadersConfig(value: unknown, cfg: OpenClawConfig): Promise<Headers> {
+  const headers = new Headers();
+  if (!isRecord(value)) {
+    return headers;
+  }
+  for (const [name, headerValue] of Object.entries(value)) {
+    const path = `plugins.entries.comfy.config.headers.${name}`;
+    const inspected = resolveSecretInputString({
+      value: headerValue,
+      path,
+      defaults: cfg.secrets?.defaults,
+      mode: "inspect",
+    });
+    if (inspected.status === "available") {
+      headers.set(name, inspected.value);
+      continue;
+    }
+    if (inspected.status === "missing") {
+      continue;
+    }
+    const resolved = await resolveConfiguredSecretInputString({
+      config: cfg,
+      env: process.env,
+      value: headerValue,
+      path,
+      unresolvedReasonStyle: "detailed",
+    });
+    if (resolved.unresolvedRefReason) {
+      throw new Error(`${path} references an unavailable secret: ${resolved.unresolvedRefReason}`);
+    }
+    if (resolved.value) {
+      headers.set(name, resolved.value);
+    }
+  }
+  return headers;
+}
+
 function resolveComfyNetworkPolicy(params: {
   baseUrl: string;
   allowPrivateNetwork: boolean;
@@ -323,8 +367,9 @@ async function readJsonResponse<T>(params: {
     auditContext: params.auditContext,
   });
   try {
-    await assertOkOrThrowHttpError(response, params.errorPrefix);
-    return (await readProviderJsonResponse(response, params.errorPrefix)) as T;
+    const requestHeaders = params.init?.headers;
+    await assertOkOrThrowHttpError(response, params.errorPrefix, { requestHeaders });
+    return await readProviderJsonResponse<T>(response, params.errorPrefix, { requestHeaders });
   } finally {
     await release();
   }
@@ -346,12 +391,6 @@ function resolveFileExtension(params: { fileName?: string; mimeType?: string }):
   return fileName.slice(dotIndex + 1);
 }
 
-function toBlobBytes(buffer: Buffer): ArrayBuffer {
-  const arrayBuffer = new ArrayBuffer(buffer.byteLength);
-  new Uint8Array(arrayBuffer).set(buffer);
-  return arrayBuffer;
-}
-
 async function uploadInputImage(params: {
   baseUrl: string;
   headers: Headers;
@@ -365,7 +404,7 @@ async function uploadInputImage(params: {
   const form = new FormData();
   form.set(
     "image",
-    new Blob([toBlobBytes(params.image.buffer)], { type: params.image.mimeType }),
+    new Blob([bufferToBlobPart(params.image.buffer)], { type: params.image.mimeType }),
     normalizeOptionalString(params.image.fileName) ||
       `input.${resolveFileExtension({ mimeType: params.image.mimeType })}`,
   );
@@ -478,9 +517,11 @@ async function waitForCloudCompletion(params: {
       return;
     }
     if (status.status === "failed" || status.status === "cancelled") {
-      throw new Error(
-        `Comfy workflow ${status.status}: ${status.error ?? status.message ?? params.promptId}`,
+      const detail = redactProviderResponseErrorText(
+        status.error ?? status.message ?? params.promptId,
+        params.headers,
       );
+      throw new Error(`Comfy workflow ${status.status}: ${detail}`);
     }
 
     const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
@@ -581,7 +622,9 @@ async function downloadOutputFile(params: {
   });
 
   try {
-    await assertOkOrThrowHttpError(firstResponse.response, "Comfy output download failed");
+    await assertOkOrThrowHttpError(firstResponse.response, "Comfy output download failed", {
+      requestHeaders: params.headers,
+    });
     const mimeType =
       normalizeOptionalString(firstResponse.response.headers.get("content-type")) ||
       "application/octet-stream";
@@ -600,6 +643,33 @@ async function downloadOutputFile(params: {
   }
 }
 
+// Only env refs can be checked without I/O. Keep other refs selectable until
+// the async request resolver can establish their availability.
+function hasUnavailableComfyHeaderSecret(value: unknown, cfg?: OpenClawConfig): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.entries(value).some(([name, headerValue]) => {
+    const inspected = resolveSecretInputString({
+      value: headerValue,
+      path: `plugins.entries.comfy.config.headers.${name}`,
+      defaults: cfg?.secrets?.defaults,
+      mode: "inspect",
+    });
+    if (inspected.status !== "configured_unavailable" || inspected.ref.source !== "env") {
+      return false;
+    }
+    const envVarName = inspected.ref.id.trim();
+    const resolvable =
+      canResolveEnvSecretRefInReadOnlyPath({
+        cfg,
+        provider: inspected.ref.provider,
+        id: envVarName,
+      }) && Boolean(normalizeSecretInputString(process.env[envVarName]));
+    return !resolvable;
+  });
+}
+
 export function isComfyCapabilityConfigured(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
@@ -613,6 +683,9 @@ export function isComfyCapabilityConfigured(params: {
   );
   const hasPromptNode = Boolean(normalizeOptionalString(capabilityConfig.promptNodeId));
   if (!hasWorkflow || !hasPromptNode) {
+    return false;
+  }
+  if (hasUnavailableComfyHeaderSecret(capabilityConfig.headers, params.cfg)) {
     return false;
   }
   if (resolveComfyMode(capabilityConfig) === "local") {
@@ -653,6 +726,9 @@ export async function runComfyWorkflow(params: {
   const inputImageNodeId = normalizeOptionalString(capabilityConfig.inputImageNodeId);
   const inputImageInputName =
     normalizeOptionalString(capabilityConfig.inputImageInputName) ?? DEFAULT_INPUT_IMAGE_INPUT_NAME;
+  const seedNodeId = normalizeOptionalString(capabilityConfig.seedNodeId);
+  const seedInputName =
+    normalizeOptionalString(capabilityConfig.seedInputName) ?? DEFAULT_SEED_INPUT_NAME;
   const outputNodeId = normalizeOptionalString(capabilityConfig.outputNodeId);
   const pollIntervalMs = resolvePositiveTimerTimeoutMs(
     readConfigInteger(capabilityConfig, "pollIntervalMs"),
@@ -670,6 +746,15 @@ export async function runComfyWorkflow(params: {
     inputName: promptInputName,
     value: params.prompt,
   });
+
+  if (seedNodeId) {
+    setWorkflowInput({
+      workflow,
+      nodeId: seedNodeId,
+      inputName: seedInputName,
+      value: randomInt(RANDOM_SEED_EXCLUSIVE_MAX),
+    });
+  }
 
   const pluginApiKey = resolveComfyApiKey(capabilityConfig, params.cfg);
   const resolvedAuth =
@@ -700,6 +785,7 @@ export async function runComfyWorkflow(params: {
       defaultBaseUrl:
         mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL,
       allowPrivateNetwork: mode === "local" || explicitAllowPrivateNetwork,
+      headers: await resolveComfyHeadersConfig(capabilityConfig.headers, params.cfg),
       defaultHeaders:
         mode === "cloud"
           ? {

@@ -12,6 +12,7 @@ import {
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -28,7 +29,7 @@ import {
   createCliStatusTextStyles,
   filterDaemonEnv,
   formatRuntimeStatus,
-  resolveDaemonContainerContext,
+  resolveDaemonInstallBlockMessage,
   resolveRuntimeStatusColor,
   renderRuntimeHints,
   safeDaemonEnv,
@@ -42,14 +43,17 @@ import {
 function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   // JSON output can be copied into issues; redact service env before serialization.
   const command = status.service.command;
-  if (!command?.environment) {
+  if (!command) {
     return status;
   }
   const safeEnv = filterDaemonEnv(command.environment);
-  const nextCommand = {
+  const nextCommand: GatewayServiceCommandConfig = {
     ...command,
     environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
   };
+  delete nextCommand.managedDefinition;
+  delete nextCommand.managedOverrides;
+  delete nextCommand.definitionPaths;
   return {
     ...status,
     service: {
@@ -101,6 +105,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   const { rich, label, accent, infoText, okText, warnText, errorText } =
     createCliStatusTextStyles();
   const spacer = () => defaultRuntime.log("");
+  // Advice belongs to this shell, not the stored service environment or probe target.
+  const installBlock = resolveDaemonInstallBlockMessage("gateway");
+  const installCommand = formatCliCommand("openclaw gateway install");
+  const reinstallCommand = formatCliCommand("openclaw gateway install --force");
 
   const { service, rpc, extraServices } = status;
   const serviceTargetsProbe = service.targetRole !== "diagnostic-only";
@@ -121,6 +129,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.log(
       `${label("Service file:")} ${infoText(shortenHomePath(service.command.sourcePath))}`,
     );
+  }
+  if (service.command?.reloadPending) {
+    defaultRuntime.log(warnText("Systemd reload: pending (run systemctl --user daemon-reload)"));
   }
   if (service.command?.workingDirectory) {
     defaultRuntime.log(
@@ -162,11 +173,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const detail = issue.detail ? ` (${issue.detail})` : "";
       defaultRuntime.error(`${warnText("Service config issue:")} ${issue.message}${detail}`);
     }
-    defaultRuntime.error(
-      warnText(
-        `Recommendation: run "${formatCliCommand("openclaw doctor")}" (or "${formatCliCommand("openclaw doctor --repair")}").`,
-      ),
-    );
+    const recommendation =
+      installBlock ??
+      `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively for guided checks, or reinstall with "${reinstallCommand}".`;
+    defaultRuntime.error(warnText(recommendation));
   }
 
   if (status.config) {
@@ -216,11 +226,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           "Root cause: CLI and service are using different config paths (likely a profile/state-dir mismatch).",
         ),
       );
-      defaultRuntime.error(
-        errorText(
-          `Fix: rerun \`${formatCliCommand("openclaw gateway install --force")}\` from the same --profile / OPENCLAW_STATE_DIR you expect.`,
-        ),
-      );
+      const recovery =
+        installBlock ??
+        `Fix: rerun \`${reinstallCommand}\` from the same --profile / OPENCLAW_STATE_DIR you expect.`;
+      defaultRuntime.error(errorText(recovery));
     }
     spacer();
   }
@@ -394,19 +403,21 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.error(errorText(`Retry: ${formatCliCommand("openclaw gateway status --deep")}`));
     spacer();
   }
-  const systemdUnavailableDetail = serviceInspectionDetail ?? service.runtime?.detail;
+  const systemdUnavailableDetail =
+    serviceInspectionDetail ??
+    service.runtime?.inspectionFailure?.detail ??
+    service.runtime?.detail;
   const systemdUnavailable =
     process.platform === "linux" &&
     (serviceInspectionDetail !== undefined || rpc?.ok !== true) &&
     isSystemdUnavailableDetail(systemdUnavailableDetail);
   if (systemdUnavailable) {
     const serviceEnv = service.command?.environment ?? process.env;
-    const container = Boolean(resolveDaemonContainerContext(serviceEnv));
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({
       wsl: isWSLEnv(serviceEnv),
       kind: classifySystemdUnavailableDetail(systemdUnavailableDetail),
-      container,
+      env: serviceEnv,
     })) {
       defaultRuntime.error(errorText(hint));
     }
@@ -415,9 +426,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
-    for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
-      defaultRuntime.error(errorText(hint));
-    }
+    const recovery = installBlock ?? `Run: ${installCommand}`;
+    defaultRuntime.error(errorText(recovery));
   } else if (service.runtime?.missingGuiSession) {
     defaultRuntime.error(
       errorText("LaunchAgent plist exists, but macOS has no usable GUI session for this user."),
@@ -464,14 +474,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (service.runtime?.cachedLabel) {
     const env = service.command?.environment ?? process.env;
     const labelValue = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
-    defaultRuntime.error(
-      errorText(
-        `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${labelValue}`,
-      ),
-    );
-    defaultRuntime.error(
-      errorText(`Then reinstall: ${formatCliCommand("openclaw gateway install")}`),
-    );
+    const recovery =
+      installBlock ??
+      `Clear with: launchctl bootout gui/$UID/${labelValue}\nThen reinstall: ${installCommand}`;
+    defaultRuntime.error(errorText(`LaunchAgent label cached but plist missing. ${recovery}`));
     spacer();
   }
 
@@ -561,23 +567,51 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     if (opts.deep) {
       for (const entry of drift.drifts) {
         const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
+        const resolvedTarget =
+          entry.targetResolution?.status === "resolved"
+            ? `; npm target ${entry.targetResolution.packageName}@${entry.targetResolution.version}`
+            : "";
         defaultRuntime.log(
-          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
+          `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}${resolvedTarget}`,
         );
       }
-      const updateCommands = drift.drifts.map((entry) =>
-        formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
-      );
-      if (updateCommands.length === 1) {
+      const repairs = drift.drifts.map((entry) => ({
+        entry,
+        command: resolvePluginVersionDriftUpdateCommand(entry),
+      }));
+      const updateCommands = repairs
+        .map(({ command }) => command)
+        .filter((command): command is string => Boolean(command))
+        .map((command) => formatCliCommand(command));
+      const unresolvedRepairs = repairs.filter(({ command }) => !command);
+      if (unresolvedRepairs.length > 0) {
+        defaultRuntime.error(errorText("Plugin repair target resolution failed:"));
+        for (const { entry } of unresolvedRepairs) {
+          const targetResolution = entry.targetResolution;
+          const detail =
+            targetResolution?.status === "unresolved"
+              ? targetResolution.error
+              : "npm registry target was not resolved";
+          defaultRuntime.error(`- ${entry.pluginId}: ${detail}`);
+        }
+        defaultRuntime.error(
+          errorText(
+            "No install command was generated for unresolved plugin targets. Retry gateway status --deep after checking registry availability.",
+          ),
+        );
+      }
+      if (updateCommands.length === 1 && unresolvedRepairs.length === 0) {
         defaultRuntime.log(
           `${label("Fix:")} ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`,
         );
-      } else {
+      } else if (updateCommands.length > 0) {
         defaultRuntime.log(`${label("Fix:")} update each drifted plugin:`);
         for (const command of updateCommands) {
           defaultRuntime.log(`- ${command}`);
         }
-        defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
+        if (unresolvedRepairs.length === 0) {
+          defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
+        }
       }
     } else {
       defaultRuntime.log(

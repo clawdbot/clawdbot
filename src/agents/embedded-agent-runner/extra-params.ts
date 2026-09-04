@@ -2,6 +2,7 @@ import {
   canonicalizeMaxTokensParam,
   resolveMaxTokensParam,
   detectOpenAICompletionsCompat,
+  resolveOpenAICompletionsCompat,
 } from "@openclaw/ai/transports";
 import {
   type NativeWebSearchToolPolicyParams,
@@ -561,20 +562,15 @@ function createStreamFnWithExtraParams(
     streamParams.stop = resolvedStop;
   }
 
-  const readSupportsPromptCacheKey = (m: unknown): boolean => {
-    const compat = (m as { compat?: unknown })?.compat;
-    if (!compat || typeof compat !== "object") {
-      return false;
-    }
-    return (compat as Record<string, unknown>).supportsPromptCacheKey === true;
-  };
+  const readCacheCompat = (m?: ProviderRuntimeModel) =>
+    m?.api === "openai-completions" ? resolveOpenAICompletionsCompat(m) : m?.compat;
 
   const initialCacheRetention = resolveCacheRetention(
     extraParams,
     provider,
     typeof model?.api === "string" ? model.api : undefined,
     typeof model?.id === "string" ? model.id : undefined,
-    readSupportsPromptCacheKey(model),
+    readCacheCompat(model),
   );
   if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
     const debugParams = initialCacheRetention
@@ -590,7 +586,7 @@ function createStreamFnWithExtraParams(
       provider,
       typeof callModel.api === "string" ? callModel.api : undefined,
       typeof callModel.id === "string" ? callModel.id : undefined,
-      readSupportsPromptCacheKey(callModel),
+      readCacheCompat(callModel),
     );
     if (Object.keys(streamParams).length === 0 && !cacheRetention) {
       return underlying(callModel, context, options);

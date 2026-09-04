@@ -4,6 +4,7 @@ import {
   validateSystemAgentChatParams,
   validateSystemAgentChatHistoryParams,
   validateSystemAgentSetupActivateParams,
+  validateSystemAgentSetupActivateStartParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
@@ -112,6 +113,31 @@ describe("OpenClaw chat history protocol", () => {
     expect(
       Value.Check(SystemAgentChatHistoryResultSchema, {
         turns: [{ role: "tool", text: "hidden", at: 1 }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("OpenClaw interactive activation protocol", () => {
+  it("requires a session id and does not accept client capability acknowledgments", () => {
+    const activation = { kind: "codex-cli", modelRef: "openai/gpt-5.6-luna" };
+    expect(validateSystemAgentSetupActivateParams(activation)).toBe(true);
+    expect(validateSystemAgentSetupActivateStartParams(activation)).toBe(false);
+    expect(
+      validateSystemAgentSetupActivateStartParams({ ...activation, sessionId: "activation" }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentSetupActivateStartParams({
+        ...activation,
+        sessionId: "activation",
+        reviewToken: "client-token",
+      }),
+    ).toBe(false);
+    expect(
+      validateSystemAgentSetupActivateStartParams({
+        ...activation,
+        sessionId: "activation",
+        acceptCapabilities: true,
       }),
     ).toBe(false);
   });

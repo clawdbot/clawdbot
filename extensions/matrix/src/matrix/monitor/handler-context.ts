@@ -293,6 +293,8 @@ export async function resolveMatrixInboundContext(config: {
       dmScope: _route.dmScope,
       accountId: _route.accountId,
       routeSessionKey: _route.sessionKey,
+      parentSessionKey:
+        threadTarget && _route.matchedBy !== "binding.channel" ? _route.mainSessionKey : undefined,
     },
     reply: {
       to: `room:${roomId}`,

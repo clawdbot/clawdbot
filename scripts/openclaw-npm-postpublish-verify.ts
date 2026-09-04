@@ -19,10 +19,18 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../src/shared/worker-bundle-hash.js";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
+import {
+  comparePackageDistInventory,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "./lib/package-dist-inventory-contract.mts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
@@ -65,9 +73,15 @@ const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.fi
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
+const MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES = 80 * 1024 * 1024;
 // Keep the dependency scan bounded while allowing headroom for generated root chunks.
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 10_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
+// The ~69 MB self-contained worker needs extra headroom, but synchronous read/parse stays bounded.
+const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
+  `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+  `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+]);
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
   // package and falls back when the optional renderer is unavailable.
@@ -94,6 +108,10 @@ const acorn = require("acorn") as typeof import("acorn");
 type DistJavaScriptFileListResult =
   | { files: string[]; limitExceeded: false }
   | { files: string[]; limit: number; limitExceeded: true };
+
+type InstalledRootDistJavaScriptReadResult =
+  | { error: string; ok: false }
+  | { ok: true; relativePath: string; source: string };
 
 type PublishedInstallScenario = {
   name: string;
@@ -464,7 +482,7 @@ export function collectInstalledPackageErrors(params: {
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
 
-  return errors;
+  return [...new Set(errors)];
 }
 
 export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
@@ -524,13 +542,7 @@ export function normalizeInstalledBinaryVersion(output: string): string {
   return versionMatch?.[0] ?? trimmed;
 }
 
-function listDistJavaScriptFiles(
-  packageRoot: string,
-  opts: {
-    maxFiles?: number;
-    skipRelativePath?: (relativePath: string) => boolean;
-  } = {},
-): DistJavaScriptFileListResult {
+function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScriptFileListResult {
   const distDir = join(packageRoot, "dist");
   if (!existsSync(distDir)) {
     return { files: [], limitExceeded: false };
@@ -553,7 +565,7 @@ function listDistJavaScriptFiles(
 
         const entryPath = join(currentDir, entry.name);
         const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
-        if (opts.skipRelativePath?.(relativePath)) {
+        if (relativePath === "extensions" || relativePath.startsWith("extensions/")) {
           continue;
         }
         if (entry.isDirectory()) {
@@ -562,10 +574,10 @@ function listDistJavaScriptFiles(
         }
         if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
           files.push(entryPath);
-          if (opts.maxFiles !== undefined && files.length > opts.maxFiles) {
+          if (files.length > MAX_INSTALLED_ROOT_DIST_JS_FILES) {
             return {
               files,
-              limit: opts.maxFiles,
+              limit: MAX_INSTALLED_ROOT_DIST_JS_FILES,
               limitExceeded: true,
             };
           }
@@ -583,25 +595,43 @@ function formatInstalledDistFileScanLimitError(scope: string, limit: number): st
   return `installed package ${scope} contains more than ${limit} JavaScript files; refusing to scan unbounded package contents.`;
 }
 
+function readInstalledRootDistJavaScriptFile(
+  packageRoot: string,
+  filePath: string,
+): InstalledRootDistJavaScriptReadResult {
+  const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
+  const maxBytes = SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS.has(relativePath)
+    ? MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES
+    : MAX_INSTALLED_ROOT_DIST_JS_BYTES;
+  const fileStat = lstatSync(filePath);
+  if (!fileStat.isFile() || fileStat.size > maxBytes) {
+    return {
+      error: `installed package root dist file '${relativePath}' is invalid or exceeds ${maxBytes} bytes.`,
+      ok: false,
+    };
+  }
+  return { ok: true, relativePath, source: readFileSync(filePath, "utf8") };
+}
+
 export function collectInstalledContextEngineRuntimeErrors(packageRoot: string): string[] {
-  const errors: string[] = [];
-  const distFiles = listDistJavaScriptFiles(packageRoot, {
-    maxFiles: MAX_INSTALLED_ROOT_DIST_JS_FILES,
-  });
+  const distFiles = listInstalledRootDistJavaScriptFiles(packageRoot);
   if (distFiles.limitExceeded) {
-    return [formatInstalledDistFileScanLimitError("dist", distFiles.limit)];
+    return [formatInstalledDistFileScanLimitError("root dist", distFiles.limit)];
   }
 
+  // The legacy marker is a root runtime bundling contract; extension assets are plugin-owned.
   for (const filePath of distFiles.files) {
-    const contents = readFileSync(filePath, "utf8");
-    if (contents.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
-      errors.push(
+    const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
+    if (!file.ok) {
+      return [file.error];
+    }
+    if (file.source.includes(LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER)) {
+      return [
         "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
-      );
-      break;
+      ];
     }
   }
-  return errors;
+  return [];
 }
 
 function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
@@ -630,14 +660,6 @@ function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string
   }
 
   return errors;
-}
-
-function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScriptFileListResult {
-  return listDistJavaScriptFiles(packageRoot, {
-    maxFiles: MAX_INSTALLED_ROOT_DIST_JS_FILES,
-    skipRelativePath: (relativePath) =>
-      relativePath === "extensions" || relativePath.startsWith("extensions/"),
-  });
 }
 
 type ParsedImportSpecifiersResult =
@@ -747,19 +769,14 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     collectBundledExtensionRuntimeDependencyOwners(packageRoot);
 
   for (const filePath of distFiles.files) {
-    const fileStat = lstatSync(filePath);
-    if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
-      const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
-      return [
-        `installed package root dist file '${relativePath}' is invalid or exceeds ${MAX_INSTALLED_ROOT_DIST_JS_BYTES} bytes.`,
-      ];
+    const file = readInstalledRootDistJavaScriptFile(packageRoot, filePath);
+    if (!file.ok) {
+      return [file.error];
     }
-    const source = readFileSync(filePath, "utf8");
-    const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
-    const parsedSpecifiers = extractJavaScriptImportSpecifiers(source);
+    const parsedSpecifiers = extractJavaScriptImportSpecifiers(file.source);
     if (!parsedSpecifiers.ok) {
       return [
-        `installed package root dist file '${relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
+        `installed package root dist file '${file.relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
       ];
     }
     for (const specifier of parsedSpecifiers.specifiers) {
@@ -772,13 +789,13 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
         isBundledExtensionOwnedRuntimeImport({
           dependencyName,
           ownersByDependency: bundledExtensionRuntimeDependencyOwners,
-          source,
+          source: file.source,
         })
       ) {
         continue;
       }
       const importers = missingImporters.get(dependencyName) ?? new Set<string>();
-      importers.add(relativePath);
+      importers.add(file.relativePath);
       missingImporters.set(dependencyName, importers);
     }
   }
@@ -851,17 +868,6 @@ export function resolveInstalledBinaryCommandInvocation(
   };
 }
 
-function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const relativePath of PACKAGED_BUNDLED_PLUGIN_ARTIFACTS) {
-    const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
-    if (match) {
-      ids.add(expectDefined(match[1], "bundled package extension id"));
-    }
-  }
-  return ids;
-}
-
 function readBundledExtensionPackageJsons(packageRoot: string): {
   manifests: InstalledBundledExtensionManifestRecord[];
   errors: string[];
@@ -869,15 +875,41 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
   const extensionsDir = join(packageRoot, "dist", "extensions");
   const manifests: InstalledBundledExtensionManifestRecord[] = [];
   const errors: string[] = [];
-  const expectedPackageIds = collectExpectedBundledExtensionPackageIds();
+  const inventoryPath = join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
 
-  // Scan the package contract first: absent bundled directories are invisible
-  // when verification only walks the installed extension root.
-  for (const expectedPackageId of expectedPackageIds) {
-    const packageJsonPath = join(extensionsDir, expectedPackageId, "package.json");
-    if (!existsSync(packageJsonPath)) {
-      errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
+  try {
+    const inventory: unknown = JSON.parse(readFileSync(inventoryPath, "utf8"));
+    if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
+      throw new Error("inventory must be an array of file paths");
     }
+    const inventoryParity = comparePackageDistInventory({
+      files: PACKAGED_BUNDLED_PLUGIN_ARTIFACTS,
+      inventory: inventory as string[],
+    });
+    errors.push(
+      ...inventoryParity.packagedFilesMissingFromInventory.map(
+        (relativePath) =>
+          `installed bundled plugin artifact omitted from dist inventory: ${relativePath}.`,
+      ),
+    );
+  } catch (error) {
+    errors.push(
+      `installed package dist inventory is missing or invalid: ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
+    );
+  }
+
+  const installedArtifactParity = comparePackageDistInventory({
+    files: [...PACKAGED_BUNDLED_PLUGIN_ARTIFACTS].filter((relativePath) =>
+      existsSync(join(packageRoot, relativePath)),
+    ),
+    inventory: PACKAGED_BUNDLED_PLUGIN_ARTIFACTS,
+  });
+  for (const relativePath of installedArtifactParity.inventoryEntriesMissingFromPackage) {
+    errors.push(
+      relativePath.endsWith("/package.json")
+        ? `installed bundled extension manifest missing: ${join(packageRoot, relativePath)}.`
+        : `installed bundled plugin artifact missing: ${relativePath}.`,
+    );
   }
 
   if (!existsSync(extensionsDir)) {

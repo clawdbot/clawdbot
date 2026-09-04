@@ -46,6 +46,7 @@ import {
 } from "./inline-buttons.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import {
+  resolveTelegramConversationReadChatId,
   resolveTelegramMessageMutationChatId,
   type TelegramMessageMutationContext,
 } from "./message-topic-binding.js";
@@ -58,12 +59,14 @@ import {
   editForumTopicTelegram,
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
+  getTelegramAllowedReactions,
   pinMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
 } from "./send.js";
+import { TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST } from "./status-reaction-variants.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
@@ -75,6 +78,7 @@ export const telegramActionRuntime = {
   editForumTopicTelegram,
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
+  getTelegramAllowedReactions,
   getCacheStats,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -88,6 +92,8 @@ export const telegramActionRuntime = {
 const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
   0x6fb9f0, 0xffd67e, 0xcb86db, 0x8eee98, 0xff93b2, 0xfb6f5f,
 ] as const;
+const TELEGRAM_EMOJI_LIST_LIMIT = 100;
+const TELEGRAM_REACTION_HINT_LIMIT = 20;
 const TELEGRAM_ACTION_ALIASES = {
   createForumTopic: "createForumTopic",
   delete: "deleteMessage",
@@ -95,6 +101,7 @@ const TELEGRAM_ACTION_ALIASES = {
   edit: "editMessage",
   editForumTopic: "editForumTopic",
   editMessage: "editMessage",
+  "emoji-list": "emoji-list",
   poll: "poll",
   react: "react",
   searchSticker: "searchSticker",
@@ -371,7 +378,7 @@ function buildTelegramActionSendPayload(params: {
 
 function getLastDurableTelegramActionResult(
   result: Extract<DurableMessageBatchSendResult, { status: "sent" }>,
-): { messageId?: string; chatId?: string } {
+) {
   const lastResult = result.results.at(-1);
   const receipt = result.receipt;
   return {
@@ -380,7 +387,41 @@ function getLastDurableTelegramActionResult(
       receipt.primaryPlatformMessageId ??
       receipt.platformMessageIds.at(-1),
     chatId: lastResult?.target?.kind === "chat" ? lastResult.target.id : undefined,
+    receipt: { threadId: receipt.threadId, replyToId: receipt.replyToId },
   };
+}
+
+async function describeTelegramAllowedReactionSample(params: {
+  chatId: string | number;
+  cfg: OpenClawConfig;
+  token: string;
+  accountId?: string;
+}): Promise<string> {
+  const reactions = await telegramActionRuntime
+    .getTelegramAllowedReactions(params.chatId, {
+      cfg: params.cfg,
+      token: params.token,
+      accountId: params.accountId,
+    })
+    .catch(() => undefined);
+  if (reactions === undefined) {
+    return "";
+  }
+  const allowed =
+    reactions ??
+    TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST.map((emoji) => ({ type: "emoji" as const, emoji }));
+  // Preserve portable alternatives when Telegram returns custom reactions first.
+  const emojis = allowed
+    .filter((reaction) => reaction.type === "emoji")
+    .slice(0, TELEGRAM_REACTION_HINT_LIMIT)
+    .map((reaction) => reaction.emoji);
+  const customIds = allowed
+    .filter((reaction) => reaction.type === "custom_emoji")
+    .slice(0, TELEGRAM_REACTION_HINT_LIMIT - emojis.length)
+    .map((reaction) => reaction.custom_emoji_id);
+  const customSample = customIds.length ? `numeric custom IDs ${customIds.join(", ")}` : "";
+  const sample = [emojis.join(" "), customSample].filter(Boolean).join("; ");
+  return sample ? ` This chat allows: ${sample}.` : "";
 }
 
 export async function handleTelegramAction(
@@ -393,8 +434,10 @@ export async function handleTelegramAction(
     sessionKey?: string | null;
     inboundEventKind?: string;
     gatewayClientScopes?: readonly string[];
+    deliveryRetryOwner?: ChannelMessageActionContext["deliveryRetryOwner"];
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     requesterAccountId?: string | null;
+    reply?: ChannelMessageActionContext["reply"];
     toolContext?: TelegramMessageMutationContext["toolContext"];
   },
 ): Promise<AgentToolResult<unknown>> {
@@ -415,6 +458,52 @@ export async function handleTelegramAction(
       inboundEventKind: options?.inboundEventKind,
     });
   };
+
+  if (action === "emoji-list") {
+    if (!isActionEnabled("reactions")) {
+      throw new Error("Telegram reactions are disabled via actions.reactions.");
+    }
+    const chatId = resolveTelegramConversationReadChatId({
+      chatId:
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringOrNumberParam(params, "to"),
+      cfg,
+      accountId,
+      context: options,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const limit = Math.min(
+      readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      }) ?? TELEGRAM_EMOJI_LIST_LIMIT,
+      TELEGRAM_EMOJI_LIST_LIMIT,
+    );
+    const allowed = await telegramActionRuntime.getTelegramAllowedReactions(chatId, {
+      cfg,
+      token,
+      accountId: accountId ?? undefined,
+    });
+    const reactions =
+      allowed ??
+      TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST.map((emoji) => ({ type: "emoji" as const, emoji }));
+    return jsonResult({
+      ok: true,
+      emojis: reactions
+        .slice(0, limit)
+        .map((reaction) =>
+          reaction.type === "emoji"
+            ? { name: reaction.emoji, identifier: reaction.emoji }
+            : { identifier: reaction.custom_emoji_id, type: "custom_emoji" },
+        ),
+      ...(allowed === null ? { note: "All standard Telegram reactions are allowed." } : {}),
+    });
+  }
 
   if (action === "react") {
     // All react failures return soft results (jsonResult with ok:false) instead
@@ -471,8 +560,9 @@ export async function handleTelegramAction(
       });
     }
     let reactionResult: Awaited<ReturnType<typeof telegramActionRuntime.reactMessageTelegram>>;
+    let authorizedChatId: string | number = chatId ?? "";
     try {
-      const authorizedChatId = await resolveTelegramMessageMutationChatId({
+      authorizedChatId = await resolveTelegramMessageMutationChatId({
         chatId: chatId ?? "",
         messageId,
         cfg,
@@ -498,14 +588,25 @@ export async function handleTelegramAction(
         reason: isInvalid ? "REACTION_INVALID" : "error",
         emoji,
         hint: isInvalid
-          ? "This emoji is not supported for Telegram reactions. Add it to your reaction disallow list so you do not try it again."
+          ? `This reaction is unavailable.${await describeTelegramAllowedReactionSample({
+              chatId: authorizedChatId,
+              cfg,
+              token,
+              accountId: accountId ?? undefined,
+            })}`
           : "Reaction failed. Do not retry.",
       });
     }
     if (!reactionResult.ok) {
+      const allowedHint = await describeTelegramAllowedReactionSample({
+        chatId: authorizedChatId,
+        cfg,
+        token,
+        accountId: accountId ?? undefined,
+      });
       return jsonResult({
         ok: false,
-        warning: reactionResult.warning,
+        warning: `${reactionResult.warning}${allowedHint}`,
         ...(remove || isEmpty ? { removed: true } : { added: emoji }),
       });
     }
@@ -586,7 +687,7 @@ export async function handleTelegramAction(
     // Optional threading parameters for forum topics and reply chains
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
-    const quoteText = readStringParam(params, "quoteText");
+    const quoteText = readStringParam(params, "quoteText", { trim: false });
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
@@ -637,12 +738,15 @@ export async function handleTelegramAction(
       to,
       accountId: accountId ?? undefined,
       payloads: [payload],
-      replyToId: replyToMessageId == null ? undefined : String(replyToMessageId),
+      ...(options?.reply
+        ? { reply: options.reply }
+        : { replyToId: replyToMessageId == null ? undefined : String(replyToMessageId) }),
       threadId: messageThreadId,
       forceDocument: sendOptions.forceDocument,
       silent: sendOptions.silent,
       durability: "required",
       gatewayClientScopes: options?.gatewayClientScopes,
+      deliveryRetryOwner: options?.deliveryRetryOwner,
       ...(mediaAccess ? { mediaAccess } : {}),
       ...(outboundSession ? { session: outboundSession } : {}),
     });
@@ -658,6 +762,7 @@ export async function handleTelegramAction(
       ok: true,
       messageId: result.messageId,
       chatId: result.chatId,
+      receipt: result.receipt,
       ...buildTelegramControlDegradation(droppedControls, Boolean(content.trim())),
     });
   }
@@ -949,7 +1054,9 @@ export async function handleTelegramAction(
       throw new Error("Telegram createForumTopic is disabled.");
     }
     const chatId = readTelegramChatId(params);
-    const name = readStringParam(params, "name", { required: true });
+    const name =
+      readStringParam(params, "name") ??
+      readStringParam(params, "threadName", { required: true, label: "name" });
     const iconColor = readTelegramForumTopicIconColor(params);
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = resolveTelegramToken(cfg, { accountId }).token;
@@ -995,7 +1102,7 @@ export async function handleTelegramAction(
     if (typeof messageThreadId !== "number") {
       throw new Error("messageThreadId or threadId is required.");
     }
-    const name = readStringParam(params, "name");
+    const name = readStringParam(params, "name") ?? readStringParam(params, "threadName");
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {

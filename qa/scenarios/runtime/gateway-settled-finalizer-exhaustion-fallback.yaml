@@ -1,0 +1,93 @@
+title: Gateway settled-finalizer exhaustion fallback
+
+scenario:
+  id: gateway-settled-finalizer-exhaustion-fallback
+  surface: gateway
+  category: gateway.gateway-rpc-apis-and-events
+  coverage:
+    primary:
+      - gateway.chat-apis
+      - agent-runtime.failure-recovery-empty-response-recovery
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
+  objective: Verify chat.send persists one safe fallback when settled-turn finalization stays empty.
+  successCriteria:
+    - chat.send starts the run and agent.wait reports success.
+    - Recovery performs exactly two tool-free finalization attempts without replaying the settled read.
+    - chat.history contains the user turn and exactly one host fallback for Control UI reloads.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/web/control-ui.md
+  codeRefs:
+    - src/gateway/server-methods/chat.ts
+    - src/gateway/server-methods/chat-send-reply-finalization.ts
+    - src/agents/embedded-agent-runner/run/settled-turn-finalization.ts
+  execution:
+    kind: flow
+    summary: Exercise the Control UI chat path through the real Gateway WebSocket.
+    config:
+      requiredProviderMode: mock-openai
+      promptSnippet: Empty response exhaustion QA check
+      prompt: "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK."
+      settledToolRetryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      expectedFallback: "The tool run finished, but no final summary was produced. I did not repeat any completed actions."
+
+flow:
+  steps:
+    - name: persists one fallback through chat history
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:gateway-settled-finalizer:${randomUUID().slice(0, 8)}`"
+        - set: started
+          value:
+            expr: "await env.gateway.call('chat.send', { sessionKey, message: config.prompt, deliver: false, idempotencyKey: randomUUID() }, { timeoutMs: liveTurnTimeoutMs(env, 30000) })"
+        - assert:
+            expr: "started?.status === 'started' && typeof started?.runId === 'string'"
+            message:
+              expr: "`chat.send did not start the run: ${JSON.stringify(started)}`"
+        - set: waited
+          value:
+            expr: "await env.gateway.call('agent.wait', { runId: started.runId, timeoutMs: liveTurnTimeoutMs(env, 45000) }, { timeoutMs: liveTurnTimeoutMs(env, 50000) })"
+        - assert:
+            expr: "waited?.status === 'ok'"
+            message:
+              expr: "`agent.wait returned ${String(waited?.status ?? 'unknown')}: ${String(waited?.error ?? '')}`"
+        - set: chatHistory
+          value:
+            expr: "await env.gateway.call('chat.history', { sessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) })"
+        - set: historyMessages
+          value:
+            expr: "chatHistory.messages ?? []"
+        - set: historyAssistantTexts
+          value:
+            expr: "historyMessages.filter((message) => message?.role === 'assistant').map((message) => typeof message?.content === 'string' ? message.content : Array.isArray(message?.content) ? message.content.filter((item) => ['text', 'input_text', 'output_text'].includes(item?.type)).map((item) => item.text ?? '').join(String.fromCharCode(10)) : String(message?.text ?? '')).map((text) => text.trim()).filter(Boolean)"
+        - assert:
+            expr: "historyMessages.some((message) => message?.role === 'user' && JSON.stringify(message).includes(config.promptSnippet)) && historyAssistantTexts.filter((text) => text === config.expectedFallback).length === 1"
+            message:
+              expr: "`chat.history did not persist the user turn and exactly one fallback: ${JSON.stringify(historyMessages)}`"
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+        - set: finalizationRequests
+          value:
+            expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.settledToolRetryNeedle))"
+        - assert:
+            expr: "scenarioRequests.length === 4 && scenarioRequests[0]?.plannedToolName === 'read' && scenarioRequests.slice(1).every((request) => !request.plannedToolName)"
+            message:
+              expr: "`expected one read and no replay across four requests: ${JSON.stringify(scenarioRequests.map((request) => request.plannedToolName ?? null))}`"
+        - assert:
+            expr: "finalizationRequests.length === 2 && finalizationRequests.every((request) => !Array.isArray(request.body?.tools) || request.body.tools.length === 0)"
+            message:
+              expr: "`expected two tool-free finalization attempts, saw ${finalizationRequests.length}`"
+      detailsExpr: "`requests=${String(scenarioRequests.length)} finalizations=${String(finalizationRequests.length)} history=${JSON.stringify(historyAssistantTexts)}`"

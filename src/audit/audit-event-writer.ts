@@ -14,6 +14,11 @@ import {
   pruneExpiredExecutionDecisionFacts,
   recordExecutionDecisionFact,
 } from "./execution-decision-facts.js";
+import {
+  parseExecutionDecisionWork,
+  processExecutionDecisionWork,
+  type ExecutionDecisionWork,
+} from "./execution-decision-work.js";
 import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admission.js";
 import {
   processExecutionIdentityAdmissionWork,
@@ -37,7 +42,8 @@ type AuditMaintenanceAttempt = "settled" | "more" | "retry";
 type AuditWriterRequest =
   | { type: "record-event"; input: AuditEventInput }
   | { type: "record-execution-identity"; work: ExecutionIdentityAdmissionWork }
-  | { type: "record-execution-decision"; receipt: DecisionReceiptV1 };
+  | { type: "record-execution-decision"; receipt: DecisionReceiptV1 }
+  | { type: "record-execution-decision-work"; work: ExecutionDecisionWork };
 
 export type AuditEventWriter = {
   ready: Promise<void>;
@@ -46,6 +52,8 @@ export type AuditEventWriter = {
   recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
   /** For decision owners without a native durable record; approvals must not use this path. */
   recordExecutionDecision: (receipt: DecisionReceiptV1) => boolean;
+  /** Raw private refs are projected only after this work reaches the FIFO owner. */
+  recordExecutionDecisionWork: (work: ExecutionDecisionWork) => boolean;
   stop: () => Promise<void>;
 };
 
@@ -80,7 +88,7 @@ function executionIdentityFailureMessage(error: unknown): string {
   return "audit execution identity persistence failed";
 }
 
-/** Start one bounded queue on the current process's cached shared-state connection owner. */
+/** Start one bounded queue; retain the owner environment or claimed state rejects its writes. */
 export function createAuditEventWriter(
   options: {
     stateDir?: string;
@@ -90,7 +98,7 @@ export function createAuditEventWriter(
   } = {},
 ): AuditEventWriter {
   const database = {
-    env: { OPENCLAW_STATE_DIR: options.stateDir ?? resolveStateDir(process.env) },
+    env: { ...process.env, OPENCLAW_STATE_DIR: options.stateDir ?? resolveStateDir(process.env) },
   };
   const maxPending = Math.max(1, Math.floor(options.maxPending ?? MAX_PENDING_AUDIT_EVENTS));
   const queue: AuditWriterRequest[] = [];
@@ -162,6 +170,10 @@ export function createAuditEventWriter(
           processExecutionIdentityAdmissionWork(request.work, database);
           return;
         }
+        if (request.type === "record-execution-decision-work") {
+          processExecutionDecisionWork(request.work, database);
+          return;
+        }
         recordExecutionDecisionFact(request.receipt, database);
       });
       return "settled";
@@ -173,7 +185,10 @@ export function createAuditEventWriter(
       resetLockContention();
       if (request.type === "record-execution-identity") {
         fail(executionIdentityFailureMessage(error));
-      } else if (request.type === "record-execution-decision") {
+      } else if (
+        request.type === "record-execution-decision" ||
+        request.type === "record-execution-decision-work"
+      ) {
         fail("audit execution decision rejected");
       } else {
         fail(error);
@@ -277,8 +292,12 @@ export function createAuditEventWriter(
       return false;
     }
     try {
+      const boundedMessage =
+        message.type === "record-execution-decision-work"
+          ? { ...message, work: parseExecutionDecisionWork(message.work) }
+          : message;
       // Preserve the former Worker boundary's clone and prototype-stripping contract.
-      queue.push(structuredClone(message));
+      queue.push(structuredClone(boundedMessage));
       schedule();
       return true;
     } catch (error) {
@@ -301,6 +320,8 @@ export function createAuditEventWriter(
     record: (input) => enqueue({ type: "record-event", input }),
     recordExecutionIdentity: (work) => enqueue({ type: "record-execution-identity", work }),
     recordExecutionDecision: (receipt) => enqueue({ type: "record-execution-decision", receipt }),
+    recordExecutionDecisionWork: (work) =>
+      enqueue({ type: "record-execution-decision-work", work }),
     stop: () => {
       if (stopPromise) {
         return stopPromise;

@@ -24,12 +24,9 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { DEFAULT_VYDRA_BASE_URL, normalizeVydraBaseUrl } from "./defaults.js";
 
-export const DEFAULT_VYDRA_BASE_URL = "https://www.vydra.ai/api/v1";
-export const DEFAULT_VYDRA_IMAGE_MODEL = "grok-imagine";
-export const DEFAULT_VYDRA_VIDEO_MODEL = "veo3";
-export const DEFAULT_VYDRA_SPEECH_MODEL = "elevenlabs/tts";
-export const DEFAULT_VYDRA_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+export { DEFAULT_VYDRA_IMAGE_MODEL, DEFAULT_VYDRA_VIDEO_MODEL } from "./defaults.js";
 const DEFAULT_HTTP_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 2_500;
 const MAX_POLL_ATTEMPTS = 120;
@@ -65,29 +62,6 @@ function addUrlValue(value: unknown, urls: Set<string>): void {
     for (const entry of value) {
       addUrlValue(entry, urls);
     }
-  }
-}
-
-export function normalizeVydraBaseUrl(value: string | undefined): string {
-  const fallback = DEFAULT_VYDRA_BASE_URL;
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return fallback;
-  }
-  try {
-    const url = new URL(trimmed);
-    if (url.hostname === "vydra.ai") {
-      url.hostname = "www.vydra.ai";
-    }
-    const pathname = url.pathname.replace(/\/+$/u, "");
-    if (!pathname) {
-      url.pathname = "/api/v1";
-    } else {
-      url.pathname = pathname;
-    }
-    return url.toString().replace(/\/$/u, "");
-  } catch {
-    return fallback;
   }
 }
 
@@ -173,13 +147,13 @@ function resolveVydraErrorMessage(payload: unknown): string | undefined {
 
 export function extractVydraResultUrls(payload: unknown, kind: VydraMediaKind): string[] {
   const urls = new Set<string>();
-  const preferredKeys =
+  const urlKeys =
     kind === "audio"
       ? ["audioUrl", "audioUrls"]
       : kind === "image"
         ? ["imageUrl", "imageUrls"]
         : ["videoUrl", "videoUrls"];
-  const sharedKeys = ["resultUrl", "resultUrls", "outputUrl", "outputUrls", "url", "urls"];
+  urlKeys.push("resultUrl", "resultUrls", "outputUrl", "outputUrls", "url", "urls");
   const recurseKeys = ["output", "outputs", "result", "results", "data", "asset", "assets"];
 
   const visit = (value: unknown, depth = 0) => {
@@ -196,7 +170,7 @@ export function extractVydraResultUrls(payload: unknown, kind: VydraMediaKind): 
     if (!object) {
       return;
     }
-    for (const key of [...preferredKeys, ...sharedKeys]) {
+    for (const key of urlKeys) {
       addUrlValue(object[key], urls);
     }
     for (const key of recurseKeys) {

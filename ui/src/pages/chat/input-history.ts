@@ -1,3 +1,5 @@
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 // Control UI chat module implements input history behavior.
 import { extractText } from "../../lib/chat/message-extract.ts";
 
@@ -12,12 +14,14 @@ export type ChatInputHistoryState = {
   sessionKey: string;
   chatLoading: boolean;
   chatMessage: string;
+  chatMentions?: readonly HumanMention[];
   chatMessages: unknown[];
   chatLocalInputHistoryBySession: Record<string, ChatLocalInputHistoryEntry[]>;
   chatInputHistorySessionKey: string | null;
   chatInputHistoryItems: string[] | null;
   chatInputHistoryIndex: number;
   chatDraftBeforeHistory: string | null;
+  chatMentionsBeforeHistory?: readonly HumanMention[];
 };
 
 export type ChatInputHistoryKeyInput = {
@@ -118,11 +122,30 @@ export function resetChatInputHistoryNavigation(state: ChatInputHistoryState) {
   state.chatInputHistoryItems = null;
   state.chatInputHistoryIndex = -1;
   state.chatDraftBeforeHistory = null;
+  state.chatMentionsBeforeHistory = undefined;
 }
 
-export function handleChatDraftChange(state: ChatInputHistoryState, next: string) {
+export function handleChatDraftChange(
+  state: ChatInputHistoryState,
+  next: string,
+  mentions?: readonly HumanMention[],
+) {
+  state.chatMentions = mentions ?? updateHumanMentions(state.chatMessage, next, state.chatMentions);
   state.chatMessage = next;
   resetChatInputHistoryNavigation(state);
+}
+
+export function appendChatDraftText(
+  state: Pick<ChatInputHistoryState, "chatMessage" | "chatMentions"> & {
+    handleChatDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
+  },
+  text: string,
+): string {
+  const separator = state.chatMessage && !/\s$/u.test(state.chatMessage) ? " " : "";
+  const next = `${state.chatMessage}${separator}${text}`;
+  // Appending after the current draft leaves every mention span unchanged.
+  state.handleChatDraftChange(next, state.chatMentions);
+  return next;
 }
 
 function hasStaleActiveHistorySelection(state: ChatInputHistoryState): boolean {
@@ -155,6 +178,7 @@ function ensureChatInputHistorySnapshot(state: ChatInputHistoryState): string[] 
   state.chatInputHistorySessionKey = state.sessionKey;
   state.chatInputHistoryIndex = -1;
   state.chatDraftBeforeHistory = state.chatMessage;
+  state.chatMentionsBeforeHistory = state.chatMentions;
   return items;
 }
 
@@ -170,6 +194,7 @@ function navigateChatInputHistory(state: ChatInputHistoryState, direction: "up" 
     }
     state.chatInputHistoryIndex += 1;
     state.chatMessage = items[state.chatInputHistoryIndex] ?? state.chatMessage;
+    state.chatMentions = [];
     return true;
   }
 
@@ -179,10 +204,12 @@ function navigateChatInputHistory(state: ChatInputHistoryState, direction: "up" 
   if (state.chatInputHistoryIndex === 0) {
     state.chatInputHistoryIndex = -1;
     state.chatMessage = state.chatDraftBeforeHistory ?? "";
+    state.chatMentions = state.chatMentionsBeforeHistory;
     return true;
   }
   state.chatInputHistoryIndex -= 1;
   state.chatMessage = items[state.chatInputHistoryIndex] ?? state.chatMessage;
+  state.chatMentions = [];
   return true;
 }
 

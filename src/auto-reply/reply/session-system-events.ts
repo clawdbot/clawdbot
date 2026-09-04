@@ -10,7 +10,10 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+import {
+  isExecCompletionEvent,
+  isHeartbeatDeliveryAwarenessEvent,
+} from "../../infra/heartbeat-events-filter.js";
 // Records system-level session events for restarts, forks, and resets.
 import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
@@ -29,14 +32,15 @@ function selectGenericSystemEvents(
   events: readonly SystemEvent[],
   options?: { suppressHeartbeatOwnedEvents?: boolean },
 ): SystemEvent[] {
-  // Exec completions and tagged cron events own dedicated heartbeat prompts
-  // (buildExecEventPrompt / buildCronEventPrompt). During heartbeat runs, leave
-  // cron entries queued for that owner; ordinary turns still drain them as the
-  // fallback when a heartbeat was skipped before it could consume the event.
+  // Exec/cron events own dedicated heartbeat prompts. Heartbeat delivery
+  // awareness stays queued for the next ordinary target turn.
   return events.filter(
     (event) =>
       !isExecCompletionEvent(event.text) &&
-      !(options?.suppressHeartbeatOwnedEvents === true && isCronContextSystemEvent(event)),
+      !(
+        options?.suppressHeartbeatOwnedEvents === true &&
+        (isCronContextSystemEvent(event) || isHeartbeatDeliveryAwarenessEvent(event))
+      ),
   );
 }
 
@@ -49,8 +53,7 @@ function compactSystemEvent(line: string): string | null {
   if (lower.includes("reason periodic")) {
     return null;
   }
-  // Filter out the actual heartbeat prompt, but not cron jobs that mention "heartbeat".
-  // The heartbeat prompt starts with "Read HEARTBEAT.md" - cron payloads won't match this.
+  // Keep retired heartbeat prompts out of replayed legacy system events.
   if (lower.startsWith("read heartbeat.md")) {
     return null;
   }

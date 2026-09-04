@@ -86,7 +86,10 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     const ctx = await createAutomaticDraftContext({
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
-      discordConfig: { streaming: { mode: "progress" }, maxLinesPerMessage: 120 },
+      discordConfig: {
+        streaming: { mode: "progress", progress: { toolProgress: true } },
+        maxLinesPerMessage: 120,
+      },
       route: BASE_CHANNEL_ROUTE,
     });
 
@@ -471,6 +474,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
+          progress: { toolProgress: true },
         },
       },
     });
@@ -512,7 +516,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
       discordConfig: {
         streaming: {
           mode: "progress",
-          progress: { label: false, commentary: false },
+          progress: { toolProgress: true, label: false, commentary: false },
         },
       },
     });
@@ -544,7 +548,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     const ctx = await createAutomaticDraftContext({
       discordConfig: {
-        streaming: { mode: "progress", progress: { label: false } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: false } },
       },
     });
 

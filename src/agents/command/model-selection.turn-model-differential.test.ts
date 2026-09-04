@@ -21,6 +21,11 @@ vi.mock("../agent-scope.js", () => ({
   resolveAgentConfig: () => undefined,
   resolveAgentEffectiveModelPrimary: () => undefined,
 }));
+vi.mock("../../auto-reply/thinking.js", () => ({
+  formatThinkingLevels: () => "",
+  isThinkingLevelSupported: () => true,
+  normalizeThinkLevel: (value: string | undefined) => value,
+}));
 vi.mock("../../channels/model-overrides.js", () => ({
   resolveChannelModelOverride: (params: {
     cfg: OpenClawConfig;
@@ -47,6 +52,9 @@ vi.mock("../../channels/model-overrides.js", () => ({
       ? { channel, model, matchKey: matchKey ?? "*", matchSource: matchKey ? "exact" : "wildcard" }
       : null;
   },
+}));
+vi.mock("../../utils/message-channel.js", () => ({
+  isDeliverableMessageChannel: (value: string) => value !== "internal",
 }));
 
 vi.mock("../auth-profiles/order.js", () => ({
@@ -130,7 +138,12 @@ vi.mock("./model-ref.js", () => ({
     provider,
     model,
   }),
-  parseAgentCommandModelRef: (_cfg: OpenClawConfig, raw: string, defaultProvider: string) => {
+  parseAgentCommandModelRef: (
+    _cfg: OpenClawConfig,
+    _agentId: string,
+    raw: string,
+    defaultProvider: string,
+  ) => {
     const slash = raw.indexOf("/");
     return slash > 0
       ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }

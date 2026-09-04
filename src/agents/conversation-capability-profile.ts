@@ -26,6 +26,7 @@ import {
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import { resolveSessionPlacementSandboxToolPolicy } from "./session-placement-computer.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
@@ -220,6 +221,10 @@ export function resolveConversationCapabilityProfile(
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const sandboxToolPolicy = resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
+    runId: params.runId,
+    agentId: effective.agentId,
+  });
   const trustedGroup = resolveTrustedGroupId({
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
@@ -276,7 +281,7 @@ export function resolveConversationCapabilityProfile(
     effective.agentProviderPolicy,
     groupPolicy,
     senderPolicy,
-    params.sandboxToolPolicy,
+    sandboxToolPolicy,
     subagentPolicy,
   ];
   const runtimeToolPolicy = params.runtimeToolAllowlist
@@ -396,7 +401,7 @@ export function resolveConversationCapabilityProfile(
       agentProviderPolicy: effective.agentProviderPolicy,
       groupPolicy,
       senderPolicy,
-      sandboxPolicy: params.sandboxToolPolicy,
+      sandboxPolicy: sandboxToolPolicy,
       subagentPolicy,
       inheritedToolPolicy,
       delegated: requesterPolicies.delegated,

@@ -3057,21 +3057,43 @@ describe("agents.delete", () => {
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 
-  it("deletes main through the normal journal path after shared auth relocation", async () => {
+  it.each([false, true])(
+    "deletes main after shared auth relocation (legacy default: %s)",
+    async (legacyDefault) => {
+      mocks.sharedAuthStoreOwnership = { location: "state-db" };
+      mocks.loadConfigReturn = {
+        agents: {
+          list: [{ id: "main" }, { id: "ops", ...(legacyDefault ? { default: true } : {}) }],
+        },
+      };
+
+      const { respond, promise } = makeCall("agents.delete", {
+        agentId: "main",
+      });
+      await promise;
+
+      expectRespondOk(respond, { ok: true, agentId: "main" });
+      expect(mocks.beginAgentDeletionCommit).toHaveBeenCalledOnce();
+      expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
+      expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves an explicit inherited auth owner after shared auth relocation", async () => {
     mocks.sharedAuthStoreOwnership = { location: "state-db" };
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+      agents: {
+        defaults: { authInheritance: { agentId: "main" } },
+        list: [{ id: "main" }, { id: "ops" }],
+      },
     };
 
-    const { respond, promise } = makeCall("agents.delete", {
-      agentId: "main",
-    });
+    const { respond, promise } = makeCall("agents.delete", { agentId: "main" });
     await promise;
 
-    expectRespondOk(respond, { ok: true, agentId: "main" });
-    expect(mocks.beginAgentDeletionCommit).toHaveBeenCalledOnce();
-    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
-    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+    expectRespondErrorContaining(respond, "owns inherited credentials");
+    expect(mocks.beginAgentDeletionCommit).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 
   it("returns not found when a concurrent delete wins the delete race", async () => {

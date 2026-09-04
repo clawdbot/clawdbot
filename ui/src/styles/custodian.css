@@ -34,7 +34,7 @@ openclaw-custodian-page {
 }
 
 .custodian-surface--setup-required {
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .custodian__setup-state {
@@ -171,6 +171,39 @@ openclaw-custodian-page {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--warn) 9%, var(--bg-elevated));
   color: var(--text);
+}
+
+.custodian__alert-card {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  max-width: 560px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border-radius: var(--radius-lg);
+}
+
+.custodian-surface--setup-required > .custodian__alert-card {
+  margin: 16px 16px 0;
+}
+
+.custodian__alert-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.custodian__alert-facts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.custodian__alert-action {
+  width: fit-content;
 }
 
 .custodian__nudge--channel-onboarding {
@@ -392,6 +425,29 @@ openclaw-custodian-page {
 .custodian__history-state {
   color: var(--muted);
   font-size: 12px;
+}
+
+.custodian__history-spinner {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 6px auto;
+  border: 2px solid color-mix(in srgb, currentcolor 35%, transparent);
+  border-top-color: currentcolor;
+  border-radius: var(--radius-full);
+  animation: custodian-history-spin 0.7s linear infinite;
+}
+
+@keyframes custodian-history-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .custodian__history-spinner {
+    animation: none;
+  }
 }
 
 .custodian__change-list {

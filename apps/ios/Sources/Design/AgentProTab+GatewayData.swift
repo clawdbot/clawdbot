@@ -144,7 +144,7 @@ extension AgentProTab {
         async let usage = self.requestOptional(
             CostUsageSummaryLite.self,
             method: "usage.cost",
-            paramsJSON: "{\"days\":31}",
+            paramsJSON: CostUsageRequest.monthParamsJSON(),
             timeoutSeconds: 12)
 
         let loadedSkills = await skills

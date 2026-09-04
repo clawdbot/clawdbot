@@ -13,10 +13,12 @@ import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registr
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
+import type { PrepareAssistantTranscriptMessage } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionEntry, SessionToolOverrides } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
+import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -32,6 +34,7 @@ import type {
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../../admitted-run-context.js";
+import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
@@ -50,6 +53,8 @@ import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine
 import type { ContextEngineTurnAttemptFacts } from "../../harness/context-engine-turn-attempt.js";
 import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
+import type { ModelFallbackAttemptProvenance } from "../../model-fallback.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
@@ -90,6 +95,8 @@ export type RunEmbeddedAgentParams = {
   preparedRunAdmission?: PreparedAgentRunAdmission;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
+  /** Detached runs may read session identity but never write its durable transcript or metadata. */
+  sessionPersistence?: "durable" | "detached";
   sessionId: string;
   sessionKey?: string;
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
@@ -100,6 +107,8 @@ export type RunEmbeddedAgentParams = {
   promptCacheKey?: string;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
   sandboxSessionKey?: string;
+  /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
+  sandboxAgentId?: string;
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
@@ -109,6 +118,8 @@ export type RunEmbeddedAgentParams = {
   toolBindings?: Readonly<Record<string, unknown>>;
   chatType?: ChatType;
   agentAccountId?: string;
+  /** Raw peer observed by the inbound routing owner, before identity linking. */
+  conversationRoutePeerId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
   trigger?: EmbeddedRunTrigger;
   /** Stable cron job identifier populated for cron-triggered runs. */
@@ -119,6 +130,8 @@ export type RunEmbeddedAgentParams = {
   scheduledRuntimeAuthorityRecoveryRequired?: boolean;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
+  /** Sticky source-turn taint inherited by an internal maintenance run. */
+  initialTurnTainted?: boolean;
   /** Delivery target for topic/thread routing. */
   messageTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
@@ -169,12 +182,16 @@ export type RunEmbeddedAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Host-prepared proof that the exact session can request Gateway publication. */
+  githubPublicationAvailable?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
   forceCodeModeTools?: boolean;
+  /** Invocation-owned Code Mode activation; limits still come from config. */
+  codeModeOverride?: boolean | "auto";
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
@@ -194,6 +211,9 @@ export type RunEmbeddedAgentParams = {
   skillWorkshopProposalReviewCompletion?: SkillWorkshopRunOptions["proposalReviewCompletion"];
   /** Restrict Skill Workshop to one atomic collection reconciliation. */
   skillWorkshopCollectionReconcile?: SkillWorkshopRunOptions["collectionReconcile"];
+  /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
+  skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
+  skillLibraryAuthoring?: SkillWorkshopRunOptions["libraryAuthoring"];
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
@@ -241,13 +261,21 @@ export type RunEmbeddedAgentParams = {
   disableTools?: boolean;
   provider?: string;
   model?: string;
+  /** Outer model-fallback owner facts for this admitted attempt. */
+  modelRoutingProvenance?: ModelFallbackAttemptProvenance;
   /** Vision capability resolved by the run owner from its prepared model catalog. */
   modelHasVision?: boolean;
+  /** Session-selected context-window option id carried by the run owner. */
+  contextWindow?: string;
+  /** Route-bound thinking capability resolved from the selected prepared catalog row. */
+  modelThinkingCapability?: PreparedModelThinkingCapability;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
+  /** Prepared fallback availability fact shared by selection and failure reporting. */
+  modelFallbackAvailability?: ModelFallbackAvailability;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
-  /** True when the pinned non-default harness owns model selection for this session. */
+  /** Locks the selected model against hooks and fallbacks; does not imply native model ownership. */
   modelSelectionLocked?: boolean;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */
   agentHarnessRuntimeOverride?: string;
@@ -269,14 +297,14 @@ export type RunEmbeddedAgentParams = {
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
-  /** If true, suppress tool error warning payloads for this run (including mutating tools). */
-  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   /** Bootstrap context mode for workspace file injection. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for context mode behavior. */
   bootstrapContextRunKind?: BootstrapContextRunKind;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Preserve the visible tool schemas while allowing execution only for these names. */
+  toolExecutionAllow?: readonly string[];
   /** Exact attempt authority attached to the active steering backend. */
   toolAuthorityFingerprint?: string;
   /** Owner-scoped plugin tool grant; normal policy and deny rules still apply. */
@@ -349,6 +377,7 @@ export type RunEmbeddedAgentParams = {
   shouldEmitToolOutput?: () => boolean;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onAssistantMessageStart?: () => void | Promise<void>;
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
@@ -359,6 +388,8 @@ export type RunEmbeddedAgentParams = {
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   /** Synchronous private observer for the sanitized per-tool result. */
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
+  /** Reports a committed generic recovery compaction before its retry starts. */
+  onAutoCompactionSucceeded?: (count: number) => void;
   onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;
   onToolStreamBoundary?: () => void | Promise<void>;
   /**
@@ -441,4 +472,75 @@ export type RunEmbeddedAgentParams = {
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
   oneShotCliRun?: boolean;
+};
+
+export type EmbeddedForegroundPromptContext = Pick<
+  RunEmbeddedAgentParams,
+  | "agentDir"
+  | "sandboxAgentId"
+  | "promptCacheKey"
+  | "reasoningLevel"
+  | "messageChannel"
+  | "messageProvider"
+  | "clientCaps"
+  | "toolBindings"
+  | "chatType"
+  | "agentAccountId"
+  | "trigger"
+  | "messageTo"
+  | "messageThreadId"
+  | "conversationToolPolicy"
+  | "groupId"
+  | "groupChannel"
+  | "groupSpace"
+  | "memberRoleIds"
+  | "messageActionTurnCapability"
+  | "spawnedBy"
+  | "isCanonicalWorkspace"
+  | "senderId"
+  | "senderName"
+  | "senderUsername"
+  | "senderE164"
+  | "senderIsOwner"
+  | "approvalReviewerDeviceId"
+  | "currentChannelId"
+  | "chatId"
+  | "channelContext"
+  | "currentMessagingTarget"
+  | "currentThreadTs"
+  | "currentMessageId"
+  | "currentInboundAudio"
+  | "replyToMode"
+  | "requireExplicitMessageTarget"
+  | "disableMessageTool"
+  | "githubPublicationAvailable"
+  | "conversationRecall"
+  | "toolOverrides"
+  | "skillsSnapshot"
+  | "currentInboundEventKind"
+  | "clientTools"
+  | "disableTools"
+  | "contextWindow"
+  | "promptMode"
+  | "forceMessageTool"
+  | "enableHeartbeatTool"
+  | "forceHeartbeatTool"
+  | "allowGatewaySubagentBinding"
+  | "extraSystemPrompt"
+  | "sourceReplyDeliveryMode"
+  | "taskSuggestionDeliveryMode"
+  | "silentReplyPromptMode"
+  | "ownerNumbers"
+  | "toolsAllow"
+  | "runtimePluginToolGrant"
+  | "inputProvenance"
+  | "scheduledToolPolicy"
+  | "modelThinkingCapability"
+  | "modelFallbacksOverride"
+> & {
+  agentId: string;
+  workspaceDir: string;
+  cwd?: string;
+  sandboxSessionKey: string;
+  cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
 };

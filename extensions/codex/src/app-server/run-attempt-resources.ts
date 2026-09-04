@@ -6,6 +6,7 @@ import {
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
@@ -21,10 +22,14 @@ import {
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
-import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
+import {
+  releaseCodexSandboxExecServerEnvironment,
+  type CodexSandboxExecEnvironment,
+} from "./sandbox-exec-server.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
+  createIsolatedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
@@ -40,7 +45,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     params,
     effectiveCwd,
     sessionAgentId,
-    sandboxSessionKey,
+    contextSessionKey,
     runAbortController,
     sandbox,
     options,
@@ -55,6 +60,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     trajectory: params.hostCapabilities.trajectory,
     tools: toolBridge.availableSpecs,
   });
+  const executionState: {
+    sandboxExecEnvironment: CodexSandboxExecEnvironment | undefined;
+    executionDisconnectError: Error | undefined;
+  } = {
+    sandboxExecEnvironment: undefined,
+    executionDisconnectError: undefined,
+  };
   const state = {
     client: undefined as unknown as CodexAppServerClient,
     thread: undefined as unknown as CodexAppServerThreadLifecycleBinding,
@@ -76,7 +88,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseSharedClientLease: undefined as (() => void) | undefined,
     startupClientUnsafe: false,
     sharedCodexClientRetiredForOneShotCleanup: false,
-    sandboxExecEnvironmentAcquired: false,
+    ...executionState,
     codexEnvironmentSelection: undefined as CodexTurnEnvironmentParams[] | undefined,
     codexExecutionCwd: effectiveCwd,
     codexSandboxPolicy: undefined as CodexSandboxPolicy | undefined,
@@ -90,7 +102,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     emitCodexNativePreToolUseFailureDiagnostic({
       agentId: sessionAgentId,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       runId: params.runId,
       signal: runAbortController.signal,
       failure,
@@ -148,15 +160,24 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await state.client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
     }
   };
+  const releaseSandboxExecEnvironment = async () => {
+    if (state.sandboxExecEnvironment) {
+      const environment = state.sandboxExecEnvironment;
+      state.sandboxExecEnvironment = undefined;
+      await releaseCodexSandboxExecServerEnvironment(sandbox, environment);
+    }
+  };
   const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
+    if (connection.attemptClientFactory === createIsolatedCodexAppServerClient) {
+      // Close the authorized node lease first; losing its socket first is a real disconnect.
+      await releaseSandboxExecEnvironment();
+      const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
+      releaseSharedClientLeaseOnce();
+      await ownedClient?.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+      return;
+    }
     releaseSharedClientLeaseOnce();
     await retireSharedCodexClientForOneShotCleanup();
-  };
-  const releaseSandboxExecEnvironment = async () => {
-    if (state.sandboxExecEnvironmentAcquired) {
-      state.sandboxExecEnvironmentAcquired = false;
-      await releaseCodexSandboxExecServerEnvironment(sandbox);
-    }
   };
   const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
     runAgentCleanupStep({
@@ -231,8 +252,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       events: nativeHookRelayEvents,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       config: params.config,
+      autoApproveMcpTools: shouldAutoApproveCodexAppServerApprovals(appServer),
+      projectedMcpServers: runtime.bundleMcpThreadConfig.configPatch?.mcp_servers,
       runId: params.runId,
       channelId: hookChannelId,
       ...(requester ? { requester } : {}),

@@ -1,7 +1,7 @@
 // Vitest extension codex app server tools config wires the extension codex app server tools test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-function createExtensionCodexAppServerToolsVitestConfig(
+export function createExtensionCodexAppServerToolsVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
   return createScopedVitestConfig(
@@ -15,7 +15,6 @@ function createExtensionCodexAppServerToolsVitestConfig(
       "extensions/codex/src/app-server/native-hook-relay.test.ts",
       "extensions/codex/src/app-server/openclaw-owned-tool-runtime-contract.test.ts",
       "extensions/codex/src/app-server/request.test.ts",
-      "extensions/codex/src/app-server/run-attempt-tools.test.ts",
       "extensions/codex/src/app-server/sandbox-exec-server*.test.ts",
       "extensions/codex/src/app-server/schema-normalization-runtime-contract.test.ts",
       "extensions/codex/src/app-server/user-input-bridge.test.ts",

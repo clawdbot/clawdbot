@@ -80,63 +80,50 @@ async function registerSubCliWithPluginCommands(
   }
 }
 
+function defineImportedSubCliGroups(
+  definitions: ReadonlyArray<
+    readonly [readonly string[], () => Promise<Record<string, unknown>>, string]
+  >,
+) {
+  return defineImportedProgramCommandGroupSpecs(
+    definitions.map(([commandNames, loadModule, exportName]) => ({
+      commandNames,
+      loadModule,
+      exportName,
+    })),
+  );
+}
+
 // Note for humans and agents:
 // If you update the list of commands, also check whether they have subcommands
 // and set the flag accordingly.
 const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
-  ...defineImportedProgramCommandGroupSpecs([
-    {
-      commandNames: ["acp"],
-      loadModule: () => import("../acp-cli.js"),
-      exportName: "registerAcpCli",
+  ...defineImportedSubCliGroups([
+    [["acp"], () => import("../acp-cli.js"), "registerAcpCli"],
+    [["gateway"], () => import("../gateway-cli.js"), "registerGatewayCli"],
+    [["daemon"], () => import("../daemon-cli.js"), "registerDaemonCli"],
+    [["logs"], () => import("../logs-cli.js"), "registerLogsCli"],
+    [["system"], () => import("../system-cli.js"), "registerSystemCli"],
+    [["models"], () => import("../models-cli.js"), "registerModelsCli"],
+    [["promos"], () => import("../promos-cli.js"), "registerPromosCli"],
+    [["telemetry"], () => import("../telemetry-cli.js"), "registerTelemetryCli"],
+  ]),
+  {
+    commandNames: ["infer", "capability"],
+    register: async (program, argv) => {
+      const mod = await import("../capability-cli.js");
+      await mod.registerCapabilityCli(program, argv);
     },
-    {
-      commandNames: ["gateway"],
-      loadModule: () => import("../gateway-cli.js"),
-      exportName: "registerGatewayCli",
-    },
-    {
-      commandNames: ["daemon"],
-      loadModule: () => import("../daemon-cli.js"),
-      exportName: "registerDaemonCli",
-    },
-    {
-      commandNames: ["logs"],
-      loadModule: () => import("../logs-cli.js"),
-      exportName: "registerLogsCli",
-    },
-    {
-      commandNames: ["system"],
-      loadModule: () => import("../system-cli.js"),
-      exportName: "registerSystemCli",
-    },
-    {
-      commandNames: ["models"],
-      loadModule: () => import("../models-cli.js"),
-      exportName: "registerModelsCli",
-    },
-    {
-      commandNames: ["promos"],
-      loadModule: () => import("../promos-cli.js"),
-      exportName: "registerPromosCli",
-    },
-    {
-      commandNames: ["infer", "capability"],
-      loadModule: () => import("../capability-cli.js"),
-      exportName: "registerCapabilityCli",
-    },
-    {
-      // exec-approvals is a commander alias on the approvals command; the lazy
-      // router only routes names listed here, so the alias must be owned too.
-      commandNames: ["approvals", "exec-approvals"],
-      loadModule: () => import("../exec-approvals-cli.js"),
-      exportName: "registerExecApprovalsCli",
-    },
-    {
-      commandNames: ["exec-policy"],
-      loadModule: () => import("../exec-policy-cli.js"),
-      exportName: "registerExecPolicyCli",
-    },
+  },
+  ...defineImportedSubCliGroups([
+    // exec-approvals is a commander alias on the approvals command; the lazy
+    // router only routes names listed here, so the alias must be owned too.
+    [
+      ["approvals", "exec-approvals"],
+      () => import("../exec-approvals-cli.js"),
+      "registerExecApprovalsCli",
+    ],
+    [["exec-policy"], () => import("../exec-policy-cli.js"), "registerExecPolicyCli"],
   ]),
   {
     commandNames: ["nodes"],
@@ -145,109 +132,29 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       await mod.registerNodesCli(program, argv);
     },
   },
-  ...defineImportedProgramCommandGroupSpecs([
-    {
-      commandNames: ["devices"],
-      loadModule: () => import("../devices-cli.js"),
-      exportName: "registerDevicesCli",
-    },
-    {
-      commandNames: ["users"],
-      loadModule: () => import("../users-cli.js"),
-      exportName: "registerUsersCli",
-    },
-    {
-      commandNames: ["node"],
-      loadModule: () => import("../node-cli.js"),
-      exportName: "registerNodeCli",
-    },
-    {
-      commandNames: ["connect"],
-      loadModule: () => import("../connect-cli.js"),
-      exportName: "registerConnectCli",
-    },
-    {
-      commandNames: ["worker"],
-      loadModule: () => import("../worker-cli.js"),
-      exportName: "registerWorkerCli",
-    },
-    {
-      commandNames: ["sandbox"],
-      loadModule: () => import("../sandbox-cli.js"),
-      exportName: "registerSandboxCli",
-    },
-    {
-      commandNames: ["fleet"],
-      loadModule: () => import("../fleet-cli.js"),
-      exportName: "registerFleetCli",
-    },
-    {
-      commandNames: ["worktrees"],
-      loadModule: () => import("../worktrees-cli.js"),
-      exportName: "registerWorktreesCli",
-    },
-    {
-      commandNames: ["attach"],
-      loadModule: () => import("../attach-cli.js"),
-      exportName: "registerAttachCli",
-    },
-    {
-      commandNames: ["tui", "terminal", "chat"],
-      loadModule: () => import("../tui-cli.js"),
-      exportName: "registerTuiCli",
-    },
-    {
-      commandNames: ["resume"],
-      loadModule: () => import("../resume-cli.js"),
-      exportName: "registerResumeCli",
-    },
-    {
-      // automations is a commander alias on the cron command; the lazy
-      // router only routes names listed here, so the alias must be owned too.
-      commandNames: ["cron", "automations"],
-      loadModule: () => import("../cron-cli.js"),
-      exportName: "registerCronCli",
-    },
-    {
-      commandNames: ["dns"],
-      loadModule: () => import("../dns-cli.js"),
-      exportName: "registerDnsCli",
-    },
-    {
-      commandNames: ["docs"],
-      loadModule: () => import("../docs-cli.js"),
-      exportName: "registerDocsCli",
-    },
-    {
-      commandNames: ["qa"],
-      loadModule: loadPrivateQaCliModule,
-      exportName: "registerQaLabCli",
-    },
-    {
-      commandNames: ["proxy"],
-      loadModule: () => import("../proxy-cli.js"),
-      exportName: "registerProxyCli",
-    },
-    {
-      commandNames: ["hooks"],
-      loadModule: () => import("../hooks-cli.js"),
-      exportName: "registerHooksCli",
-    },
-    {
-      commandNames: ["webhooks"],
-      loadModule: () => import("../webhooks-cli.js"),
-      exportName: "registerWebhooksCli",
-    },
-    {
-      commandNames: ["qr"],
-      loadModule: () => import("../qr-cli.js"),
-      exportName: "registerQrCli",
-    },
-    {
-      commandNames: ["clawbot"],
-      loadModule: () => import("../clawbot-cli.js"),
-      exportName: "registerClawbotCli",
-    },
+  ...defineImportedSubCliGroups([
+    [["devices"], () => import("../devices-cli.js"), "registerDevicesCli"],
+    [["users"], () => import("../users-cli.js"), "registerUsersCli"],
+    [["node"], () => import("../node-cli.js"), "registerNodeCli"],
+    [["connect"], () => import("../connect-cli.js"), "registerConnectCli"],
+    [["worker"], () => import("../worker-cli.js"), "registerWorkerCli"],
+    [["sandbox"], () => import("../sandbox-cli.js"), "registerSandboxCli"],
+    [["fleet"], () => import("../fleet-cli.js"), "registerFleetCli"],
+    [["worktrees"], () => import("../worktrees-cli.js"), "registerWorktreesCli"],
+    [["attach"], () => import("../attach-cli.js"), "registerAttachCli"],
+    [["tui", "terminal", "chat"], () => import("../tui-cli.js"), "registerTuiCli"],
+    [["resume"], () => import("../resume-cli.js"), "registerResumeCli"],
+    // automations is a commander alias on the cron command; the lazy
+    // router only routes names listed here, so the alias must be owned too.
+    [["cron", "automations"], () => import("../cron-cli.js"), "registerCronCli"],
+    [["dns"], () => import("../dns-cli.js"), "registerDnsCli"],
+    [["docs"], () => import("../docs-cli.js"), "registerDocsCli"],
+    [["qa"], loadPrivateQaCliModule, "registerQaLabCli"],
+    [["proxy"], () => import("../proxy-cli.js"), "registerProxyCli"],
+    [["hooks"], () => import("../hooks-cli.js"), "registerHooksCli"],
+    [["webhooks"], () => import("../webhooks-cli.js"), "registerWebhooksCli"],
+    [["qr"], () => import("../qr-cli.js"), "registerQrCli"],
+    [["clawbot"], () => import("../clawbot-cli.js"), "registerClawbotCli"],
   ]),
   {
     commandNames: ["pairing"],
@@ -286,32 +193,12 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       });
     },
   },
-  ...defineImportedProgramCommandGroupSpecs([
-    {
-      commandNames: ["directory"],
-      loadModule: () => import("../directory-cli.js"),
-      exportName: "registerDirectoryCli",
-    },
-    {
-      commandNames: ["security"],
-      loadModule: () => import("../security-cli.js"),
-      exportName: "registerSecurityCli",
-    },
-    {
-      commandNames: ["secrets"],
-      loadModule: () => import("../secrets-cli.js"),
-      exportName: "registerSecretsCli",
-    },
-    {
-      commandNames: ["skills"],
-      loadModule: () => import("../skills-cli.js"),
-      exportName: "registerSkillsCli",
-    },
-    {
-      commandNames: ["update"],
-      loadModule: () => import("../update-cli.js"),
-      exportName: "registerUpdateCli",
-    },
+  ...defineImportedSubCliGroups([
+    [["directory"], () => import("../directory-cli.js"), "registerDirectoryCli"],
+    [["security"], () => import("../security-cli.js"), "registerSecurityCli"],
+    [["secrets"], () => import("../secrets-cli.js"), "registerSecretsCli"],
+    [["skills"], () => import("../skills-cli.js"), "registerSkillsCli"],
+    [["update"], () => import("../update-cli.js"), "registerUpdateCli"],
   ]),
 ];
 

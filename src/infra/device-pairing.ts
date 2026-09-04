@@ -45,13 +45,8 @@ export type NodePairingGeneration = {
   key: string;
 };
 
-export type NodePairingIdentity = {
-  nodeId: string;
-  key: string;
-};
-
 export type NodePairingState = {
-  identity: NodePairingIdentity;
+  identity: { nodeId: string; key: string };
   generation: NodePairingGeneration | null;
 };
 
@@ -185,7 +180,9 @@ export function hasEffectivePairedDeviceRole(
 }
 
 /** Resolve the authenticated node pairing independently of surface approval. */
-function resolveNodePairingIdentity(device: PairedDevice | null): NodePairingIdentity | null {
+function resolveNodePairingIdentity(
+  device: PairedDevice | null,
+): NodePairingState["identity"] | null {
   if (!device || !hasEffectivePairedDeviceRole(device, "node")) {
     return null;
   }
@@ -234,20 +231,17 @@ export function resolveNodePairingGeneration(
   return { nodeId: device.deviceId, key };
 }
 
-/** Clear node-surface cache state when its owning pairing generation changes. */
-export function clearNodePairingGenerationBins(
+/** Clear node runtime facts when their owning pairing generation changes. */
+export function clearNodePairingGenerationState(
   device: PairedDevice,
   previousGeneration: NodePairingGeneration | null,
 ): void {
   const nextGeneration = resolveNodePairingGeneration(device);
-  if (
-    previousGeneration?.key === nextGeneration?.key ||
-    !device.nodeSurface ||
-    device.nodeSurface.bins === undefined
-  ) {
+  if (previousGeneration?.key === nextGeneration?.key || !device.nodeSurface) {
     return;
   }
   delete device.nodeSurface.bins;
+  delete device.nodeSurface.sessionHost;
 }
 
 /** Resolve connection identity and optional approved surface generation from one row. */

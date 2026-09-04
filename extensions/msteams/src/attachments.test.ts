@@ -468,7 +468,7 @@ describe("msteams attachments", () => {
       runAttachmentAuthRetryCase,
     );
 
-    it("preserves auth fallback when dispatcher-mode fetch returns a redirect", async () => {
+    it("follows an authenticated redirect through guarded fetch", async () => {
       const redirectedUrl = createTestUrl("redirected.png");
       const tokenProvider = createTokenProvider();
       const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
@@ -484,12 +484,6 @@ describe("msteams attachments", () => {
         return createNotFoundResponse();
       });
 
-      readRemoteMediaBufferMock.mockImplementationOnce(async (params) => {
-        return await readRemoteMediaBufferWithRedirects(params, {
-          dispatcher: {},
-        } as RequestInit);
-      });
-
       const media = await downloadAttachmentsWithFetch(
         createImageAttachments(TEST_URL_IMAGE),
         fetchMock,
@@ -498,7 +492,18 @@ describe("msteams attachments", () => {
 
       expectAttachmentMediaLength(media, 1);
       expect(tokenProvider.getAccessToken).toHaveBeenCalledOnce();
-      expect(fetchMock.mock.calls.map(([calledUrl]) => calledUrl)).toContain(redirectedUrl);
+      expect(fetchMock.mock.calls.map(([calledUrl]) => calledUrl)).toEqual([
+        TEST_URL_IMAGE,
+        TEST_URL_IMAGE,
+        redirectedUrl,
+      ]);
+      expect(
+        fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+      ).toEqual([null, "Bearer token", "Bearer token"]);
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(init).toHaveProperty("dispatcher");
+        expect(init?.redirect).toBe("manual");
+      }
     });
 
     it("continues scope fallback after non-auth failure and succeeds on later scope", async () => {
@@ -718,9 +723,15 @@ describe("msteams attachments", () => {
         expect(tokenProvider.getAccessToken).toHaveBeenCalled();
       });
 
-      it("falls through to direct fetch for non-shared-link URLs", async () => {
-        const directUrl = createTestUrl("direct.pdf");
-        const fetchMock = createOkFetchMock(CONTENT_TYPE_APPLICATION_PDF, "pdf");
+      it("keeps look-alike hosts out of Graph shares and auth fallback", async () => {
+        const directUrl = "https://notonedrive.com/direct.pdf";
+        const tokenProvider = createTokenProvider();
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+          const url = resolveRequestUrl(input);
+          return url.startsWith(GRAPH_SHARES_URL_PREFIX)
+            ? createTextResponse("unauthorized", 401)
+            : createBufferResponse(PDF_BUFFER, CONTENT_TYPE_APPLICATION_PDF);
+        });
         detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
         saveMediaBufferMock.mockResolvedValueOnce({
           id: "saved.pdf",
@@ -729,9 +740,13 @@ describe("msteams attachments", () => {
           contentType: CONTENT_TYPE_APPLICATION_PDF,
         });
 
-        const media = await downloadAttachmentsWithFetch(
-          createPdfAttachments(directUrl),
-          fetchMock,
+        const media = await downloadMSTeamsAttachments(
+          buildDownloadParams(createPdfAttachments(directUrl), {
+            tokenProvider,
+            allowHosts: ["notonedrive.com", GRAPH_HOST],
+            authAllowHosts: [GRAPH_HOST],
+            fetchFn: asFetchFn(fetchMock),
+          }),
         );
 
         expectAttachmentMediaLength(media, 1);
@@ -742,6 +757,25 @@ describe("msteams attachments", () => {
         // Should have hit the original host, NOT graph shares.
         expect(calledUrls).toContain(directUrl);
         expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
+        expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+      });
+
+      it("rejects non-HTTPS shared-link hosts before fetch or auth fallback", async () => {
+        const tokenProvider = createTokenProvider();
+        const fetchMock = vi.fn(async () => createTextResponse("unauthorized", 401));
+
+        await downloadAttachmentsWithFetch(
+          createPdfAttachments("http://onedrive.com/direct.pdf"),
+          fetchMock,
+          {
+            tokenProvider,
+            allowHosts: ["onedrive.com", GRAPH_HOST],
+            authAllowHosts: [GRAPH_HOST],
+          },
+          { expectFetchCalled: false },
+        );
+
+        expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
       });
     });
 

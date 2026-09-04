@@ -3,55 +3,36 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { QaEvidenceTiming, QaEvidenceSummaryJson } from "./evidence-summary.js";
-import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
-import { startQaGatewayChild } from "./gateway-child.js";
+import type { QaGatewayChild, QaGatewayStopResult } from "./gateway-child.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
-import type { QaLabServerHandle, QaLabServerStartParams } from "./lab-server.types.js";
+import type { QaLabServerHandle } from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
-import type { QaProviderMode } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
-import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   createQaTransportAdapter,
   selectQaTransportDriver,
   type QaTransportAdapterFactory,
-  type QaTransportFactoryContext,
   type QaTransportId,
 } from "./qa-transport-registry.js";
-import type { QaReportCheck } from "./report.js";
-import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
-import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
+import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
 import { shouldUseIsolatedQaSuiteScenarioWorkers, splitModelRef } from "./suite-planning.js";
-import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
-import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
+import type {
+  QaSuiteEnvironment,
+  QaSuiteResult as QaSuiteBaseResult,
+  QaSuiteRunParams as QaSuiteBaseRunParams,
+  QaSuiteScenarioResult,
+  QaSuiteStartLabFn,
+} from "./suite-types.js";
 
-export type QaSuiteScenarioResult = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  steps: QaReportCheck[];
-  details?: string;
-  timing?: QaEvidenceTiming;
-  runtimeParity?: RuntimeParityResult;
-  modelSwitchEvidence?: Record<string, unknown>;
-};
-
-type QaSuiteEnvironment = {
-  lab: QaLabServerHandle;
-  runtimeId: RuntimeId;
-  webSessionIds: Set<string>;
-} & QaSuiteRuntimeEnv;
-
-export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaLabServerHandle>;
+export type { QaSuiteScenarioResult, QaSuiteStartLabFn };
 
 export async function createQaSuiteTransportAdapter(params: {
   adapterOptions?: QaSuiteRunParams["adapterOptions"];
@@ -99,43 +80,10 @@ export async function createQaSuiteTransportAdapter(params: {
   }
 }
 
-export type QaSuiteRunParams = {
-  adapterOptions?: QaTransportFactoryContext["adapterOptions"];
-  adapterFactories?: readonly QaTransportAdapterFactory[];
-  channelId?: string;
-  evidenceMode?: QaScorecardEvidenceMode;
-  repoRoot?: string;
-  sutOpenClawCommand?: QaGatewayChildCommand;
-  mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
-  outputDir?: string;
-  providerMode?: QaProviderMode;
-  transportId?: QaTransportId;
-  channelDriver?: QaScorecardChannelDriver;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  failFast?: boolean;
-  thinkingDefault?: QaThinkingLevel;
-  claudeCliAuthMode?: QaCliBackendAuthMode;
-  scenarioIds?: string[];
-  lab?: QaLabServerHandle;
-  startLab?: QaSuiteStartLabFn;
-  concurrency?: number;
-  enabledPluginIds?: string[];
-  controlUiEnabled?: boolean;
-  transportReadyTimeoutMs?: number;
-  workerStartStaggerMs?: number;
-  forcedRuntime?: RuntimeId;
-  runtimePair?: [RuntimeId, RuntimeId];
-  captureRuntimeParityCell?: boolean;
-  roundTripProbe?: QaSuiteRoundTripProbe;
+export type QaSuiteRunParams = QaSuiteBaseRunParams & {
   // Profile runs prove every applicable declared channel. Direct channel lanes
   // still treat execution.channels as an OR eligibility list.
   expandScenarioChannels?: boolean;
-  // Unified suite partitions consume child evidence in memory; only the
-  // parent should write the aggregate qa-evidence.json artifact.
-  writeEvidenceFile?: boolean;
 };
 
 export function shouldLogQaSuiteProgress(env: NodeJS.ProcessEnv = process.env) {
@@ -272,16 +220,21 @@ export async function runQaFlowSuiteCleanupPlan(params: {
   closeWebSessions?: () => Promise<void>;
   cleanupTransportBeforeGatewayStop: () => Promise<void>;
   cleanupTransportAfterGatewayStop: () => Promise<void>;
-  stopGateway?: () => Promise<void>;
+  stopGateway: () => Promise<QaGatewayStopResult>;
   disposeAgentHarnesses: () => Promise<void>;
   stopProvider?: () => Promise<void>;
   finishLab: () => Promise<void>;
 }) {
-  const stopGateway = params.stopGateway;
-  let gatewayStopped = !stopGateway;
+  let gatewayStopped = false;
   const stopGatewayAndMark = async () => {
-    await stopGateway?.();
-    gatewayStopped = true;
+    const result = await params.stopGateway();
+    gatewayStopped = result.process !== "unconfirmed";
+    if (result.errors.length) {
+      throw new AggregateError(
+        result.errors,
+        `qa gateway child cleanup failed: ${result.errors.map((error) => String(error)).join("; ")}`,
+      );
+    }
   };
   const cleanupTransportAfterGatewayStop = async () => {
     if (gatewayStopped) {
@@ -293,7 +246,7 @@ export async function runQaFlowSuiteCleanupPlan(params: {
     // Drain transport HTTP work before stopping the gateway; otherwise a completed suite can
     // emit an unhandled response-close rejection during delivery.
     { phase: "transport before gateway stop", run: params.cleanupTransportBeforeGatewayStop },
-    ...(stopGateway ? [{ phase: "gateway stop", run: stopGatewayAndMark }] : []),
+    { phase: "gateway stop", run: stopGatewayAndMark },
     // Never release a credential-backed transport until gateway teardown proves
     // that the isolated runtime reached its terminal boundary.
     { phase: "transport after gateway stop", run: cleanupTransportAfterGatewayStop },
@@ -308,24 +261,26 @@ export function throwQaSuiteCleanupErrors(params: {
   runFailed: boolean;
   runError: unknown;
   result?: QaSuiteResult;
+  scenarios?: readonly QaSuiteScenarioResult[];
   evidenceWritten?: boolean;
 }) {
   if (params.cleanupFailures.length === 0) {
     return;
   }
   const result = params.result;
-  const scenarios = result?.scenarios ?? [];
+  const scenarios = result?.scenarios ?? params.scenarios ?? [];
+  const scenariosCompleted = result !== undefined || params.scenarios !== undefined;
   const failed = scenarios.filter((scenario) => scenario.status === "fail").length;
   const skipped = scenarios.filter((scenario) => scenario.status === "skip").length;
   const passed = scenarios.length - failed - skipped;
-  const cleanupHeadline = !result
+  const cleanupHeadline = !scenariosCompleted
     ? "QA suite cleanup failed before scenarios completed"
     : failed === 0 && skipped === 0
       ? "QA scenarios passed, but cleanup failed"
       : "QA scenarios completed, but cleanup failed";
   const message = [
     params.runFailed ? "QA suite and cleanup failed" : cleanupHeadline,
-    ...(result
+    ...(scenariosCompleted
       ? [
           `scenario counts: passed=${passed} failed=${failed} skipped=${skipped} total=${scenarios.length}`,
         ]
@@ -394,17 +349,8 @@ const QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64 =
 const QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALklEQVR4nO3OoQEAAAyDsP7/9HYGJgJNdtuVDQAAAAAAACAHxH8AAAAAAACAHvBX0fhq85dN7QAAAABJRU5ErkJggg==";
 
-export type QaSuiteResult = {
-  evidence?: QaEvidenceSummaryJson;
-  outputDir: string;
-  evidencePath: string;
-  reportPath: string;
-  summaryPath: string;
-  report: string;
+export type QaSuiteResult = Omit<QaSuiteBaseResult, "scenarios"> & {
   scenarios: QaSuiteScenarioResult[];
-  startedScenarioIds: string[];
-  watchUrl: string;
-  runtimeParityCell?: RuntimeParityCell;
 };
 
 export async function runQaSuiteScenarioDefinitionForRuntime(
@@ -427,7 +373,7 @@ export async function runQaSuiteScenarioDefinitionForRuntime(
   });
 }
 
-type QaGatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type QaGatewayHandle = QaGatewayChild;
 
 export function buildQaSuiteRuntimeMetrics(params: {
   startedAt: Date;
@@ -503,31 +449,24 @@ async function listGatewayHeapSnapshotFiles(tempRoot: string) {
   return files.toSorted((left, right) => left.mtimeMs - right.mtimeMs);
 }
 
-async function waitForStableFileSize(pathName: string) {
-  let lastSize = -1;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const stats = await fs.stat(pathName).catch(() => null);
-    if (stats && stats.size > 0 && stats.size === lastSize) {
-      return stats.size;
-    }
-    lastSize = stats?.size ?? -1;
-    await sleep(250);
-  }
-  const stats = await fs.stat(pathName);
-  return stats.size;
-}
-
 export async function captureGatewayHeapSnapshotCheckpoint(params: {
-  gateway: QaGatewayHandle;
+  gateway: Pick<QaGatewayHandle, "tempRoot" | "pid" | "signalProcess" | "call">;
   outputDir: string;
   label: string;
 }): Promise<QaSuiteGatewayHeapSnapshot | undefined> {
   const before = new Set(
     (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).map((file) => file.pathName),
   );
+  const pid = params.gateway.pid;
+  const assertSameGateway = () => {
+    if (params.gateway.pid !== pid) {
+      throw new Error("Gateway changed during heap snapshot capture");
+    }
+  };
+  const deadlineMs = Date.now() + 20_000;
   await params.gateway.signalProcess("SIGUSR2");
   let snapshotPath: string | undefined;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  while (Date.now() < deadlineMs) {
     const next = (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).filter(
       (file) => !before.has(file.pathName),
     );
@@ -541,7 +480,12 @@ export async function captureGatewayHeapSnapshotCheckpoint(params: {
     return undefined;
   }
 
-  const bytes = await waitForStableFileSize(snapshotPath);
+  // Node opens the file before synchronous serialization. A same-process RPC after
+  // file appearance cannot respond until the signal handler has closed the writer.
+  assertSameGateway();
+  await params.gateway.call("health", {}, { deadlineMs });
+  assertSameGateway();
+  const { size: bytes } = await fs.stat(snapshotPath);
   const snapshotsDir = path.join(params.outputDir, "artifacts", "gateway-heap-snapshots");
   await fs.mkdir(snapshotsDir, { recursive: true });
   const relativePath = path.join(

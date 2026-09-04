@@ -11,8 +11,10 @@ export const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   "sonnet-5": "claude-sonnet-5",
   "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4-6": "claude-sonnet-4-6",
-  fable: "claude-fable-5",
+  fable: "claude-fable-5-1",
   "fable-5": "claude-fable-5",
+  "fable-5.1": "claude-fable-5-1",
+  "fable-5-1": "claude-fable-5-1",
 };
 
 export function detectNodeClaudePlacement(params: {

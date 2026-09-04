@@ -108,6 +108,8 @@ describe("message-channel", () => {
     expect(isInternalNonDeliveryChannel("webchat")).toBe(false);
     expect(isInternalNonDeliveryChannel("")).toBe(false);
     expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
+    expect(isInternalNonDeliveryChannel("cron-event")).toBe(false);
+    expect(isInternalNonDeliveryChannel("exec-event")).toBe(false);
   });
 
   it("reads native approval behavior from bundled channel manifests", async () => {

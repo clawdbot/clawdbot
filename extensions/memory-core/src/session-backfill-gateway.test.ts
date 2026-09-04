@@ -75,7 +75,10 @@ describe("session backfill gateway methods", () => {
   });
 
   it("validates preview params and returns at most three samples per day", async () => {
-    const { methods } = createHarness();
+    const pluginConfig = { memoryPolicy: { excludeSessions: { channels: ["discord"] } } };
+    const { methods } = createHarness({
+      plugins: { entries: { "memory-core": { config: pluginConfig } } },
+    });
     executeBatchMock.mockResolvedValueOnce({
       result: {
         agentId: "main",
@@ -110,6 +113,7 @@ describe("session backfill gateway methods", () => {
       to: "2026-07-31",
       limitDays: 14,
       workspaceDir: "/tmp/main-workspace",
+      pluginConfig,
     });
     expect(respond).toHaveBeenCalledWith(true, {
       days: 1,
@@ -202,7 +206,10 @@ describe("session backfill gateway methods", () => {
   });
 
   it("applies a chunk with cursor progress and rolls back by agent", async () => {
-    const { methods } = createHarness();
+    const pluginConfig = { memoryPolicy: { excludeSessions: { chatTypes: ["group"] } } };
+    const { methods } = createHarness({
+      plugins: { entries: { "memory-core": { config: pluginConfig } } },
+    });
     executeBatchMock.mockResolvedValueOnce({
       result: {
         agentId: "main",
@@ -234,6 +241,7 @@ describe("session backfill gateway methods", () => {
       agentId: "main",
       limitDays: 14,
     });
+    expect(executeBatchMock).toHaveBeenCalledWith(expect.objectContaining({ pluginConfig }));
     expect(applyRespond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({

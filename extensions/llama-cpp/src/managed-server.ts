@@ -3,6 +3,11 @@ import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import {
+  readProviderJsonResponse,
+  readProviderTextResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -17,10 +22,6 @@ import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
   DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
-  DEFAULT_LLAMA_CPP_MODEL_ID,
-  DEFAULT_LLAMA_CPP_MODEL_REVISION,
-  DEFAULT_LLAMA_CPP_MODEL_SHA256,
-  DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
   DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_DEFAULT_PORT,
   resolveCachedLlamaCppModelPath,
@@ -37,9 +38,9 @@ import {
   type LlamaDownloadProgress,
   type LlamaServerAsset,
 } from "./llama-server-install.js";
+import { resolveLlamaCppCatalogArtifact } from "./model-catalog.js";
 
 type ModelArtifact = {
-  source: string;
   fileName: string;
   url: string;
   expectedSize?: number;
@@ -48,12 +49,21 @@ type ModelArtifact = {
 
 export type ManagedLlamaServer = {
   command: string;
-  presetPath: string;
   baseUrl: string;
   healthUrl: string;
   args: string[];
-  backend: LlamaServerAsset["backend"];
 };
+
+export type ManagedLlamaChatModel =
+  | { mode: "preserve" }
+  | { mode: "remove" }
+  | {
+      mode: "configure";
+      id: string;
+      path: string;
+      contextSize?: number;
+      maxTokens?: number;
+    };
 
 export type LlamaServerRuntimeFacts = {
   engine: "llama.cpp";
@@ -73,6 +83,11 @@ export type LlamaServerRuntimeFacts = {
 
 const modelPromises = new Map<string, Promise<string>>();
 const chatPreparationPromises = new Map<string, Promise<void>>();
+// Chat and embedding share one restart preset. Serialize read-modify-write updates so neither
+// path can discard the other model stanza during concurrent preparation.
+const presetWritePromises = new Map<string, Promise<void>>();
+// Pooled embeddings must fit one input in one physical batch. Match llama.cpp's EmbeddingGemma preset.
+const LLAMA_CPP_EMBEDDING_UBATCH_SIZE = 2048;
 
 function parseHuggingFaceSource(source: string): {
   user: string;
@@ -119,7 +134,11 @@ async function resolveHuggingFaceArtifact(
       if (!response.ok) {
         throw new Error(`Cannot resolve ${source}: HTTP ${response.status}`);
       }
-      const ggufFile = asOptionalRecord(asOptionalRecord(await response.json())?.ggufFile);
+      const ggufFile = asOptionalRecord(
+        asOptionalRecord(
+          await readProviderJsonResponse(response, "llama.cpp Hugging Face manifest"),
+        )?.ggufFile,
+      );
       file = typeof ggufFile?.rfilename === "string" ? ggufFile.rfilename : undefined;
       expectedSize = typeof ggufFile?.size === "number" ? ggufFile.size : undefined;
       if (!file) {
@@ -131,27 +150,35 @@ async function resolveHuggingFaceArtifact(
   }
   const encodedFile = file.split("/").map(encodeURIComponent).join("/");
   const url = `https://huggingface.co/${encodeURIComponent(parsed.user)}/${encodeURIComponent(parsed.repository)}/resolve/${encodeURIComponent(parsed.revision)}/${encodedFile}?download=true`;
-  const treeUrl = `https://huggingface.co/api/models/${encodeURIComponent(parsed.user)}/${encodeURIComponent(parsed.repository)}/tree/${encodeURIComponent(parsed.revision)}?recursive=true&expand=true`;
-  const { response: treeResponse, release: releaseTree } = await fetchWithSsrFGuard({
-    url: treeUrl,
+  const fileInfoUrl = `https://huggingface.co/api/models/${encodeURIComponent(parsed.user)}/${encodeURIComponent(parsed.repository)}/paths-info/${encodeURIComponent(parsed.revision)}`;
+  const { response: fileInfoResponse, release: releaseFileInfo } = await fetchWithSsrFGuard({
+    url: fileInfoUrl,
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json", "user-agent": "llama-cpp" },
+      body: JSON.stringify({ paths: [file], expand: false }),
+    },
     signal,
     requireHttps: true,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(treeUrl),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(fileInfoUrl),
     auditContext: "llama-cpp-model-resolve",
   });
-  let tree: unknown;
+  let fileInfo: unknown;
   try {
-    if (!treeResponse.ok) {
+    if (!fileInfoResponse.ok) {
       throw new Error(
-        `Cannot read Hugging Face integrity metadata for ${source}: HTTP ${treeResponse.status}`,
+        `Cannot read Hugging Face integrity metadata for ${source}: HTTP ${fileInfoResponse.status}`,
       );
     }
-    tree = await treeResponse.json();
+    fileInfo = await readProviderJsonResponse(
+      fileInfoResponse,
+      "llama.cpp Hugging Face file metadata",
+    );
   } finally {
-    await releaseTree();
+    await releaseFileInfo();
   }
-  const fileRow = Array.isArray(tree)
-    ? tree.map((entry) => asOptionalRecord(entry)).find((entry) => entry?.path === file)
+  const fileRow = Array.isArray(fileInfo)
+    ? fileInfo.map((entry) => asOptionalRecord(entry)).find((entry) => entry?.path === file)
     : undefined;
   const lfs = asOptionalRecord(fileRow?.lfs);
   const expectedSha256 =
@@ -171,22 +198,16 @@ async function resolveHuggingFaceArtifact(
     .filter(Boolean)
     .join("_")
     .replace(/[^a-z\d._-]+/giu, "_")}`;
-  return { source, fileName: safeName, url, expectedSize, expectedSha256 };
+  return { fileName: safeName, url, expectedSize, expectedSha256 };
 }
 
 function defaultArtifact(source: string): ModelArtifact | undefined {
-  if (source === DEFAULT_LLAMA_CPP_MODEL_URI) {
-    return {
-      source,
-      fileName: DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
-      url: `https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/${DEFAULT_LLAMA_CPP_MODEL_REVISION}/gemma-4-E4B-it-Q4_K_M.gguf?download=true`,
-      expectedSize: DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
-      expectedSha256: DEFAULT_LLAMA_CPP_MODEL_SHA256,
-    };
+  const recipe = resolveLlamaCppCatalogArtifact(source);
+  if (recipe) {
+    return recipe;
   }
   if (source === DEFAULT_LLAMA_CPP_EMBEDDING_MODEL) {
     return {
-      source,
       fileName: DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
       url: `https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/${DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION}/embeddinggemma-300m-qat-Q8_0.gguf?download=true`,
       expectedSize: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
@@ -232,7 +253,7 @@ async function resolveModelArtifact(source: string, signal?: AbortSignal): Promi
     if (!fileName.toLowerCase().includes(".gguf")) {
       throw new Error(`Remote model URL must name a GGUF file: ${source}`);
     }
-    return { source, fileName, url: source };
+    return { fileName, url: source };
   }
   throw new Error(`Unsupported remote model URI: ${source}`);
 }
@@ -265,7 +286,7 @@ export async function ensureLlamaCppModel(params: {
       .catch(() => false);
     if (exists) {
       if (artifact.expectedSha256) {
-        if ((await sha256File(destination)) === artifact.expectedSha256) {
+        if ((await sha256File(destination, params.signal)) === artifact.expectedSha256) {
           return destination;
         }
       } else {
@@ -305,43 +326,69 @@ function assertIniValue(value: string, label: string): string {
   return value;
 }
 
-function renderLlamaServerPreset(params: {
-  chatModelId?: string;
-  chatModelPath?: string;
+function renderChatModelSection(params: {
+  id: string;
+  modelPath: string;
   contextSize?: number;
   maxTokens?: number;
-  embeddingModelId: string;
-  embeddingModelPath: string;
 }): string {
-  const embeddingId = assertIniValue(params.embeddingModelId, "llama.cpp embedding model id");
-  if (embeddingId.includes("]")) {
+  const id = assertIniValue(params.id, "llama.cpp model id");
+  if (id.includes("]")) {
     throw new Error("llama.cpp model ids cannot contain ]");
   }
-  const lines = ["version = 1", ""];
-  if (params.chatModelId || params.chatModelPath) {
-    if (!params.chatModelId || !params.chatModelPath) {
-      throw new Error("llama.cpp chat model id and path must be provided together");
-    }
-    const chatId = assertIniValue(params.chatModelId, "llama.cpp model id");
-    if (chatId.includes("]")) {
-      throw new Error("llama.cpp model ids cannot contain ]");
-    }
-    lines.push(
-      `[${chatId}]`,
-      `model = ${assertIniValue(params.chatModelPath, "llama.cpp model path")}`,
-      `ctx-size = ${params.contextSize ?? DEFAULT_LLAMA_CPP_CONTEXT_SIZE}`,
-      `n-predict = ${params.maxTokens ?? 2048}`,
-      "jinja = true",
-      "",
-    );
-  }
-  lines.push(
-    `[${embeddingId}]`,
-    `model = ${assertIniValue(params.embeddingModelPath, "llama.cpp embedding model path")}`,
+  return [
+    `[${id}]`,
+    `model = ${assertIniValue(params.modelPath, "llama.cpp model path")}`,
+    `ctx-size = ${params.contextSize ?? DEFAULT_LLAMA_CPP_CONTEXT_SIZE}`,
+    `n-predict = ${params.maxTokens ?? 2048}`,
+    "jinja = true",
+  ].join("\n");
+}
+
+function renderEmbeddingModelSection(params: { isDefault?: boolean; modelPath: string }): string {
+  return [
+    `[${DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID}]`,
+    `model = ${assertIniValue(params.modelPath, "llama.cpp embedding model path")}`,
+    ...(params.isDefault ? [`ubatch-size = ${LLAMA_CPP_EMBEDDING_UBATCH_SIZE}`] : []),
     "embedding = true",
+  ].join("\n");
+}
+
+function readModelSection(contents: string | undefined, id: string): string | undefined {
+  if (!contents) {
+    return undefined;
+  }
+  const lines = contents.split(/\r?\n/u);
+  const start = lines.indexOf(`[${id}]`);
+  if (start < 0) {
+    return undefined;
+  }
+  let end = start + 1;
+  while (end < lines.length && !/^\[[^\]]+\]$/u.test(lines[end] ?? "")) {
+    end += 1;
+  }
+  return lines.slice(start, end).join("\n").trimEnd();
+}
+
+function readChatModelSection(contents: string | undefined): string | undefined {
+  const id = contents
+    ?.split(/\r?\n/u)
+    .map((line) => /^\[([^\]]+)\]$/u.exec(line)?.[1])
+    .find((candidate) => candidate && candidate !== DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID);
+  return id ? readModelSection(contents, id) : undefined;
+}
+
+function renderLlamaServerPreset(params: {
+  chatSection?: string;
+  embeddingSection: string;
+}): string {
+  return [
+    "version = 1",
     "",
-  );
-  return lines.join("\n");
+    ...(params.chatSection ? [params.chatSection, ""] : []),
+    params.embeddingSection,
+    "",
+  ].join("\n");
 }
 
 async function writePreset(presetPath: string, contents: string): Promise<void> {
@@ -349,6 +396,63 @@ async function writePreset(presetPath: string, contents: string): Promise<void> 
   const temporary = `${presetPath}.tmp-${randomUUID()}`;
   await fsp.writeFile(temporary, contents, { mode: 0o600 });
   await fsp.rename(temporary, presetPath);
+}
+
+async function updatePreset(
+  presetPath: string,
+  params: {
+    chatModel: ManagedLlamaChatModel;
+    embeddingModelIsDefault?: boolean;
+    embeddingModelPath?: string;
+    defaultEmbeddingModelPath?: string;
+  },
+): Promise<void> {
+  const previous = presetWritePromises.get(presetPath) ?? Promise.resolve();
+  const pending = previous
+    .catch(() => undefined)
+    .then(async () => {
+      const existing = await fsp.readFile(presetPath, "utf8").catch((error: unknown) => {
+        if (asOptionalRecord(error)?.code === "ENOENT") {
+          return undefined;
+        }
+        throw error;
+      });
+      const chatSection =
+        params.chatModel.mode === "preserve"
+          ? readChatModelSection(existing)
+          : params.chatModel.mode === "configure"
+            ? renderChatModelSection({
+                id: params.chatModel.id,
+                modelPath: params.chatModel.path,
+                contextSize: params.chatModel.contextSize,
+                maxTokens: params.chatModel.maxTokens,
+              })
+            : undefined;
+      const embeddingSection = params.embeddingModelPath
+        ? renderEmbeddingModelSection({
+            isDefault: params.embeddingModelIsDefault,
+            modelPath: params.embeddingModelPath,
+          })
+        : (readModelSection(existing, DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID) ??
+          (params.defaultEmbeddingModelPath
+            ? renderEmbeddingModelSection({
+                isDefault: true,
+                modelPath: params.defaultEmbeddingModelPath,
+              })
+            : undefined));
+      if (!embeddingSection) {
+        throw new Error("llama.cpp embedding model path is required for a new managed preset");
+      }
+      await writePreset(presetPath, renderLlamaServerPreset({ chatSection, embeddingSection }));
+    });
+  presetWritePromises.set(presetPath, pending);
+  try {
+    await pending;
+  } finally {
+    if (presetWritePromises.get(presetPath) === pending) {
+      presetWritePromises.delete(presetPath);
+    }
+  }
 }
 
 async function findAvailableLlamaServerPort(preferred = LLAMA_CPP_DEFAULT_PORT): Promise<number> {
@@ -371,55 +475,80 @@ async function findAvailableLlamaServerPort(preferred = LLAMA_CPP_DEFAULT_PORT):
 }
 
 export async function prepareManagedLlamaServer(params: {
-  chatModelId?: string;
-  chatModelPath?: string;
-  contextSize?: number;
-  maxTokens?: number;
-  embeddingModelPath: string;
+  // Runtime embedding refreshes preserve chat. Explicit embedding-only setup removes it.
+  chatModel: ManagedLlamaChatModel;
+  embeddingModelIsDefault?: boolean;
+  embeddingModelPath?: string;
+  defaultEmbeddingModelPath?: string;
   port?: number;
+  localService?: ModelProviderConfig["localService"];
+  asset?: LlamaServerAsset;
+  isolated?: boolean;
+  signal?: AbortSignal;
+  onProgress?: LlamaDownloadProgress;
 }): Promise<ManagedLlamaServer> {
-  const { command, asset } = await ensureLlamaServerInstalled();
-  const { presetPath } = resolveManagedLlamaServerPaths(asset);
-  await writePreset(
-    presetPath,
-    renderLlamaServerPreset({
-      ...(params.chatModelPath
-        ? {
-            chatModelId: params.chatModelId ?? DEFAULT_LLAMA_CPP_MODEL_ID,
-            chatModelPath: params.chatModelPath,
-          }
-        : {}),
-      contextSize: params.contextSize,
-      maxTokens: params.maxTokens,
-      embeddingModelId: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
-      embeddingModelPath: params.embeddingModelPath,
-    }),
-  );
-  const port = params.port ?? (await findAvailableLlamaServerPort());
+  params.signal?.throwIfAborted();
+  const command =
+    params.localService?.command ??
+    (
+      await ensureLlamaServerInstalled({
+        asset: params.asset,
+        signal: params.signal,
+        onProgress: params.onProgress,
+      })
+    ).command;
+  const port = params.port ?? (await findAvailableLlamaServerPort(params.isolated ? 0 : undefined));
   const rootUrl = `http://127.0.0.1:${port}`;
-  return {
+  const endpoint = {
     command,
-    presetPath,
     baseUrl: `${rootUrl}/v1`,
-    healthUrl: `${rootUrl}/health`,
-    args: [
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      "--models-preset",
-      presetPath,
-      "--models-max",
-      "2",
-      "--metrics",
-      "--no-ui",
-    ],
-    backend: asset.backend,
+    healthUrl: params.localService?.healthUrl ?? `${rootUrl}/health`,
+  };
+  const configuredPreset =
+    params.localService?.args?.find((_, index, args) => args[index - 1] === "--models-preset") ??
+    params.localService?.env?.LLAMA_ARG_MODELS_PRESET;
+  // Existing services may own a direct --model command instead of a router preset.
+  // Keep that public localService contract; only setup creates a new router.
+  if (params.localService && !configuredPreset && !params.isolated) {
+    return { ...endpoint, args: params.localService.args ?? [] };
+  }
+  const defaultPreset = configuredPreset
+    ? path.resolve(params.localService?.cwd ?? process.cwd(), configuredPreset)
+    : resolveManagedLlamaServerPaths(params.asset).presetPath;
+  // Setup candidates own their preset. Verification must never rewrite the active
+  // server's restart configuration before the candidate is accepted.
+  const presetPath = params.isolated
+    ? path.join(path.dirname(defaultPreset), `models-${randomUUID()}.ini`)
+    : defaultPreset;
+  await updatePreset(presetPath, {
+    chatModel: params.chatModel,
+    embeddingModelIsDefault: params.embeddingModelIsDefault,
+    embeddingModelPath: params.embeddingModelPath,
+    defaultEmbeddingModelPath: params.defaultEmbeddingModelPath,
+  });
+  params.signal?.throwIfAborted();
+  return {
+    ...endpoint,
+    args:
+      params.localService && !params.isolated
+        ? (params.localService.args ?? [])
+        : [
+            "--host",
+            "127.0.0.1",
+            "--port",
+            String(port),
+            "--models-preset",
+            presetPath,
+            "--models-max",
+            "2",
+            "--metrics",
+            "--no-ui",
+          ],
   };
 }
 
 export async function ensureManagedLlamaServerForChat(params: {
-  provider: import("openclaw/plugin-sdk/provider-model-shared").ModelProviderConfig;
+  provider: ModelProviderConfig;
   model: {
     id: string;
     params?: Record<string, unknown>;
@@ -433,6 +562,7 @@ export async function ensureManagedLlamaServerForChat(params: {
   const cacheDir = resolveLlamaCppModelCacheDir(params.provider);
   const key = JSON.stringify([
     params.provider.baseUrl,
+    params.provider.localService,
     params.model.id,
     params.model.params,
     cacheDir,
@@ -469,15 +599,19 @@ export async function ensureManagedLlamaServerForChat(params: {
       const configuredContext = params.model.params?.contextSize;
       const port = Number(new URL(params.provider.baseUrl).port);
       await prepareManagedLlamaServer({
-        chatModelId: params.model.id,
-        chatModelPath,
-        contextSize:
-          typeof configuredContext === "number" && configuredContext > 0
-            ? Math.floor(configuredContext)
-            : params.model.contextTokens,
-        maxTokens: params.model.maxTokens,
-        embeddingModelPath: path.join(cacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
+        chatModel: {
+          mode: "configure",
+          id: params.model.id,
+          path: chatModelPath,
+          contextSize:
+            typeof configuredContext === "number" && configuredContext > 0
+              ? Math.floor(configuredContext)
+              : params.model.contextTokens,
+          maxTokens: params.model.maxTokens,
+        },
+        defaultEmbeddingModelPath: path.join(cacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
         port: Number.isInteger(port) && port > 0 ? port : undefined,
+        localService: params.provider.localService,
       });
     })();
   chatPreparationPromises.set(key, pending);
@@ -508,7 +642,11 @@ async function fetchEndpoint(
       if (!response.ok) {
         return { ok: false };
       }
-      return { ok: true, value: accept === "json" ? await response.json() : await response.text() };
+      const value =
+        accept === "json"
+          ? await readProviderJsonResponse(response, "llama-server inspection")
+          : await readProviderTextResponse(response, "llama-server inspection");
+      return { ok: true, value };
     } finally {
       await release();
     }

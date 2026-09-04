@@ -226,4 +226,8 @@ export type TuiBackend = {
   runGoalCommand?: (
     opts: TuiGoalCommandOptions,
   ) => Promise<{ text: string; continuationPrompt?: string }>;
+  runUsageCostCommand?: (opts: {
+    sessionKey: string;
+    agentId?: string;
+  }) => Promise<{ text: string }>;
 };

@@ -17,6 +17,7 @@ export { requireAcpRuntimeBackend };
 export type {
   AcpRuntime,
   AcpRuntimeCapabilities,
+  AcpRuntimeConfigOptionResult,
   AcpRuntimeDoctorReport,
   AcpRuntimeEnsureInput,
   AcpRuntimeEvent,

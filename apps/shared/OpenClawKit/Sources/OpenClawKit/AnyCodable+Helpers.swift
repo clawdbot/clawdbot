@@ -6,25 +6,12 @@ extension AnyCodable {
     }
 
     public var boolValue: Bool? {
-        if let value = self.value as? Bool {
-            return value
-        }
-        if let number = self.value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
-            return number.boolValue
-        }
-        return nil
+        self.value as? Bool
     }
 
     public var intValue: Int? {
-        if let value = self.value as? Int {
-            return value
-        }
-        if let number = self.value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
-            let value = number.doubleValue
-            if value > 0, value.rounded(.towardZero) == value, value <= Double(Int.max) {
-                return Int(value)
-            }
-        }
+        if let value = self.value as? any BinaryInteger { return Int(exactly: value) }
+        if let value = self.value as? any BinaryFloatingPoint { return Int(exactly: value) }
         return nil
     }
 

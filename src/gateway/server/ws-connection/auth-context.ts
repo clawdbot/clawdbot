@@ -64,6 +64,7 @@ type ResolveConnectAuthDecisionParams = {
   publicKey?: string;
   role: string;
   scopes: string[];
+  requireBootstrapToken?: boolean;
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
   verifyBootstrapToken: (params: {
@@ -260,7 +261,8 @@ async function resolveConnectAuthDecisionCore(
       );
       if (!bootstrapRateCheck.allowed) {
         bootstrapRateLimited = true;
-        if (!authOk) {
+        if (!authOk || params.requireBootstrapToken) {
+          authOk = false;
           authResult = {
             ok: false,
             reason: "rate_limited",
@@ -289,7 +291,8 @@ async function resolveConnectAuthDecisionCore(
         params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN);
       } else {
         pendingBootstrapFailure = true;
-        if (!authOk) {
+        if (!authOk || params.requireBootstrapToken) {
+          authOk = false;
           authResult = { ok: false, reason: tokenCheck.reason ?? "bootstrap_token_invalid" };
         }
       }

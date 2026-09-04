@@ -1,16 +1,15 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
-import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "./read-only.js";
 
 const mocks = vi.hoisted(() => ({
-  resolvePluginMetadataSnapshot: vi.fn((_params: { workspaceDir?: string }) => {
-    const plugins: PluginManifestRecord[] = [];
-    return { plugins, manifestRegistry: { plugins, diagnostics: [] } };
-  }),
+  resolvePluginMetadataSnapshot: vi.fn((_params: { workspaceDir?: string }) =>
+    createPluginMetadataSnapshotFixture(),
+  ),
 }));
 
 vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -58,13 +57,14 @@ describe("read-only channel plugin legacy workspace discovery", () => {
       name: "Research Chat",
       description: "Research workspace channel",
       version: "1.0.0",
-      source: "/srv/research/.openclaw/extensions/research-chat-plugin",
-      origin: "workspace",
+      rootDir: "/srv/research/.openclaw/extensions/research-chat-plugin",
+      source: "/srv/research/.openclaw/extensions/research-chat-plugin/index.js",
+      origin: "workspace" as const,
       channels: ["research-chat"],
-    } as PluginManifestRecord;
+    };
     mocks.resolvePluginMetadataSnapshot.mockImplementation(({ workspaceDir }) => {
       const plugins = workspaceDir === path.resolve("/srv/research") ? [researchPlugin] : [];
-      return { plugins, manifestRegistry: { plugins, diagnostics: [] } };
+      return createPluginMetadataSnapshotFixture({ plugins });
     });
     const cfg = {
       agents: {

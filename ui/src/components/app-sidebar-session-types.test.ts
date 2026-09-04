@@ -6,10 +6,12 @@ import {
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionSortMode,
   loadStoredSidebarSessionStatusFilter,
+  loadStoredSidebarSessionOwnerFilter,
   loadStoredSidebarSessionsShowPreview,
   setStoredSessionCatalogHidden,
   storeSidebarSessionSortMode,
   storeSidebarSessionStatusFilter,
+  storeSidebarSessionOwnerFilter,
   storeSidebarSessionsShowPreview,
 } from "./app-sidebar-session-types.ts";
 
@@ -62,6 +64,76 @@ describe("sidebar session status preference", () => {
   });
 });
 
+describe("sidebar session owner preference", () => {
+  it("isolates owner and involving-me filters by gateway and authenticated user", () => {
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+      ownerId: "profile-bob",
+      involvingMe: false,
+    });
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-grace", {
+      ownerId: null,
+      involvingMe: true,
+    });
+
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      ownerId: "profile-bob",
+      involvingMe: false,
+    });
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-grace")).toEqual({
+      ownerId: null,
+      involvingMe: true,
+    });
+    expect(loadStoredSidebarSessionOwnerFilter("wss://two.example/ws", "profile-ada")).toEqual({
+      ownerId: null,
+      involvingMe: false,
+    });
+  });
+
+  it("removes all-owner filters and rejects malformed stored values", () => {
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+      ownerId: "profile-bob",
+      involvingMe: false,
+    });
+    const key = localStorage.key(0);
+    expect(key).not.toBeNull();
+    localStorage.setItem(key ?? "", "owner:");
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      ownerId: null,
+      involvingMe: false,
+    });
+
+    storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+      ownerId: null,
+      involvingMe: false,
+    });
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      ownerId: null,
+      involvingMe: false,
+    });
+    expect(localStorage.length).toBe(0);
+  });
+
+  it("keeps rendering when browser storage rejects access", () => {
+    localStorage.getItem = () => {
+      throw new Error("storage disabled");
+    };
+    localStorage.setItem = () => {
+      throw new Error("storage disabled");
+    };
+
+    expect(loadStoredSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada")).toEqual({
+      ownerId: null,
+      involvingMe: false,
+    });
+    expect(() =>
+      storeSidebarSessionOwnerFilter("wss://one.example/ws", "profile-ada", {
+        ownerId: null,
+        involvingMe: true,
+      }),
+    ).not.toThrow();
+  });
+});
+
 describe("sidebar session sort preference", () => {
   it("defaults absent and unknown stored values to created", () => {
     expect(loadStoredSidebarSessionSortMode()).toBe("created");
@@ -89,8 +161,8 @@ describe("collapsed sidebar sections preference", () => {
 });
 
 describe("sidebar session preview preference", () => {
-  it("defaults to showing previews and round-trips the stored choice", () => {
-    expect(loadStoredSidebarSessionsShowPreview()).toBe(true);
+  it("defaults to hiding previews and round-trips the stored choice", () => {
+    expect(loadStoredSidebarSessionsShowPreview()).toBe(false);
 
     storeSidebarSessionsShowPreview(false);
     expect(loadStoredSidebarSessionsShowPreview()).toBe(false);

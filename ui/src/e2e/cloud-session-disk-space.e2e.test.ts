@@ -1,8 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -12,9 +14,12 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const sessionKey = "agent:main:disk-monitor";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() || ".artifacts/control-ui-e2e/cloud-disk",
-);
+let artifactDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    artifactDir = createControlUiE2eArtifactDir("cloud-disk");
+  }
+});
 const viewport = { height: 900, width: 1280 };
 const gibibyte = 1024 ** 3;
 const mebibyte = 1024 ** 2;
@@ -100,11 +105,10 @@ suite.define(() => {
       if (!captureUiProof) {
         return;
       }
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(artifactDir, name),
-      });
+      await writeFile(
+        path.join(artifactDir, name),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [cloudBadge]),
+      );
     };
     const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
     const cloudBadge = sidebarRow.locator(".session-row-badge--cloud");
@@ -120,7 +124,7 @@ suite.define(() => {
     };
     const refresh = async (diskSpace: SessionPlacementDiskSpace): Promise<void> => {
       const requestCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse("sessions.list", sessionsList(diskSpace));
+      await gateway.setSessionsListResponse(sessionsList(diskSpace));
       await gateway.emitGatewayEvent("sessions.changed", {
         reason: "worker-disk-space",
         sessionKey,
@@ -138,7 +142,7 @@ suite.define(() => {
       await page.getByText("Disk monitor is ready.", { exact: true }).waitFor();
       await sidebarRow.getByText("Disk monitor", { exact: true }).waitFor();
       expect(await page.locator(".chat-cloud-disk-space-notice").count()).toBe(0);
-      await expectAccessibleBadge("ok", "Cloud worker: active");
+      await expectAccessibleBadge("ok", "Placement: active");
       await capture("01-healthy.png");
 
       await refresh({
@@ -154,10 +158,7 @@ suite.define(() => {
       expect(await warning.textContent()).toContain(
         "96% used · 247 MB free. Delete unneeded files or stop the cloud worker before large writes.",
       );
-      await expectAccessibleBadge(
-        "warning",
-        "Cloud worker: active · Cloud session disk space is low",
-      );
+      await expectAccessibleBadge("warning", "Placement: active · Cloud session disk space is low");
       await capture("02-warning.png");
 
       await refresh({
@@ -175,13 +176,13 @@ suite.define(() => {
       );
       await expectAccessibleBadge(
         "critical",
-        "Cloud worker: active · Cloud session disk space is critically low",
+        "Placement: active · Cloud session disk space is critically low",
       );
       await capture("03-critical.png");
 
       await refresh({ ...healthy, observedAtMs: observedAtMs + 3_000 });
       await expect.poll(() => page.locator(".chat-cloud-disk-space-notice").count()).toBe(0);
-      await expectAccessibleBadge("ok", "Cloud worker: active");
+      await expectAccessibleBadge("ok", "Placement: active");
       await capture("04-recovered.png");
     } finally {
       await suite.closeBrowserContext(context);

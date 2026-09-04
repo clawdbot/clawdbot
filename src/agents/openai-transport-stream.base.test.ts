@@ -197,6 +197,43 @@ describe("openai transport stream", () => {
     expect(output.responseId).toBe("resp_failed_empty_error");
   });
 
+  it("preserves the structured error code on a thrown Responses failure (#117609)", async () => {
+    // A real response.failed SSE event carries error.code. The transport must
+    // preserve that code on the thrown ResponsesStreamFailure so the failover
+    // classifier can hand it to the provider hook. Without the code, the hook is
+    // skipped (no structured descriptor) and the prose classifier matches the
+    // "server_error" substring in the folded message as timeout. Pre-fix the
+    // thrown failure carried no code field at all.
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    const failure = await testing
+      .processResponsesStream(
+        streamChunks([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed_server_error",
+              status: "failed",
+              model: "gpt-5.4-pro",
+              error: { code: "server_error", message: "provider failed" },
+            },
+          },
+        ]),
+        output,
+        { push: vi.fn() },
+        model,
+      )
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as { name?: string }).name).toBe("ResponsesStreamFailure");
+    expect((failure as { code?: string }).code).toBe("server_error");
+    // The message stays in the prose-folded form, which is exactly what the
+    // prose classifier would misread as timeout without the preserved code.
+    expect((failure as { message?: string }).message).toBe("server_error: provider failed");
+  });
+
   it("tags Responses encrypted reasoning with replay provenance while streaming", async () => {
     const model = makeResponsesModel({
       id: "gpt-5.4",
@@ -301,6 +338,7 @@ describe("openai transport stream", () => {
       reasoningTokens: 3,
       totalTokens: 9,
     });
+    expect(output.usage.contextUsage).toEqual({ state: "unavailable" });
   });
 
   it("prices Responses cache writes separately from ordinary input", async () => {
@@ -340,6 +378,11 @@ describe("openai transport stream", () => {
       cacheRead: 20,
       cacheWrite: 30,
       reasoningTokens: 0,
+      totalTokens: 110,
+    });
+    expect(output.usage.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 100,
       totalTokens: 110,
     });
     expect(output.usage.cost.input).toBeCloseTo(0.00025);
@@ -1171,10 +1214,11 @@ describe("openai transport stream", () => {
 
     expect(testing.buildOpenAISdkRequestOptions(codexModel, undefined, { stream: true })).toEqual({
       headers: { Accept: "text/event-stream" },
+      maxRetries: 0,
     });
     expect(
       testing.buildOpenAISdkRequestOptions(transportAliasModel, undefined, { stream: true }),
-    ).toEqual({ headers: { Accept: "text/event-stream" } });
+    ).toEqual({ headers: { Accept: "text/event-stream" }, maxRetries: 0 });
     expect(testing.buildOpenAISdkRequestOptions(codexModel)).toBeUndefined();
     expect(
       testing.buildOpenAISdkRequestOptions(nonNativeChatGPTModel, undefined, { stream: true }),

@@ -27,11 +27,11 @@ import { resolveSandboxAgentId } from "./shared.js";
 import {
   buildRemoteCommand,
   buildRemoteWorkdirValidationCommand,
-  buildSshSandboxArgv,
   buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
+  prepareSshSandboxExec,
   runSshSandboxCommand,
   uploadDirectoryToSshTarget,
   type SshSandboxSession,
@@ -39,6 +39,7 @@ import {
 
 type PendingExec = {
   sshSession: SshSandboxSession;
+  cleanup: () => Promise<void>;
 };
 
 type ResolvedSshRuntimePaths = {
@@ -108,7 +109,7 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
       target: cfg.ssh.target,
     });
     try {
-      await runSshSandboxCommand({
+      const result = await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([
           "/bin/sh",
@@ -119,6 +120,10 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
         ]),
         allowFailure: true,
       });
+      if (result.code !== 0) {
+        const detail = result.stderr.toString("utf8").trim() || `exit ${result.code}`;
+        throw new Error(`Failed to remove SSH sandbox runtime ${entry.containerName}: ${detail}`);
+      }
     } finally {
       await disposeSshSandboxSession(session);
     }
@@ -204,7 +209,7 @@ class SshSandboxBackendImpl {
         const remoteCommand = buildValidatedExecRemoteCommand({
           command,
           workdir: remoteWorkdir,
-          env,
+          env: {},
         });
         await this.ensureRuntime();
         const sshSession = await this.createSession();
@@ -212,15 +217,17 @@ class SshSandboxBackendImpl {
           if (!this.consumeRefreshedSkillsForNextExec(remoteWorkdir)) {
             await this.refreshRemoteSkillsWorkspace(sshSession);
           }
+          const prepared = await prepareSshSandboxExec({
+            session: sshSession,
+            remoteCommand,
+            env,
+            tty: usePty,
+          });
           return {
-            argv: buildSshSandboxArgv({
-              session: sshSession,
-              remoteCommand,
-              tty: usePty,
-            }),
+            argv: prepared.argv,
             env: sanitizeEnvVars(process.env).allowed,
             stdinMode: "pipe-open",
-            finalizeToken: { sshSession } satisfies PendingExec,
+            finalizeToken: { sshSession, cleanup: prepared.cleanup } satisfies PendingExec,
           };
         } catch (error) {
           await disposeSshSandboxSession(sshSession);
@@ -228,9 +235,13 @@ class SshSandboxBackendImpl {
         }
       },
       finalizeExec: async ({ token }) => {
-        const sshSession = (token as PendingExec | undefined)?.sshSession;
-        if (sshSession) {
-          await disposeSshSandboxSession(sshSession);
+        const pending = token as PendingExec | undefined;
+        if (pending) {
+          try {
+            await pending.cleanup();
+          } finally {
+            await disposeSshSandboxSession(pending.sshSession);
+          }
         }
       },
       runShellCommand: async (command) => await this.runRemoteShellScript(command),

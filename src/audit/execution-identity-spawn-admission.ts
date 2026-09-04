@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 const EXECUTION_IDENTITY_SPAWN_ADMISSION_FACTS = Symbol("executionIdentitySpawnAdmissionFacts");
 
 type ExecutionIdentitySpawnLineage = {
@@ -26,10 +28,6 @@ type ExecutionIdentitySpawnAdmissionInput =
   | { operation: "extend-envelope"; value: unknown; extra?: unknown }
   | { operation: "base-envelope"; value: unknown }
   | { operation: "read"; value: unknown };
-
-function isCarrierRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function ownDataDescriptor(value: object, key: PropertyKey): PropertyDescriptor | undefined {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -86,7 +84,7 @@ function validateEnvelopeExtension(
     return { missingEvidence };
   }
   if (
-    !isCarrierRecord(lineage) ||
+    !isRecord(lineage) ||
     (lineage.parentContextId !== undefined && !validRef(lineage.parentContextId, 256)) ||
     (lineage.parentExecutionId !== undefined && !validRef(lineage.parentExecutionId, 256)) ||
     (lineage.parentRunId !== undefined && !validRef(lineage.parentRunId, 256)) ||
@@ -182,7 +180,7 @@ export function executionIdentitySpawnAdmission(
     const extension = validateEnvelopeExtension(parsed[0], parsed[1]);
     return [extension.lineage, extension.missingEvidence];
   }
-  if (!isCarrierRecord(value)) {
+  if (!isRecord(value)) {
     throw new Error("execution identity spawn admission carrier is invalid");
   }
   if (operation === "attach") {

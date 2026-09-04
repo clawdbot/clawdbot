@@ -407,7 +407,41 @@ describe("Plugin SDK API baseline", () => {
       expect.objectContaining({ change: "signature", exportName: "SendOptions" }),
       expect.objectContaining({ change: "reachable", exportName: "send" }),
     ]);
-    expect(diff.exports.every((change) => change.declarationChanges.length > 0)).toBe(true);
+    expect(diff.exports[0]?.declarationChanges.length).toBeGreaterThan(0);
+    expect(diff.exports[1]?.declarationChanges).toEqual([]);
+  });
+
+  it("stores shared declaration detail once while retaining every affected export", async () => {
+    const render = (field: string) =>
+      renderSourceFixture({
+        "fixture.ts": [
+          `type SharedOptions = { ${field}: string };`,
+          "export declare function preview(options: SharedOptions): void;",
+          "export declare function send(options: SharedOptions): void;",
+        ].join("\n"),
+      });
+    const baseline = await render("text");
+    const changed = await render("accountId");
+
+    const diff = diffPluginSdkApi(baseline, changed);
+    expect(diff.exports.map(({ change, exportName }) => ({ change, exportName }))).toEqual([
+      { change: "reachable", exportName: "preview" },
+      { change: "reachable", exportName: "send" },
+    ]);
+    expect(diff.exports[0]?.declarationChanges).toEqual([
+      expect.objectContaining({
+        after: expect.stringContaining("accountId: string"),
+        before: expect.stringContaining("text: string"),
+        name: expect.stringContaining("SharedOptions"),
+      }),
+    ]);
+    expect(diff.exports[1]?.declarationChanges).toEqual([]);
+    expect(JSON.stringify(diff).match(/type SharedOptions/gu)).toHaveLength(2);
+    const report = formatPluginSdkApiDiffReport({ baseLabel: "base", diff, headLabel: "head" });
+    expect(report).toContain("Affected exports (2)");
+    expect(report).toContain("`openclaw/plugin-sdk/fixture` — `preview` (reachable)");
+    expect(report).toContain("`openclaw/plugin-sdk/fixture` — `send` (reachable)");
+    expect(report).not.toContain("affects 1 export");
   });
 
   it("validates renderer artifacts at the subprocess boundary", async () => {

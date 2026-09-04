@@ -9,14 +9,18 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { root as openSafeFilesystemRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  isPathStrictlyInside,
+  root as openSafeFilesystemRoot,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
-import type {
-  CodexAppServerBindingIdentity,
-  CodexAppServerBindingStore,
-  CodexAppServerThreadBinding,
+import {
+  assertCodexBindingMayBeReplaced,
+  type CodexAppServerBindingIdentity,
+  type CodexAppServerBindingStore,
+  type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
 // Codex owns proactive auto-compaction, but OpenClaw must not resume a native
@@ -96,15 +100,7 @@ async function listCodexAppServerRolloutFilesForThread(
     path.join(path.dirname(resolvedAgentDir), "codex-home", "sessions"),
   ];
   const rolloutRoot = rolloutPath
-    ? roots.find((root) => {
-        const relativePath = path.relative(root, rolloutPath);
-        return (
-          relativePath !== "" &&
-          relativePath !== ".." &&
-          !relativePath.startsWith(`..${path.sep}`) &&
-          !path.isAbsolute(relativePath)
-        );
-      })
+    ? roots.find((root) => isPathStrictlyInside(root, rolloutPath))
     : undefined;
   if (
     rolloutPath &&
@@ -421,6 +417,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   config: EmbeddedRunAttemptParams["config"] | undefined;
   contextEngineActive?: boolean;
   projectedTurnTokens?: number;
+  expectedSessionRuntimeOwnership?: EmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"];
 }): Promise<{
   binding: CodexAppServerThreadBinding | undefined;
   startupContextTokens?: number;
@@ -464,6 +461,11 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         rolloutFiles.map(async (file) => {
           await file.handle?.close();
         }),
+      );
+      assertCodexBindingMayBeReplaced(
+        binding,
+        "rotating an oversized native transcript",
+        params.expectedSessionRuntimeOwnership,
       );
       embeddedAgentLog.warn(
         "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
@@ -516,6 +518,11 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
       : undefined;
   const tokenCount = maxFiniteNumber([sessionTokens, nativeTokens]);
   if (tokenCount !== undefined && tokenCount >= maxTokens) {
+    assertCodexBindingMayBeReplaced(
+      binding,
+      "rotating a full native context",
+      params.expectedSessionRuntimeOwnership,
+    );
     embeddedAgentLog.warn(
       "codex app-server native transcript exceeded active token limit; starting a fresh thread",
       {

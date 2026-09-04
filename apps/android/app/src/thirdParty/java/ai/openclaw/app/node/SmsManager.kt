@@ -245,12 +245,24 @@ class SmsManager(
 
     internal fun mapMmsMsgBoxToSearchType(msgBox: Int?): Int? =
       when (msgBox) {
-        1 -> 1 // inbox
-        2 -> 2 // sent
-        3 -> 3 // draft
-        4 -> 4 // outbox
-        5 -> 5 // failed
-        6 -> 6 // queued
+        1 -> 1
+
+        // inbox
+        2 -> 2
+
+        // sent
+        3 -> 3
+
+        // draft
+        4 -> 4
+
+        // outbox
+        5 -> 5
+
+        // failed
+        6 -> 6
+
+        // queued
         else -> null
       }
 
@@ -262,7 +274,10 @@ class SmsManager(
               append('\\')
               append(ch)
             }
-            else -> append(ch)
+
+            else -> {
+              append(ch)
+            }
           }
         }
       }

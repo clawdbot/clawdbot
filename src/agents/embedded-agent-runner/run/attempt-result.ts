@@ -3,6 +3,7 @@
  */
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -12,6 +13,8 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { createCacheTrace } from "../../cache-trace.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
+import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
@@ -21,6 +24,7 @@ import {
   buildAttemptReplayMetadata,
   hasAttemptTerminalState,
 } from "./attempt-terminal-evidence.js";
+import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { shouldTreatEmptyAssistantReplyAsSilent } from "./incomplete-turn-recovery.js";
 import { resolveSilentToolResultReplyPayload } from "./incomplete-turn-resolution.js";
 import type {
@@ -33,18 +37,26 @@ type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSessi
 type CacheTrace = ReturnType<typeof createCacheTrace>;
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
 
-/** Keeps presentation state sticky while retry attempts replace their result object. */
-export function createMcpAttemptCarryover() {
+/** Keeps attempt-owned state available while retry attempts replace their result object. */
+export function createAttemptCarryover() {
   let latestMcpAppChannelView: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
   let latestMcpConnectAction: EmbeddedRunAttemptResult["latestMcpConnectAction"];
+  let modelAttempt: AgentRuntimeModelAttempt | undefined;
   return {
     apply(
-      attempt: Pick<EmbeddedRunAttemptResult, "latestMcpAppChannelView" | "latestMcpConnectAction">,
+      attempt: Pick<
+        EmbeddedRunAttemptResult,
+        "latestMcpAppChannelView" | "latestMcpConnectAction" | "modelAttempt"
+      >,
     ): void {
+      modelAttempt = attempt.modelAttempt;
       latestMcpAppChannelView = attempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
       attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       latestMcpConnectAction = attempt.latestMcpConnectAction ?? latestMcpConnectAction;
       attempt.latestMcpConnectAction = latestMcpConnectAction;
+    },
+    get modelAttempt() {
+      return modelAttempt;
     },
   };
 }
@@ -103,24 +115,50 @@ type CompleteEmbeddedAttemptResultInput = {
     streamStrategy: string;
   };
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
+  deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
 };
+
+/**
+ * Captures the settled transcript the tool-free finalizer needs when a settled
+ * post-tool turn dies on its final provider call. The consumer fails closed
+ * without this context, so the attempt-result owner has to supply it; the codex
+ * app-server harness already does the same for its own attempts.
+ */
+function resolveSettledTurnFinalizationContext(params: {
+  assistantTexts: readonly string[];
+  messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"];
+  terminal: EmbeddedRunAttemptResult["terminal"];
+}): EmbeddedRunAttemptResult["settledTurnFinalizationContext"] {
+  // Only a transient final provider call can safely recover an already settled tool turn.
+  if (
+    params.terminal.kind !== "failed" ||
+    params.terminal.source !== "prompt" ||
+    params.terminal.timeoutObservation ||
+    !isTransientNetworkError(params.terminal.error)
+  ) {
+    return undefined;
+  }
+  // A turn that already produced visible text has nothing to finalize, and a
+  // turn without a tool result never settled one.
+  if (!params.assistantTexts.every((text) => !text.trim())) {
+    return undefined;
+  }
+  if (!params.messagesSnapshot.some((message) => message.role === "toolResult")) {
+    return undefined;
+  }
+  return {
+    source: "openclaw-transcript",
+    messages: Object.freeze([...params.messagesSnapshot]),
+  };
+}
 
 function normalizeEmbeddedAttemptToolMetas(
   entries: EmbeddedAttemptSubscription["toolMetas"],
 ): EmbeddedRunAttemptResult["toolMetas"] {
   return entries
     .filter(
-      (
-        entry,
-      ): entry is {
-        toolName: string;
-        meta?: string;
-        replaySafe?: boolean;
-        isError?: boolean;
-        asyncStarted?: boolean;
-        asyncTaskRunId?: string;
-        asyncTaskId?: string;
-      } => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
+      (entry): entry is EmbeddedAttemptSubscription["toolMetas"][number] & { toolName: string } =>
+        typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
     )
     .map((entry) => {
       const normalized: EmbeddedRunAttemptResult["toolMetas"][number] = {
@@ -128,8 +166,14 @@ function normalizeEmbeddedAttemptToolMetas(
         meta: entry.meta,
         replaySafe: entry.replaySafe === true,
       };
+      if (entry.toolCallId) {
+        normalized.toolCallId = entry.toolCallId;
+      }
       if (typeof entry.isError === "boolean") {
         normalized.isError = entry.isError;
+      }
+      if (entry.terminate === true) {
+        normalized.terminate = true;
       }
       if (entry.asyncStarted === true) {
         normalized.asyncStarted = true;
@@ -139,6 +183,9 @@ function normalizeEmbeddedAttemptToolMetas(
       }
       if (entry.asyncTaskId) {
         normalized.asyncTaskId = entry.asyncTaskId;
+      }
+      if (entry.codeModeSuspended === true) {
+        normalized.codeModeSuspended = true;
       }
       return normalized;
     });
@@ -179,7 +226,6 @@ export function completeEmbeddedAttemptResult(
     getLastAssistantTextMessageIndex,
     getLastCompactionTokensAfter,
     getLastToolError,
-    getLastToolRecovery,
     getLatestMcpAppChannelView,
     getLatestMcpConnectAction,
     getMessagingToolSentMediaUrls,
@@ -187,6 +233,7 @@ export function completeEmbeddedAttemptResult(
     getMessagingToolSentTexts,
     getMessagingToolSourceReplyPayloads,
     getPendingToolMediaReply,
+    getToolAutoDeliveryMediaUrls,
     getReplayState,
     getSuccessfulCronAdds,
     getVisibleBlockReplyCount,
@@ -298,13 +345,18 @@ export function completeEmbeddedAttemptResult(
   }
 
   const acceptedSessionSpawns = getAcceptedSessionSpawns();
+  const messagingToolSentMediaUrls = getMessagingToolSentMediaUrls();
+  const sentMediaUrls = new Set(messagingToolSentMediaUrls.map((url) => url.trim()));
+  const toolAutoDeliveryMediaUrls = getToolAutoDeliveryMediaUrls().filter(
+    (url) => !sentMediaUrls.has(url.trim()),
+  );
   const observedReplayMetadata = buildAttemptReplayMetadata({
     // Structured start arguments already updated replayState for mutations and async work.
     // Reclassifying by tool name would incorrectly mark read-only cron actions as unsafe.
     toolMetas: [],
     didSendViaMessagingTool: didSendViaMessagingTool(),
     messagingToolSentTexts: getMessagingToolSentTexts(),
-    messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+    messagingToolSentMediaUrls,
     acceptedSessionSpawns,
     successfulCronAdds: getSuccessfulCronAdds(),
   });
@@ -316,7 +368,7 @@ export function completeEmbeddedAttemptResult(
     toolMetas: toolMetasNormalized,
     didSendViaMessagingTool: didSendViaMessagingTool(),
     messagingToolSentTexts: getMessagingToolSentTexts(),
-    messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+    messagingToolSentMediaUrls,
     acceptedSessionSpawns,
     successfulCronAdds: getSuccessfulCronAdds(),
   });
@@ -325,7 +377,6 @@ export function completeEmbeddedAttemptResult(
     completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined;
   const didSendDeterministicApprovalPromptNow = didSendDeterministicApprovalPrompt();
   const lastToolError = getLastToolError();
-  const lastToolRecovery = getLastToolRecovery();
   const heartbeatToolResponse = getHeartbeatToolResponse();
   const messagingToolSourceReplyPayloads = getMessagingToolSourceReplyPayloads();
   const hasToolMediaBlockReplyNow = hasToolMediaBlockReply();
@@ -335,7 +386,6 @@ export function completeEmbeddedAttemptResult(
     didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
     heartbeatToolResponse,
     lastToolError,
-    lastToolRecovery,
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
@@ -343,7 +393,7 @@ export function completeEmbeddedAttemptResult(
     didDeliverSourceReplyViaMessageTool: state.didDeliverSourceReplyViaMessageTool,
     messagingToolSourceReplyPayloads,
     messagingToolSentTexts: getMessagingToolSentTexts(),
-    messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+    messagingToolSentMediaUrls,
     messagingToolSentTargets: getMessagingToolSentTargets(),
     acceptedSessionSpawns,
     successfulCronAdds: getSuccessfulCronAdds(),
@@ -386,11 +436,11 @@ export function completeEmbeddedAttemptResult(
       didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
       didSendViaMessagingTool: didSendViaMessagingTool(),
       messagingToolSentTexts: getMessagingToolSentTexts(),
-      messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+      messagingToolSentMediaUrls,
       messagingToolSentTargets: getMessagingToolSentTargets(),
       acceptedSessionSpawns,
       lastToolError,
-      lastAssistant: state.lastAssistant,
+      currentAttemptCompletedAssistant: state.currentAttemptCompletedAssistant,
       itemLifecycle: getItemLifecycle(),
       messagesSnapshot: state.messagesSnapshot,
       toolMetas: toolMetasNormalized,
@@ -398,8 +448,14 @@ export function completeEmbeddedAttemptResult(
       terminal: state.terminal,
     },
   });
+  const settledTurnFinalizationContext = resolveSettledTurnFinalizationContext({
+    assistantTexts,
+    messagesSnapshot: state.messagesSnapshot,
+    terminal: state.terminal,
+  });
   const result: EmbeddedRunAttemptWithReceiptEvidence = {
     ...state,
+    ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     replayMetadata,
     currentAttemptReplayMetadata,
     itemLifecycle: getItemLifecycle(),
@@ -415,14 +471,14 @@ export function completeEmbeddedAttemptResult(
     successfulNestedToolNames: state.successfulNestedToolNames,
     acceptedSessionSpawns,
     lastToolError,
-    lastToolRecovery,
     didSendViaMessagingTool: didSendViaMessagingTool(),
     didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
     messagingToolSentTexts: getMessagingToolSentTexts(),
-    messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+    messagingToolSentMediaUrls,
     messagingToolSentTargets: getMessagingToolSentTargets(),
     messagingToolSourceReplyPayloads,
     heartbeatToolResponse,
+    sourceReplyDelivered: subscription.getSourceReplyDelivered(),
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
@@ -438,9 +494,18 @@ export function completeEmbeddedAttemptResult(
     yieldDetected: state.yieldDetected || undefined,
     yieldAcknowledgment: state.yieldAcknowledgment,
   };
+  const resultWithAutoDeliveryMedia =
+    toolAutoDeliveryMediaUrls.length > 0
+      ? markCoreTtsAttemptResult(
+          result,
+          toolAutoDeliveryMediaUrls,
+          attempt.admittedRunContext.operationalRunInstance,
+        )
+      : result;
   return finalizeEmbeddedAttempt({
-    result,
+    result: resultWithAutoDeliveryMedia,
     trajectoryRecorder: input.trajectoryRecorder,
+    deferredLifecycleOwner: input.deferredLifecycleOwner,
     synthesizedPayloadCount,
     emptyAssistantReplyIsSilent,
     hasTerminalOutput,

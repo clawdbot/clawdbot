@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -66,8 +67,12 @@ describe("skill_workshop list", () => {
       proposal_content: "# Missing Draft\n",
     });
     const proposalId = (created.details as { id: string }).id;
+    const record = await readSkillProposalRecord(proposalId, { env: testState.env });
+    if (!record) {
+      throw new Error(`expected stored proposal ${proposalId}`);
+    }
     await fs.rm(
-      path.join(testState.stateDir, "skill-workshop", "proposals", proposalId, "PROPOSAL.md"),
+      path.join(testState.stateDir, "skill-workshop", "proposals", proposalId, record.draftFile),
     );
 
     const listed = await tool.execute("call-list", { action: "list" });

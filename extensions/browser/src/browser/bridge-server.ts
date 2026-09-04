@@ -7,8 +7,8 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { listenBrowserHttpServer } from "./http-listen.js";
@@ -90,7 +90,6 @@ export async function startBrowserBridgeServer(params: {
   authPassword?: string;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
   resolveSandboxNoVncToken?: (token: string) => ResolvedNoVncObserver | null;
-  skipRouteRegistrationForTest?: boolean;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
   if (!isLoopbackHost(host)) {
@@ -139,21 +138,15 @@ export async function startBrowserBridgeServer(params: {
     profiles: new Map(),
   };
 
-  if (params.skipRouteRegistrationForTest) {
-    app.get("/", (_req, res) => {
-      res.status(200).send("OK");
-    });
-  } else {
-    const [{ createBrowserRouteContext }, { registerBrowserRoutes }] = await Promise.all([
-      import("./server-context.js"),
-      import("./routes/index.js"),
-    ]);
-    const ctx = createBrowserRouteContext({
-      getState: () => state,
-      onEnsureAttachTarget: params.onEnsureAttachTarget,
-    });
-    registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
-  }
+  const [{ createBrowserRouteContext }, { registerBrowserRoutes }] = await Promise.all([
+    import("./server-context.js"),
+    import("./routes/index.js"),
+  ]);
+  const ctx = createBrowserRouteContext({
+    getState: () => state,
+    onEnsureAttachTarget: params.onEnsureAttachTarget,
+  });
+  registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
 
   const server = await listenBrowserHttpServer(app, port, host);
 

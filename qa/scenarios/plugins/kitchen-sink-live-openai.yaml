@@ -90,7 +90,7 @@ scenario:
         - agent event subscription registration requires id and handle
         - agent tool result middleware must be a function
         - agent harness "kitchen-sink-agent-harness" registration missing required runtime methods
-        - channel "kitchen-sink-channel-probe" registration missing required config helpers
+        - channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes
         - cli registration missing explicit commands metadata
         - only bundled plugins can register Codex app-server extension factories
         - compaction provider "kitchen-sink-compaction-provider" registration missing summarize
@@ -109,7 +109,7 @@ scenario:
       requiredAdversarialDiagnostics:
         - agent tool result middleware must be a function
         - agent harness "kitchen-sink-agent-harness" registration missing required runtime methods
-        - channel "kitchen-sink-channel-probe" registration missing required config helpers
+        - channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes
         - "trusted tool policy registration requires id, description, and evaluate()"
         - session scheduler job registration requires unique id, sessionKey, and kind
         - "plugin must declare contracts.tools for: kitchen-sink-tool"

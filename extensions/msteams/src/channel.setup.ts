@@ -9,7 +9,6 @@ import {
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
-import { resolveMSTeamsCredentials } from "./token.js";
 
 export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   id: "msteams",
@@ -28,11 +27,12 @@ export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   configSchema: MSTeamsChannelConfigSchema,
   config: {
     ...msteamsConfigAdapter,
-    isConfigured: (_account, cfg) => Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
+    isConfigured: (account) => account.configured,
     describeAccount: (account) =>
       describeAccountSnapshot({
         account,
         configured: account.configured,
+        extra: { tokenStatus: account.tokenStatus },
       }),
   },
   setupWizard: msteamsSetupWizard,

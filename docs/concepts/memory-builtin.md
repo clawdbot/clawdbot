@@ -23,6 +23,10 @@ started.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
 - **sqlite-vec acceleration** for in-database vector queries (optional).
 
+Native sqlite-vec queries run in a separate, read-only process so a slow query
+does not block the Gateway event loop. Cancelling a search terminates its query
+process; OpenClaw does not retry that native query on the Gateway thread.
+
 ## Getting started
 
 By default, the builtin engine uses OpenAI embeddings. If `OPENAI_API_KEY` or
@@ -96,7 +100,10 @@ only injects curated or promoted-trusted entries.
 Each indexed chunk also has SQLite-owned provenance: origin class (`owner`,
 `agent`, `untrusted`, or `system`), session kind, observation time, and an
 optional supersession key. This metadata is stored separately from Markdown
-so recalled prose cannot rewrite its own trust classification.
+so recalled prose cannot rewrite its own trust classification. Automatic
+session ingestion also records source-session origins for its staged entries,
+which support selective deletion after promotion. For coverage and limits, see
+[Memory provenance and deletion](/concepts/memory-provenance).
 
 - **Index location:** the owning agent database at
   `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
@@ -104,9 +111,33 @@ so recalled prose cannot rewrite its own trust classification.
   shutdown checkpoints.
 - **File watching:** changes to memory files trigger a debounced reindex
   (1.5s default).
-- **Auto-reindex:** the index rebuilds automatically when the embedding
-  provider, model, chunking config, configured sources, or scope change.
-- **Reindex on demand:** `openclaw memory index --force`
+- **Index compatibility:** changing the embedding provider, model, settings,
+  configured sources, or scope can pause search until you explicitly rebuild.
+  See [provider selection](/reference/memory-config#provider-selection).
+- **Reindex on demand:** `openclaw memory index --force --agent <id>`
+
+Search-triggered maintenance applies pending memory and session changes
+incrementally while searches remain available. A failed full rebuild retains
+its full-retry state; ordinary dirty content does not itself force a rebuild.
+
+Full reindexes build a replacement in a temporary database and publish the
+memory tables atomically. Concurrent searches and status reads keep using the
+published index; a failed rebuild leaves that index intact. The embedding cache
+is bounded before publication, not after copying excess entries into the
+shared database.
+
+Other agent state, including sessions and transcripts in the same database,
+is retained. Use the [memory index command](/cli/memory#memory-index) for
+memory-only repair.
+
+`openclaw memory status` reports stored chunk text and JSON embedding bytes
+for each source (`sourceCounts[].chunkBytes` in JSON). These are payload sizes,
+not total disk usage: embedding cache, FTS/vector tables, SQLite overhead, and
+WAL/free pages are excluded.
+
+After an upgrade, automatic project and trigger recall may need to repair
+legacy provenance. That repair runs in the background. Replies continue while
+automatic recall stays empty until the affected sources have been reclassified.
 
 <Info>
 You can also index Markdown files outside the workspace with
@@ -126,7 +157,12 @@ Doctor removes the retired `memory.backend`, `memory.qmd`, and
 `memory.search.qmd` settings, including agent-scoped `memory.search.qmd`
 forms. It preserves QMD paths and extra collections as the corresponding
 `memory.search.extraPaths` entries, including `{ path, pattern }` globs. When
-Memory Core finds a retired per-agent QMD workspace under
+QMD session indexing was enabled, Doctor also enables builtin session indexing
+and adds `sessions` to `memory.search.sources` without enabling broader
+cross-conversation recall. Retained session-reset transcripts remain in the
+agent's sessions directory and are indexed from those original artifacts.
+
+When Memory Core finds a retired per-agent QMD workspace under
 `~/.openclaw/agents/<agentId>/qmd/`, Doctor also offers to remove its derived
 indexes, model downloads, collection metadata, and session exports.
 
@@ -192,6 +228,74 @@ vector store separately from the embedding provider, so `Vector store:
 unavailable` points at sqlite-vec loading while `Embeddings: unavailable`
 points at provider/auth or model readiness. Check logs for the specific load
 error.
+
+### Safe index recovery
+
+To rebuild after stale results or an embedding-provider change, select the
+affected agent explicitly:
+
+```bash
+openclaw memory status --agent <agent-id> --deep
+openclaw memory index --agent <agent-id> --force --verbose
+openclaw memory status --agent <agent-id> --deep
+```
+
+<Warning>
+The index shares `openclaw-agent.sqlite` with canonical sessions, transcripts,
+and other durable agent state. Never delete that database or its `-wal`, `-shm`,
+or `-journal` sidecars to reset memory. Memory indexing cannot reconstruct
+conversation history lost this way.
+</Warning>
+
+To discard the derived index and embedding cache before rebuilding, use
+[`memory reset`](/cli/memory#memory-reset):
+
+```bash
+openclaw memory reset --agent <agent-id>
+openclaw memory index --agent <agent-id>
+```
+
+Reset asks for confirmation; add `--yes` for non-interactive use. It clears only
+memory-owned derived tables, preserving non-memory database tables, including
+sessions and transcripts, and memory source files. It coordinates with
+existing memory maintenance without restarting the Gateway, which can reindex
+retained sources afterward. If indexing is busy, let it finish and retry reset.
+Reset does not shrink the database file or recover already deleted data.
+
+If indexing fails or the database grows unexpectedly, keep the database and
+its sidecars, retain the verbose error, and [create and verify a backup](/cli/backup)
+before manual recovery. A large database alone does not show which tables are
+responsible. Reindexing is not a session-history restore: if history is missing
+after moving or deleting the database, recover from a verified backup using
+the [restore workflow](/install/backups#restore-a-full-archive).
+
+### Reclaim disk space
+
+Start with `openclaw memory status --agent <agent-id> --json`. Compare the
+database and WAL sizes, reusable bytes, retained embedding-cache payload, and
+per-source chunk payloads. Reusable bytes are pages already free inside SQLite;
+they are not additional data. Cache and chunk payloads exclude indexes and
+SQLite overhead, so they do not explain every byte in the shared file.
+
+If the derived index needs to be discarded, create and verify a
+[backup](/cli/backup), then stop the Gateway through its deployment owner and
+stop other writers. Keep them stopped through reset and compaction so background
+indexing cannot refill the cache between commands:
+
+```bash
+openclaw memory reset --agent <agent-id> --yes
+openclaw doctor --session-sqlite compact --session-sqlite-agent <agent-id>
+openclaw memory index --agent <agent-id>
+openclaw memory status --agent <agent-id>
+```
+
+If only unused pages need reclaiming, skip reset and preserve the existing index.
+Doctor compacts the whole agent database, verifies integrity, and reports the
+before/after database and WAL sizes. Compaction needs temporary disk space; on a
+full volume, free space or move a verified backup to a volume with sufficient
+capacity before attempting it. Rebuilding can call the embedding provider and
+incur cost. Restart the Gateway through its deployment owner after verification.
+Neither reset nor compaction removes canonical sessions or changes retention.
 
 ## Configuration
 

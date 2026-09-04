@@ -182,7 +182,6 @@ describe("scoped command lane lifecycle", () => {
       CommandLane.SystemAgent,
       CommandLane.Cron,
       CommandLane.CronNested,
-      CommandLane.SkillWorkshopReview,
       CommandLane.Subagent,
       CommandLane.Nested,
     ];
@@ -244,7 +243,6 @@ describe("scoped command lane lifecycle", () => {
     });
     const replacementState = {
       lane,
-      createdAtMs: Date.now(),
       queue: [],
       activeTaskIds: new Set<number>(),
       maxConcurrent: 1,

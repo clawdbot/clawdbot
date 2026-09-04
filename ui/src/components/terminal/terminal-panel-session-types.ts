@@ -72,7 +72,6 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
     options: CreateGhosttyTerminalOptions,
   ): Promise<GhosttyTerminalController>;
   closeTerminalPanel(): void;
-  clearTerminalPanelResizeListeners(): void;
   findTerminalPanelViewport(): Element | null;
   hideTerminalPanelForUnavailableSurface(): void;
   resetTerminalSessionPicker(): void;

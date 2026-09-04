@@ -3,8 +3,6 @@
     <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chat"</string>
     <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sessão"</string>
     <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Modelo"</string>
-    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s anterior"</string>
-    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Próximo %1$s"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Controles"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Falar"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Falha no áudio do relógio"</string>
@@ -41,6 +39,17 @@
     <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Iniciar uma conversa"</string>
     <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fale ou digite no relógio. O telefone pareado envia a mensagem por meio da sessão autenticada do OpenClaw."</string>
     <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sessão atual"</string>
+    <string name="context_label_value" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
+    <string name="close" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Fechar"</string>
+    <string name="search" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pesquisar"</string>
+    <string name="search_sessions" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pesquisar sessões"</string>
+    <string name="search_models" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pesquisar modelos"</string>
+    <string name="load_more" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Carregar mais"</string>
+    <string name="active_on_phone" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Ativo no telefone"</string>
+    <string name="open_on_watch" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Abrir no relógio"</string>
+    <string name="no_matches" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Nenhum resultado"</string>
+    <string name="search_sessions_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Encontrar uma sessão"</string>
+    <string name="search_models_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Encontrar um modelo"</string>
     <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aparência"</string>
     <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Escuro"</string>
     <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Claro"</string>

@@ -4,17 +4,19 @@
 import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parse, type Node as AcornNode } from "acorn";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
 const WORKER_DEPLOY_ENTRYPOINTS = [
   `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
   `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+  `dist/worker/${WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH}`,
 ] as const;
 const DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES = 70 * 1024;
 const GATEWAY_RUN_CHUNK_MARKER_SETS = [
@@ -28,7 +30,8 @@ const GATEWAY_RUN_FORBIDDEN_STATIC_IMPORTS = [
   "process-respawn",
   "restart-sentinel",
   "server-close",
-  "server-reload-handlers",
+  "server-reload-hot",
+  "server-reload-managed",
 ];
 const STATIC_IMPORT_RE =
   /\b(?:import|export)\s+(?:(?:[^'"()]*?\s+from\s+)|)["'](?<specifier>[^"']+)["']/gu;
@@ -36,15 +39,12 @@ const STATIC_IMPORT_RE =
 type CliBootstrapCheckParams = {
   rootDir?: string;
   entrypoints?: string[];
+  workerDeployEntrypoints?: readonly string[];
   distDir?: string;
   gatewayRunChunkMaxBytes?: number;
   fs?: typeof fs;
   logger?: { error(message: string): void };
 };
-
-function isMainModule() {
-  return process.argv[1] ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
-}
 
 function isBuiltinSpecifier(specifier: string) {
   return specifier.startsWith("node:") || module.isBuiltin(specifier);
@@ -356,8 +356,8 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
 export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParams = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const entrypoints = WORKER_DEPLOY_ENTRYPOINTS.map((entrypoint) =>
-    path.resolve(rootDir, entrypoint),
+  const entrypoints = (params.workerDeployEntrypoints ?? WORKER_DEPLOY_ENTRYPOINTS).map(
+    (entrypoint) => path.resolve(rootDir, entrypoint),
   );
   const artifactDir = path.dirname(entrypoints[0]!);
   const artifactNames = new Set(
@@ -449,7 +449,7 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
   throw new Error("CLI bootstrap static graph imports external packages.");
 }
 
-if (isMainModule()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     checkCliBootstrapExternalImports();
     console.log("CLI bootstrap import guard passed.");

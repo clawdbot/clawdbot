@@ -7,6 +7,7 @@ import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -38,11 +39,12 @@ async function capture(page: Page, name: string) {
     return;
   }
   await mkdir(proofDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
+  await writeFile(
+    path.join(proofDir, name),
+    await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [
+      page.locator(".log-message").first(),
+    ]),
+  );
 }
 
 async function visibleMessages(page: Page) {

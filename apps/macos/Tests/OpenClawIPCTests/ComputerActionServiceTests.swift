@@ -57,7 +57,7 @@ struct ComputerActionServiceTests {
                 await self.releaseFirst.wait()
             }
             try Task.checkCancellation()
-            return OpenClawComputerActResult(ok: true, cursorX: Double(actionID), cursorY: 0)
+            return OpenClawComputerActResult(ok: true)
         }
     }
 
@@ -581,7 +581,7 @@ struct ComputerActionServiceTests {
         let action = Task { @MainActor in
             try await queue.perform(params, lifecycleGeneration: 0) { _, _ in
                 taskBox.task?.cancel()
-                return OpenClawComputerActResult(ok: true, cursorX: 1, cursorY: 0)
+                return OpenClawComputerActResult(ok: true)
             }
         }
         taskBox.task = action

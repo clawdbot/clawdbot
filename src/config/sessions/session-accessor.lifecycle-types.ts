@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
-import type { SessionResetBoundaryReason } from "./session-reset-boundary-event.js";
+import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleArtifactCleanupParams = {
@@ -47,6 +48,8 @@ export type ResetSessionEntryLifecycleMutation = Omit<
 >;
 
 export type ResetSessionEntryLifecycleParams = {
+  /** Revalidate caller authority before preparation and synchronous reset commit. */
+  commitGuard?: () => void;
   /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
   archivePreviousTranscript?: boolean;
   /** Runs after the persisted entry changes and any requested archival completes. */
@@ -59,7 +62,7 @@ export type ResetSessionEntryLifecycleParams = {
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
   /** Atomically append this boundary with the reset entry mutation. */
-  resetBoundaryReason?: SessionResetBoundaryReason;
+  resetBoundary?: SessionResetBoundaryRequest;
   /** Explicit store target for SQLite session ownership. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
@@ -75,6 +78,11 @@ export type DeleteSessionEntryLifecycleResult = {
 };
 
 export type DeleteSessionEntryLifecycleParams = {
+  /**
+   * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
+   * Must not write the deleting agent database: its Worker may hold the transaction lock.
+   */
+  commitGuard?: () => void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
@@ -139,7 +147,11 @@ export class SessionEntryLifecycleUpsertConflictError extends Error {
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;
-  resetBoundaryReason?: SessionResetBoundaryReason;
+  /** Apply this upsert only when the named removal was projected in the same mutation. */
+  requiresRemovalSessionKey?: string;
+  /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
+  routeContext?: ConversationRouteContext | null;
+  resetBoundary?: SessionResetBoundaryRequest;
 } & (
   | {
       entry: SessionEntry;
@@ -149,7 +161,6 @@ export type SessionEntryLifecycleUpsert = {
       buildEntry: (context: {
         currentEntry?: SessionEntry;
         sessionKey: string;
-        store: Record<string, SessionEntry>;
       }) => Promise<SessionEntry | null | undefined> | SessionEntry | null | undefined;
       entry?: never;
     }
@@ -165,6 +176,7 @@ export type SessionEntryLifecycleMutationResult = {
   removedEntries: number;
   removedSessionKeys: string[];
   archived: number;
+  capArchived?: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;

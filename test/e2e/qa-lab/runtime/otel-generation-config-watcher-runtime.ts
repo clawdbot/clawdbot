@@ -7,8 +7,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket, type RawData } from "ws";
 import {
   QA_EVIDENCE_FILENAME,
-  startQaGatewayChild,
+  createQaGatewayChild,
   startQaMockOpenAiServer,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_IDS,
@@ -20,6 +21,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   inspectOtelParentGraph,
   isSpanId,
@@ -274,10 +276,7 @@ function traceparent(target: GenerationTarget): string {
   return `00-${target.traceId}-${target.parentSpanId}-01`;
 }
 
-async function runTracedTurn(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  target: GenerationTarget,
-): Promise<void> {
+async function runTracedTurn(gateway: QaGatewayChild, target: GenerationTarget): Promise<void> {
   const client = await connectRawGateway({ token: gateway.token, wsUrl: gateway.wsUrl });
   try {
     const started = await requestRaw(client, {
@@ -442,15 +441,15 @@ async function updateWatchedEndpoint(configPath: string, endpoint: string): Prom
 }
 
 async function stopResources(params: {
-  gateway?: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  gatewayOwner: ReturnType<typeof createQaGatewayChild>;
   gatewayStopped: boolean;
   mock?: Awaited<ReturnType<typeof startQaMockOpenAiServer>>;
   receiverA?: LocalReceiver;
   receiverB?: LocalReceiver;
 }): Promise<void> {
   const failures: unknown[] = [];
-  if (params.gateway && !params.gatewayStopped) {
-    await params.gateway.stop().catch((error: unknown) => failures.push(error));
+  if (!params.gatewayStopped) {
+    await stopQaGatewayFixture(params.gatewayOwner).catch((error: unknown) => failures.push(error));
   }
   await params.mock?.stop().catch((error: unknown) => failures.push(error));
   await params.receiverA?.close().catch((error: unknown) => failures.push(error));
@@ -466,13 +465,14 @@ async function probeOtelGenerationConfigWatcher(
   let receiverA: LocalReceiver | undefined;
   let receiverB: LocalReceiver | undefined;
   let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let gatewayStopped = false;
   try {
     receiverA = await startReceiver();
     receiverB = await startReceiver();
     mock = await startQaMockOpenAiServer();
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -532,7 +532,7 @@ async function probeOtelGenerationConfigWatcher(
     await runTracedTurn(gateway, GENERATION_B);
     await waitForGeneration(receiverB, GENERATION_B);
     await sleep(1_000);
-    await gateway.stop();
+    await stopQaGatewayFixture(gatewayOwner);
     gatewayStopped = true;
     await sleep(POST_STOP_SETTLE_MS);
 
@@ -578,7 +578,7 @@ async function probeOtelGenerationConfigWatcher(
       restartLogObserved,
     };
   } finally {
-    await stopResources({ gateway, gatewayStopped, mock, receiverA, receiverB });
+    await stopResources({ gatewayOwner, gatewayStopped, mock, receiverA, receiverB });
   }
 }
 

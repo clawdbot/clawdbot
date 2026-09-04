@@ -30,7 +30,6 @@ export {
 export type {
   AfterToolCallContext,
   AfterToolCallResult,
-  AfterToolOutcomeContext,
   AgentEvent,
   AgentMessage,
   AgentOptions,

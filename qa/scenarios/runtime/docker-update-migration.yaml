@@ -21,7 +21,7 @@ scenario:
   codeRefs:
     - scripts/e2e/upgrade-survivor-docker.sh
     - scripts/e2e/lib/upgrade-survivor/run.sh
-    - src/cli/update-cli/post-core-plugin-convergence.ts
+    - src/commands/doctor/shared/post-core-plugin-convergence.ts
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts

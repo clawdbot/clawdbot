@@ -758,6 +758,7 @@ export function evaluateToleratedProfiledKovaReport(
   return evaluate(() => {
     const { gate, records, cards, groups } = validateEnvelope(report, options);
     check(gate.verdict === "DO_NOT_SHIP", "gate verdict was not DO_NOT_SHIP");
+    check(!options.requireInstrumentedPerformanceContract, "current producer retained failure");
     check(
       records.every((record) => record.status === "PASS" || record.status === "FAIL"),
       "invalid record status",

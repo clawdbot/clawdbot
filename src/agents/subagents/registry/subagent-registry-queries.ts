@@ -470,12 +470,31 @@ export function countActiveRunsForSessionFromRuns(
   return count;
 }
 
+function scopeRootDescendantsToRequesterAgent(
+  runs: Map<string, SubagentRunRecord>,
+  rootSessionKey: string,
+  requesterAgentId?: string,
+): Map<string, SubagentRunRecord> {
+  return requesterAgentId
+    ? new Map(
+        [...runs].filter(
+          ([, entry]) =>
+            entry.requesterSessionKey !== rootSessionKey ||
+            entry.requesterAgentId === requesterAgentId,
+        ),
+      )
+    : runs;
+}
+
 /** Counts live descendants under a requester/session tree. */
 export function countActiveDescendantRunsFromRuns(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,
+  requesterAgentId?: string,
 ): number {
-  return buildSubagentRunReadIndexFromRuns({ runs }).countActiveDescendantRuns(rootSessionKey);
+  return buildSubagentRunReadIndexFromRuns({
+    runs: scopeRootDescendantsToRequesterAgent(runs, rootSessionKey, requesterAgentId),
+  }).countActiveDescendantRuns(rootSessionKey);
 }
 
 /** Counts descendants that are live or ended but not yet cleaned up. */
@@ -498,19 +517,9 @@ export function hasDescendantRunAwaitingSettleFromRuns(
   excludeRunId?: string,
   requesterAgentId?: string,
 ): boolean {
-  const scopedRuns = requesterAgentId
-    ? new Map(
-        [...runs].filter(
-          ([, entry]) =>
-            entry.requesterSessionKey !== rootSessionKey ||
-            entry.requesterAgentId === requesterAgentId,
-        ),
-      )
-    : runs;
-  return buildSubagentRunReadIndexFromRuns({ runs: scopedRuns }).hasDescendantRunAwaitingSettle(
-    rootSessionKey,
-    excludeRunId,
-  );
+  return buildSubagentRunReadIndexFromRuns({
+    runs: scopeRootDescendantsToRequesterAgent(runs, rootSessionKey, requesterAgentId),
+  }).hasDescendantRunAwaitingSettle(rootSessionKey, excludeRunId);
 }
 
 /** Lists latest descendant runs under a requester/session tree. */

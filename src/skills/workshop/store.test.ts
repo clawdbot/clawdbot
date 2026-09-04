@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
@@ -59,6 +59,7 @@ describe("Skill Workshop SQLite store", () => {
       commitPendingSkillProposalTransition({
         expected: proposal.record,
         record: applied,
+        event,
         operationLabel: "skill-workshop.test.conflict",
       }),
     ).toMatchObject({ state: "conflict", current: { status: "applied" } });
@@ -71,7 +72,6 @@ describe("Skill Workshop SQLite store", () => {
     const existing = new DatabaseSync(databasePath);
     existing.exec(`
       DROP TABLE skill_workshop_proposal_events;
-      DROP TABLE skill_workshop_proposal_origin_runs;
       DROP TABLE skill_workshop_proposal_rollbacks;
       DROP TABLE skill_workshop_proposals;
       DROP TABLE skill_workshop_collection_reviews;

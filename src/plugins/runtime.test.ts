@@ -1,5 +1,6 @@
 /** Covers plugin runtime registration API behavior and registry mutation guards. */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { getPluginRunContext, setPluginRunContext } from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
@@ -115,20 +116,10 @@ describe("setActivePluginRegistry", () => {
       },
     },
   ] as const)("continues cleanup when the $name", async ({ refresh }) => {
-    let releaseFirstCleanup: (() => void) | undefined;
-    let markFirstCleanupStarted: (() => void) | undefined;
-    let markSecondCleanupCalled: (() => void) | undefined;
-    const firstCleanupStarted = new Promise<void>((resolve) => {
-      markFirstCleanupStarted = resolve;
-    });
-    const secondCleanupCalled = new Promise<void>((resolve) => {
-      markSecondCleanupCalled = resolve;
-    });
-    if (!markFirstCleanupStarted || !markSecondCleanupCalled) {
-      throw new Error("Expected cleanup signal callbacks to be initialized");
-    }
-    const notifyFirstCleanupStarted = markFirstCleanupStarted;
-    const notifySecondCleanupCalled = markSecondCleanupCalled;
+    const firstCleanupStarted = createDeferredCore();
+    const firstCleanupReleased = createDeferredCore();
+    const secondCleanupCalled = createDeferredCore();
+    onTestFinished(() => firstCleanupReleased.resolve());
     const previous = createEmptyPluginRegistry();
     previous.plugins.push(
       createPluginRecord({
@@ -144,10 +135,8 @@ describe("setActivePluginRegistry", () => {
         lifecycle: {
           id: "first-cleanup",
           async cleanup() {
-            notifyFirstCleanupStarted();
-            await new Promise<void>((resolve) => {
-              releaseFirstCleanup = resolve;
-            });
+            firstCleanupStarted.resolve();
+            await firstCleanupReleased.promise;
           },
         },
         source: "/virtual/cleanup-refresh-race/index.ts",
@@ -159,7 +148,7 @@ describe("setActivePluginRegistry", () => {
         lifecycle: {
           id: "second-cleanup",
           cleanup() {
-            notifySecondCleanupCalled();
+            secondCleanupCalled.resolve();
           },
         },
         source: "/virtual/cleanup-refresh-race/index.ts",
@@ -170,15 +159,13 @@ describe("setActivePluginRegistry", () => {
 
     setActivePluginRegistry(previous);
     setActivePluginRegistry(next);
-    await waitForCleanupSignal(firstCleanupStarted, "first cleanup start");
+    // The race starts inside cleanup; cold lazy imports are not a cleanup deadline.
+    await firstCleanupStarted.promise;
 
     refresh(next);
-    if (!releaseFirstCleanup) {
-      throw new Error("Expected first cleanup release callback to be initialized");
-    }
-    releaseFirstCleanup();
+    firstCleanupReleased.resolve();
 
-    await waitForCleanupSignal(secondCleanupCalled, "second cleanup");
+    await waitForCleanupSignal(secondCleanupCalled.promise, "second cleanup");
   });
 
   it("includes plugin ids imported before registration failed", () => {

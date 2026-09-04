@@ -31,7 +31,10 @@ import {
   type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
-import { SkillWorkshopRevisionRecoveryController } from "./revision-recovery.ts";
+import {
+  SkillWorkshopRevisionRecoveryController,
+  skillWorkshopRevisionAdmissionsFor,
+} from "./revision-recovery.ts";
 import { resolveSelfLearning, setSelfLearningEnabled } from "./self-learning.ts";
 import {
   captureSkillWorkshopSourceScope,
@@ -193,13 +196,13 @@ function renderSkillWorkshopPage(
               },
               onPrev: () => selectRelativeProposal(-1),
               onNext: () => selectRelativeProposal(1),
-              onApply: (key) => {
+              onApply: (decision) => {
                 if (
                   !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.apply")
                 ) {
                   return;
                 }
-                void runSkillWorkshopLifecycleAction(state, context, "apply", key).finally(
+                void runSkillWorkshopLifecycleAction(state, context, "apply", decision).finally(
                   requestUpdate,
                 );
                 requestUpdate();
@@ -226,13 +229,13 @@ function renderSkillWorkshopPage(
                 state.skillWorkshopRevisionDraft = "";
                 requestUpdate();
               },
-              onReject: (key) => {
+              onReject: (decision) => {
                 if (
                   !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.reject")
                 ) {
                   return;
                 }
-                void runSkillWorkshopLifecycleAction(state, context, "reject", key).finally(
+                void runSkillWorkshopLifecycleAction(state, context, "reject", decision).finally(
                   requestUpdate,
                 );
                 requestUpdate();
@@ -430,7 +433,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
     )
     .watch(
-      () => this.context?.skillWorkshopRevisionAdmissions,
+      () => (this.context ? skillWorkshopRevisionAdmissionsFor(this.context) : undefined),
       (admissions, notify) => admissions.subscribe(notify),
     );
 

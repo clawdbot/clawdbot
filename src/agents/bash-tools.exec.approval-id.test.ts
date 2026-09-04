@@ -7,8 +7,8 @@ import path from "node:path";
  * Covers approval registration ids, follow-up idempotency, and approved
  * node/gateway invocation behavior.
  */
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRequireRecord } from "../../test/helpers/record.js";
 import {
   loadExecApprovals,
   saveExecApprovals,
@@ -35,6 +35,7 @@ vi.mock("./tools/nodes-utils.js", () => ({
     {
       nodeId: "node-1",
       commands: ["system.run", "system.run.prepare"],
+      connected: true,
       platform: "darwin",
     },
   ]),
@@ -244,11 +245,16 @@ function expectPendingApprovalText(
   expect(pendingText).toContain(options.command);
   if (options.interactive) {
     expect(pendingText).toContain("Mode: foreground (interactive approvals available).");
+  }
+  if (options.interactive && options.host !== "node") {
     expect(pendingText).toContain(
       (options.allowedDecisions ?? "").includes("allow-always")
         ? "Background mode requires pre-approved policy"
         : "Background mode requires an effective policy that allows pre-approval",
     );
+  }
+  if (options.host === "node") {
+    expect(pendingText).not.toContain("Background mode");
   }
   return details;
 }
@@ -380,6 +386,16 @@ function mockNoApprovalRouteRegistration() {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label");
+
+function requireExecApprovalRequestCall() {
+  const requestCall = vi
+    .mocked(callGatewayTool)
+    .mock.calls.find(([method]) => method === "exec.approval.request");
+  return {
+    params: requireRecord(requestCall?.[2], "approval request params"),
+    options: requireRecord(requestCall?.[3], "approval request options"),
+  };
+}
 
 function expectRecordFields(
   record: Record<string, unknown> | undefined,
@@ -704,6 +720,9 @@ describe("exec approvals", () => {
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "node.invoke") {
         const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
         if (invoke.command === "system.run") {
           return { payload: { success: true, stdout: "node-ok" } };
         }
@@ -1557,6 +1576,7 @@ describe("exec approvals", () => {
     resolveRegistration?.({ status: "accepted", id: "approval-id" });
     const result = await executePromise;
     expect(result.details.status).toBe("approval-pending");
+    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBeUndefined();
     expect(calls[0]).toBe("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
   });
@@ -1604,12 +1624,10 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-ok");
 
-    const approvalRequestCall = vi
-      .mocked(callGatewayTool)
-      .mock.calls.find(([method]) => method === "exec.approval.request");
-    expect(requireRecord(approvalRequestCall?.[3], "approval request options").expectFinal).toBe(
-      false,
-    );
+    const approvalRequest = requireExecApprovalRequestCall();
+    expect(approvalRequest.options.expectFinal).toBe(false);
+    expect(approvalRequest.params.suppressDelivery).toBeUndefined();
+    expect(approvalRequest.params.deliverToApprovalClientsOnly).toBe(true);
     expect(
       vi
         .mocked(callGatewayTool)
@@ -1677,6 +1695,8 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-node-ok");
+    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBe(true);
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBeUndefined();
     const systemRun = requireRecord(systemRunInvoke, "system.run invoke");
     expect(systemRun.command).toBe("system.run");
     const params = requireRecord(systemRun.params, "system.run params");
@@ -1708,6 +1728,56 @@ describe("exec approvals", () => {
         command: "echo cron-denied",
       }),
     ).rejects.toThrow("Automation runs cannot wait for interactive exec approval");
+    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBeUndefined();
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBe(true);
+  });
+
+  it("denies node cron no-route approvals when askFallback is deny", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "always", askFallback: "deny" },
+      agents: {},
+    });
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return { id: "approval-id", decision: null };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: null };
+      }
+      if (method === "node.invoke") {
+        const invoke = requireRecord(params, "node invoke");
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "always",
+      security: "full",
+      trigger: "cron",
+      approvalRunningNoticeMs: 0,
+    });
+
+    await expect(
+      tool.execute("call-cron-node-denied", {
+        command: "echo cron-node-denied",
+      }),
+    ).rejects.toThrow("Automation runs cannot wait for interactive exec approval");
+    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBe(true);
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBeUndefined();
+    expect(
+      vi
+        .mocked(callGatewayTool)
+        .mock.calls.some(
+          ([method, _opts, params]) =>
+            method === "node.invoke" &&
+            requireRecord(params, "node invoke").command === "system.run",
+        ),
+    ).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

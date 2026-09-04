@@ -45,14 +45,34 @@ gh pr create --repo owner/repo --title "feat: title" --body-file /tmp/pr.md
 gh pr merge 55 --repo owner/repo --squash
 ```
 
-When creating or refreshing a PR body, append this final footer only when the Runtime line supplies `sessionUrl=<exact-url>`. Replace `<sessionUrl>` with that URL verbatim; do not construct or modify it. Omit the footer when `sessionUrl` is absent. When refreshing an existing PR body, preserve or update exactly one footer and keep it final:
+When creating or refreshing a commit or PR, visibly include the exact ordered `Worked on by` list from the authoritative Git attribution context for the current turn; use `## Worked on by` in PR bodies. Preserve its exact `Co-authored-by` trailers in commits, including after history rewrites. Never infer identities from names or chat, include bots or opted-out people, or reorder the supplied contributors.
+
+When creating or refreshing a PR body, append this final footer only when the Runtime line supplies `sessionUrl=<exact-url>`. Replace `<sessionUrl>` with that URL verbatim; do not construct or modify it. Omit the footer when `sessionUrl` is absent. Preserve any publication marker before exactly one footer, and keep the footer final:
 
 ```text
 ---
-[View the OpenClaw work session](<sessionUrl>)
+[View the OpenClaw team session](<sessionUrl>)
 ```
 
 URLs work directly: `gh pr view https://github.com/owner/repo/pull/55`.
+
+### Landing ownership
+
+When the user asks to land or merge a PR, the terminal outcome is the PR's verified
+GitHub state, not the end of a review, worker turn, or CI observation.
+
+- Keep the job active until `gh pr view ... --json state,mergedAt,mergeCommit`
+  proves `state` is `MERGED`.
+- Treat review findings, merge conflicts, failed checks, and requested changes as
+  continuation work when they are in scope. Patch them, rerun the required gates,
+  and re-evaluate the exact updated head.
+- A pending check is a wait state, not completion. Use the repository's supported
+  wait or merge workflow; do not claim success from partial green checks.
+- If work was delegated to a persistent session and that run stops before merge,
+  continue the same session rather than treating its report as the final result.
+- Stop as blocked only when continuing requires new authority, unavailable
+  credentials, or a product decision that cannot be inferred safely. Report the
+  exact blocker and leave the PR unmerged.
 
 ## Issues
 

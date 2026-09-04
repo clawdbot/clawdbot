@@ -40,6 +40,7 @@ describe("buildCliAgentSystemPrompt", () => {
   it("uses CLI backend tool fallback instead of OpenClaw tool assumptions", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      docsPath: "/tmp/openclaw/docs",
       tools: [],
       modelDisplay: "test/model",
     });
@@ -50,6 +51,10 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("No OpenClaw tool list is injected");
+    expect(prompt).toContain("docs first via `read`");
+    expect(prompt).not.toContain("exec approval-pending");
+    expect(prompt).not.toContain("Config read: `gateway`");
+    expect(prompt).not.toContain("`gateway(config.schema.lookup)`");
   });
 
   it("describes bundled exec as synchronous node execution", () => {
@@ -63,7 +68,7 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("pty available");
   });
 
-  it("uses cwd, not bootstrap workspace, for CLI workspace guidance", () => {
+  it("distinguishes the CLI working directory from the agent workspace", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw-agent",
       cwd: "/tmp/task-repo",
@@ -71,7 +76,10 @@ describe("buildCliAgentSystemPrompt", () => {
       modelDisplay: "test/model",
     });
 
+    expect(prompt).toContain("## Directory Roles");
     expect(prompt).toContain("Working directory: /tmp/task-repo");
+    expect(prompt).toContain("Agent workspace: /tmp/openclaw-agent");
+    expect(prompt).not.toContain("## Workspace\n");
     expect(prompt).not.toContain("Working directory: /tmp/openclaw-agent");
   });
 
@@ -151,15 +159,23 @@ describe("buildCliAgentSystemPrompt", () => {
   it("includes session identity in runtime when provided", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      config: {
+        agents: {
+          entries: {
+            "Team Ops": { identity: { name: "Ops Navigator" } },
+          },
+        },
+      },
       tools: [],
       modelDisplay: "test/model",
-      agentId: "main",
-      sessionKey: "agent:main:telegram:direct:peer",
+      agentId: "team-ops",
+      sessionKey: "agent:team-ops:telegram:direct:peer",
       sessionId: "session-123",
     });
 
-    expect(prompt).toContain("agent=main");
-    expect(prompt).toContain("session=agent:main:telegram:direct:peer");
+    expect(prompt).toContain(
+      "Runtime: name=Ops Navigator | agent=team-ops | session=agent:team-ops:telegram:direct:peer",
+    );
     expect(prompt).toContain("sessionId=session-123");
   });
 

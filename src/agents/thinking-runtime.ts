@@ -9,7 +9,7 @@ import {
 /** Resolves the concrete harness runtime that owns the next agent turn. */
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import { resolveAvailableAgentHarnessPolicy } from "./harness/availability.js";
 import { resolveAutoAgentHarnessId } from "./harness/support.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 
@@ -28,6 +28,18 @@ export function hasResolvedThinkingCatalogEntry(params: {
       normalizeProviderId(candidate.provider) === normalizedProvider && candidate.id === modelId,
   );
   return entry?.reasoning !== undefined;
+}
+
+/** Reuses prepared capability facts for plugin runtimes even when the manifest is partial. */
+export function needsThinkHydration(
+  catalog: readonly ThinkingCatalogEntry[] | undefined,
+  provider: string,
+  model: string,
+  agentRuntime: string,
+): boolean {
+  return (
+    agentRuntime !== "openclaw" || !hasResolvedThinkingCatalogEntry({ catalog, provider, model })
+  );
 }
 
 export function normalizeThinkingCatalogProviders<T extends ThinkingCatalogEntry>(
@@ -53,24 +65,27 @@ export function resolveEffectiveAgentRuntime(params: {
   modelBaseUrl?: unknown;
   agentId?: string;
   sessionKey?: string;
-  sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
+  sessionEntry?: Pick<
+    SessionEntry,
+    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+  >;
 }): string {
   const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
     provider: params.provider,
     entry: params.sessionEntry,
     cfg: params.cfg,
   });
-  const runtime =
-    sessionRuntime ??
-    resolveAgentHarnessPolicy({
-      provider: params.provider,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      modelBaseUrl: params.modelBaseUrl,
-      config: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    }).runtime;
+  const runtime = resolveAvailableAgentHarnessPolicy({
+    ...params,
+    mode: "projection",
+    config: params.cfg,
+    modelProvider: {
+      api: params.modelApi ?? undefined,
+      baseUrl: normalizeOptionalString(params.modelBaseUrl),
+    },
+    agentHarnessId: params.sessionEntry?.modelSelectionLocked ? sessionRuntime : undefined,
+    agentHarnessRuntimeOverride: sessionRuntime,
+  }).runtime;
   if (runtime === "auto") {
     // Reuse the loaded harness registry without triggering plugin discovery.
     // This keeps thinking policy aligned with the harness that would own the turn.

@@ -1,4 +1,5 @@
 import type { ApplicationGateway } from "../../app/context.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 
 const CUSTODIAN_SESSION_STORAGE_KEY = "openclaw.custodian.session.v1";
@@ -8,13 +9,7 @@ function isStoredCustodianSessionId(value: string | null): value is string {
 }
 
 export function createCustodianSessionId(): string {
-  if (typeof crypto.randomUUID === "function") {
-    return `control-ui-onboarding-${crypto.randomUUID()}`;
-  }
-  const suffix = [...crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
-  return `control-ui-onboarding-${suffix}`;
+  return `control-ui-onboarding-${generateUUID()}`;
 }
 
 export function persistCustodianSessionId(sessionId: string): void {

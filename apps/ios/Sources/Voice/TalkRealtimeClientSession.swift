@@ -50,6 +50,8 @@ struct TalkRealtimeClientCloseParams: Encodable {
 struct TalkRealtimeToolCallResponse: Decodable {
     let runId: String?
     let idempotencyKey: String?
+    let agentId: String?
+    let agentSessionKey: String?
 }
 
 struct TalkRealtimeServerEvent: Decodable {

@@ -8,7 +8,7 @@ export type AttachmentClass =
   | "video"
   | "archive"
   | "binary";
-type AttachmentCharset = "utf-16le" | "utf-16be";
+type AttachmentCharset = "utf-16le" | "utf-16be" | "windows-1252";
 export type AttachmentClassification = {
   mime: string | undefined;
   class: AttachmentClass;
@@ -79,36 +79,36 @@ function resolveUtf16Charset(buffer: Buffer): AttachmentCharset | undefined {
   return zeroOdd >= zeroEven ? "utf-16le" : "utf-16be";
 }
 
-function textRatios(text: string): [printable: number, wordish: number] {
+function textRatios(text: string, includeWordish: boolean): [printable: number, wordish: number] {
   let printable = 0;
-  let control = 0;
   let wordish = 0;
+  let total = 0;
   for (const char of text) {
     const code = char.codePointAt(0) ?? 0;
-    if (code === 9 || code === 10 || code === 13 || code === 32) {
-      printable += 1;
-      wordish += 1;
-    } else if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
-      control += 1;
-    } else {
-      printable += 1;
-      wordish += Number(WORDISH_CHAR.test(char));
-    }
+    const whitespace = code === 9 || code === 10 || code === 13 || code === 32;
+    const isControl = !whitespace && (code < 32 || (code >= 0x7f && code <= 0x9f));
+    total += 1;
+    printable += Number(!isControl);
+    wordish += Number(whitespace || (!isControl && includeWordish && WORDISH_CHAR.test(char)));
   }
-  const total = printable + control;
   return total === 0 ? [0, 0] : [printable / total, wordish / total];
 }
 
-function looksLikeText(buffer: Buffer): boolean {
-  if (buffer.length === 0) {
-    return false;
-  }
-  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
+function sniffTextCharset(buffer: Buffer): "utf-8" | "windows-1252" | undefined {
+  const sample = buffer.subarray(0, 4096);
+  // Finish the last sampled UTF-8 sequence without starting a new one outside the window.
+  // Its lead is within the final four bytes; completion needs at most three more.
+  const tail = sample.subarray(-4);
+  const leadIndex = tail.findLastIndex((byte) => (byte & 0xc0) !== 0x80);
+  const lead = tail[leadIndex] ?? 0;
+  const width = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc2 ? 2 : 1;
+  const end = sample.length + Math.max(0, leadIndex + width - tail.length);
   try {
-    return textRatios(new TextDecoder("utf-8", { fatal: true }).decode(sample))[0] > 0.85;
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, end));
+    return textRatios(text, false)[0] > 0.85 ? "utf-8" : undefined;
   } catch {
-    const [printable, wordish] = textRatios(new TextDecoder("windows-1252").decode(sample));
-    return printable > 0.95 && wordish > 0.3;
+    const [printable, wordish] = textRatios(new TextDecoder("windows-1252").decode(sample), true);
+    return printable > 0.95 && wordish > 0.3 ? "windows-1252" : undefined;
   }
 }
 
@@ -126,7 +126,6 @@ export async function classifyAttachmentBytes(params: {
     filePath: params.name ?? undefined,
   });
   const detectedClass = attachmentClassFromMime(mime);
-  const charset = resolveUtf16Charset(params.buffer);
   const hasUtf16Bom =
     params.buffer.length >= 2 &&
     (params.buffer.readUInt16LE(0) === 0xfeff || params.buffer.readUInt16LE(0) === 0xfffe);
@@ -135,21 +134,21 @@ export async function classifyAttachmentBytes(params: {
     mime?.startsWith("application/vnd.") ||
     (detectedClass !== "binary" && !hasUtf16Bom)
   ) {
+    const charset = detectedClass === "text" ? resolveUtf16Charset(params.buffer) : undefined;
     // Text resolved by extension can still be BOM-less UTF-16; dropping the
     // detected charset here would decode it downstream as UTF-8 mojibake.
-    return detectedClass === "text" && charset
-      ? { mime, class: detectedClass, charset }
-      : { mime, class: detectedClass };
+    return charset ? { mime, class: detectedClass, charset } : { mime, class: detectedClass };
   }
   const signature = params.buffer.length >= 4 ? params.buffer.readUInt32BE(0) : 0;
   if (signature === 0x504b0304 || signature === 0x504b0102 || signature === 0x504b0506) {
     return { mime, class: "archive" };
   }
-  if (!charset && !looksLikeText(params.buffer)) {
+  const charset = resolveUtf16Charset(params.buffer) ?? sniffTextCharset(params.buffer);
+  if (!charset) {
     return { mime, class: "binary" };
   }
   const extensionMime = mimeTypeFromFilePath(params.name);
-  const firstLine = new TextDecoder(charset ?? "utf-8")
+  const firstLine = new TextDecoder(charset)
     .decode(params.buffer.subarray(0, Math.min(params.buffer.length, 8192)))
     .split(/\r?\n/, 1)[0];
   const textMime =
@@ -159,5 +158,6 @@ export async function classifyAttachmentBytes(params: {
       : firstLine?.includes("\t")
         ? "text/tab-separated-values"
         : "text/plain");
-  return { mime: textMime, class: "text", ...(charset ? { charset } : {}) };
+  // Carry the decoder that recognized the bytes; default UTF-8 needs no override.
+  return { mime: textMime, class: "text", ...(charset !== "utf-8" ? { charset } : {}) };
 }

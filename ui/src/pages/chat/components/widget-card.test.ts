@@ -1,22 +1,45 @@
 /* @vitest-environment jsdom */
 
 import { nothing, render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/board/provider.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
+const widgetPorts: MessagePort[] = [];
+
+function initializeWidgetFrame(frame: HTMLIFrameElement) {
+  const channel = new MessageChannel();
+  widgetPorts.push(channel.port1, channel.port2);
+  window.dispatchEvent(
+    new MessageEvent("message", {
+      data: { type: "openclaw:widget-prompt-offer" },
+      origin: "null",
+      source: frame.contentWindow,
+      ports: [channel.port2],
+    }),
+  );
+  frame.dispatchEvent(new Event("load"));
+}
+
+afterEach(() => {
+  for (const port of widgetPorts.splice(0)) {
+    port.close();
+  }
+  document.body.replaceChildren();
+});
+
 describe("widget-card", () => {
-  it("keeps mounted frames stable but refreshes remounts and new connection generations", () => {
+  it("keeps initialized frames stable but refreshes remounts and new connection generations", () => {
     const firstPreview = {
       kind: "canvas",
       surface: "assistant_message",
       render: "url",
-      viewId: "cv_surface_lease_one",
       url: "/__openclaw__/canvas/documents/cv_surface_lease_one/index.html",
       sandbox: "scripts",
     } as const;
     const host = document.createElement("div");
+    document.body.append(host);
     render(
       renderToolPreview(firstPreview, "chat_message", {
         canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
@@ -26,6 +49,7 @@ describe("widget-card", () => {
     const originalFrame = host.querySelector<HTMLIFrameElement>("iframe");
     const originalSrc = originalFrame?.getAttribute("src");
     expect(originalSrc).toContain("/__openclaw__/cap/one/");
+    initializeWidgetFrame(originalFrame!);
 
     render(
       renderToolPreview(firstPreview, "chat_message", {
@@ -58,12 +82,79 @@ describe("widget-card", () => {
     expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
   });
 
+  it.each(["pending", "failed"] as const)(
+    "replaces an uninitialized %s frame when its capability rotates",
+    (loadState) => {
+      const preview = {
+        kind: "canvas",
+        surface: "assistant_message",
+        render: "url",
+        url: "/__openclaw__/canvas/documents/cv_initial_rotation/index.html",
+        sandbox: "scripts",
+      } as const;
+      const host = document.createElement("div");
+      document.body.append(host);
+      const show = (capability: string) =>
+        render(
+          renderToolPreview(preview, "chat_message", {
+            canvasPluginSurfaceUrl: `https://canvas.test/__openclaw__/cap/${capability}`,
+          }),
+          host,
+        );
+
+      show("hello");
+      const original = host.querySelector("iframe")!;
+      if (loadState === "failed") {
+        // HTTP error documents also dispatch load, but offer no widget bridge.
+        original.dispatchEvent(new Event("load"));
+      }
+      show("renewed");
+      const renewed = host.querySelector("iframe")!;
+      expect(renewed).not.toBe(original);
+      expect(renewed.getAttribute("src")).toContain("/__openclaw__/cap/renewed/");
+
+      initializeWidgetFrame(renewed);
+      show("next");
+      expect(host.querySelector("iframe")).toBe(renewed);
+      expect(renewed.getAttribute("src")).toContain("/__openclaw__/cap/renewed/");
+    },
+  );
+
+  it("fits a tall widget instead of scrolling it inside the frame", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          url: "/__openclaw__/canvas/documents/cv_tall_widget/index.html",
+          sandbox: "scripts",
+        } as const,
+        "chat_message",
+        { canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one" },
+      ),
+      host,
+    );
+    const frame = host.querySelector<HTMLIFrameElement>("iframe");
+    initializeWidgetFrame(frame!);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: "openclaw:widget-size", height: 3000 },
+        source: frame?.contentWindow,
+      }),
+    );
+    expect(frame?.style.height).toBe("3000px");
+    expect(frame?.style.minHeight).toBe("3000px");
+    host.remove();
+  });
+
   it("keeps a short reported frame height across a capability rotation", () => {
     const preview = {
       kind: "canvas",
       surface: "assistant_message",
       render: "url",
-      viewId: "cv_surface_lease_height",
       url: "/__openclaw__/canvas/documents/cv_surface_lease_height/index.html",
       sandbox: "scripts",
     } as const;
@@ -76,7 +167,7 @@ describe("widget-card", () => {
       host,
     );
     const frame = host.querySelector<HTMLIFrameElement>("iframe");
-    frame?.dispatchEvent(new Event("load"));
+    initializeWidgetFrame(frame!);
     window.dispatchEvent(
       new MessageEvent("message", {
         data: { type: "openclaw:widget-size", height: 48 },
@@ -116,7 +207,7 @@ describe("widget-card", () => {
       render: "url",
       viewId: "cv_surface_lease_mounted",
       url: "/__openclaw__/canvas/documents/cv_surface_lease_mounted/index.html",
-      sandbox: "scripts",
+      sandbox: "strict",
     } as const;
     const mountedHost = document.createElement("div");
     render(
@@ -189,7 +280,7 @@ describe("widget-card", () => {
     expect(canvas.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
     expect(
       Array.from(canvas.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
-    ).toEqual(["Copy to clipboard", "Download file"]);
+    ).toEqual(["Copy as image", "Download as image"]);
 
     const app = document.createElement("div");
     render(
@@ -214,12 +305,50 @@ describe("widget-card", () => {
     expect(app.querySelector("iframe")).toBeNull();
     expect(app.querySelector('button[aria-label="Widget actions"]')).toBeNull();
 
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          title: "App",
+          preferredHeight: 480,
+          mcpApp: { viewId: "view-dispatch" },
+        },
+        "chat_message",
+        { sessionKey: "agent:main:main", rawText: "raw app payload" },
+      ),
+      app,
+    );
+    expect(app.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
+    expect(
+      Array.from(app.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+    ).toEqual(["Show raw details"]);
+
+    const external = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          url: "https://example.test/widget",
+        },
+        "chat_message",
+        { allowExternalEmbedUrls: true, rawText: "external raw payload" },
+      ),
+      external,
+    );
+    expect(
+      Array.from(external.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+    ).toEqual(["Show raw details"]);
+
     const unknown = document.createElement("div");
     render(renderToolPreview({ kind: "unknown" } as never, "chat_message"), unknown);
     expect(unknown.childElementCount).toBe(0);
   });
 
-  it("pins normalized Canvas HTML through the board provider", async () => {
+  it("pins default-script Canvas HTML through the board provider", async () => {
     const pinWidget = vi.fn(async () => undefined);
     const snapshotSignal = {
       value: {
@@ -246,14 +375,13 @@ describe("widget-card", () => {
           title: "Release status",
           viewId: " cv_release ",
           url: "/__openclaw__/canvas/documents/cv_release/index.html",
-          sandbox: "scripts",
         },
         "chat_message",
         { boardProvider: provider },
       ),
       canvas,
     );
-
+    expect(canvas.querySelector("openclaw-canvas-widget-view")).not.toBeNull();
     canvas.querySelector<HTMLButtonElement>("[data-pin-widget]")?.click();
     await vi.waitFor(() => {
       expect(pinWidget).toHaveBeenCalledWith({
@@ -494,8 +622,31 @@ describe("widget-card presentation", () => {
     expect(host.querySelector(".chat-tool-card__preview-header")).toBeNull();
     expect(host.querySelector(".chat-tool-card__preview-label")).toBeNull();
     expect(host.querySelector(".chat-tool-card__preview-actions")).not.toBeNull();
-    expect(host.querySelector(".chat-tool-card__preview-frame")?.getAttribute("title")).toBe(
-      "Clock",
+    expect(host.querySelector("openclaw-canvas-widget-view")?.title).toBe("Clock");
+  });
+
+  it.each([
+    ["strict", undefined, false],
+    ["strict", "scripts", false],
+    ["trusted", undefined, true],
+    ["trusted", "strict", false],
+  ] as const)("applies %s policy to preview sandbox %s", (embedSandboxMode, sandbox, scripted) => {
+    const host = document.createElement("div");
+    render(
+      renderToolPreview({ ...preview, sandbox }, "chat_message", {
+        embedSandboxMode,
+        boardProvider: providerWith(),
+      }),
+      host,
     );
+    const managedView = host.querySelector("openclaw-canvas-widget-view");
+    expect(managedView !== null).toBe(sandbox !== "strict");
+    expect(host.querySelector("[data-pin-widget]") !== null).toBe(scripted);
+    if (managedView) {
+      expect(managedView.allowScripts).toBe(scripted);
+      expect(host.querySelector("iframe")).toBeNull();
+    } else {
+      expect(host.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
+    }
   });
 });

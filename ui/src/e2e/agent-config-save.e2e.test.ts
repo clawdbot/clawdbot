@@ -1,8 +1,8 @@
 // Control UI E2E proves per-agent config writes use the canonical keyed shape.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,12 +13,110 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "agent-config-save");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("agent-config-save");
+  }
+});
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
 suite.define(() => {
-  it("submits keyed entries and surfaces Gateway validation failures", async () => {
+  it("shows rejected initial configuration loads and recovers when reloaded", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+      async ({ page }) => {
+        const config = { agents: { entries: { main: { default: true } } } };
+        const gateway = await installMockGateway(page, {
+          assistantName: "Main agent",
+          defaultAgentId: "main",
+          methodResponses: {
+            "agents.list": {
+              agents: [{ id: "main", name: "Main agent" }],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            "config.get": {
+              __mockError: {
+                code: "INTERNAL_ERROR",
+                message: "Agent configuration unavailable; retry Reload Config",
+                retryable: true,
+              },
+            },
+          },
+        });
+
+        expect(
+          (await page.goto(`${suite.server.baseUrl}settings/agents/main/overview`))?.status(),
+        ).toBe(200);
+        await gateway.waitForRequest("agents.list");
+        await gateway.waitForRequest("config.get");
+        const agentsPage = page.locator("openclaw-agents-page");
+        const reload = agentsPage.getByRole("button", { name: "Reload Config" });
+        await reload.waitFor();
+        if (captureUiProof) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              proofDir,
+              `agent-config-load-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "failed"}.png`,
+            ),
+          });
+        }
+
+        const error = agentsPage
+          .getByRole("alert")
+          .filter({ hasText: "Agent configuration unavailable" });
+        await expect.poll(() => error.isVisible()).toBe(true);
+        await expect
+          .poll(() => agentsPage.locator(".model-picker__select").getAttribute("disabled"))
+          .not.toBeNull();
+
+        await gateway.setMethodResponse("config.get", {
+          config,
+          sourceConfig: config,
+          runtimeConfig: config,
+          hash: "recovered-agent-config",
+          issues: [],
+          raw: JSON.stringify(config),
+          valid: true,
+        });
+        const readsBefore = (await gateway.getRequests("config.get")).length;
+        await reload.click();
+        await gateway.waitForRequest("config.get", { after: readsBefore });
+        await expect.poll(() => error.count()).toBe(0);
+        await expect
+          .poll(() => agentsPage.locator(".model-picker__select").getAttribute("disabled"))
+          .toBeNull();
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "profile allow",
+      toolId: "read",
+      groupId: "fs",
+      groupLabel: "Files",
+      description: "Read files",
+      profileLabel: "Full",
+      tools: { profile: "full" },
+      expectedTools: { profile: "full", deny: ["read"] },
+    },
+    {
+      name: "wildcard alsoAllow",
+      toolId: "web_fetch",
+      groupId: "web",
+      groupLabel: "Web",
+      description: "Fetch web content",
+      profileLabel: "Minimal",
+      tools: { profile: "minimal", alsoAllow: ["web_*"] },
+      expectedTools: { profile: "minimal", alsoAllow: ["web_*"], deny: ["web_fetch"] },
+    },
+  ])("submits keyed entries and surfaces Gateway validation failures ($name)", async (scenario) => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -31,7 +129,7 @@ suite.define(() => {
             entries: {
               main: {
                 default: true,
-                tools: { profile: "full" },
+                tools: scenario.tools,
               },
             },
           },
@@ -57,17 +155,17 @@ suite.define(() => {
             },
             "tools.catalog": {
               agentId: "main",
-              profiles: [{ id: "full", label: "Full" }],
+              profiles: [{ id: scenario.tools.profile, label: scenario.profileLabel }],
               groups: [
                 {
-                  id: "fs",
-                  label: "Files",
+                  id: scenario.groupId,
+                  label: scenario.groupLabel,
                   source: "core",
                   tools: [
                     {
-                      id: "read",
-                      label: "read",
-                      description: "Read files",
+                      id: scenario.toolId,
+                      label: scenario.toolId,
+                      description: scenario.description,
                       source: "core",
                       defaultProfiles: ["full"],
                     },
@@ -77,7 +175,7 @@ suite.define(() => {
             },
             "tools.effective": {
               agentId: "main",
-              profile: "full",
+              profile: scenario.tools.profile,
               groups: [],
               notices: [],
             },
@@ -92,11 +190,17 @@ suite.define(() => {
 
         await page
           .locator(".agent-tools-group")
-          .filter({ hasText: "Files" })
+          .filter({ hasText: scenario.groupLabel })
           .locator(".agent-tools-group__summary")
           .click();
+        const toggle = page.locator(`#agent-tool-${scenario.toolId} wa-switch`);
+        await expect
+          .poll(() =>
+            toggle.evaluate((element) => (element as HTMLElement & { checked: boolean }).checked),
+          )
+          .toBe(true);
         await gateway.deferNext("config.set");
-        await page.locator("#agent-tool-read wa-switch").click();
+        await toggle.click();
 
         const request = await gateway.waitForRequest("config.set");
         const params = requireRecord(request.params);
@@ -106,7 +210,7 @@ suite.define(() => {
             entries: {
               main: {
                 default: true,
-                tools: { profile: "full", deny: ["read"] },
+                tools: scenario.expectedTools,
               },
             },
           },
@@ -121,7 +225,6 @@ suite.define(() => {
         await page.getByRole("alert").filter({ hasText: "mock validation failure" }).waitFor();
 
         if (captureUiProof) {
-          await mkdir(proofDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,

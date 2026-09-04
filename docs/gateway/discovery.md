@@ -25,12 +25,8 @@ All network discovery/advertising lives in the **Node Gateway**
 - **Direct WS transport**: a LAN/tailnet-facing Gateway WS endpoint (no SSH).
 - **SSH transport (fallback)**: remote control by forwarding
   `127.0.0.1:18789` over SSH.
-- **Legacy TCP bridge (removed)**: older node transport (see
-  [Bridge protocol](/gateway/bridge-protocol)); no longer advertised for
-  discovery and no longer part of current builds.
 
-Protocol details: [Gateway protocol](/gateway/protocol),
-[Bridge protocol (legacy)](/gateway/bridge-protocol).
+Protocol details: [Gateway protocol](/gateway/protocol).
 
 ## Why direct and SSH both exist
 
@@ -73,10 +69,6 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
   | `tailnetDns=<magicdns>`     | Optional hint; auto-detected when Tailscale is available.                                                                                                        |
   | `sshPort=<port>`            | Present only when `discovery.mdns.mode="full"`; omitted (SSH defaults to `22`) in the default `"minimal"` mode, on both the LAN advertiser and wide-area DNS-SD. |
   | `cliPath=<path>`            | Same `discovery.mdns.mode="full"` gate as `sshPort`; a remote-install hint for the CLI path.                                                                     |
-
-  A `canvasPort` TXT key is defined in the plugin discovery contract for a
-  future canvas host port, but no current code path sets a value, so it is
-  never emitted today.
 
 Security notes:
 

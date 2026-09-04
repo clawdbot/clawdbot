@@ -64,7 +64,7 @@ const MAX_LINE_RULE_FINDINGS_PER_RULE = 32;
 const FILE_SCAN_CACHE_MAX = 5000;
 const DIR_ENTRY_CACHE_MAX = 5000;
 const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
-const TEST_FILE_NAME_PATTERN = /\.(?:mock|spec|test)\.[^.]+$/i;
+const TEST_FILE_NAME_PATTERN = /\.(?:mock|spec|test|test-helper|test-support)\.[^.]+$/i;
 
 type FileScanCacheEntry = {
   size: number;

@@ -18,7 +18,10 @@ import {
 } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveAndroidVersion, syncAndroidVersioning } from "../../../scripts/lib/android-version.ts";
+import {
+  checkAndroidVersioning,
+  resolveAndroidVersion,
+} from "../../../scripts/lib/android-version.ts";
 
 type ReleaseArtifact = {
   flavorName: "play" | "wear" | "third-party";
@@ -390,7 +393,7 @@ function main() {
     return;
   }
 
-  syncAndroidVersioning({ mode: "check", rootDir });
+  checkAndroidVersioning({ rootDir });
   const version = resolveAndroidVersion(rootDir);
   const buildMetadata = resolveAndroidBuildMetadata();
   const artifacts = releaseArtifacts(version.canonicalVersion).filter(

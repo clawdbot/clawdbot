@@ -273,6 +273,11 @@ network grants, and no child-process or worker grants. OpenClaw enforces a
 parent-process wall-clock timeout and kills the subprocess on timeout, including
 after async continuations.
 
+Outstanding bridged tool calls are canceled when the child settles, including
+fatal exits and final results. Failed exits wait for stderr to drain before
+rendering a bounded diagnostic. The error separately reports bytes discarded
+from the 64 KiB retained tail and bytes omitted from its final text preview.
+
 The runtime exposes only:
 
 - `console.log`, `console.warn`, and `console.error`
@@ -377,10 +382,10 @@ operation. OpenClaw does not record serialized tool or prompt byte counts. The
 [E2E scenario](#e2e-validation) measures provider payload bytes separately from
 the mock provider lane, not from the runtime.
 
-Regardless of mode, target tool calls are projected into the session transcript
-as normal tool call and tool result pairs, and search, describe, and call
-results carry each tool's `id` and `source`. Session logs therefore still
-answer:
+Regardless of mode, completed target calls persist as bounded, redacted display
+activity in session history without adding synthetic model turns to replay.
+Search, describe, and call results carry each tool's `id` and `source`.
+Session logs therefore still answer:
 
 - how many tool schemas the model saw up front
 - how many search and describe operations it performed

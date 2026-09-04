@@ -5,6 +5,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
+import type { WorkerBootstrapArtifactTransferHttpCallback } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
 const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
 const activeLimiters: AuthRateLimiter[] = [];
@@ -17,6 +18,7 @@ afterEach(() => {
 
 async function withTransferServer<T>(params: {
   bundleCallback?: NodeWorkerBundleTransferHttpCallback;
+  bootstrapCallback?: WorkerBootstrapArtifactTransferHttpCallback;
   callback?: NodeWorkspaceTransferHttpCallback;
   limiter?: AuthRateLimiter;
   hooks?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -32,6 +34,7 @@ async function withTransferServer<T>(params: {
     resolvedAuth,
     joinRateLimiter: params.limiter,
     handleNodeWorkerBundleTransferRequest: params.bundleCallback,
+    handleWorkerBootstrapArtifactTransferRequest: params.bootstrapCallback,
     handleNodeWorkspaceTransferRequest: params.callback,
     getRuntimeConfig: () => ({}),
   });
@@ -109,6 +112,47 @@ describe("node worker bundle transfer HTTP routing", () => {
         expect(response.status).toBe(200);
         expect(response.headers.get("cache-control")).toBe("no-store");
         await expect(response.text()).resolves.toBe(bundleHash);
+      },
+    });
+  });
+});
+
+describe("cloud bootstrap artifact HTTP routing", () => {
+  it("serves only an authorized exact artifact before node enrollment and reserves malformed paths", async () => {
+    const hooks = vi.fn(async () => false);
+    const callback = vi.fn<WorkerBootstrapArtifactTransferHttpCallback>(
+      async ({ bearer, artifactSha256, res }) =>
+        bearer === "bootstrap-capability"
+          ? {
+              kind: "authorized",
+              handle: () => {
+                res.end(artifactSha256);
+              },
+            }
+          : { kind: "unauthorized" },
+    );
+    await withTransferServer({
+      bootstrapCallback: callback,
+      hooks,
+      run: async (origin) => {
+        const digest = "c".repeat(64);
+        const url = `${origin}/__openclaw__/worker-bootstrap/artifacts/${digest}`;
+        for (const target of [
+          url,
+          `${url}?token=bootstrap-capability`,
+          `${origin}/__openclaw__/worker-bootstrap/invalid`,
+        ]) {
+          const response = await fetch(target);
+          expect(response.status).toBe(404);
+          expect(response.headers.get("cache-control")).toBe("no-store");
+        }
+        const response = await fetch(url, {
+          headers: { authorization: "Bearer bootstrap-capability" },
+        });
+        expect(response.status).toBe(200);
+        await expect(response.text()).resolves.toBe(digest);
+        expect(callback).toHaveBeenCalledOnce();
+        expect(hooks).not.toHaveBeenCalled();
       },
     });
   });

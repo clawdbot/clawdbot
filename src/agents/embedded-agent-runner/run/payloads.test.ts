@@ -541,32 +541,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
-    // Middleware failures after useful assistant output warn the user without
-    // replacing the successful answer as the terminal payload. Uses a non-exec
-    // mutating tool so the warning still surfaces under the recovery policy.
-    const payloads = buildPayloads({
-      assistantTexts: ["Queued 3 topics."],
-      lastToolError: {
-        toolName: "write",
-        error: "Tool output unavailable due to post-processing error",
-        middlewareError: true,
-        mutatingAction: true,
-      },
-      verboseLevel: "off",
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("Queued 3 topics.");
-    expect(payloads[1]).toMatchObject({
-      isError: true,
-    });
-    expect(payloads[1]?.text).toContain("Write failed");
-    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
-      nonTerminalToolErrorWarning: true,
-    });
-  });
-
   it("surfaces concise bash tool errors when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "bash", error: "command failed" },
@@ -588,12 +562,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         mutatingAction: true,
       },
       runAborted: true,
+      runStopReason: "aborted",
     });
 
     expectSingleToolErrorPayload(payloads, {
       title: "Bash",
       absentDetail: "codex native tool blocked",
     });
+  });
+
+  it("renders an intentional Gateway restart as status", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "gateway_exec",
+        error: "OpenClaw dynamic tool call aborted.",
+        executionStarted: true,
+      },
+      runAborted: true,
+      runStopReason: "restart",
+      toolResultFormat: "markdown",
+    });
+
+    expect(payloads).toEqual([{ text: "Gateway restarting…" }]);
   });
 
   it("keeps timed-out cron exec failures compact when verbose mode is off", () => {
@@ -685,28 +675,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     }
   });
 
-  it("keeps a quiet heartbeat response with a recovered mutation receipt", () => {
-    const payloads = buildPayloads({
-      heartbeatToolResponse: {
-        outcome: "no_change",
-        notify: false,
-        summary: "Nothing needs attention.",
-      },
-      isHeartbeatTrigger: true,
-      lastToolRecovery: { toolName: "write" },
-    });
-
-    expect(payloads.map((payload) => payload.text)).toStrictEqual([
-      "HEARTBEAT_OK",
-      "✅ ✍️ Write succeeded after retry.",
-    ]);
-    expect(resolveHeartbeatToolResponseFromReplyResult(payloads)).toEqual({
-      outcome: "no_change",
-      notify: false,
-      summary: "Nothing needs attention.",
-    });
-  });
-
   it("marks plain-text heartbeat replies with unresolved mutating failures", () => {
     const payloads = buildPayloads({
       assistantTexts: ["The heartbeat check completed."],
@@ -718,10 +686,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       },
     });
 
-    expect(payloads.at(-1)).toMatchObject({
-      isError: true,
-      text: expect.stringContaining("Message failed"),
-    });
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("The heartbeat check completed.");
     for (const payload of payloads) {
       expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
         toolName: "message",
@@ -729,7 +695,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     }
   });
 
-  it("retains terminal heartbeat state when all failure copy is suppressed", () => {
+  it("retains terminal heartbeat state on the no-reply tool warning", () => {
     const payloads = buildPayloads({
       isHeartbeatTrigger: true,
       lastToolError: {
@@ -737,16 +703,18 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         error: "cross-context messaging denied",
         mutatingAction: true,
       },
-      suppressToolErrorWarnings: true,
     });
 
-    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
+    expectSingleToolErrorPayload(payloads, {
+      title: "Message",
+      absentDetail: "cross-context messaging denied",
+    });
     expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
       toolName: "message",
     });
   });
 
-  it("adds an outbound terminal marker when suppressed failure copy leaves only reasoning", () => {
+  it("adds a tool warning when a heartbeat failure leaves only reasoning", () => {
     const payloads = buildPayloads({
       isHeartbeatTrigger: true,
       lastAssistant: {
@@ -761,12 +729,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       },
       reasoningLevel: "on",
       thinkingLevel: "high",
-      suppressToolErrorWarnings: true,
     });
 
     expect(payloads).toHaveLength(2);
     expect(payloads[0]).toMatchObject({ text: "Private reasoning only.", isReasoning: true });
-    expect(resolveHeartbeatReplyPayload(payloads)?.text).toBe("HEARTBEAT_OK");
+    expect(resolveHeartbeatReplyPayload(payloads)).toMatchObject({
+      text: "⚠️ Message failed",
+      isError: true,
+    });
     for (const payload of payloads) {
       expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
         toolName: "message",
@@ -813,28 +783,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSinglePayloadText(payloads, "Message delivery was blocked.");
-  });
-
-  it("suppresses heartbeat failure copy without suppressing terminal failure state", () => {
-    const payloads = buildPayloads({
-      heartbeatToolResponse: {
-        outcome: "no_change",
-        notify: false,
-        summary: "Nothing needs attention.",
-      },
-      isHeartbeatTrigger: true,
-      lastToolError: {
-        toolName: "message",
-        error: "cross-context messaging denied",
-        mutatingAction: true,
-      },
-      suppressToolErrorWarnings: true,
-    });
-
-    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
-    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
-      toolName: "message",
-    });
   });
 
   it("does not infer a terminal mutation from a mixed-action tool name", () => {
@@ -894,32 +842,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("keeps stale full-verbose tool errors compact when live verbose is off", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "permission denied" },
-      suppressToolErrorWarnings: () => false,
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Write",
-      absentDetail: "permission denied",
-    });
-  });
-
-  it("preserves full-verbose tool error details with static suppression disabled", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "permission denied" },
-      suppressToolErrorWarnings: false,
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Write",
-      detail: "permission denied",
-    });
-  });
-
   it("keeps non-exec mutating tool failures visible", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "write", error: "permission denied" },
@@ -971,10 +893,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         mutatingAction: true,
       },
     },
-  ])("suppresses sessions_send errors for $name", ({ lastToolError }) => {
-    expectNoPayloads({
+  ])("warns for silent sessions_send failures: $name", ({ lastToolError }) => {
+    const payloads = buildPayloads({
       lastToolError,
       verboseLevel: "on",
+    });
+    expectSingleToolErrorPayload(payloads, {
+      title: "Session Send",
+      absentDetail: "delivery timeout",
     });
   });
 

@@ -2,7 +2,6 @@
  * Tests direct-message guard policy helpers exposed through the SDK.
  */
 import { describe, expect, it, vi } from "vitest";
-import { resolveOriginMessageTo } from "../auto-reply/reply/origin-routing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveImplicitMessageActionTarget } from "../infra/outbound/message-action-normalization.js";
 import {
@@ -299,10 +298,7 @@ describe("channel-inbound direct-message helpers", () => {
     expect(result.ctxPayload.NativeDirectUserId).toBe("clawstudio");
     expect(result.ctxPayload.OriginatingTo).toBe("reef:clawstudio");
     expect(result.ctxPayload.CommandAuthorized).toBe(true);
-    const currentChannelId = resolveOriginMessageTo({
-      originatingTo: result.ctxPayload.OriginatingTo,
-      to: result.ctxPayload.To,
-    });
+    const currentChannelId = result.ctxPayload.OriginatingTo ?? result.ctxPayload.To;
     expect(
       resolveImplicitMessageActionTarget({ currentChannelId, currentChannelProvider: "reef" }),
     ).toBe("reef:clawstudio");

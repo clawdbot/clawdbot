@@ -6,11 +6,14 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 // Agent via gateway tests cover gateway-backed agent command dispatch and session loading.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayPendingRequests } from "../../packages/gateway-client/src/pending-request.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import {
   configureExecutionIdentityAdmissionSink,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
+import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
@@ -360,6 +363,32 @@ describe("agentCliCommand", () => {
   it("uses a timer-safe max gateway timeout when --timeout is 0", () => {
     expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
   });
+
+  it.each([
+    ["agent", "--agent"],
+    ["sessionId", "--session-id"],
+    ["sessionKey", "--session-key"],
+    ["to", "--to"],
+  ] as const)(
+    "rejects blank %s selectors before local or Gateway dispatch",
+    async (option, flag) => {
+      await withTempStore(async () => {
+        mockGatewaySuccessReply();
+        for (const local of [false, true]) {
+          for (const value of ["", "   "]) {
+            await expect(
+              agentCliCommand(
+                { message: "hi", to: "agent:main:explicit-target", local, [option]: value },
+                runtime,
+              ),
+            ).rejects.toThrow(`${flag} must not be blank`);
+          }
+        }
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(agentCommand).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("clamps oversized gateway timeout seconds at the command boundary", async () => {
     await withTempStore(async () => {
@@ -1255,25 +1284,28 @@ describe("agentCliCommand", () => {
     );
   });
 
-  it("scopes legacy global session keys to the requested agent before gateway dispatch", async () => {
-    await withTempStore(
-      async () => {
-        mockGatewaySuccessReply();
+  it.each(["global", "unknown"])(
+    "preserves logical %s keys with an explicit agent before gateway dispatch",
+    async (sessionKey) => {
+      await withTempStore(
+        async () => {
+          mockGatewaySuccessReply();
 
-        await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "global" }, runtime);
+          await agentCliCommand({ message: "hi", agent: "ops", sessionKey }, runtime);
 
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        const request = requireRecord(
-          requireFirstCallArg(callGateway, "gateway"),
-          "gateway request",
-        );
-        const params = requireRecord(request.params, "gateway request params");
-        expect(params.agentId).toBe("ops");
-        expect(params.sessionKey).toBe("agent:ops:global");
-      },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
-    );
-  });
+          expect(callGateway).toHaveBeenCalledTimes(1);
+          const request = requireRecord(
+            requireFirstCallArg(callGateway, "gateway"),
+            "gateway request",
+          );
+          const params = requireRecord(request.params, "gateway request params");
+          expect(params.agentId).toBe("ops");
+          expect(params.sessionKey).toBe(sessionKey);
+        },
+        { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      );
+    },
+  );
 
   it("preserves unscoped global session keys when no agent is requested", async () => {
     await withTempStore(
@@ -1989,35 +2021,46 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("exits for local runs that resolve after SIGTERM aborts them", async () => {
-    await withTempStore(async () => {
-      const signals = createSignalProcess();
-      agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
-        return await new Promise((resolve) => {
-          opts.abortSignal?.addEventListener(
-            "abort",
-            () => {
-              resolve({
-                payloads: [],
-                meta: { aborted: true },
-              } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
-            },
-            { once: true },
-          );
+  it.each([
+    ["SIGTERM", 143],
+    ["SIGINT", 130],
+  ] as const)(
+    "preserves %s when a local run returns a failed outcome",
+    async (signal, exitCode) => {
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
+          return await new Promise((resolve) => {
+            opts.abortSignal?.addEventListener(
+              "abort",
+              () => {
+                resolve(
+                  recordAgentRunTerminalOutcome(
+                    {
+                      payloads: [],
+                      meta: { aborted: true },
+                    },
+                    "failed",
+                  ) as unknown as Awaited<ReturnType<typeof AgentCommand>>,
+                );
+              },
+              { once: true },
+            );
+          });
         });
-      });
 
-      const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
-        process: signals.processLike,
-      });
-      await waitForAgentCommandCall();
-      signals.emit("SIGTERM");
+        const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
+          process: signals.processLike,
+        });
+        await waitForAgentCommandCall();
+        signals.emit(signal);
 
-      await expect(run).resolves.toBeUndefined();
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(143);
-    });
-  });
+        await expect(run).resolves.toBeUndefined();
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+      });
+    },
+  );
 
   it("does not classify abort errors as gateway transport failures", async () => {
     await withTempStore(async () => {
@@ -2227,6 +2270,200 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it.each([
+    {
+      label: "accepted negative final",
+      accepted: { status: "accepted", runId: "gateway-accepted" },
+      payload: { runId: "gateway-final", privateResult: "not-for-cli" },
+      runId: "gateway-final",
+    },
+    {
+      label: "cached final only",
+      accepted: undefined,
+      payload: { runId: "gateway-cached", privateResult: "not-for-cli" },
+      runId: "gateway-cached",
+    },
+    {
+      label: "accepted final without ID",
+      accepted: { status: "accepted", runId: "gateway-accepted" },
+      payload: { status: "error" },
+      runId: "gateway-accepted",
+    },
+    { label: "preadmission rejection", accepted: undefined, payload: undefined, runId: undefined },
+    { label: "blank final ID", accepted: undefined, payload: { runId: "   " }, runId: undefined },
+    {
+      label: "non-string final ID",
+      accepted: undefined,
+      payload: { runId: 123 },
+      runId: undefined,
+    },
+    {
+      label: "negative accepted shape",
+      accepted: undefined,
+      payload: { status: "accepted" },
+      runId: undefined,
+    },
+  ])(
+    "reports only observed Gateway run provenance for $label",
+    async ({ accepted, payload, runId }) => {
+      await withTempStore(async () => {
+        const error = new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message: "turn failed",
+          details: { runId: "not-provenance", privateResult: "not-for-cli" },
+          retryable: true,
+          retryAfterMs: 250,
+        });
+        const signal = createSignalProcess();
+        const humanBefore = formatCliFailureLines({ title: "failed", error, env: {} });
+        callGateway.mockImplementation(
+          async (request: { onAccepted?: (payload: unknown) => void }) => {
+            const pending = new GatewayPendingRequests({
+              createRequestId: () => "request",
+              nowMs: Date.now,
+              createRequestError: () => error,
+            });
+            const result = pending.request(
+              { send: () => {} },
+              "agent",
+              {},
+              { expectFinal: true, onAccepted: request.onAccepted },
+            );
+            if (accepted) {
+              pending.handleResponse({ type: "res", id: "1:request", ok: true, payload: accepted });
+            }
+            pending.handleResponse({
+              type: "res",
+              id: "1:request",
+              ok: false,
+              payload,
+              error: { code: error.code, message: error.message },
+            });
+            // Bound the pre-fix negative-accepted regression without a wall-clock timeout.
+            pending.flush(error);
+            return await result;
+          },
+        );
+        await expect(
+          agentCliCommand(
+            {
+              message: "hi",
+              sessionKey: "agent:ops:run-proof",
+              runId: "local-idempotency",
+              json: true,
+            },
+            jsonRuntime,
+            { process: signal.processLike },
+          ),
+        ).rejects.toBe(error);
+        expect(formatCliJsonFailure(error, { env: {} })).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: "turn failed" },
+          ...(runId ? { runId, origin: "gateway" } : {}),
+        });
+        expect(formatCliFailureLines({ title: "failed", error, env: {} })).toEqual(humanBefore);
+        expect(error).toMatchObject({
+          name: "GatewayClientRequestError",
+          code: "UNAVAILABLE",
+          retryable: true,
+          retryAfterMs: 250,
+          details: { runId: "not-provenance" },
+        });
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(signal.listenerCount("SIGINT") + signal.listenerCount("SIGTERM")).toBe(0);
+      }, remoteGatewayConfig);
+    },
+  );
+
+  it.each([
+    {
+      label: "accepted timeout",
+      createError: createGatewayTimeoutError,
+      accepted: { status: "accepted", runId: "gateway-accepted" },
+      runId: "gateway-accepted",
+    },
+    {
+      label: "accepted close",
+      createError: createGatewayClosedError,
+      accepted: { status: "accepted", runId: "gateway-accepted" },
+      runId: "gateway-accepted",
+    },
+    {
+      label: "unacknowledged close",
+      createError: createGatewayClosedError,
+      accepted: undefined,
+      runId: undefined,
+    },
+    {
+      label: "accepted without ID",
+      createError: createGatewayTimeoutError,
+      accepted: { status: "accepted", sessionKey: "agent:ops:run-proof" },
+      runId: undefined,
+    },
+  ])(
+    "preserves error identity and uncertainty for $label",
+    async ({ createError, accepted, runId }) => {
+      await withTempStore(async () => {
+        const error = createError();
+        const signal = createSignalProcess();
+        const humanBefore = formatCliFailureLines({ title: "failed", error, env: {} });
+        callGateway.mockImplementation(
+          async (request: { onAccepted?: (payload: unknown) => void }) => {
+            if (accepted) {
+              request.onAccepted?.(accepted);
+            }
+            throw error;
+          },
+        );
+        await expect(
+          agentCliCommand(
+            {
+              message: "hi",
+              sessionKey: "agent:ops:run-proof",
+              runId: "local-idempotency",
+              json: true,
+            },
+            jsonRuntime,
+            { process: signal.processLike },
+          ),
+        ).rejects.toBe(error);
+        expect(formatCliJsonFailure(error, { env: {} })).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: error.message },
+          ...(runId ? { runId, origin: "gateway" } : {}),
+        });
+        expect(formatCliFailureLines({ title: "failed", error, env: {} })).toEqual(humanBefore);
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(mockMessages(jsonRuntime.error).join("\n")).toContain("may still be running");
+        expect(signal.listenerCount("SIGINT") + signal.listenerCount("SIGTERM")).toBe(0);
+      }, remoteGatewayConfig);
+    },
+  );
+
+  it("does not promote arbitrary thrown object fields into Gateway provenance", async () => {
+    await withTempStore(async () => {
+      const error = Object.assign(new Error("local failure"), {
+        runId: "forged",
+        origin: "gateway",
+        responsePayload: { runId: "forged" },
+        details: { runId: "forged" },
+      });
+      callGateway.mockRejectedValue(error);
+      await expect(
+        agentCliCommand(
+          { message: "hi", sessionKey: "agent:ops:run-proof", json: true },
+          jsonRuntime,
+        ),
+      ).rejects.toBe(error);
+      expect(formatCliJsonFailure(error)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message: "local failure" },
+      });
+    }, remoteGatewayConfig);
+  });
+
   it("rejects gateway timeout errors unchanged with a local retry hint", async () => {
     await withTempStore(async () => {
       const error = createGatewayTimeoutError();
@@ -2331,12 +2568,17 @@ describe("agentCliCommand", () => {
     await withTempStore(async () => {
       const stop = vi.fn(async () => {});
       startOneShotDiagnosticsExporters.mockResolvedValue({ stop });
-      agentCommand.mockRejectedValueOnce(new Error("embedded run failed"));
+      const error = Object.assign(new Error("embedded run failed"), { runId: "local-run" });
+      agentCommand.mockRejectedValueOnce(error);
 
       await expect(
         agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime),
       ).rejects.toThrow("embedded run failed");
 
+      expect(formatCliJsonFailure(error)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message: "embedded run failed" },
+      });
       expect(stop).toHaveBeenCalledTimes(1);
     });
   });
@@ -2370,41 +2612,57 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("retries transient normal gateway closes before failing", async () => {
-    vi.useFakeTimers();
-    try {
-      await withTempStore(async () => {
-        const error = createGatewayNormalCloseError();
-        callGateway.mockRejectedValue(error);
+  it.each([false, true])(
+    "retains provenance across transient normal closes (accepted=%s)",
+    async (accepted) => {
+      vi.useFakeTimers();
+      try {
+        await withTempStore(async () => {
+          const error = createGatewayNormalCloseError();
+          callGateway.mockImplementation(
+            async (request: { onAccepted?: (payload: unknown) => void }) => {
+              if (accepted && callGateway.mock.calls.length === 1) {
+                request.onAccepted?.({ status: "accepted", runId: "gateway-before-retry" });
+                throw createGatewayNormalCloseError();
+              }
+              throw error;
+            },
+          );
 
-        const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-        const rejection = expect(command).rejects.toBe(error);
-        await vi.advanceTimersByTimeAsync(33_000);
-        await rejection;
+          const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+          const rejection = expect(command).rejects.toBe(error);
+          await vi.advanceTimersByTimeAsync(33_000);
+          await rejection;
 
-        expect(callGateway).toHaveBeenCalledTimes(6);
-        const idempotencyKeys = callGateway.mock.calls.map(
-          ([call]) => (call as { params?: { idempotencyKey?: unknown } }).params?.idempotencyKey,
-        );
-        expect(new Set(idempotencyKeys).size).toBe(1);
-        expect(agentCommand).not.toHaveBeenCalled();
-        expect(
-          mockMessages(runtime.error).filter((message) =>
-            message.includes("Gateway agent connection closed during handshake"),
-          ),
-        ).toHaveLength(5);
-        expect(
-          mockMessages(runtime.error).some(
-            (message) =>
-              message.includes("Gateway agent call connection closed") &&
-              message.includes("--local"),
-          ),
-        ).toBe(true);
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+          expect(callGateway).toHaveBeenCalledTimes(6);
+          const idempotencyKeys = callGateway.mock.calls.map(
+            ([call]) => (call as { params?: { idempotencyKey?: unknown } }).params?.idempotencyKey,
+          );
+          expect(new Set(idempotencyKeys).size).toBe(1);
+          expect(formatCliJsonFailure(error, { env: {} })).toEqual({
+            ok: false,
+            error: { type: "cli_error", message: error.message },
+            ...(accepted ? { runId: "gateway-before-retry", origin: "gateway" } : {}),
+          });
+          expect(agentCommand).not.toHaveBeenCalled();
+          expect(
+            mockMessages(runtime.error).filter((message) =>
+              message.includes("Gateway agent connection closed during handshake"),
+            ),
+          ).toHaveLength(5);
+          expect(
+            mockMessages(runtime.error).some(
+              (message) =>
+                message.includes("Gateway agent call connection closed") &&
+                message.includes("--local"),
+            ),
+          ).toBe(true);
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("rejects transport-closed errors unchanged with a local retry hint", async () => {
     await withTempStore(async () => {
@@ -2468,7 +2726,10 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("marks a failed local terminal outcome unsuccessful", async () => {
+  it.each([
+    ["failed", 1],
+    ["completed", 0],
+  ] as const)("maps a %s local terminal outcome to exit %s", async (outcome, exitCode) => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
       agentCommand.mockResolvedValueOnce(
@@ -2477,7 +2738,7 @@ describe("agentCliCommand", () => {
             payloads: [{ text: "provider failed", isError: true }],
             meta: { error: new Error("provider failed") },
           },
-          "failed",
+          outcome,
         ),
       );
 
@@ -2485,7 +2746,7 @@ describe("agentCliCommand", () => {
         process: signals.processLike,
       });
 
-      expect(signals.processLike.exitCode).toBe(1);
+      expect(signals.processLike.exitCode).toBe(exitCode);
     });
   });
 

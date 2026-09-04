@@ -1,0 +1,127 @@
+title: A2A disabled cross-agent send
+
+scenario:
+  id: a2a-disabled-cross-agent-send
+  surface: channel
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-delivery
+    secondary:
+      - agent-runtime.tool-safety-controls
+  objective: Verify explicitly disabling agent-to-agent messaging denies a real sessions_send before any target run or main-session creation.
+  gatewayConfigPatch:
+    agents:
+      entries:
+        qa:
+          default: true
+        orion:
+          tools:
+            profile: coding
+    tools:
+      agentToAgent:
+        enabled: false
+  successCriteria:
+    - The source plans sessions_send to agent:orion:main with timeoutSeconds=0.
+    - The exact tool call returns forbidden with the agent-to-agent disabled reason.
+    - No target model request or Orion main session exists after the quiet window.
+  docsRefs:
+    - docs/gateway/config-tools.md
+    - docs/concepts/session-tool.md
+  codeRefs:
+    - src/plugin-sdk/session-visibility.ts
+    - src/plugin-sdk/session-visibility-internal.ts
+    - src/agents/tools/sessions-send-tool.ts
+  execution:
+    kind: flow
+    retryCount: 0
+    channel: qa-channel
+    summary: Verify explicitly disabling agent-to-agent messaging denies a real sessions_send before any target run or main-session creation.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-a2a-disabled-cross-agent-send
+      targetSessionKey: agent:orion:main
+      promptSnippet: qa a2a message-tool mirror check
+      targetPromptSnippet: qa group visible reply tool check
+      expectedMarker: QA-A2A-DISABLED
+      denialText: Agent-to-agent messaging is disabled
+      quietWindowMs: 8000
+
+flow:
+  steps:
+    - name: denies the send before target work
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode && Boolean(env.mock)"
+            message: this runtime proof requires mock-openai
+        - assert:
+            expr: "env.cfg.tools?.sessions === undefined && env.cfg.tools?.agentToAgent?.enabled === false"
+            message: the Gateway must use only the scenario's declared session-access policy
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: sessionsBefore
+          value:
+            expr: "await env.gateway.call('sessions.list', {}, { timeoutMs: 30000 })"
+        - assert:
+            expr: "!sessionsBefore.sessions.some((session) => session.key === config.targetSessionKey)"
+            message: the target main session must not already exist
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+              title: QA Cross-Agent Access
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: "`@openclaw ${config.promptSnippet}. sessionKey=\"${config.targetSessionKey}\". Use sessions_send once with timeoutSeconds=0. The target must reply visibly with exact marker: \\`${config.expectedMarker}\\``"
+        # Expected-failure scenario: the denied send yields an isError warning reply, so
+        # poll the mock directly instead of the failure-aware transport waits.
+        - set: sourceRequest
+          value:
+            expr: "await (async () => { const deadline = Date.now() + 60000; while (Date.now() < deadline) { const found = (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.prompt ?? '').includes(config.promptSnippet) && request.plannedToolName === 'sessions_send' && request.plannedToolArgs?.sessionKey === config.targetSessionKey && request.plannedToolArgs?.timeoutSeconds === 0); if (found) { return found; } await sleep(500); } throw new Error('timed out waiting for the source sessions_send plan'); })()"
+        - assert:
+            expr: "Boolean(sourceRequest.plannedToolCallId)"
+            message: the source send must have a tool-call ID for result correlation
+        - set: sourceFollowup
+          value:
+            expr: "await (async () => { const deadline = Date.now() + 60000; while (Date.now() < deadline) { const found = (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${sourceRequest.cursor}`)).find((request) => request.toolOutputCallId === sourceRequest.plannedToolCallId && Boolean(request.toolOutput)); if (found) { return found; } await sleep(500); } throw new Error('timed out waiting for the sessions_send tool result follow-up'); })()"
+        - set: sendResult
+          value:
+            expr: "JSON.parse(sourceFollowup.toolOutput)"
+        - assert:
+            expr: "sendResult.status === 'forbidden' && sourceFollowup.toolOutput.includes(config.denialText)"
+            message:
+              expr: "`unexpected sessions_send result: ${String(sourceFollowup.toolOutput).slice(0, 600)}`"
+        - set: failureReply
+          value:
+            expr: "await (async () => { const deadline = Date.now() + 30000; while (Date.now() < deadline) { const found = state.getSnapshot().messages.find((message) => message.direction === 'outbound' && message.isError === true); if (found) { return found; } await sleep(250); } return undefined; })()"
+        - assert:
+            expr: "Boolean(failureReply) && /session send/i.test(failureReply.text)"
+            message:
+              expr: "`expected the user-visible tool failure warning for the denied send; outbound=${JSON.stringify(state.getSnapshot().messages.filter((message) => message.direction === 'outbound').map((message) => ({ text: message.text, isError: message.isError })))}`"
+        - call: sleep
+          args: [{ ref: config.quietWindowMs }]
+        - set: scenarioRequests
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)"
+        - set: targetRequests
+          value:
+            expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.targetPromptSnippet))"
+        - assert:
+            expr: targetRequests.length === 0
+            message: the denied send must not start any target model request
+        - set: sessionsAfter
+          value:
+            expr: "await env.gateway.call('sessions.list', {}, { timeoutMs: 30000 })"
+        - set: targetSessions
+          value:
+            expr: "sessionsAfter.sessions.filter((session) => session.key === config.targetSessionKey)"
+        - assert:
+            expr: targetSessions.length === 0
+            message: the denied send must not create the target main session
+      detailsExpr: "JSON.stringify({ sourceTool: sourceRequest.plannedToolArgs, toolOutput: sourceFollowup.toolOutput.slice(0, 600), userVisibleWarning: String(failureReply?.text ?? '').slice(0, 200), toolResultCorrelated: sourceFollowup.toolOutputCallId === sourceRequest.plannedToolCallId, quietWindowMs: config.quietWindowMs, targetRunPresent: targetRequests.length > 0, targetRequestCount: targetRequests.length, sessionsListMatch: targetSessions.length > 0, targetSessionCount: targetSessions.length })"

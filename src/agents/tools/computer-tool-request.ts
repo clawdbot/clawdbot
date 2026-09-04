@@ -62,16 +62,6 @@ const ESCALATION_REASONS = new Set([
   "no_window_target",
   "other",
 ]);
-const READ_ONLY_COMPUTER_ACT_ACTIONS = new Set<ComputerUseV2ActionName>([
-  "list_apps",
-  "list_windows",
-  "get_accessibility_tree",
-  "get_cursor_position",
-  "get_window_state",
-  "zoom",
-  "get_browser_state",
-  "get_recording_state",
-]);
 const SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
 
 function isScrollDirection(value: string): value is (typeof SCROLL_DIRECTIONS)[number] {
@@ -80,10 +70,6 @@ function isScrollDirection(value: string): value is (typeof SCROLL_DIRECTIONS)[n
 
 export function isComputerActAction(action: ComputerToolAction): boolean {
   return INPUT_ACTIONS.has(action);
-}
-
-export function isReadOnlyComputerActAction(action: ComputerToolAction): boolean {
-  return READ_ONLY_COMPUTER_ACT_ACTIONS.has(action);
 }
 
 export function computerActionNeedsFrame(

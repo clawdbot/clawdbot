@@ -222,10 +222,7 @@ function expandPluginGroups(
       continue;
     }
     const tools = groups.byPlugin.get(normalized) ?? [];
-    // Discord owns its own show_widget; only alias names absent from plugin ownership metadata.
-    const promotedCoreTools = (
-      SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS.get(normalized) ?? []
-    ).filter((toolName) => !groups.all.includes(toolName));
+    const promotedCoreTools = SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS.get(normalized) ?? [];
     if (tools.length > 0 || promotedCoreTools.length > 0) {
       expanded.push(...tools, ...promotedCoreTools);
       continue;

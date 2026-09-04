@@ -97,6 +97,11 @@ export type SkillWorkshopActionNotice = {
   slug: string;
 };
 
+export type SkillWorkshopProposalDecision = {
+  proposalId: string;
+  expectedRevisionHash: string | null;
+};
+
 type SkillWorkshopAppliedRevision = {
   proposal: SkillWorkshopProposal;
   version: number;

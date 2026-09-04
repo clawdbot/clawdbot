@@ -8,11 +8,11 @@ import type {
   SessionTranscriptTurnWriteContext,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-transcript-store.js";
 
 // Append results are public SDK contracts. Keep commit-only cursor metadata
 // attached to their object lifetime without changing the returned message shape.

@@ -6,7 +6,7 @@ import {
   type ThinkLevel,
 } from "../../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
@@ -291,6 +291,7 @@ export async function resolveEmbeddedModelSelection(params: {
   const normalizedChannelOverride = channelModelOverride
     ? parseAgentCommandModelRef(
         params.cfg,
+        params.sessionAgentId,
         channelModelOverride.model,
         defaultProvider,
         params.modelManifestContext,
@@ -314,6 +315,7 @@ export async function resolveEmbeddedModelSelection(params: {
       storedModelOverrideRouteResolution === "raw" && !storedRouteCataloged
         ? resolveModelAliasFromPair({
             cfg: params.cfg,
+            agentId: params.sessionAgentId,
             provider: candidateProvider,
             model: storedModelOverride,
             defaultProvider,
@@ -369,6 +371,7 @@ export async function resolveEmbeddedModelSelection(params: {
           )
         : parseAgentCommandModelRef(
             params.cfg,
+            params.sessionAgentId,
             explicitModelOverride,
             provider,
             params.modelManifestContext,

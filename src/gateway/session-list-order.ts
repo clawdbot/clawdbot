@@ -36,9 +36,17 @@ function selectNewestLimitedEntries(
 ): SessionEntryPair[] {
   const selected: SessionEntryPair[] = [];
   for (const entry of entries) {
-    const insertAt = selected.findIndex(
-      (candidate) => compareSessionEntryPairs(entry, candidate, sortBy) < 0,
-    );
+    const first = selected[0];
+    const beforeFirst = first && compareSessionEntryPairs(entry, first, sortBy) < 0;
+    const worst = selected[limit - 1];
+    if (!beforeFirst && worst && compareSessionEntryPairs(entry, worst, sortBy) >= 0) {
+      continue;
+    }
+    const insertAt = beforeFirst
+      ? 0
+      : selected.findIndex(
+          (candidate, index) => index > 0 && compareSessionEntryPairs(entry, candidate, sortBy) < 0,
+        );
     if (insertAt >= 0) {
       selected.splice(insertAt, 0, entry);
       if (selected.length > limit) {

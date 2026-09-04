@@ -5,6 +5,7 @@ import {
 import { readToolStringParam } from "../../agents/tools/common.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
@@ -165,6 +166,7 @@ async function resolveActionTarget(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   accountId?: string | null;
+  plugin?: ChannelPlugin;
 }): Promise<ResolvedMessagingTarget | undefined> {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
   const toRaw = normalizeOptionalString(params.args.to) ?? "";
@@ -174,6 +176,7 @@ async function resolveActionTarget(params: {
       channel: params.channel,
       input: toRaw,
       accountId: params.accountId ?? undefined,
+      plugin: params.plugin,
     });
     params.args.to = resolved.to;
     resolvedTarget = resolved;
@@ -185,6 +188,7 @@ async function resolveActionTarget(params: {
       channel: params.channel,
       input: channelIdRaw,
       accountId: params.accountId ?? undefined,
+      plugin: params.plugin,
       preferredKind: "group",
       validateResolvedTarget: (target) =>
         target.kind === "user"
@@ -205,6 +209,7 @@ async function resolveResolvedTargetOrThrow(params: {
   channel: ChannelId;
   input: string;
   accountId?: string;
+  plugin?: ChannelPlugin;
   preferredKind?: "group" | "user" | "channel";
   validateResolvedTarget?: (target: ResolvedMessagingTarget) => string | undefined;
 }): Promise<ResolvedMessagingTarget> {
@@ -214,6 +219,7 @@ async function resolveResolvedTargetOrThrow(params: {
     input: params.input,
     accountId: params.accountId,
     preferredKind: params.preferredKind,
+    plugin: params.plugin,
   });
   if (!resolved.ok) {
     throw resolved.error;
@@ -391,6 +397,19 @@ export async function prepareMessageRoute(params: {
       agentId,
     });
   }
+  const delegatesActionToGateway =
+    Boolean(input.gateway) &&
+    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
+  // Resolve once for locally owned sends so formatting and delivery share an
+  // identity. Remote calls must retain omitted input for the Gateway to resolve.
+  if (
+    !accountId &&
+    action === "send" &&
+    !delegatesActionToGateway &&
+    (channelPlugin.outbound?.deliveryMode !== "gateway" || input.gatewayOwnedDelivery === true)
+  ) {
+    accountId = resolveChannelDefaultAccountId({ plugin: channelPlugin, cfg });
+  }
   if (accountId) {
     actionParams.accountId = accountId;
   }
@@ -403,9 +422,6 @@ export async function prepareMessageRoute(params: {
     cfg,
     agentId,
   });
-  const delegatesActionToGateway =
-    Boolean(input.gateway) &&
-    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
   const defersExternalTargetResolution =
     delegatesActionToGateway &&
     !dryRun &&
@@ -457,6 +473,7 @@ export async function resolveMessageTarget(params: {
   toolContext?: ChannelThreadingToolContext;
   agentId?: string | null;
   deferExternalTargetResolution?: boolean;
+  plugin?: ChannelPlugin;
 }): Promise<ResolvedMessagingTarget | undefined> {
   const resolvedTarget = params.deferExternalTargetResolution
     ? undefined
@@ -466,6 +483,7 @@ export async function resolveMessageTarget(params: {
         action: params.action,
         args: params.args,
         accountId: params.accountId,
+        plugin: params.plugin,
       });
 
   enforceCrossContextPolicy({

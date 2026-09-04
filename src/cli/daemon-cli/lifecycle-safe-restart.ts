@@ -1,12 +1,17 @@
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { refreshLegacySystemdServiceMetadata } from "../../daemon/systemd.js";
 import { callGatewayCli } from "../../gateway/call.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { appendGatewayLifecycleAudit } from "./lifecycle-audit.js";
 import type { DaemonLifecycleOptions } from "./types.js";
+
+const SAFE_RESTART_METADATA_REFRESH_TIMEOUT_MS = 5_000;
 
 function formatSafeRestartWarnings(result: SafeGatewayRestartRequestResult): string[] | undefined {
   return result.preflight.blockers.length === 0 ? undefined : [result.preflight.summary];
@@ -55,6 +60,29 @@ export async function runSafeGatewayRestart(
   if (skipDeferral) {
     params.skipDeferral = true;
   }
+  if (process.platform === "linux") {
+    const reportRefreshError = (error: unknown) => {
+      defaultRuntime.error(
+        theme.warn(
+          `Warning: legacy systemd metadata was not refreshed: ${formatErrorMessage(error)}`,
+        ),
+      );
+    };
+    const mutationError = resolveGatewayServiceMutationError(
+      "refresh legacy systemd service metadata",
+      process.env,
+    );
+    if (mutationError) {
+      reportRefreshError(mutationError);
+    } else {
+      // Definition maintenance is best effort. Keep a wedged systemd manager from
+      // suppressing the separately bounded Gateway restart request below.
+      await refreshLegacySystemdServiceMetadata(
+        process.env,
+        SAFE_RESTART_METADATA_REFRESH_TIMEOUT_MS,
+      ).catch(reportRefreshError);
+    }
+  }
   const result = await callGatewayCli<SafeGatewayRestartRequestResult>({
     method: "gateway.restart.request",
     params,
@@ -83,7 +111,8 @@ export async function runSafeGatewayRestart(
         ? "safe restart requested; gateway will restart after active work drains " +
           "(bounded wait; may force after the timeout expires)"
         : skipDeferral
-          ? "safe restart requested; gateway bypassing active-work deferral"
+          ? "safe restart requested; gateway bypassing active-work deferral; " +
+            "shutdown may still wait for pending replies to drain"
           : "safe restart requested; gateway will restart momentarily";
   const payload = {
     ok: true,

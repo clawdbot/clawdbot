@@ -1,79 +1,12 @@
 /**
  * Built-in model suppression helpers.
- * Resolves plugin manifest suppression rules with process-local caching so
+ * Resolves prepared plugin manifest suppression rules so
  * built-in catalog entries can be hidden or blocked consistently.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { buildManifestBuiltInModelSuppressionResolver } from "../plugins/manifest-model-suppression.js";
-import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataEnvFingerprint } from "../plugins/plugin-metadata-snapshot.js";
-
-type ManifestSuppressionResolver = ReturnType<typeof buildManifestBuiltInModelSuppressionResolver>;
-
-type CachedManifestSuppressionResolver = {
-  config: OpenClawConfig | undefined;
-  controlPlaneFingerprint: string;
-  cwd: string;
-  envFingerprint: string;
-  metadataSnapshot: unknown;
-  resolver: ManifestSuppressionResolver;
-  workspaceDir: string | undefined;
-};
-
-let cachedManifestSuppressionResolver: CachedManifestSuppressionResolver | undefined;
-
-/** Clear cached manifest suppression resolver state for tests and metadata lifecycle resets. */
-function clearModelSuppressionResolverCache(): void {
-  cachedManifestSuppressionResolver = undefined;
-}
-
-registerPluginMetadataProcessMemoLifecycleClear(clearModelSuppressionResolverCache);
-
-function resolveCachedManifestSuppressionResolver(params: {
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}): ManifestSuppressionResolver {
-  const cached = cachedManifestSuppressionResolver;
-  const controlPlaneFingerprint = resolvePluginControlPlaneFingerprint({
-    ...(params.config ? { config: params.config } : {}),
-    env: params.env,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  const cwd = process.cwd();
-  const envFingerprint = resolvePluginMetadataEnvFingerprint(params.env);
-  const metadataSnapshot = getCurrentPluginMetadataSnapshot(params);
-  if (
-    cached !== undefined &&
-    cached.config === params.config &&
-    cached.controlPlaneFingerprint === controlPlaneFingerprint &&
-    cached.cwd === cwd &&
-    cached.envFingerprint === envFingerprint &&
-    cached.metadataSnapshot === metadataSnapshot &&
-    cached.workspaceDir === params.workspaceDir
-  ) {
-    return cached.resolver;
-  }
-  const resolver = buildManifestBuiltInModelSuppressionResolver({
-    env: params.env,
-    ...(params.config ? { config: params.config } : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  cachedManifestSuppressionResolver = {
-    config: params.config,
-    controlPlaneFingerprint,
-    cwd,
-    envFingerprint,
-    metadataSnapshot,
-    resolver,
-    workspaceDir: params.workspaceDir,
-  };
-  return resolver;
-}
 
 function resolveBuiltInModelSuppressionFromManifest(params: {
   provider?: string | null;
@@ -88,7 +21,7 @@ function resolveBuiltInModelSuppressionFromManifest(params: {
   if (!provider || !modelId) {
     return undefined;
   }
-  return resolveCachedManifestSuppressionResolver({
+  return buildManifestBuiltInModelSuppressionResolver({
     env: process.env,
     ...(params.config ? { config: params.config } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
@@ -102,37 +35,7 @@ function resolveBuiltInModelSuppressionFromManifest(params: {
   });
 }
 
-function resolveBuiltInModelSuppression(params: {
-  provider?: string | null;
-  id?: string | null;
-  baseUrl?: string | null;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}) {
-  const manifestResult = resolveBuiltInModelSuppressionFromManifest(params);
-  if (manifestResult?.suppress) {
-    return manifestResult;
-  }
-  const provider = normalizeProviderId(params.provider ?? "");
-  const modelId = normalizeLowercaseStringOrEmpty(params.id);
-  if (!provider || !modelId) {
-    return undefined;
-  }
-  return undefined;
-}
-
 /** Return true when plugin manifest metadata suppresses a built-in model entry. */
-export function shouldSuppressBuiltInModelFromManifest(params: {
-  provider?: string | null;
-  id?: string | null;
-  baseUrl?: string | null;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}) {
-  return resolveBuiltInModelSuppressionFromManifest(params)?.suppress ?? false;
-}
-
-/** Return true when any built-in suppression rule applies to a model entry. */
 export function shouldSuppressBuiltInModelCore(params: {
   provider?: string | null;
   id?: string | null;
@@ -140,7 +43,7 @@ export function shouldSuppressBuiltInModelCore(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }) {
-  return resolveBuiltInModelSuppression(params)?.suppress ?? false;
+  return resolveBuiltInModelSuppressionFromManifest(params)?.suppress ?? false;
 }
 
 /**
@@ -168,7 +71,7 @@ export function buildSuppressedBuiltInModelError(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): string | undefined {
-  return resolveBuiltInModelSuppression(params)?.errorMessage;
+  return resolveBuiltInModelSuppressionFromManifest(params)?.errorMessage;
 }
 
 /** Build a reusable suppression predicate for repeated catalog filtering. */

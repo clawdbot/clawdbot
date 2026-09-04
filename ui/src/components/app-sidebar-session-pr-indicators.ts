@@ -1,8 +1,10 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import {
+  summarizeSessionPullRequests,
   scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
@@ -11,13 +13,9 @@ import {
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import {
-  resolveSessionPullRequestIndicatorState,
-  type SessionPullRequestIndicatorState,
-} from "./session-menu-work.ts";
 
 type IndicatorEntry = {
-  state: SessionPullRequestIndicatorState;
+  summary: SessionCatalogPullRequestSummary | undefined;
   worktreeId: string;
 };
 
@@ -38,7 +36,6 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   private store: SessionPullRequestSnapshotStore | null = null;
   private stopStoreUpdates: (() => void) | null = null;
   private connected = false;
-  private refreshScheduled = false;
 
   constructor(
     private readonly host: ReactiveControllerHost,
@@ -52,7 +49,11 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   }
 
   hostUpdated(): void {
-    this.scheduleRefresh();
+    // Reuse the projection before the host releases it in updated(). Changes
+    // here can still schedule a follow-up render to clear stale PR summaries.
+    if (this.connected) {
+      this.refreshVisible();
+    }
   }
 
   hostDisconnected(): void {
@@ -61,22 +62,14 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     this.reset(false);
   }
 
-  state(sessionKey: string, worktreeId: string): SessionPullRequestIndicatorState {
+  summary(
+    sessionKey: string,
+    worktreeId: string,
+    initial?: SessionCatalogPullRequestSummary,
+  ): SessionCatalogPullRequestSummary | undefined {
     const entry = this.states.get(sessionKey);
-    return entry?.worktreeId === worktreeId ? entry.state : "none";
-  }
-
-  private scheduleRefresh(): void {
-    if (this.refreshScheduled) {
-      return;
-    }
-    this.refreshScheduled = true;
-    globalThis.setTimeout(() => {
-      this.refreshScheduled = false;
-      if (this.connected) {
-        this.refreshVisible();
-      }
-    }, 0);
+    // A ready empty snapshot is authoritative; only seed a row before its first snapshot.
+    return entry?.worktreeId === worktreeId ? entry.summary : initial;
   }
 
   private releaseStore(): void {
@@ -110,13 +103,13 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     );
   }
 
-  private applySnapshots(): void {
+  private applySnapshots(rows?: readonly SidebarRecentSession[]): void {
     const store = this.store;
     if (!store) {
       return;
     }
     let changed = false;
-    for (const session of this.eligibleRows()) {
+    for (const session of rows ?? this.eligibleRows()) {
       if (!session.worktreeId) {
         continue;
       }
@@ -141,12 +134,16 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
       if (snapshot.status !== "ready" && snapshot.pullRequests.length === 0) {
         continue;
       }
+      const current = this.states.get(session.key);
       const entry = {
-        state: resolveSessionPullRequestIndicatorState(snapshot.pullRequests),
+        summary: summarizeSessionPullRequests(snapshot.pullRequests, current?.summary),
         worktreeId: session.worktreeId,
       };
-      const current = this.states.get(session.key);
-      if (current?.state !== entry.state || current.worktreeId !== entry.worktreeId) {
+      if (
+        !current ||
+        current.summary !== entry.summary ||
+        current.worktreeId !== entry.worktreeId
+      ) {
         this.states.set(session.key, entry);
         changed = true;
       }
@@ -199,6 +196,6 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
       this,
       eligibleRows.map((session) => this.scopedKey(session.key)),
     );
-    this.applySnapshots();
+    this.applySnapshots(eligibleRows);
   }
 }

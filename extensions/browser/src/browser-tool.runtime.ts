@@ -22,6 +22,7 @@ export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | 
 export {
   callGatewayTool,
   describeImageFile,
+  hasGatewayToolRoutingContext,
   imageResultFromFile,
   jsonResult,
   listNodes,
@@ -46,6 +47,10 @@ export {
   browserArmDialog,
   browserArmFileChooser,
   browserConsoleMessages,
+  browserRequests,
+  browserErrors,
+  browserPageText,
+  browserEmulateSetting,
   browserDownload,
   browserNavigate,
   browserPdfSave,
@@ -73,7 +78,7 @@ export { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 export { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 export { resolveExistingUploadPaths } from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
-export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
+export { persistBrowserProxyResultFiles } from "./browser/proxy-files.js";
 export { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
 export {
   touchSessionBrowserTab,
