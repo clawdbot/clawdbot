@@ -5,12 +5,14 @@ import net from "node:net";
 import { InputFile } from "grammy";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   logWebhookError,
   logWebhookProcessed,
   logWebhookReceived,
 } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { BackoffPolicy, RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   computeBackoff,
@@ -315,6 +317,7 @@ export async function startTelegramWebhook(opts: {
   spoolDir?: string;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }) {
+  const readConfig = createRuntimeConfigReader(opts.config ?? {});
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
   if (path === healthPath) {
@@ -479,7 +482,9 @@ export async function startTelegramWebhook(opts: {
       return;
     }
     const startTime = Date.now();
-    logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
+    if (isDiagnosticsEnabled(readConfig())) {
+      logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
+    }
     const secretHeader = resolveSingleHeaderValue(req.headers["x-telegram-bot-api-secret-token"]);
     if (!hasValidTelegramWebhookSecret(secretHeader, secret)) {
       // Authenticated Telegram delivery must not consume the abuse budget. Only
@@ -536,18 +541,22 @@ export async function startTelegramWebhook(opts: {
       res.setHeader(TELEGRAM_WEBHOOK_ACCEPTED_HEADER, TELEGRAM_WEBHOOK_ACCEPTED_VALUE);
       respondText(200);
       status.noteWebhookUpdateReceived();
-      logWebhookProcessed({
-        channel: "telegram",
-        updateType: "telegram-post",
-        durationMs: Date.now() - startTime,
-      });
+      if (isDiagnosticsEnabled(readConfig())) {
+        logWebhookProcessed({
+          channel: "telegram",
+          updateType: "telegram-post",
+          durationMs: Date.now() - startTime,
+        });
+      }
     })().catch((err: unknown) => {
       const errMsg = formatErrorMessage(err);
-      logWebhookError({
-        channel: "telegram",
-        updateType: "telegram-post",
-        error: errMsg,
-      });
+      if (isDiagnosticsEnabled(readConfig())) {
+        logWebhookError({
+          channel: "telegram",
+          updateType: "telegram-post",
+          error: errMsg,
+        });
+      }
       runtime.log?.(`webhook request failed: ${errMsg}`);
       respondText(500);
     });

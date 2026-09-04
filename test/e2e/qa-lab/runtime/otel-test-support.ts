@@ -107,7 +107,7 @@ export function createRecentTraceSummary() {
         }
       }
     },
-    read(): CapturedTraceSummary[] {
+    read: (): CapturedTraceSummary[] => {
       return [...traces].map(([traceId, names]) => ({
         traceId,
         names: Object.fromEntries(names),

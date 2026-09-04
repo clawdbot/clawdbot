@@ -390,28 +390,45 @@ describe("buildGatewayReloadPlan", () => {
     { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
   ]);
   it.each([
-    { prefix: "channels.whatsapp", kind: "none", services: [] },
-    { prefix: "channels.whatsapp.exporter", kind: "hot", services: ["exporter"] },
-  ] as const)(
-    "preserves explicit policy precedence for service $prefix",
-    ({ prefix, kind, services }) => {
-      const serviceRegistry = createTestRegistry([
-        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
-      ]);
-      serviceRegistry.services.push({
-        pluginId: "exporter",
-        source: "test",
-        origin: "workspace",
-        service: { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
-      });
-      setActivePluginRegistry(serviceRegistry);
-      expect(resolveConfigReloadMetadata(`${prefix}.enabled`)).toEqual({ kind });
-      expect(buildGatewayReloadPlan([`${prefix}.enabled`]).restartServices).toEqual(
-        new Set(services),
-      );
-      setActivePluginRegistry(emptyRegistry);
+    { prefix: "gateway", path: "gateway.port", kind: "restart", services: [] },
+    { prefix: "discovery", path: "discovery.wideArea.enabled", kind: "restart", services: [] },
+    { prefix: "logging", path: "logging.level", kind: "none", services: [] },
+    { prefix: "mcp", path: "mcp.apps.enabled", kind: "restart", services: [] },
+    {
+      prefix: "plugins",
+      path: "plugins.entries.exporter.enabled",
+      kind: "hot",
+      services: ["exporter"],
     },
-  );
+    { prefix: "channels.whatsapp", path: "channels.whatsapp.enabled", kind: "none", services: [] },
+    {
+      prefix: "channels.whatsapp.exporter",
+      path: "channels.whatsapp.exporter.enabled",
+      kind: "hot",
+      services: ["exporter"],
+    },
+  ] as const)("preserves explicit policy precedence for service $prefix", (entry) => {
+    const { prefix, path: changedPath, kind, services } = entry;
+    const serviceRegistry = createTestRegistry([
+      { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+    ]);
+    serviceRegistry.services.push({
+      pluginId: "exporter",
+      source: "test",
+      origin: "workspace",
+      service: { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
+    });
+    setActivePluginRegistry(serviceRegistry);
+    expect(resolveConfigReloadMetadata(changedPath)).toEqual({ kind });
+    const plan = buildGatewayReloadPlan([changedPath]);
+    expect(plan.restartGateway).toBe(kind === "restart");
+    expect(plan.restartServices).toEqual(new Set(services));
+    if (prefix === "plugins") {
+      expect(plan.reloadPlugins).toBe(true);
+      expect(plan.disposeMcpRuntimes).toBe(true);
+    }
+    setActivePluginRegistry(emptyRegistry);
+  });
   it.each(["channels.mattermost", "channels.mattermost.accounts.work"])(
     "preserves channel account ownership when a service reloads %s",
     (prefix) => {

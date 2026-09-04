@@ -158,6 +158,8 @@ describe("runtime snapshot state", () => {
 
       const readUnbound = createRuntimeConfigReader(scopedResolvedConfig);
 
+      const readUnbound = createRuntimeConfigReader(scopedResolvedConfig);
+
       expect(
         selectApplicableRuntimeConfig({
           inputConfig: cloneConfigWithResolutionFacts(sourceConfig),

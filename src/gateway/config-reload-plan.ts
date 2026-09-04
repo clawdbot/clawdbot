@@ -304,7 +304,9 @@ function getReloadPolicyCatalog() {
   ];
   const expand = (items: ReloadPolicy[]): ReloadRule[] =>
     items.flatMap(({ prefixes, ...policy }) => prefixes.map((prefix) => ({ ...policy, prefix })));
-  const ownedRules = expand(policies).toSorted((a, b) => b.prefix.length - a.prefix.length);
+  const ownedRules = expand([...policies, ...DEFAULT_RELOAD_POLICIES]).toSorted(
+    (a, b) => b.prefix.length - a.prefix.length,
+  );
   const rules = [
     ...ownedRules,
     // Narrow service declarations retain existing owner actions, including
@@ -316,7 +318,6 @@ function getReloadPolicyCatalog() {
         prefix,
       })),
     ),
-    ...expand(DEFAULT_RELOAD_POLICIES),
   ];
   for (const rule of rules) {
     rule.services = servicePolicies

@@ -58,7 +58,8 @@ Retained channel monitors can bind `createRuntimeConfigReader(cfg)` from
 runtime updates when the supplied config belongs to the active runtime, and
 preserves an explicitly scoped config otherwise, including when no runtime has
 been published yet. Read once per turn and carry that snapshot through admission
-and replies.
+and replies. Process-wide controls such as diagnostics should read at the point
+of emission.
 
 ## Reusable runtime utilities
 
@@ -1231,7 +1232,7 @@ A service can declare `reload: { configPrefixes: ["myConfig.service"] }` alongsi
 its `id`, `start`, and `stop`. After a matching config change commits, the Gateway
 stops that service and calls `start(ctx)` again with the new `ctx.config`. Only
 loaded services declaring the matching prefix are replaced; overlapping owners
-all refresh. Existing narrower restart or no-op policies still take precedence.
+all refresh. Existing equal or narrower restart or no-op policies still take precedence.
 Each start receives a new capability lease and health reporter. Stop must release
 resources before resolving; failed replacement cleanup or startup triggers
 Gateway recovery. A full plugin replacement subsumes these service restarts.
