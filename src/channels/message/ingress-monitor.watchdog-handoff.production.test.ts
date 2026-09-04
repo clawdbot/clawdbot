@@ -207,7 +207,7 @@ function createMonitor(
   });
 }
 
-async function createOversizedReplyParams() {
+async function createOversizedReplyParams(): Promise<Parameters<typeof runReplyAgent>[0]> {
   const storePath = `${tempDirs.make("openclaw-ingress-handoff-session-")}/sessions.json`;
   const sessionEntry: SessionEntry = {
     sessionId: "session-1",
@@ -257,7 +257,7 @@ async function createOversizedReplyParams() {
     storePath,
     sessionEntry,
     sessionStore: { [sessionKey]: sessionEntry },
-  } satisfies Parameters<typeof runReplyAgent>[0];
+  };
 }
 
 describe("channel ingress production-boundary watchdog handoff", () => {
