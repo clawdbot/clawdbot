@@ -747,6 +747,27 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it("notifies the owning shell after a pane leaves its DOM subtree", async () => {
+    const { pane } = createTestChatPane({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const lifecycle = pane as TestChatPane & { render: () => unknown };
+    lifecycle.render = () => null;
+    const shell = document.createElement("openclaw-app-shell");
+    const paneCounts: number[] = [];
+    shell.addEventListener("openclaw-chat-pane-lifecycle-changed", () => {
+      paneCounts.push(shell.querySelectorAll("openclaw-chat-pane").length);
+    });
+    shell.append(pane);
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await lifecycle.updateComplete;
+    pane.remove();
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+
+    expect(paneCounts).toEqual([1, 0]);
+  });
+
   it("renders once while initially hidden, then reconciles hidden invalidations", async () => {
     let visibilityState: DocumentVisibilityState = "hidden";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
@@ -1006,7 +1027,7 @@ describe("chat pane connection lifecycle", () => {
 
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
-      expect.objectContaining({ limit: 800, sessionKey: state.sessionKey }),
+      expect.objectContaining({ limit: 80, maxBytes: 256 * 1024, sessionKey: state.sessionKey }),
     );
     expect(deferHydration).toHaveBeenCalledWith(state.sessionKey, expect.any(Promise));
   });

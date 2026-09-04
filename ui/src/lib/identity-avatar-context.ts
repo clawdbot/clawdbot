@@ -10,8 +10,11 @@ let gatewayRequests = new AbortController();
 // would silently drop whichever registered first.
 const gatewayContextResets = new Set<() => void>();
 
-export function registerAvatarGatewayReset(reset: () => void): void {
+export function registerAvatarGatewayReset(reset: () => void): () => void {
   gatewayContextResets.add(reset);
+  return () => {
+    gatewayContextResets.delete(reset);
+  };
 }
 
 export function readAvatarGatewayContext() {

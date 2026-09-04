@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
 import {
   identityAvatarClass,
@@ -11,8 +13,8 @@ import {
   type IdentityAvatarView,
 } from "./identity-avatar-view.ts";
 
-function renderAvatar(view: IdentityAvatarView, container: HTMLElement): void {
-  render(
+function renderAvatar(view: IdentityAvatarView, container: HTMLElement) {
+  return render(
     html`<span class=${identityAvatarClass("test-avatar", view)}>
       ${renderIdentityAvatarImage({
         view,
@@ -158,5 +160,68 @@ describe("shared identity avatar view", () => {
 
     secondImage.dispatchEvent(new Event("load"));
     expect(container.querySelector(".test-avatar")?.classList.contains("is-fallback")).toBe(false);
+  });
+
+  it("retains pending images independently through replacement and reconnect under pressure", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
+    const avatar = createDeferred<Response>();
+    const pressure = createDeferred<Response>();
+    const response = () =>
+      new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
+    let avatarRequests = 0;
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/avatar/pending-")) {
+        return pressure.promise;
+      }
+      avatarRequests += 1;
+      return avatarRequests === 1 ? avatar.promise : Promise.resolve(response());
+    });
+    let sequence = 0;
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:view-${sequence++}`);
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    const identity = {
+      id: "profile-ada",
+      name: "Ada",
+      profileAvatarUrl: "/api/users/profile-ada/avatar?v=1",
+    };
+    const first = document.body.appendChild(document.createElement("div"));
+    const second = document.body.appendChild(document.createElement("div"));
+    renderAvatar(resolveIdentityAvatarView(identity), first);
+    const part = renderAvatar(resolveIdentityAvatarView(identity), second);
+    const pressureLoads = Array.from({ length: 128 }, (_, index) =>
+      Promise.resolve(resolveAvatarImageUrl(`/avatar/pending-${index}?v=1`)),
+    );
+    render(nothing, first);
+    avatar.resolve(response());
+    const image = () => second.querySelector<HTMLImageElement>("img");
+    try {
+      await vi.waitFor(() => expect(image()?.getAttribute("src")).toBe("blob:view-0"));
+      image()?.dispatchEvent(new Event("load"));
+      expect(revoke).not.toHaveBeenCalledWith("blob:view-0");
+      part.setConnected(false);
+      expect(revoke).toHaveBeenCalledWith("blob:view-0");
+      part.setConnected(true);
+      await vi.waitFor(() => expect(image()?.getAttribute("src")).toBe("blob:view-1"));
+      renderAvatar(resolveIdentityAvatarView(identity), second);
+      expect(image()?.getAttribute("src")).toBe("blob:view-1");
+      expect(avatarRequests).toBe(2);
+      renderAvatar(
+        resolveIdentityAvatarView({
+          ...identity,
+          profileAvatarUrl: "/api/users/profile-ada/avatar?v=2",
+        }),
+        second,
+      );
+      await vi.waitFor(() => expect(image()?.getAttribute("src")).toBe("blob:view-2"));
+      expect(revoke).toHaveBeenCalledWith("blob:view-1");
+      expect(revoke).not.toHaveBeenCalledWith("blob:view-2");
+      expect(fetchAvatar).toHaveBeenCalledTimes(131);
+    } finally {
+      render(nothing, first);
+      render(nothing, second);
+      pressure.resolve(new Response(null, { status: 404 }));
+      await Promise.all(pressureLoads);
+    }
   });
 });

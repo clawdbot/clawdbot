@@ -1,3 +1,4 @@
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { AVATAR_MAX_BYTES } from "../../../src/shared/avatar-limits.js";
 import {
   fetchGatewayContextResource,
@@ -20,14 +21,17 @@ const IDENTITY_AVATAR_MIME_TYPES = new Set([
 
 type CachedIdentityAvatar = {
   blobUrl: string | null;
+  references: number;
   settled: boolean;
   retryAt?: number;
   promise: Promise<string | null>;
 };
 
 const identityAvatarCache = new Map<string, CachedIdentityAvatar>();
+let identityAvatarGeneration = 0;
 
 function clearIdentityAvatarCache(): void {
+  identityAvatarGeneration += 1;
   for (const entry of identityAvatarCache.values()) {
     if (entry.blobUrl) {
       URL.revokeObjectURL(entry.blobUrl);
@@ -47,7 +51,7 @@ function trimIdentityAvatarCache(): void {
     }
     // Pending consumers still need their eventual blob. Evict only settled
     // images or misses, in the Map's LRU order.
-    if (!entry.settled) {
+    if (!entry.settled || entry.references > 0) {
       continue;
     }
     identityAvatarCache.delete(key);
@@ -64,11 +68,12 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
   identityAvatarCache.delete(url);
   if (cached && (cached.retryAt === undefined || Date.now() < cached.retryAt)) {
     identityAvatarCache.set(url, cached);
-    return cached.settled && cached.blobUrl ? cached.blobUrl : cached.promise;
+    return cached.blobUrl ?? cached.promise;
   }
 
   const entry: CachedIdentityAvatar = {
     blobUrl: null,
+    references: 0,
     settled: false,
     promise: Promise.resolve(null),
   };
@@ -136,5 +141,122 @@ export function settleAvatarImageUrl(value: string | null): void {
       trimIdentityAvatarCache();
       return;
     }
+  }
+}
+
+/** Acquire before awaiting: each pending or displayed consumer owns its own release. */
+export function retainAvatarImageUrl(value: string | Promise<string | null> | null): () => void {
+  const entry = value
+    ? [...identityAvatarCache.values()].find(
+        (item) => item.blobUrl === value || item.promise === value,
+      )
+    : undefined;
+  if (!entry) {
+    return () => undefined;
+  }
+  entry.references += 1;
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    entry.references -= 1;
+    entry.settled = true;
+    trimIdentityAvatarCache();
+  };
+}
+
+/** View ownership for agent cards/selectors; bytes remain in the shared Gateway image cache. */
+export class IdentityAvatarController implements ReactiveController {
+  private connected = false;
+  private unsubscribeGatewayReset?: () => void;
+  private routes = new Map<
+    string,
+    { url: string | null; result: string | Promise<string | null> | null; release?: () => void }
+  >();
+  private activeRoutes: Set<string> | null = null;
+  private generation = identityAvatarGeneration;
+
+  constructor(private readonly host: ReactiveControllerHost) {
+    host.addController(this);
+  }
+
+  hostConnected() {
+    this.connected = true;
+    this.unsubscribeGatewayReset = registerAvatarGatewayReset(() => this.host.requestUpdate());
+    this.host.requestUpdate();
+  }
+
+  hostDisconnected() {
+    this.connected = false;
+    this.unsubscribeGatewayReset?.();
+    this.unsubscribeGatewayReset = undefined;
+    for (const route of this.routes.values()) {
+      route.release?.();
+    }
+    this.routes.clear();
+  }
+
+  withActiveRoutes<T>(render: () => T): T {
+    this.activeRoutes = new Set();
+    try {
+      return render();
+    } finally {
+      for (const [key, route] of this.routes) {
+        if (!this.activeRoutes.has(key)) {
+          route.release?.();
+          this.routes.delete(key);
+        }
+      }
+      this.activeRoutes = null;
+    }
+  }
+
+  resolve(value: string): string | null {
+    if (!this.connected) {
+      return null;
+    }
+    if (!value.startsWith("/")) {
+      return value;
+    }
+    if (this.generation !== identityAvatarGeneration) {
+      for (const route of this.routes.values()) {
+        route.release?.();
+      }
+      this.routes.clear();
+      this.generation = identityAvatarGeneration;
+    }
+    this.activeRoutes?.add(value);
+    const result = resolveAvatarImageUrl(value);
+    const cached = this.routes.get(value);
+    if (cached && cached.result === result) {
+      return cached.url;
+    }
+    const route: { url: string | null; result: typeof result; release?: () => void } = {
+      url: null,
+      result,
+      release: retainAvatarImageUrl(result),
+    };
+    this.routes.set(value, route);
+    const apply = (url: string | null) => {
+      if (this.generation !== identityAvatarGeneration || this.routes.get(value) !== route) {
+        route.release?.();
+        return;
+      }
+      route.url = url;
+    };
+    if (typeof result === "string" || result === null) {
+      apply(result);
+    } else {
+      void result.then((url) => {
+        apply(url);
+        if (this.connected && this.routes.get(value) === route) {
+          this.host.requestUpdate();
+        }
+      });
+    }
+    cached?.release?.();
+    return route.url;
   }
 }
