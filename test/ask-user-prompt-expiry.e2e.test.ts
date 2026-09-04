@@ -7,6 +7,10 @@ import {
   waitForAskUserPromptReady,
 } from "../src/agents/tools/ask-user-tool.js";
 import { sendQuestionToolPrompt } from "../src/agents/tools/question-prompt-send.js";
+import {
+  createSecretsTool,
+  normalizeSecretsRequestParams,
+} from "../src/agents/tools/secrets-tool.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import {
   createOpenClawTestInstance,
@@ -38,19 +42,25 @@ describe("ask_user prompt expiry Gateway behavior", () => {
       const { client, sessionKey, reservation } = await createFixture("ask-user-prompt-expiry", 1);
       try {
         const questions = normalizeAskUserParams(askUserArgs).questions;
+        const gatewayCalls: string[] = [];
         const gatewayCall = async (
           method: string,
           opts: { timeoutMs?: number },
           params?: unknown,
           extra?: { signal?: AbortSignal },
-        ) =>
-          await client.request(method, params, {
+        ) => {
+          gatewayCalls.push(method);
+          return await client.request(method, params, {
             timeoutMs: opts.timeoutMs,
             signal: extra?.signal,
           });
+        };
         const readiness = waitForAskUserPromptReady(reservation.questionId, gatewayCall);
-        await new Promise((resolve) => setTimeout(resolve, 1_100));
         await expect(readiness).resolves.toBeUndefined();
+        const delayedExecution = await createAskUserTool({ sessionKey, gatewayCall }).execute(
+          reservation.toolCallId,
+          askUserArgs,
+        );
 
         expect(
           reserveAskUserPromptDelivery({
@@ -59,10 +69,14 @@ describe("ask_user prompt expiry Gateway behavior", () => {
             questions,
           }),
         ).toBeDefined();
+        expect(delayedExecution).toMatchObject({ details: { status: "no_answer" } });
+        expect(gatewayCalls).not.toContain("question.request");
         process.stderr.write(
           `ASK_USER_REAL_CLEANUP_PROOF ${JSON.stringify({
             readiness: "expired",
             reservationReleased: true,
+            delayedExecution: "no_answer",
+            questionRequestAfterExpiry: false,
             nextReservation: "accepted",
           })}\n`,
         );
@@ -140,9 +154,68 @@ describe("ask_user prompt expiry Gateway behavior", () => {
       }
     },
   );
+
+  it(
+    "rejects delayed credential execution after readiness cleanup",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
+      const questions = normalizeSecretsRequestParams(args).questions;
+      const { client, sessionKey, reservation } = await createFixture(
+        "secrets-prompt-expiry",
+        1,
+        questions,
+      );
+      try {
+        const gatewayCalls: string[] = [];
+        const gatewayCall = async (
+          method: string,
+          opts: { timeoutMs?: number },
+          params?: unknown,
+          extra?: { signal?: AbortSignal },
+        ) => {
+          gatewayCalls.push(method);
+          return await client.request(method, params, {
+            timeoutMs: opts.timeoutMs,
+            signal: extra?.signal,
+          });
+        };
+        const readiness = waitForAskUserPromptReady(reservation.questionId, gatewayCall);
+        await expect(readiness).resolves.toBeUndefined();
+        const delayedExecution = await createSecretsTool({ sessionKey, gatewayCall }).execute(
+          reservation.toolCallId,
+          args,
+        );
+
+        expect(
+          reserveAskUserPromptDelivery({
+            toolCallId: "call-after-secret-expiry",
+            sessionKey,
+            questions,
+          }),
+        ).toBeDefined();
+        expect(delayedExecution).toMatchObject({ details: { status: "no_answer" } });
+        expect(gatewayCalls).not.toContain("question.request");
+        process.stderr.write(
+          `SECRETS_REAL_CLEANUP_PROOF ${JSON.stringify({
+            readiness: "expired",
+            delayedExecution: "no_answer",
+            questionRequestAfterExpiry: false,
+            nextReservation: "accepted",
+          })}\n`,
+        );
+      } finally {
+        await disconnectGatewayClient(client);
+      }
+    },
+  );
 });
 
-async function createFixture(name: string, timeoutSeconds: number) {
+async function createFixture(
+  name: string,
+  timeoutSeconds: number,
+  questions = normalizeAskUserParams(askUserArgs).questions,
+) {
   const instance = await createOpenClawTestInstance({
     name,
     env: {
@@ -164,7 +237,7 @@ async function createFixture(name: string, timeoutSeconds: number) {
   const reservation = reserveAskUserPromptDelivery({
     toolCallId,
     sessionKey,
-    questions: normalizeAskUserParams(askUserArgs).questions,
+    questions,
     timeoutSeconds,
   });
   if (!reservation) {

@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SecretRefSchema } from "../../config/zod-schema.core.js";
 import { isBuiltInDefaultSecretProviderRef } from "../../secrets/ref-contract.js";
 import { claimPendingAgentQuestionAnswer } from "../harness/gateway-question.js";
-import { reserveAskUserPromptDelivery, settleAskUserPromptDelivery } from "./ask-user-tool.js";
+import {
+  reserveAskUserPromptDelivery,
+  settleAskUserPromptDelivery,
+  waitForAskUserPromptReady,
+} from "./ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
 import { createSecretsTool, normalizeSecretsRequestParams } from "./secrets-tool.js";
 
@@ -605,6 +609,7 @@ describe("secrets tool", () => {
         throw new Error("expected secret prompt reservation");
       }
       vi.setSystemTime(Date.now() + 1_000);
+      await expect(waitForAskUserPromptReady(reservation.questionId)).resolves.toBeUndefined();
       const gateway = gatewayStub(async () => {
         throw new Error("expired reservations must not reach the Gateway");
       });

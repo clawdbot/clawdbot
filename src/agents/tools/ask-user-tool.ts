@@ -37,6 +37,7 @@ import {
 import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
 
 const ASK_USER_PROMPT_RECHECK_MS = 50;
+const ASK_USER_EXPIRED_RETENTION_MS = ASK_USER_RPC_GRACE_MS;
 
 const AskUserToolSchema = Type.Object(
   {
@@ -94,6 +95,7 @@ const AskUserToolSchema = Type.Object(
 type AskUserQuestionPhase =
   | { kind: "reserved" }
   | { kind: "registering" }
+  | { kind: "expired" }
   | { kind: "prompting" }
   | { kind: "answerable" }
   | { kind: "resolving" }
@@ -148,6 +150,9 @@ function askUserSessionKey(sessionKey: string | undefined, agentId?: string): st
 
 function findAskUserQuestionForSession(sessionKey: string): AskUserQuestionState | undefined {
   for (const question of askUserQuestions.values()) {
+    if (question.phase.kind === "expired") {
+      continue;
+    }
     if (question.sessionKey === sessionKey) {
       return question;
     }
@@ -174,6 +179,24 @@ function releaseAskUserQuestion(questionId: string): void {
     wake();
   }
   state.waiters.clear();
+}
+
+function expireAskUserQuestion(questionId: string, state: AskUserQuestionState): void {
+  if (askUserQuestions.get(questionId) !== state || state.phase.kind === "expired") {
+    return;
+  }
+  state.claim?.dispose();
+  state.claim = undefined;
+  state.answer = undefined;
+  state.questions = [];
+  state.sessionKey = "";
+  transitionAskUserQuestion(state, { kind: "expired" });
+  const cleanupTimer = setTimeout(() => {
+    if (askUserQuestions.get(questionId) === state && state.phase.kind === "expired") {
+      askUserQuestions.delete(questionId);
+    }
+  }, ASK_USER_EXPIRED_RETENTION_MS);
+  cleanupTimer.unref?.();
 }
 
 async function waitForQuestionChange(
@@ -233,7 +256,7 @@ function releaseExpiredAskUserQuestion(questionId: string, state: AskUserQuestio
     return false;
   }
   if (askUserQuestions.get(questionId) === state) {
-    releaseAskUserQuestion(questionId);
+    expireAskUserQuestion(questionId, state);
   }
   return true;
 }
@@ -248,6 +271,9 @@ export async function waitForAskUserPromptReady(
     return undefined;
   }
   while (askUserQuestions.get(questionId) === state) {
+    if (state.phase.kind === "expired") {
+      return undefined;
+    }
     if (releaseExpiredAskUserQuestion(questionId, state)) {
       return undefined;
     }
@@ -350,7 +376,11 @@ export async function isAskUserPromptPending(
     return false;
   }
   while (askUserQuestions.get(questionId) === state) {
-    if (state.phase.kind === "resolving" || state.phase.kind === "prompt-failed") {
+    if (
+      state.phase.kind === "expired" ||
+      state.phase.kind === "resolving" ||
+      state.phase.kind === "prompt-failed"
+    ) {
       return false;
     }
     const read = await readAskUserQuestionStatusBeforeExpiry(
@@ -552,6 +582,10 @@ export function createAskUserTool(params: {
       const sessionKey = askUserSessionKey(params.sessionKey, params.agentId);
       const reserved = askUserQuestions.get(questionId);
       const existing = findAskUserQuestionForSession(sessionKey);
+      if (reserved?.phase.kind === "expired") {
+        releaseAskUserQuestion(questionId);
+        return noAnswerResult("expired");
+      }
       if ((reserved && reserved.phase.kind !== "reserved") || (existing && existing !== reserved)) {
         throw new ToolInputError(
           "ask_user already has a pending question for this session; wait for it to resolve before asking another",

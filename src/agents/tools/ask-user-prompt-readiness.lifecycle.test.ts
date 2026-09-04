@@ -50,6 +50,16 @@ describe("ask_user prompt readiness lifecycle", () => {
       gatewayResult.resolve({ questions: [] });
 
       await expect(pending).resolves.toBeUndefined();
+      const gateway = vi.fn(async () => {
+        throw new Error("expired calls must not reach the Gateway");
+      });
+      await expect(
+        createAskUserTool({ sessionKey, gatewayCall: gateway as unknown as GatewayCall }).execute(
+          "call-readiness-expired",
+          validArgs,
+        ),
+      ).resolves.toMatchObject({ details: { status: "no_answer" } });
+      expect(gateway).not.toHaveBeenCalled();
       expect(
         reserveAskUserPromptDelivery({
           toolCallId: "call-after-readiness-expired",
