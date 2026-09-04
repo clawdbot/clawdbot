@@ -5084,6 +5084,9 @@ export const en: TranslationMap & {
       expand: "Expand diagram",
       rendering: "Rendering diagram…",
       error: "This diagram could not be rendered. Check the source or simplify the diagram.",
+      rendererError:
+        "The Mermaid renderer could not load or finish. Reload the dashboard; if this continues, check proxy or authentication rules for its renderer asset URLs.",
+      imageError: "The diagram image could not be displayed. Reload the dashboard to try again.",
     },
     codeBlock: {
       languageFallback: "Code",

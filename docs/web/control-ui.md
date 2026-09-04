@@ -894,6 +894,16 @@ diagrams keep their source visible with an error; correct the syntax or simplify
 the diagram. Diagram source cannot run scripts or click handlers, load external
 images, or add custom CSS to the Control UI.
 
+Renderer loading or timeout errors instead suggest reloading the dashboard and
+checking proxy authentication. The renderer runs in an isolated frame, so its
+`assets/mermaid.min-*.js` and `assets/frame-*.js` requests do not send `SameSite=Lax`
+or `SameSite=Strict` cookies. Behind a cookie-authenticated reverse proxy, those
+static asset URLs must be reachable without those cookies, including under any
+configured `gateway.controlUi.basePath`. Check the browser Network panel for
+blocked requests or redirects to a login page. Keep authentication on the
+dashboard and Gateway APIs; any proxy exception should cover only these static
+renderer assets. Reload after correcting the asset access rules.
+
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
