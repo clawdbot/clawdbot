@@ -1,3 +1,4 @@
+import path from "node:path";
 // Control UI E2E coverage for legacy WebKit media errors.
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -37,9 +38,13 @@ suite.define(() => {
         .toBe("The selected microphone is unavailable. Choose another input or System default.");
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
       expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
-      await captureComposerProof(page, "webkit-selected-microphone-unavailable-composer.png");
+      await captureComposerProof(
+        suite,
+        page,
+        "webkit-selected-microphone-unavailable-composer.png",
+      );
       await page.getByRole("alert").screenshot({
-        path: ".artifacts/control-ui-e2e/voice-controls/webkit-selected-microphone-alert.png",
+        path: path.join(suite.artifactDir, "voice-controls/webkit-selected-microphone-alert.png"),
       });
     });
   });

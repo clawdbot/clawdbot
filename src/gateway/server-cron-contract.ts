@@ -5,11 +5,10 @@ import type { CronServiceContract } from "../cron/service-contract.js";
 
 export type GatewayCronServiceContract = CronServiceContract & {
   /** Remove an owned declarative job family from obsolete SQLite store partitions. */
-  removeStaleJobFamily(family: {
-    declarationKey: string;
-    name: string;
-    ownerPluginTag: string;
-  }): Promise<number>;
+  removeStaleJobFamily(
+    family: { declarationKey: string; name: string; ownerPluginTag: string },
+    opts?: { commitGuard?: () => void },
+  ): Promise<number>;
   readScratch(id: string): Promise<CronJobScratchState>;
   writeScratch(
     id: string,

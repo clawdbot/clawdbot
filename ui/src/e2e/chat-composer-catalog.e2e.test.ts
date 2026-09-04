@@ -1,5 +1,6 @@
 // Control UI E2E tests cover chat composer catalog discovery.
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -68,6 +69,58 @@ suite.define(() => {
       });
     },
   );
+
+  it("shows the active fallback model while retaining the selected preference", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const selectedModel = { id: "gpt-5.5", name: "GPT-5.5", provider: "codex" };
+      const activeModel = { id: "qwen3.5:9b", name: "Qwen 3.5 9B", provider: "ollama" };
+      const gateway = await installMockGateway(page, {
+        agentModel: "codex/gpt-5.5",
+        models: [selectedModel, activeModel],
+        methodResponses: {
+          "sessions.list": {
+            count: 1,
+            defaults: { model: selectedModel.id, modelProvider: selectedModel.provider },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                model: selectedModel.id,
+                modelProvider: selectedModel.provider,
+                activeModel: activeModel.id,
+                activeModelProvider: activeModel.provider,
+                status: "done",
+                updatedAt: Date.now(),
+              },
+            ],
+            path: "",
+            ts: Date.now(),
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const composer = page.locator(".agent-chat__input");
+      const trigger = composer.locator('[data-chat-model-select="true"]');
+
+      await expect.poll(() => trigger.textContent()).toContain("Qwen 3.5 9B");
+      await trigger.click();
+      await expect
+        .poll(() =>
+          composer
+            .locator('[data-chat-model-option="codex/gpt-5.5"]')
+            .getAttribute("aria-selected"),
+        )
+        .toBe("true");
+      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+        await composer.screenshot({
+          animations: "disabled",
+          path: `${suite.artifactDir}/active-fallback-model.png`,
+        });
+      }
+    });
+  });
 
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
@@ -141,7 +194,9 @@ suite.define(() => {
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
       const composer = page.locator(".agent-chat__input");
-      const providers = composer.locator("[data-chat-model-provider]");
+      const providers = composer.locator(
+        "[data-chat-model-provider] .chat-controls__provider-label",
+      );
       await expect
         .poll(async () => (await providers.allTextContents()).map((label) => label.trim()))
         .toEqual(["OpenAI"]);
@@ -170,6 +225,7 @@ suite.define(() => {
           id: "gpt-5.6-sol",
           name: "GPT-5.6 Sol",
           provider: "openai",
+          contextWindow: 1_000_000,
           available: false,
           unavailableReason: "missing-auth" as const,
         },
@@ -177,6 +233,7 @@ suite.define(() => {
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           provider: "openai",
+          contextWindow: 1_000_000,
           available: false,
           unavailableReason: "missing-auth" as const,
         },
@@ -222,7 +279,21 @@ suite.define(() => {
       await expect.poll(() => options.last().isVisible()).toBe(true);
       await expect.poll(() => options.first().textContent()).toContain("GPT-5.6 Sol");
       await expect.poll(() => options.first().textContent()).toContain("Default");
-      await expect.poll(() => options.first().textContent()).toContain("Sign-in needed");
+      await expect
+        .poll(() =>
+          options.evaluateAll((rows) =>
+            rows.every((row) => {
+              const warning = row.querySelector("[data-chat-model-auth-warning]");
+              return (
+                warning?.textContent?.trim() === "Sign-in needed" &&
+                warning.querySelector("svg") !== null &&
+                row.querySelector(".chat-controls__model-option-meta") === null &&
+                !row.textContent?.includes("1M")
+              );
+            }),
+          ),
+        )
+        .toBe(true);
       await expect
         .poll(() =>
           options.evaluateAll(
@@ -238,7 +309,10 @@ suite.define(() => {
       await expect.poll(() => composer.locator("textarea").isDisabled()).toBe(true);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-composer-catalog", artifactRoot)
+        : undefined;
       if (artifactDir) {
         await composer.screenshot({
           animations: "disabled",
@@ -250,7 +324,7 @@ suite.define(() => {
     });
   });
 
-  it("loads agent-scoped startup models when the route switches sessions", async () => {
+  it("keeps the selected model visible while loading the next session's scoped catalog", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const workModel = {
         id: "work-model",
@@ -348,7 +422,28 @@ suite.define(() => {
         .toBe(1);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
+      await gateway.deferNext("chat.startup", { sessionKey: "agent:other:main" });
       await navigateToControlUiSession(page, "agent:other:main");
+      await gateway.waitForRequest("chat.startup", { after: 1 });
+      const targetModelTrigger = activeComposer().locator('[data-chat-model-select="true"]');
+      await expect.poll(() => targetModelTrigger.textContent()).toContain("other-model");
+      expect(await targetModelTrigger.getAttribute("aria-busy")).toBe("false");
+      expect(
+        await targetModelTrigger.locator(".chat-controls__model-trigger-skeleton").count(),
+      ).toBe(0);
+      expect(await activeComposer().locator("[data-chat-model-option]").count()).toBe(0);
+      expect(
+        await activeComposer()
+          .locator('.chat-controls__effort-picker:not([aria-hidden="true"])')
+          .count(),
+      ).toBe(0);
+      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+        await activeComposer().screenshot({
+          animations: "disabled",
+          path: `${suite.artifactDir}/selected-model-during-session-startup.png`,
+        });
+      }
+      await gateway.resolveDeferred("chat.startup");
       const startupRequests = await gateway.getRequests("chat.startup");
       expect(
         startupRequests.filter(
@@ -467,7 +562,10 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
         .toContain("No models available");
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-composer-catalog", artifactRoot)
+        : undefined;
       if (artifactDir) {
         await page.screenshot({
           animations: "disabled",
@@ -541,12 +639,19 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       const pickerTrigger = composer.locator('[data-chat-model-select="true"]');
+      const metadataRequestCount = (await gateway.getRequests("chat.metadata")).length;
       await pickerTrigger.click();
       await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+      // The startup snapshot is already visible. Wait for the refresh to commit
+      // its cooldown before moving Date; completion invalidates chat metadata.
+      await gateway.waitForRequest("chat.metadata", { after: metadataRequestCount });
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible())
         .toBe(true);
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-composer-catalog", artifactRoot)
+        : undefined;
       if (artifactDir) {
         await page.screenshot({
           animations: "disabled",
@@ -606,7 +711,10 @@ suite.define(() => {
           .poll(() => textarea.evaluate((node) => node.matches(":placeholder-shown")))
           .toBe(true);
         await expect.poll(() => textarea.getAttribute("placeholder")).toContain("Message");
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("chat-composer-catalog", artifactRoot)
+          : undefined;
         if (artifactDir) {
           await page.locator(".agent-chat__composer-shell").screenshot({
             animations: "disabled",

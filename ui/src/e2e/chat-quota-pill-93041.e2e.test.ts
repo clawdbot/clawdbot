@@ -1,9 +1,9 @@
 // Real-browser proof + regression for #93041: provider usage from models.authStatus remains
 // available in the desktop composer's context popover. Screenshots go to the ignored artifacts tree.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   controlUiSessionUrl,
@@ -17,14 +17,10 @@ const suite = createControlUiE2eSuite({
 });
 
 const baseTime = 1_700_000_000_000;
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-quota-pill-93041");
+let artifactDir: string;
 const captureOwnershipProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const ownershipProofPhase = process.env.OPENCLAW_UI_PROOF_PHASE?.trim() || "candidate";
-const ownershipProofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/ui-visual-proof/agent-quota-ownership",
-  ownershipProofPhase,
-);
+let ownershipProofDir: string;
 
 const authStatusWithUsage = {
   ts: baseTime,
@@ -333,6 +329,12 @@ async function openVisibleQuotaPopover(page: Page) {
 }
 
 suite.define(() => {
+  beforeEach(() => {
+    artifactDir = createControlUiE2eArtifactDir("chat-quota-pill-93041");
+    if (captureOwnershipProof) {
+      ownershipProofDir = path.join(artifactDir, "agent-quota-ownership", ownershipProofPhase);
+    }
+  });
   it("shows high context pressure without a compact action", async () => {
     const fixture = await openChat(authStatusWithUsage, {
       "sessions.list": highPressureSessions,
@@ -462,9 +464,6 @@ suite.define(() => {
   });
 
   it("binds delayed auth and quota presentation to the selected global agent", async () => {
-    if (captureOwnershipProof) {
-      await mkdir(ownershipProofDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -737,7 +736,7 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(ownershipProofDir, "03-work-settled.png"),
+          path: path.join(ownershipProofDir, "04-work-quota-popover.png"),
         });
       }
     } finally {

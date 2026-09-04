@@ -5,7 +5,6 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { t } from "../../i18n/index.ts";
 import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -35,11 +34,7 @@ import {
 } from "./chat-pane-shared.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  resolveChatAgentId,
-  saveRouteSessionSettings,
-  selectedChatSessionRow,
-} from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
@@ -68,10 +63,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
-      this.githubPublicationResult = null;
-      this.githubPublicationError = null;
-      this.githubPublicationIdempotencyKey = null;
-      this.githubPublicationBusy = false;
+      this.githubPublication.reset();
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return;
@@ -124,8 +116,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       );
     }
     const published =
-      this.githubPublicationResult?.status === "published"
-        ? this.githubPublicationResult
+      this.githubPublication.result?.status === "published"
+        ? this.githubPublication.result
         : undefined;
     const publishedPullRequest = published
       ? result.pullRequests.find((pullRequest) => pullRequest.url === published.url)
@@ -138,9 +130,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           publishedPullRequest.state !== "open" &&
           publishedPullRequest.state !== "draft"))
     ) {
-      this.githubPublicationResult = null;
-      this.githubPublicationError = null;
-      this.githubPublicationIdempotencyKey = null;
+      this.githubPublication.reset();
     }
     this.sessionPullRequestsBranch = result.branch;
     this.sessionPullRequestsRateLimited = result.rateLimited;
@@ -149,16 +139,12 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected resetSessionPullRequests(): void {
-    this.githubPublicationRequestVersion += 1;
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.sessionPullRequests = [];
     this.sessionPullRequestsBranch = undefined;
     this.sessionPullRequestsRateLimited = false;
     this.sessionPullRequestsExpanded = false;
-    this.githubPublicationResult = null;
-    this.githubPublicationError = null;
-    this.githubPublicationIdempotencyKey = null;
-    this.githubPublicationBusy = false;
+    this.githubPublication.reset();
     this.dismissedSessionPullRequestIds = new Set();
   }
 
@@ -348,29 +334,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return nextSessionKey;
   }
 
-  // Global chrome (persisted session settings, gateway session, agent
-  // selection) is owned by exactly one pane; the container guarantees a single
-  // active pane, so inactive split panes must never run these bindings.
-  protected applyActiveSessionBindings() {
-    const state = this.state;
-    if (
-      !state ||
-      !this.active ||
-      !this.presented ||
-      !this.sessionKey.trim() ||
-      parseCatalogSessionKey(state.sessionKey)
-    ) {
-      return;
-    }
-    const nextSessionKey = state.sessionKey;
-    saveRouteSessionSettings(state, nextSessionKey);
-    selectApplicationSession({
-      selection: this.context.agentSelection,
-      gateway: this.context.gateway,
-      sessionKey: nextSessionKey,
-    });
-  }
-
   protected openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {
     this.catalogRequestedSessionKey = this.sessionKey;
     this.catalogMessages = [];
@@ -412,6 +375,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         : null;
     }
     let content = text;
+    let truncated = item.truncated;
     if (item.type === "reasoning") {
       content = text ? `Thinking\n\n${text}` : "Thinking";
     } else if (item.type === "toolCall") {
@@ -419,17 +383,18 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         text ?? catalogRawString(item.raw, ["command", "name", "tool", "title", "query"]);
       content = label ? `Tool call\n\n${label}` : "Tool call";
     } else if (item.type === "toolResult") {
-      // Raw aggregated output is only bounded by the transcript read's per-item
-      // byte cap (megabytes), so clamp it to the preview size before rendering.
-      const aggregated = catalogRawString(item.raw, ["aggregatedOutput"]);
       const output =
-        text ??
-        (aggregated ? clampText(aggregated, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null) ??
-        catalogRawResult(item.raw);
-      content = output ? `Tool result\n\n${output}` : "Tool result";
+        text ?? catalogRawString(item.raw, ["aggregatedOutput"]) ?? catalogRawResult(item.raw);
+      // Native text and raw fallbacks share the same display limit; source data stays intact.
+      const preview = output ? clampText(output, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null;
+      truncated ||= Boolean(output && preview !== output);
+      content = preview ? `Tool result\n\n${preview}` : "Tool result";
     }
     if (!content) {
       return null;
+    }
+    if (truncated) {
+      content = `${content}\n\n${t("chat.catalogOutputTruncated")}`;
     }
     return {
       role: "assistant",

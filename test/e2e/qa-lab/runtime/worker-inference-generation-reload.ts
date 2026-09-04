@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { coerceErrorMessage, toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   createQaBusState,
   createQaChannelTransport,
@@ -23,7 +23,6 @@ import {
   PROOF_TIMEOUT_MS,
   waitFor,
 } from "./cloud-worker-midturn-loss-fixture.js";
-import workerGenerationProviderFixture from "./fixtures/worker-inference-generation-provider/index.js";
 import {
   closeWireServer,
   connectWireClient,
@@ -50,7 +49,7 @@ const GENERATION_C_REPLY = "WORKER-GENERATION-C-OK";
 const OWNERSHIP_STAGES = ["factory", "policy", "wrapper", "execution"] as const;
 
 type Generation = "A" | "B" | "C" | "D";
-type ProducerOptions = { artifactBase: string; repoRoot: string };
+type ProducerOptions = Readonly<{ artifactBase: string; repoRoot: string }>;
 type TraceEvent = {
   event: string;
   generation: Generation;
@@ -437,9 +436,6 @@ async function readMockRequests(baseUrl: string) {
 }
 
 async function runProof(options: ProducerOptions) {
-  if (workerGenerationProviderFixture.id !== PLUGIN_ID) {
-    throw new Error("worker generation fixture id does not match its configured plugin id");
-  }
   // openclaw-temp-dir: standalone QA producer owns and removes this fixture root.
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worker-generation-"));
   const tracePath = path.join(options.artifactBase, `${SCENARIO_ID}-trace.jsonl`);
@@ -500,6 +496,11 @@ async function runProof(options: ProducerOptions) {
         session: { ...config.session, dmScope: "per-peer" },
       }),
     });
+    const { default: workerGenerationProviderFixture } =
+      await import("./fixtures/worker-inference-generation-provider/index.js");
+    if (workerGenerationProviderFixture.id !== PLUGIN_ID) {
+      throw new Error("worker generation fixture id does not match its configured plugin id");
+    }
     await waitFor("generation A provider registration", async () => {
       const registrations = (await readTrace(tracePath)).filter(
         (event) => event.event === "registered" && event.generation === "A",
@@ -737,7 +738,9 @@ async function runProof(options: ProducerOptions) {
   return verdict;
 }
 
-async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
+export async function runWorkerInferenceGeneration(
+  options: ProducerOptions,
+): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${SCENARIO_ID}.log`,
@@ -788,7 +791,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
 
 async function main(argv: readonly string[]) {
   const options = parseOptions(argv);
-  const evidence = await runProducer(options);
+  const evidence = await runWorkerInferenceGeneration(options);
   const status = evidence.entries[0]?.result.status;
   console.log(`Worker inference generation evidence: ${QA_EVIDENCE_FILENAME}`);
   console.log(

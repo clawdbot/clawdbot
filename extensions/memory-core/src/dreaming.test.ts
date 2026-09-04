@@ -2,9 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  DEFAULT_MEMORY_DEEP_DREAMING_LIMIT,
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-  DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
@@ -13,16 +11,16 @@ import {
   MANAGED_MEMORY_DREAMING_CRON_NAME,
   MANAGED_MEMORY_DREAMING_CRON_TAG,
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
+  resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   enqueueSystemEvent,
   resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  registerShortTermPromotionDreaming,
-  resolveShortTermPromotionDreamingConfig,
-} from "./dreaming.js";
+import { registerShortTermPromotionDreaming } from "./dreaming.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 // `runDreamingSweepPhases` is the only binding the dreaming trigger imports from this module.
@@ -41,26 +39,25 @@ const constants = {
   MANAGED_DREAMING_CRON_TAG: MANAGED_MEMORY_DREAMING_CRON_TAG,
   DREAMING_SYSTEM_EVENT_TEXT: MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
   DEFAULT_DREAMING_CRON_EXPR: DEFAULT_MEMORY_DREAMING_FREQUENCY,
-  DEFAULT_DREAMING_LIMIT: DEFAULT_MEMORY_DEEP_DREAMING_LIMIT,
   DEFAULT_DREAMING_MIN_SCORE: DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
   DEFAULT_DREAMING_MIN_RECALL_COUNT: DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
   DEFAULT_DREAMING_MIN_UNIQUE_QUERIES: DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
   DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS:
     DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-  DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION:
-    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
   DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS: DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS,
   RUNTIME_CRON_RECONCILE_INTERVAL_MS: 60_000,
-  STARTUP_CRON_RETRY_DELAY_MS: 5_000,
-  STARTUP_CRON_RETRY_MAX_ATTEMPTS: 12,
 };
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
-afterEach(() => {
+const registeredServiceStops = new Set<() => Promise<void>>();
+
+afterEach(async () => {
+  const stops = [...registeredServiceStops];
+  registeredServiceStops.clear();
+  await Promise.all(stops.map((stop) => stop()));
+  vi.useRealTimers();
   resetSystemEventsForTest();
 });
-
-function clearInternalHooks(): void {}
 
 type CronSchedule = { kind: "cron"; expr: string; tz?: string };
 type CronPayload =
@@ -109,12 +106,10 @@ type CronHarnessOptions = {
   staleJobs?: CronJobLike[];
 };
 type DreamingPluginApi = Parameters<typeof registerShortTermPromotionDreaming>[0];
-type DreamingPluginApiTestDouble = {
-  config: OpenClawConfig;
-  pluginConfig: Record<string, unknown>;
+type DreamingPluginApiTestDouble = DreamingPluginApi & {
   logger: ReturnType<typeof createLogger>;
-  runtime: unknown;
   on: ReturnType<typeof vi.fn>;
+  registerService: ReturnType<typeof vi.fn<DreamingPluginApi["registerService"]>>;
 };
 
 function createLogger() {
@@ -256,7 +251,7 @@ function createDreamingConfig(
 function createDreamingTestContext(
   params: {
     config?: OpenClawConfig;
-    runtime?: unknown;
+    runtime?: { config?: Pick<DreamingPluginApi["runtime"]["config"], "current"> };
     initialJobs?: CronJobLike[];
     cronOptions?: CronHarnessOptions;
   } = {},
@@ -265,13 +260,17 @@ function createDreamingTestContext(
   const harness = createCronHarness(params.initialJobs, params.cronOptions);
   const onMock = vi.fn();
   const api: DreamingPluginApiTestDouble = {
-    config: params.config ?? createDreamingConfig(),
-    pluginConfig: {},
+    ...createTestPluginApi({
+      config: params.config ?? createDreamingConfig(),
+      pluginConfig: {},
+      logger,
+    }),
     logger,
-    runtime: params.runtime ?? {},
     on: onMock,
+    registerService: vi.fn<DreamingPluginApi["registerService"]>(),
   };
-  return { api, harness, logger, onMock };
+  Object.assign(api.runtime, params.runtime);
+  return { api, harness, logger };
 }
 
 function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
@@ -293,17 +292,6 @@ function requireAddCall(harness: { addCalls: CronAddInput[] }, index: number): C
   const call = harness.addCalls[index];
   if (!call) {
     throw new Error(`expected cron add call ${index}`);
-  }
-  return call;
-}
-
-function requireUpdateCall(
-  harness: { updateCalls: Array<{ id: string; patch: CronPatch }> },
-  index: number,
-): { id: string; patch: CronPatch } {
-  const call = harness.updateCalls[index];
-  if (!call) {
-    throw new Error(`expected cron update call ${index}`);
   }
   return call;
 }
@@ -343,294 +331,79 @@ function getBeforeAgentReplyHandler(
   ) => Promise<unknown>;
 }
 
-function getGatewayStartHandler(
-  onMock: ReturnType<typeof vi.fn>,
-): (
-  event: { port: number },
-  ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
-) => Promise<unknown> {
-  const call = onMock.mock.calls.find(([eventName]) => eventName === "gateway_start");
-  if (!call) {
-    throw new Error("gateway_start hook was not registered");
-  }
-  return call[1] as (
-    event: { port: number },
-    ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
-  ) => Promise<unknown>;
+function getDreamingService(api: DreamingPluginApiTestDouble) {
+  return expectDefined(
+    api.registerService.mock.calls.find(([service]) => service.id === "memory-core-dreaming"),
+    "memory-core-dreaming service registration",
+  )[0];
 }
 
-function getGatewayStopHandler(
-  onMock: ReturnType<typeof vi.fn>,
-): (
-  event: { reason?: string },
-  ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
-) => Promise<unknown> | void {
-  const call = onMock.mock.calls.find(([eventName]) => eventName === "gateway_stop");
-  if (!call) {
-    throw new Error("gateway_stop hook was not registered");
-  }
-  return call[1] as (
-    event: { reason?: string },
-    ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
-  ) => Promise<unknown> | void;
-}
-
-async function triggerGatewayStart(
-  onMock: ReturnType<typeof vi.fn>,
-  ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
+async function triggerDreamingServiceStart(
+  api: DreamingPluginApiTestDouble,
+  ctx: { config: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
 ): Promise<void> {
-  await getGatewayStartHandler(onMock)({ port: 18789 }, ctx);
+  await getDreamingService(api).start({
+    ...ctx,
+    stateDir: ".",
+    logger: api.logger,
+  } as OpenClawPluginServiceContext);
 }
 
-async function triggerGatewayStop(
-  onMock: ReturnType<typeof vi.fn>,
-  ctx: { config?: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown } = {},
-): Promise<void> {
-  await getGatewayStopHandler(onMock)({ reason: "test" }, ctx);
+async function triggerDreamingServiceStop(api: DreamingPluginApiTestDouble): Promise<void> {
+  await getDreamingService(api).stop?.({
+    config: api.config,
+    stateDir: ".",
+    logger: api.logger,
+  });
 }
 
 function registerShortTermPromotionDreamingForTest(api: DreamingPluginApiTestDouble): void {
-  registerShortTermPromotionDreaming(api as unknown as DreamingPluginApi);
+  registerShortTermPromotionDreaming(api);
+  registeredServiceStops.add(() => triggerDreamingServiceStop(api));
 }
 
 describe("short-term dreaming config", () => {
-  it("uses defaults and user timezone fallback", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          userTimezone: "America/Los_Angeles",
+  it.each([
+    { name: "blank", value: " " },
+    { name: "negative", value: -2 },
+  ])("keeps deep defaults for $name thresholds", ({ value }) => {
+    const resolved = resolveMemoryDeepDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          phases: {
+            deep: {
+              minScore: value,
+              minRecallCount: value,
+              minUniqueQueries: value,
+              recencyHalfLifeDays: value,
+              maxAgeDays: value,
+              maxPromotedSnippetTokens: value,
+            },
+          },
         },
       },
-    } as OpenClawConfig;
-    const resolved = resolveShortTermPromotionDreamingConfig({
-      pluginConfig: {},
-      cfg,
     });
-    expect(resolved).toEqual({
-      enabled: true,
-      cron: constants.DEFAULT_DREAMING_CRON_EXPR,
-      timezone: "America/Los_Angeles",
-      limit: constants.DEFAULT_DREAMING_LIMIT,
+    expect(resolved).toMatchObject({
       minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
       minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
       minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
       recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
       maxAgeDays: 30,
       maxPromotedSnippetTokens: constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
-      verboseLogging: false,
-      storage: {
-        mode: "separate",
-        separateReports: false,
-      },
     });
   });
 
-  it("reads explicit dreaming config values", () => {
-    const resolved = resolveShortTermPromotionDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          enabled: true,
-          timezone: "UTC",
-          verboseLogging: true,
-          frequency: "5 1 * * *",
-          model: "anthropic/claude-haiku-4-5",
-          phases: {
-            deep: {
-              limit: 7,
-              minScore: 0.4,
-              minRecallCount: 2,
-              minUniqueQueries: 3,
-              recencyHalfLifeDays: 21,
-              maxAgeDays: 30,
-              maxPromotedSnippetTokens: 333,
-            },
-          },
-        },
-      },
-    });
-    expect(resolved).toEqual({
-      enabled: true,
-      cron: "5 1 * * *",
-      timezone: "UTC",
-      limit: 7,
-      minScore: 0.4,
-      minRecallCount: 2,
-      minUniqueQueries: 3,
-      recencyHalfLifeDays: 21,
-      maxAgeDays: 30,
-      maxPromotedSnippetTokens: 333,
-      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
-      verboseLogging: true,
-      storage: {
-        mode: "separate",
-        separateReports: false,
-      },
-      execution: {
-        model: "anthropic/claude-haiku-4-5",
-      },
-    });
-  });
-
-  it("accepts top-level frequency and numeric string thresholds", () => {
-    const resolved = resolveShortTermPromotionDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          enabled: true,
-          frequency: "5 1 * * *",
-          phases: {
-            deep: {
-              limit: "4",
-              minScore: "0.6",
-              minRecallCount: "2",
-              minUniqueQueries: "3",
-              recencyHalfLifeDays: "9",
-              maxAgeDays: "45",
-              maxPromotedSnippetTokens: "222",
-            },
-          },
-        },
-      },
-    });
-    expect(resolved).toEqual({
-      enabled: true,
-      cron: "5 1 * * *",
-      limit: 4,
-      minScore: 0.6,
-      minRecallCount: 2,
-      minUniqueQueries: 3,
-      recencyHalfLifeDays: 9,
-      maxAgeDays: 45,
-      maxPromotedSnippetTokens: 222,
-      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
-      verboseLogging: false,
-      storage: {
-        mode: "separate",
-        separateReports: false,
-      },
-    });
-  });
-
-  it("treats blank numeric strings as unset and keeps preset defaults", () => {
-    const resolved = resolveShortTermPromotionDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          enabled: true,
-          phases: {
-            deep: {
-              limit: " ",
-              minScore: "",
-              minRecallCount: "  ",
-              minUniqueQueries: "",
-              recencyHalfLifeDays: "",
-              maxAgeDays: " ",
-              maxPromotedSnippetTokens: "",
-            },
-          },
-        },
-      },
-    });
-    expect(resolved).toEqual({
-      enabled: true,
-      cron: constants.DEFAULT_DREAMING_CRON_EXPR,
-      limit: constants.DEFAULT_DREAMING_LIMIT,
-      minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
-      minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
-      minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
-      recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
-      maxAgeDays: 30,
-      maxPromotedSnippetTokens: constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
-      verboseLogging: false,
-      storage: {
-        mode: "separate",
-        separateReports: false,
-      },
-    });
-  });
-
-  it("accepts limit=0 as an explicit no-op promotion cap", () => {
-    const resolved = resolveShortTermPromotionDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          enabled: true,
-          phases: {
-            deep: {
-              limit: 0,
-            },
-          },
-        },
-      },
-    });
-    expect(resolved.limit).toBe(0);
-  });
-
-  it("accepts verboseLogging as a boolean or boolean string", () => {
-    const enabled = resolveShortTermPromotionDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          verboseLogging: true,
-        },
-      },
-    });
-    const disabled = resolveShortTermPromotionDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          verboseLogging: "false",
-        },
-      },
-    });
-
-    expect(enabled.verboseLogging).toBe(true);
-    expect(disabled.verboseLogging).toBe(false);
-  });
-
-  it("falls back to defaults when thresholds are negative", () => {
-    const resolved = resolveShortTermPromotionDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          enabled: true,
-          phases: {
-            deep: {
-              minScore: -0.2,
-              minRecallCount: -2,
-              minUniqueQueries: -4,
-              recencyHalfLifeDays: -10,
-              maxAgeDays: -5,
-              maxPromotedSnippetTokens: -10,
-            },
-          },
-        },
-      },
-    });
-    expect(resolved.enabled).toBe(true);
-    expect(resolved.minScore).toBe(constants.DEFAULT_DREAMING_MIN_SCORE);
-    expect(resolved.minRecallCount).toBe(constants.DEFAULT_DREAMING_MIN_RECALL_COUNT);
-    expect(resolved.minUniqueQueries).toBe(constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES);
-    expect(resolved.recencyHalfLifeDays).toBe(constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS);
-    expect(resolved.maxAgeDays).toBe(30);
-    expect(resolved.maxPromotedSnippetTokens).toBe(
-      constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-    );
-  });
-
-  it("keeps deep sleep disabled when the phase is off", () => {
-    const resolved = resolveShortTermPromotionDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          phases: {
-            deep: {
-              enabled: false,
-            },
-          },
-        },
-      },
-    });
-    expect(resolved.enabled).toBe(false);
+  it.each([
+    { name: "zero promotion cap", deep: { limit: 0 }, expected: { limit: 0 } },
+    { name: "disabled deep phase", deep: { enabled: false }, expected: { enabled: false } },
+  ])("preserves an explicit $name", ({ deep, expected }) => {
+    expect(
+      resolveMemoryDeepDreamingConfig({ pluginConfig: { dreaming: { phases: { deep } } } }),
+    ).toMatchObject(expected);
   });
 });
 
-describe("gateway startup reconciliation", () => {
+describe("dreaming service reconciliation", () => {
   let liveConfigRunPayloadCase: {
     result: unknown;
     runtimeConfigCalled: boolean;
@@ -638,7 +411,6 @@ describe("gateway startup reconciliation", () => {
   };
 
   beforeAll(async () => {
-    clearInternalHooks();
     const workspaceDir = await createTempWorkspace("memory-dreaming-live-config-workspace-");
     const runtimeCurrentConfig = vi.fn(() =>
       createDreamingConfig(
@@ -646,7 +418,7 @@ describe("gateway startup reconciliation", () => {
         { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
       ),
     );
-    const { api, harness, logger, onMock } = createDreamingTestContext({
+    const { api, harness, logger } = createDreamingTestContext({
       config: createDreamingConfig({
         enabled: true,
         frequency: "15 4 * * *",
@@ -658,7 +430,7 @@ describe("gateway startup reconciliation", () => {
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
+      await triggerDreamingServiceStart(api, {
         config: api.config,
         getCron: () => harness.cron,
       });
@@ -669,7 +441,7 @@ describe("gateway startup reconciliation", () => {
         contextKey: "cron:memory-dreaming",
       });
 
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
       liveConfigRunPayloadCase = {
         result: await beforeAgentReply(
           { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
@@ -679,60 +451,53 @@ describe("gateway startup reconciliation", () => {
         warnCalls: [...logger.warn.mock.calls],
       };
     } finally {
-      await triggerGatewayStop(onMock).catch(() => undefined);
-      clearInternalHooks();
+      await triggerDreamingServiceStop(api).catch(() => undefined);
     }
   });
 
   it("uses the startup cfg when reconciling the managed dreaming cron job", async () => {
-    clearInternalHooks();
-    const { api, harness, logger, onMock } = createDreamingTestContext({
+    const { api, harness, logger } = createDreamingTestContext({
       config: { plugins: { entries: {} } },
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: {
-          hooks: { internal: { enabled: true } },
-          plugins: {
-            entries: {
-              "memory-core": {
-                config: {
-                  dreaming: {
-                    enabled: true,
-                    frequency: "15 4 * * *",
-                    timezone: "UTC",
-                  },
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, {
+      config: {
+        hooks: { internal: { enabled: true } },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
                 },
               },
             },
           },
-        } as OpenClawConfig,
-        getCron: () => harness.cron,
-      });
+        },
+      } as OpenClawConfig,
+      getCron: () => harness.cron,
+    });
 
-      expect(harness.addCalls).toHaveLength(1);
-      const addCall = requireAddCall(harness, 0);
-      expect(addCall.declarationKey).toBe("memory-core:memory-dreaming-promotion");
-      expectCronSchedule(addCall.schedule, "15 4 * * *", "UTC");
-      expect(addCall.delivery?.mode).toBe("none");
-      expectLogContains(logger.info, "created managed dreaming cron job");
-    } finally {
-      clearInternalHooks();
-    }
+    expect(harness.addCalls).toHaveLength(1);
+    const addCall = requireAddCall(harness, 0);
+    expect(addCall.declarationKey).toBe("memory-core:memory-dreaming-promotion");
+    expectCronSchedule(addCall.schedule, "15 4 * * *", "UTC");
+    expect(addCall.delivery?.mode).toBe("none");
+    expectLogContains(logger.info, "created managed dreaming cron job");
   });
 
   it("recovers on the runtime interval after startup cron reconciliation fails", async () => {
     vi.useFakeTimers();
-    clearInternalHooks();
-    const { api, harness, logger, onMock } = createDreamingTestContext({
+    const { api, harness, logger } = createDreamingTestContext({
       cronOptions: { listThrowsForFirstCalls: 1 },
     });
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
+      await triggerDreamingServiceStart(api, {
         config: api.config,
         getCron: () => harness.cron,
       });
@@ -747,15 +512,13 @@ describe("gateway startup reconciliation", () => {
       expect(harness.addCalls).toHaveLength(1);
       expectCronSchedule(requireAddCall(harness, 0).schedule, "15 4 * * *", "UTC");
     } finally {
-      await triggerGatewayStop(onMock).catch(() => undefined);
+      await triggerDreamingServiceStop(api).catch(() => undefined);
       vi.useRealTimers();
-      clearInternalHooks();
     }
   });
 
-  it("does not arm runtime recovery after gateway_stop wins the startup race", async () => {
+  it("drains pending reconciliation on service stop without arming runtime recovery", async () => {
     vi.useFakeTimers();
-    clearInternalHooks();
     let rejectStartupList: (reason?: unknown) => void = () => undefined;
     const startupListPromise = new Promise<CronJobLike[]>((_resolve, reject) => {
       rejectStartupList = reject;
@@ -784,74 +547,99 @@ describe("gateway startup reconciliation", () => {
         return 0;
       },
     };
-    const { api, logger, onMock } = createDreamingTestContext();
+    const { api, logger } = createDreamingTestContext();
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      const startup = triggerGatewayStart(onMock, {
+      const startup = triggerDreamingServiceStart(api, {
         config: api.config,
         getCron: () => cron,
       });
 
-      await triggerGatewayStop(onMock);
+      let stopped = false;
+      const stopping = triggerDreamingServiceStop(api).then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
       rejectStartupList(new Error("startup list failed"));
-      await startup;
+      await Promise.all([startup, stopping]);
       await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
       expect(listCalls).toBe(1);
       expect(addCalls).toHaveLength(0);
       expectLogContains(logger.error, "dreaming startup reconciliation failed");
     } finally {
-      await triggerGatewayStop(onMock).catch(() => undefined);
+      rejectStartupList(new Error("test cleanup"));
+      await triggerDreamingServiceStop(api).catch(() => undefined);
       vi.useRealTimers();
-      clearInternalHooks();
     }
   });
 
-  it("reconciles disabled->enabled config changes during runtime", async () => {
-    clearInternalHooks();
-    const { api, harness, onMock } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: false, frequency: "0 2 * * *", timezone: "UTC" }),
+  it("updates the existing job on service replacement and stops the old reconciliation timer", async () => {
+    vi.useFakeTimers();
+    const { api, harness } = createDreamingTestContext({
+      config: createDreamingConfig({ enabled: true, frequency: "0 1 * * *", timezone: "UTC" }),
+    });
+    const { api: successorApi } = createDreamingTestContext({
+      config: createDreamingConfig({
+        enabled: true,
+        frequency: "45 8 * * *",
+        timezone: "America/Los_Angeles",
+      }),
     });
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
+      await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+      const originalId = expectDefined(harness.jobs[0], "original dreaming job").id;
+
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS / 2);
+      await triggerDreamingServiceStop(api);
+      registerShortTermPromotionDreamingForTest(successorApi);
+      await triggerDreamingServiceStart(successorApi, {
+        config: successorApi.config,
         getCron: () => harness.cron,
       });
 
-      expect(harness.addCalls).toHaveLength(0);
+      expect(harness.addCalls).toHaveLength(1);
+      expect(harness.updateCalls).toEqual([
+        {
+          id: originalId,
+          patch: {
+            schedule: { kind: "cron", expr: "45 8 * * *", tz: "America/Los_Angeles" },
+          },
+        },
+      ]);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 2);
 
-      api.config = createDreamingConfig({
-        enabled: true,
-        frequency: "30 6 * * *",
-        timezone: "America/New_York",
+      expect(harness.listCalls).toBe(4);
+      expect(harness.updateCalls).toHaveLength(1);
+      expect(harness.jobs).toHaveLength(1);
+      expect(harness.jobs[0]).toMatchObject({
+        id: originalId,
+        schedule: { kind: "cron", expr: "45 8 * * *", tz: "America/Los_Angeles" },
       });
 
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: "." },
-      );
-
-      expect(harness.addCalls).toHaveLength(1);
-      expectCronSchedule(requireAddCall(harness, 0).schedule, "30 6 * * *", "America/New_York");
+      await triggerDreamingServiceStop(successorApi);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+      expect(harness.listCalls).toBe(4);
     } finally {
-      clearInternalHooks();
+      await triggerDreamingServiceStop(api);
+      await triggerDreamingServiceStop(successorApi);
+      vi.useRealTimers();
     }
   });
 
   it("reconciles disabled->enabled config changes without waiting for another agent turn", async () => {
     vi.useFakeTimers();
-    clearInternalHooks();
-    const { api, harness, onMock } = createDreamingTestContext({
+    const { api, harness } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: false, frequency: "0 2 * * *", timezone: "UTC" }),
     });
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
+      await triggerDreamingServiceStart(api, {
         config: api.config,
         getCron: () => harness.cron,
       });
@@ -869,74 +657,13 @@ describe("gateway startup reconciliation", () => {
       expect(harness.addCalls).toHaveLength(1);
       expectCronSchedule(requireAddCall(harness, 0).schedule, "30 6 * * *", "America/New_York");
     } finally {
-      await triggerGatewayStop(onMock).catch(() => undefined);
+      await triggerDreamingServiceStop(api).catch(() => undefined);
       vi.useRealTimers();
-      clearInternalHooks();
     }
   });
 
-  it("reconciles cadence/timezone updates against the active cron service after startup", async () => {
-    clearInternalHooks();
-    const {
-      api,
-      harness: startupHarness,
-      onMock,
-    } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: true, frequency: "0 1 * * *", timezone: "UTC" }),
-    });
-
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      const cronRef = { current: startupHarness.cron };
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => cronRef.current,
-      });
-
-      expect(startupHarness.addCalls).toHaveLength(1);
-      const managed = startupHarness.jobs.find((job) =>
-        job.description?.includes("[managed-by=memory-core.short-term-promotion]"),
-      );
-      if (!managed) {
-        throw new Error("expected managed short-term promotion dreaming job");
-      }
-      expect(managed.description).toContain("[managed-by=memory-core.short-term-promotion]");
-
-      const reloadedHarness = createCronHarness([
-        {
-          ...managed,
-          schedule: managed.schedule ? { ...managed.schedule } : undefined,
-          payload: managed.payload ? { ...managed.payload } : undefined,
-        },
-      ]);
-      cronRef.current = reloadedHarness.cron;
-      api.config = createDreamingConfig({
-        enabled: true,
-        frequency: "45 8 * * *",
-        timezone: "America/Los_Angeles",
-      });
-
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: "." },
-      );
-
-      expect(startupHarness.updateCalls).toHaveLength(0);
-      expect(reloadedHarness.updateCalls).toHaveLength(1);
-      expectCronSchedule(
-        requireUpdateCall(reloadedHarness, 0).patch.schedule,
-        "45 8 * * *",
-        "America/Los_Angeles",
-      );
-    } finally {
-      clearInternalHooks();
-    }
-  });
-
-  it("updates a seeded old-schedule managed job in place by its stable name", async () => {
-    clearInternalHooks();
-    const { api, harness, onMock } = createDreamingTestContext({
+  it("replaces a legacy name-matched job with its declared identity", async () => {
+    const { api, harness } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: true, frequency: "*/3 * * * *" }),
       initialJobs: [
         {
@@ -956,7 +683,7 @@ describe("gateway startup reconciliation", () => {
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, { config: api.config, getCron: () => harness.cron });
+      await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
 
       expect(harness.addCalls).toHaveLength(1);
       expect(harness.removeCalls).toEqual(["job-old-schedule"]);
@@ -968,13 +695,11 @@ describe("gateway startup reconciliation", () => {
       expectCronSchedule(requireAddCall(harness, 0).schedule, "*/3 * * * *");
       expect(harness.jobs).toHaveLength(1);
     } finally {
-      await triggerGatewayStop(onMock).catch(() => undefined);
-      clearInternalHooks();
+      await triggerDreamingServiceStop(api).catch(() => undefined);
     }
   });
 
-  it("removes seeded stale managed duplicates before reconciling the survivor", async () => {
-    clearInternalHooks();
+  it("replaces legacy managed duplicates with one declared job", async () => {
     const seeded = (id: string, createdAtMs: number, expr: string): CronJobLike => ({
       id,
       name: constants.MANAGED_DREAMING_CRON_NAME,
@@ -987,7 +712,7 @@ describe("gateway startup reconciliation", () => {
       delivery: { mode: "none" },
       createdAtMs,
     });
-    const { api, harness, onMock } = createDreamingTestContext({
+    const { api, harness } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: true, frequency: "*/3 * * * *" }),
       initialJobs: [
         seeded("job-oldest", 10, "0 3 * * *"),
@@ -997,7 +722,7 @@ describe("gateway startup reconciliation", () => {
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, { config: api.config, getCron: () => harness.cron });
+      await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
 
       expect(harness.addCalls).toHaveLength(1);
       expect(harness.removeCalls).toEqual(["job-oldest", "job-duplicate"]);
@@ -1006,13 +731,11 @@ describe("gateway startup reconciliation", () => {
       expect(harness.jobs).toHaveLength(1);
       expect(harness.jobs[0]?.declarationKey).toBe("memory-core:memory-dreaming-promotion");
     } finally {
-      await triggerGatewayStop(onMock).catch(() => undefined);
-      clearInternalHooks();
+      await triggerDreamingServiceStop(api).catch(() => undefined);
     }
   });
 
   it("adopts the exact legacy row from an obsolete store beside the declaration job", async () => {
-    clearInternalHooks();
     const legacyRow: CronJobLike = {
       id: "75e182e6-8728-43ae-832b-01f50702feed",
       name: "Memory Dreaming Promotion",
@@ -1046,7 +769,7 @@ describe("gateway startup reconciliation", () => {
       delivery: { mode: "none" },
       createdAtMs: 1_785_338_313_079,
     };
-    const { api, harness, onMock } = createDreamingTestContext({
+    const { api, harness } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: true, frequency: "*/3 * * * *" }),
       initialJobs: [declaredRow],
       cronOptions: { staleJobs: [legacyRow] },
@@ -1054,7 +777,7 @@ describe("gateway startup reconciliation", () => {
 
     try {
       registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, { config: api.config, getCron: () => harness.cron });
+      await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
 
       expect(harness.staleJobs).toEqual([]);
       expect(harness.jobs).toHaveLength(1);
@@ -1072,301 +795,196 @@ describe("gateway startup reconciliation", () => {
         },
       ]);
     } finally {
-      await triggerGatewayStop(onMock).catch(() => undefined);
-      clearInternalHooks();
+      await triggerDreamingServiceStop(api).catch(() => undefined);
     }
   });
 
-  it("recreates the managed cron job when it is removed after startup", async () => {
-    clearInternalHooks();
-    const { api, harness, onMock } = createDreamingTestContext({
+  it("recreates a deleted managed job on the regular interval without an agent turn", async () => {
+    vi.useFakeTimers();
+    const { api, harness } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: true, frequency: "0 2 * * *", timezone: "UTC" }),
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => harness.cron,
-      });
-      expect(harness.addCalls).toHaveLength(1);
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => harness.cron,
+    });
+    expect(harness.addCalls).toHaveLength(1);
 
-      harness.jobs.splice(
-        0,
-        harness.jobs.length,
-        ...harness.jobs.filter(
-          (job) => !job.description?.includes("[managed-by=memory-core.short-term-promotion]"),
-        ),
-      );
-      expect(harness.jobs).toHaveLength(0);
+    harness.jobs.splice(
+      0,
+      harness.jobs.length,
+      ...harness.jobs.filter(
+        (job) => !job.description?.includes("[managed-by=memory-core.short-term-promotion]"),
+      ),
+    );
+    expect(harness.jobs).toHaveLength(0);
 
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: "." },
-      );
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
-      expect(harness.addCalls).toHaveLength(2);
-      expectCronSchedule(requireAddCall(harness, 1).schedule, "0 2 * * *", "UTC");
-    } finally {
-      clearInternalHooks();
-    }
+    expect(harness.addCalls).toHaveLength(2);
+    expectCronSchedule(requireAddCall(harness, 1).schedule, "0 2 * * *", "UTC");
   });
 
-  it("does not reconcile managed cron on non-heartbeat runtime replies", async () => {
-    clearInternalHooks();
-    const { api, harness, onMock } = createDreamingTestContext({
+  it("keeps scheduler maintenance out of user, heartbeat, and cron reply hooks", async () => {
+    const { api, harness } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: true, frequency: "0 2 * * *", timezone: "UTC" }),
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => harness.cron,
-      });
-
-      expect(harness.listCalls).toBe(1);
-
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
-      await beforeAgentReply(
-        { cleanedBody: "hello again" },
-        { trigger: "user", workspaceDir: "." },
-      );
-
-      expect(harness.listCalls).toBe(1);
-    } finally {
-      clearInternalHooks();
-    }
-  });
-
-  it("does not reconcile managed cron on every repeated runtime heartbeat", async () => {
-    clearInternalHooks();
-    const now = Date.parse("2026-04-10T12:00:00Z");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
-    const { api, harness, onMock } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: true, frequency: "0 2 * * *", timezone: "UTC" }),
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => harness.cron,
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => harness.cron,
-      });
+    expect(harness.listCalls).toBe(1);
 
-      expect(harness.listCalls).toBe(1);
+    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
+    await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+    await beforeAgentReply({ cleanedBody: "" }, { trigger: "heartbeat", workspaceDir: "." });
+    await beforeAgentReply({ cleanedBody: "" }, { trigger: "cron", workspaceDir: "." });
 
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: "." },
-      );
-      await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: "." },
-      );
-
-      expect(harness.listCalls).toBe(2);
-    } finally {
-      nowSpy.mockRestore();
-      clearInternalHooks();
-    }
+    expect(harness.listCalls).toBe(1);
   });
 
   it("only triggers managed dreaming when the queued cron event is still pending", async () => {
-    clearInternalHooks();
-    const { api, harness, onMock } = createDreamingTestContext({
+    const { api, harness } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: false }),
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => harness.cron,
-      });
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => harness.cron,
+    });
 
-      const sessionKey = "agent:main:main";
-      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
-        sessionKey,
-        contextKey: "cron:memory-dreaming",
-      });
+    const sessionKey = "agent:main:main";
+    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+      sessionKey,
+      contextKey: "cron:memory-dreaming",
+    });
 
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      const first = await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey },
-      );
+    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
+    const first = await beforeAgentReply(
+      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      { trigger: "heartbeat", workspaceDir: ".", sessionKey },
+    );
 
-      expect(first).toEqual({
-        handled: true,
-        reason: "memory-core: short-term dreaming disabled",
-      });
+    expect(first).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming disabled",
+    });
 
-      resetSystemEventsForTest();
+    resetSystemEventsForTest();
 
-      const second = await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey },
-      );
+    const second = await beforeAgentReply(
+      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      { trigger: "heartbeat", workspaceDir: ".", sessionKey },
+    );
 
-      expect(second).toBeUndefined();
-    } finally {
-      clearInternalHooks();
-    }
+    expect(second).toBeUndefined();
   });
 
   it("resolves queued managed dreaming cron events from the base session for isolated heartbeats", async () => {
-    clearInternalHooks();
-    const { api, harness, onMock } = createDreamingTestContext({
+    const { api, harness } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: false }),
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => harness.cron,
-      });
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => harness.cron,
+    });
 
-      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
-        sessionKey: "agent:main:main",
-        contextKey: "cron:memory-dreaming",
-      });
+    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+      sessionKey: "agent:main:main",
+      contextKey: "cron:memory-dreaming",
+    });
 
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      const result = await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
-      );
+    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
+    const result = await beforeAgentReply(
+      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+    );
 
-      expect(result).toEqual({
-        handled: true,
-        reason: "memory-core: short-term dreaming disabled",
-      });
-    } finally {
-      clearInternalHooks();
-    }
+    expect(result).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming disabled",
+    });
   });
 
-  it("does not emit the cron-unavailable warning on gateway_start when cron is missing (regression #69939)", async () => {
-    clearInternalHooks();
+  it("does not emit the cron-unavailable warning at service start when cron is missing", async () => {
     const { api, logger } = createDreamingTestContext({
       config: { plugins: { entries: {} } },
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(api.on, {
-        config: createDreamingConfig(undefined, { hooks: { internal: { enabled: true } } }),
-        getCron: () => undefined,
-      });
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, {
+      config: createDreamingConfig(undefined, { hooks: { internal: { enabled: true } } }),
+      getCron: () => undefined,
+    });
 
-      expectLogNotContains(logger.warn, "cron service unavailable");
-      // The startup-path log should be demoted to debug instead.
-      expectLogContains(logger.debug, "cron service not yet available at gateway_start");
-    } finally {
-      clearInternalHooks();
-    }
+    expectLogNotContains(logger.warn, "cron service unavailable");
+    expectLogContains(logger.debug, "cron service not yet available at service start");
   });
 
-  it("keeps ordinary heartbeat reconciliation quiet when no gateway cron context is available", async () => {
-    clearInternalHooks();
-    const { api, logger, onMock } = createDreamingTestContext();
-
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply(
-        { cleanedBody: "" },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
-      );
-
-      expectLogNotContains(logger.warn, "cron service unavailable");
-    } finally {
-      clearInternalHooks();
-    }
-  });
-
-  it("still warns on gateway runtime reconciliation when cron remains unavailable", async () => {
-    clearInternalHooks();
-    const { api, logger, onMock } = createDreamingTestContext();
-
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => undefined,
-      });
-      expect(logger.warn).not.toHaveBeenCalled();
-
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply(
-        { cleanedBody: "" },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
-      );
-
-      expectLogContains(logger.warn, "cron service unavailable");
-    } finally {
-      await triggerGatewayStop(onMock);
-      clearInternalHooks();
-    }
-  });
-
-  it("still warns on managed runtime reconciliation when cron remains unavailable (preserves #69939 genuine-failure signal)", async () => {
-    clearInternalHooks();
-    const { api, logger, onMock } = createDreamingTestContext();
-
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      // Startup without cron — must stay silent on warn.
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => undefined,
-      });
-      expect(logger.warn).not.toHaveBeenCalled();
-
-      // Now a managed runtime reconciliation happens and cron is still missing
-      // (e.g. the cron service genuinely failed to initialize). The warning must fire.
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply(
-        { cleanedBody: "" },
-        { trigger: "cron", workspaceDir: ".", sessionKey: "agent:main:cron:job-managed" },
-      );
-
-      expectLogContains(logger.warn, "cron service unavailable");
-    } finally {
-      await triggerGatewayStop(onMock);
-      clearInternalHooks();
-    }
-  });
-
-  it("retries startup cron reconciliation until cron is available without a heartbeat (regression #72841)", async () => {
+  it("does not start background reconciliation in a host without Gateway cron access", async () => {
     vi.useFakeTimers();
-    clearInternalHooks();
-    const { api, harness, logger, onMock } = createDreamingTestContext();
+    const { api, harness, logger } = createDreamingTestContext();
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerDreamingServiceStart(api, { config: api.config });
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 2);
+
+      expect(harness.listCalls).toBe(0);
+      expect(logger.debug).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await triggerDreamingServiceStop(api);
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores ordinary heartbeats before the Gateway service starts", async () => {
+    const { api, logger } = createDreamingTestContext();
+
+    registerShortTermPromotionDreamingForTest(api);
+
+    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
+    await beforeAgentReply(
+      { cleanedBody: "" },
+      { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+    );
+
+    expectLogNotContains(logger.warn, "cron service unavailable");
+  });
+
+  it("recovers unavailable cron on the regular interval without a heartbeat or repeated warnings", async () => {
+    vi.useFakeTimers();
+    const { api, harness, logger } = createDreamingTestContext();
 
     try {
       registerShortTermPromotionDreamingForTest(api);
       let cronAvailable = false;
-      await triggerGatewayStart(onMock, {
+      await triggerDreamingServiceStart(api, {
         config: api.config,
         getCron: () => (cronAvailable ? harness.cron : undefined),
       });
 
       expect(harness.addCalls).toHaveLength(0);
-      expectLogContains(logger.debug, "cron service not yet available at gateway_start");
+      expectLogContains(logger.debug, "cron service not yet available at service start");
 
-      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
       expect(harness.addCalls).toHaveLength(0);
-      expectLogNotContains(logger.warn, "cron service unavailable");
-      expectLogContains(logger.debug, "cron service not yet available at gateway_start");
+      expectLogContains(logger.warn, "cron service unavailable");
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
 
       cronAvailable = true;
-      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
       expect(harness.addCalls).toHaveLength(1);
       const addCall = requireAddCall(harness, 0);
@@ -1377,44 +995,13 @@ describe("gateway startup reconciliation", () => {
       expect(payload.message).toBe(constants.DREAMING_SYSTEM_EVENT_TEXT);
       expect(payload.lightContext).toBe(true);
     } finally {
+      await triggerDreamingServiceStop(api);
       vi.useRealTimers();
-      clearInternalHooks();
     }
   });
 
-  it("keeps startup cron retry warnings quiet until the retry window is exhausted", async () => {
+  it("removes disabled dreaming jobs when cron becomes available on the regular interval", async () => {
     vi.useFakeTimers();
-    clearInternalHooks();
-    const { api, logger, onMock } = createDreamingTestContext();
-
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => undefined,
-      });
-
-      expectLogContains(logger.debug, "cron service not yet available at gateway_start");
-
-      await vi.advanceTimersByTimeAsync(
-        constants.STARTUP_CRON_RETRY_DELAY_MS * (constants.STARTUP_CRON_RETRY_MAX_ATTEMPTS - 1),
-      );
-      expectLogNotContains(logger.warn, "cron service unavailable");
-
-      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
-
-      expectLogContains(logger.warn, "cron service unavailable");
-      expect(logger.warn).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-      await triggerGatewayStop(onMock);
-      clearInternalHooks();
-    }
-  });
-
-  it("retries disabled startup cleanup until cron is available", async () => {
-    vi.useFakeTimers();
-    clearInternalHooks();
     const managedJob: CronJobLike = {
       id: "job-managed",
       declarationKey: "memory-core:memory-dreaming-promotion",
@@ -1427,7 +1014,7 @@ describe("gateway startup reconciliation", () => {
       payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
       createdAtMs: 10,
     };
-    const { api, harness, logger, onMock } = createDreamingTestContext({
+    const { api, harness, logger } = createDreamingTestContext({
       config: createDreamingConfig({
         enabled: false,
         frequency: "15 4 * * *",
@@ -1439,38 +1026,37 @@ describe("gateway startup reconciliation", () => {
     try {
       registerShortTermPromotionDreamingForTest(api);
       let cronAvailable = false;
-      await triggerGatewayStart(onMock, {
+      await triggerDreamingServiceStart(api, {
         config: api.config,
         getCron: () => (cronAvailable ? harness.cron : undefined),
       });
 
-      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
       expect(harness.removeCalls).toHaveLength(0);
 
       cronAvailable = true;
-      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
       expect(harness.removeCalls).toEqual(["job-managed"]);
       expect(harness.jobs).toHaveLength(0);
       expect(harness.addCalls).toHaveLength(0);
       expectLogContains(logger.info, "removed 1 managed dreaming cron job");
     } finally {
+      await triggerDreamingServiceStop(api);
       vi.useRealTimers();
-      clearInternalHooks();
     }
   });
 
   it("does not recreate startup cron from stale enabled config after runtime config disables dreaming", async () => {
     vi.useFakeTimers();
-    clearInternalHooks();
-    const { api, harness, logger, onMock } = createDreamingTestContext({
+    const { api, harness, logger } = createDreamingTestContext({
       cronOptions: { listThrowsForFirstCalls: 1 },
     });
 
     try {
       registerShortTermPromotionDreamingForTest(api);
       let cronAvailable = false;
-      await triggerGatewayStart(onMock, {
+      await triggerDreamingServiceStart(api, {
         config: api.config,
         getCron: () => (cronAvailable ? harness.cron : undefined),
       });
@@ -1482,21 +1068,20 @@ describe("gateway startup reconciliation", () => {
       });
       cronAvailable = true;
 
-      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
-      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
-      expectLogContains(logger.error, "deferred dreaming cron retry failed");
-      expect(harness.listCalls).toBe(1);
+      expectLogContains(logger.error, "dreaming cron reconcile failed");
+      expect(harness.listCalls).toBe(2);
       expect(harness.addCalls).toHaveLength(0);
     } finally {
+      await triggerDreamingServiceStop(api);
       vi.useRealTimers();
-      clearInternalHooks();
     }
   });
 
   it("uses default-on cadence instead of stale startup config when live memory-core config is removed", async () => {
     vi.useFakeTimers();
-    clearInternalHooks();
     const runtimeCurrentConfig = vi.fn(
       () =>
         ({
@@ -1505,92 +1090,82 @@ describe("gateway startup reconciliation", () => {
           },
         }) as OpenClawConfig,
     );
-    const { api, harness, logger, onMock } = createDreamingTestContext({
+    const { api, harness, logger } = createDreamingTestContext({
       runtime: { config: { current: runtimeCurrentConfig } },
     });
 
     try {
       registerShortTermPromotionDreamingForTest(api);
       let cronAvailable = false;
-      await triggerGatewayStart(onMock, {
+      await triggerDreamingServiceStart(api, {
         config: api.config,
         getCron: () => (cronAvailable ? harness.cron : undefined),
       });
 
       cronAvailable = true;
-      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
 
       expect(runtimeCurrentConfig).toHaveBeenCalled();
       expect(harness.addCalls).toHaveLength(1);
       expect(harness.addCalls[0]?.schedule.expr).toBe(constants.DEFAULT_DREAMING_CRON_EXPR);
       expectLogNotContains(logger.warn, "cron service unavailable");
     } finally {
+      await triggerDreamingServiceStop(api).catch(() => undefined);
       vi.useRealTimers();
-      await triggerGatewayStop(onMock).catch(() => undefined);
-      clearInternalHooks();
     }
   });
 
-  it("clears pending startup cron retry on gateway stop", async () => {
+  it("stops unavailable-cron recovery when the service stops", async () => {
     vi.useFakeTimers();
-    clearInternalHooks();
-    const { api, harness, onMock } = createDreamingTestContext();
+    const { api, harness } = createDreamingTestContext();
 
     try {
       registerShortTermPromotionDreamingForTest(api);
       let cronAvailable = false;
-      await triggerGatewayStart(onMock, {
+      await triggerDreamingServiceStart(api, {
         config: api.config,
         getCron: () => (cronAvailable ? harness.cron : undefined),
       });
 
-      await triggerGatewayStop(onMock);
+      await triggerDreamingServiceStop(api);
       cronAvailable = true;
-      await vi.advanceTimersByTimeAsync(
-        constants.STARTUP_CRON_RETRY_DELAY_MS * constants.STARTUP_CRON_RETRY_MAX_ATTEMPTS,
-      );
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS * 2);
 
       expect(harness.addCalls).toHaveLength(0);
     } finally {
       vi.useRealTimers();
-      clearInternalHooks();
     }
   });
 
-  it("uses live runtime config for heartbeat dreaming reconciliation", async () => {
-    clearInternalHooks();
+  it("uses live runtime config to disable a queued heartbeat dreaming run", async () => {
     const runtimeCurrentConfig = vi.fn(() => createDreamingConfig({ enabled: false }));
-    const { api, harness, onMock } = createDreamingTestContext({
+    const { api, harness } = createDreamingTestContext({
       runtime: { config: { current: runtimeCurrentConfig } },
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => harness.cron,
-      });
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => harness.cron,
+    });
 
-      const sessionKey = "agent:main:main";
-      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
-        sessionKey,
-        contextKey: "cron:memory-dreaming",
-      });
+    const sessionKey = "agent:main:main";
+    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+      sessionKey,
+      contextKey: "cron:memory-dreaming",
+    });
 
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      const result = await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey },
-      );
+    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
+    const result = await beforeAgentReply(
+      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      { trigger: "heartbeat", workspaceDir: ".", sessionKey },
+    );
 
-      expect(runtimeCurrentConfig).toHaveBeenCalled();
-      expect(result).toEqual({
-        handled: true,
-        reason: "memory-core: short-term dreaming disabled",
-      });
-    } finally {
-      clearInternalHooks();
-    }
+    expect(runtimeCurrentConfig).toHaveBeenCalled();
+    expect(result).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming disabled",
+    });
   });
 
   it("uses live runtime config for the heartbeat dreaming run payload", async () => {
@@ -1605,7 +1180,6 @@ describe("gateway startup reconciliation", () => {
   });
 
   it("uses the product default instead of startup plugin config when live config is removed", async () => {
-    clearInternalHooks();
     const workspaceDir = await createTempWorkspace("memory-dreaming-default-on-live-config-");
     const runtimeCurrentConfig = vi.fn(
       () =>
@@ -1616,74 +1190,64 @@ describe("gateway startup reconciliation", () => {
           },
         }) as OpenClawConfig,
     );
-    const { api, harness, onMock } = createDreamingTestContext({
+    const { api, harness } = createDreamingTestContext({
       runtime: { config: { current: runtimeCurrentConfig } },
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => harness.cron,
-      });
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => harness.cron,
+    });
 
-      const sessionKey = "agent:main:main";
-      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
-        sessionKey,
-        contextKey: "cron:memory-dreaming",
-      });
+    const sessionKey = "agent:main:main";
+    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+      sessionKey,
+      contextKey: "cron:memory-dreaming",
+    });
 
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      const result = await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir, sessionKey },
-      );
+    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
+    const result = await beforeAgentReply(
+      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      { trigger: "heartbeat", workspaceDir, sessionKey },
+    );
 
-      expect(runtimeCurrentConfig).toHaveBeenCalled();
-      expect(result).toEqual({
-        handled: true,
-        reason: "memory-core: short-term dreaming processed",
-      });
-    } finally {
-      clearInternalHooks();
-    }
+    expect(runtimeCurrentConfig).toHaveBeenCalled();
+    expect(result).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming processed",
+    });
   });
 
   it("handles managed dreaming cron triggers without a queued heartbeat event", async () => {
-    clearInternalHooks();
-    const { api, harness, onMock } = createDreamingTestContext({
+    const { api, harness } = createDreamingTestContext({
       config: createDreamingConfig({ enabled: false }),
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => harness.cron,
-      });
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => harness.cron,
+    });
 
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      const result = await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "cron", workspaceDir: ".", sessionKey: "cron:memory-dreaming" },
-      );
+    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
+    const result = await beforeAgentReply(
+      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      { trigger: "cron", workspaceDir: ".", sessionKey: "cron:memory-dreaming" },
+    );
 
-      expect(result).toEqual({
-        handled: true,
-        reason: "memory-core: short-term dreaming disabled",
-      });
-    } finally {
-      clearInternalHooks();
-    }
+    expect(result).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming disabled",
+    });
   });
 
   // Regression: the sweep dropped the agent id entirely, so narrative subagent sessions used
   // unscoped keys that no per-agent SQLite store could resolve and every phase failed.
   it("sweeps each workspace as its owning agent rather than the roster default", async () => {
-    clearInternalHooks();
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-owner-");
     runDreamingSweepPhasesMock.mockClear();
-    const { api, harness, onMock } = createDreamingTestContext({
+    const { api, harness } = createDreamingTestContext({
       config: createDreamingConfig(
         {
           enabled: true,
@@ -1694,44 +1258,39 @@ describe("gateway startup reconciliation", () => {
       ),
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, {
-        config: api.config,
-        getCron: () => harness.cron,
-      });
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, {
+      config: api.config,
+      getCron: () => harness.cron,
+    });
 
-      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        {
-          trigger: "cron",
-          agentId: "researcher",
-          workspaceDir,
-          sessionKey: "agent:researcher:cron:memory-dreaming",
-        },
-      );
+    const beforeAgentReply = getBeforeAgentReplyHandler(api.on);
+    await beforeAgentReply(
+      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      {
+        trigger: "cron",
+        agentId: "researcher",
+        workspaceDir,
+        sessionKey: "agent:researcher:cron:memory-dreaming",
+      },
+    );
 
-      expect(runDreamingSweepPhasesMock).toHaveBeenCalledTimes(1);
-      const sweepArgs = expectDefined(
-        runDreamingSweepPhasesMock.mock.calls[0],
-        "dreaming sweep call",
-      )[0];
-      expect(sweepArgs.agentId).toBe("researcher");
-      expect(sweepArgs.workspaceDir).toBe(workspaceDir);
-    } finally {
-      clearInternalHooks();
-    }
+    expect(runDreamingSweepPhasesMock).toHaveBeenCalledTimes(1);
+    const sweepArgs = expectDefined(
+      runDreamingSweepPhasesMock.mock.calls[0],
+      "dreaming sweep call",
+    )[0];
+    expect(sweepArgs.agentId).toBe("researcher");
+    expect(sweepArgs.workspaceDir).toBe(workspaceDir);
   });
 
   it("reports a degraded sweep when narrative cleanup fails", async () => {
-    clearInternalHooks();
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-cleanup-degraded-");
     runDreamingSweepPhasesMock.mockResolvedValueOnce({
       degradedPhases: 1,
       pendingNarratives: 0,
     });
-    const { api, harness, logger, onMock } = createDreamingTestContext({
+    const { api, harness, logger } = createDreamingTestContext({
       config: createDreamingConfig(
         {
           enabled: true,
@@ -1742,22 +1301,18 @@ describe("gateway startup reconciliation", () => {
       ),
     });
 
-    try {
-      registerShortTermPromotionDreamingForTest(api);
-      await triggerGatewayStart(onMock, { config: api.config, getCron: () => harness.cron });
-      const result = await getBeforeAgentReplyHandler(onMock)(
-        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "cron", agentId: "main", workspaceDir },
-      );
+    registerShortTermPromotionDreamingForTest(api);
+    await triggerDreamingServiceStart(api, { config: api.config, getCron: () => harness.cron });
+    const result = await getBeforeAgentReplyHandler(api.on)(
+      { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      { trigger: "cron", agentId: "main", workspaceDir },
+    );
 
-      expect(result).toEqual({
-        handled: true,
-        reason: "memory-core: short-term dreaming degraded",
-      });
-      expectLogContains(logger.warn, "failed=0, degraded=1, narrativesPending=0");
-    } finally {
-      clearInternalHooks();
-    }
+    expect(result).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming degraded",
+    });
+    expectLogContains(logger.warn, "failed=0, degraded=1, narrativesPending=0");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

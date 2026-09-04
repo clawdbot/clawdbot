@@ -384,6 +384,7 @@ export function normalizeProviderAuthChoices(
       ...(cliOption ? { cliOption } : {}),
       ...(cliDescription ? { cliDescription } : {}),
       ...(appGuidedSecret ? { appGuidedSecret: true } : {}),
+      ...(entry.personalAccount === true ? { personalAccount: true } : {}),
       ...(appGuidedActionLabel ? { appGuidedActionLabel } : {}),
       ...(appGuidedAuth ? { appGuidedAuth } : {}),
       ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),

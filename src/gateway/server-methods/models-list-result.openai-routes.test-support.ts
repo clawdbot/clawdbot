@@ -5,11 +5,15 @@ import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
-import { buildModelsListResult } from "./models-list-result.js";
+import {
+  buildModelsListResult,
+  createGatewayAgentModelCatalogProjector,
+} from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
 export const WITHOUT_OPENAI_ENV_AUTH = {
@@ -42,7 +46,7 @@ export function registerTestCatalogAccess(
   });
 }
 
-export async function listModels(params: {
+type ListModelsParams = {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -55,20 +59,27 @@ export async function listModels(params: {
   staticEntries?: ModelCatalogEntry[];
   cfg?: OpenClawConfig;
   discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
+  catalogComplete?: boolean;
   preparedAuthModes?: PreparedAgentCredentialModes;
   metadataSnapshot?: PluginMetadataSnapshot;
+  pluginRegistry?: PluginRegistry;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   view?: "all" | "configured" | "provider-config" | "default";
-}) {
+};
+
+export function createModelsListTestContext(params: ListModelsParams) {
   const agentId = params.agentId ?? "main";
   const config = params.cfg ?? ({} as OpenClawConfig);
   const createCatalogSnapshot = (entries: ModelCatalogEntry[]) =>
     ({
       agentId,
       agentDir: params.agentDir ?? "/tmp/models-list-openai-agent",
-      catalogComplete: false,
+      catalogComplete: params.catalogComplete ?? false,
       workspaceDir: params.workspaceDir ?? "/tmp/models-list-openai-workspace",
       config,
+      observationConfig: config,
+      pluginRegistry: params.pluginRegistry,
+      isCurrent: () => true,
       authModes: params.preparedAuthModes ?? {},
       authStore: loadAuthProfileStoreWithoutExternalProfiles(
         params.agentDir ?? "/tmp/models-list-openai-agent",
@@ -105,6 +116,13 @@ export async function listModels(params: {
     loadGatewayModelCatalogSnapshot,
     logGateway: { debug: () => {}, warn: () => {} },
   } as unknown as GatewayRequestContext;
+  return context;
+}
+
+export async function listModels(params: ListModelsParams) {
+  const context = createModelsListTestContext(params);
+  const agentId = params.agentId ?? "main";
+  const config = params.cfg ?? ({} as OpenClawConfig);
   return await buildModelsListResult({
     context,
     agentId,
@@ -120,16 +138,19 @@ export async function listModels(params: {
             config,
             snapshot: { entries: params.catalog, routeVariants: params.catalog },
           },
-          catalogProjector: {
+          catalogProjector: createGatewayAgentModelCatalogProjector({
+            cfg: config,
+            agentId,
+            snapshot: { entries: params.catalog, routeVariants: params.catalog },
             metadataSnapshot: {
               index: { plugins: [] },
               manifestRegistry: { plugins: [] },
               plugins: [
                 { id: "test-provider", modelCatalog: { discovery: params.discoveryModes } },
               ],
-            },
-            authStore: { version: 1, profiles: {} },
-          } as never,
+            } as never,
+            preparedAuthStore: { version: 1, profiles: {} },
+          }),
         }
       : {}),
     ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),

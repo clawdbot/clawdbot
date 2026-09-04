@@ -1,0 +1,35 @@
+title: Codex inbound-audio message TTS delivery
+
+scenario:
+  id: codex-inbound-message-auto-tts
+  surface: media
+  category: media.text-to-speech-delivery
+  coverage:
+    # Native-binary proof stays explicitly selected instead of joining default coverage profiles.
+    secondary:
+      - media.tts
+      - media.outbound-voice-audio-delivery
+      - channels.inbound-media-normalization
+  objective: Verify native Codex dynamic message tools retain the current inbound-audio fact for automatic TTS.
+  successCriteria:
+    - A synthetic audio attachment enters through QA Channel with transcription disabled.
+    - The native Codex app server calls message(action=send, final=true) against a local mock model.
+    - Inbound-mode TTS synthesizes exactly once and QA Channel receives the exact synthetic WAV bytes.
+    - A subsequent text-only turn in the same session delivers one text reply without another synthesis.
+  docsRefs:
+    - docs/tools/tts.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - test/e2e/qa-lab/runtime/media-talk-gateway.ts
+    - src/agents/embedded-agent-runner/run/attempt-tool-run-context.ts
+    - extensions/codex/src/app-server/dynamic-tool-build.ts
+    - src/infra/outbound/message-action-tts.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/media-talk-gateway.ts
+    summary: Starts an isolated Gateway, QA Channel, native Codex app server, and synthetic speech provider. The fixed openai/gpt-5.6-luna fixture model uses only the managed local mock endpoint and catalog; no live credentials or transcription requests are used.
+    args:
+      - --scenario
+      - codex-inbound-message-auto-tts
+      - --artifact-base
+      - ${outputDir}

@@ -12,7 +12,6 @@ export type AgentsRouteData = AgentsRouteLocation & {
   gateway: ApplicationContext["gateway"];
   gatewaySnapshot: ApplicationGatewaySnapshot;
   agentsList: AgentsListResult | null;
-  selectedAgentId: string | null;
   error: string | null;
 };
 
@@ -25,17 +24,11 @@ async function loadAgentsRouteData(
   const gatewaySnapshot = gateway.snapshot;
   const rawAgentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
   const agentsList = rawAgentsList ? selectableAgentsList(rawAgentsList) : null;
-  const requestedAgent = route.requestedAgentId
-    ? (agentsList?.agents.find((entry) => entry.id === route.requestedAgentId)?.id ?? null)
-    : null;
-  // Unknown explicit ids keep their URL while the roster selection falls back,
-  // matching the shipped ?agent= behavior without an automatic mount redirect.
   return {
     ...route,
     gateway,
     gatewaySnapshot,
     agentsList,
-    selectedAgentId: requestedAgent ?? agentsList?.defaultId ?? agentsList?.agents[0]?.id ?? null,
     error: context.agents.state.agentsError,
   };
 }

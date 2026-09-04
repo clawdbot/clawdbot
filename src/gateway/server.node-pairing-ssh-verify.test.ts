@@ -1,7 +1,12 @@
 // SSH-verified node pairing e2e: real gateway server on the LAN self-connect
 // harness, with the SSH probe runtime mocked at the module boundary.
 import { beforeEach, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { writeConfigFile } from "../config/config.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { GatewayNodePairingConfig } from "../config/types.gateway.js";
+import * as pairingApprovals from "../infra/device-pairing-approval.js";
+import { withDevicePairingLock } from "../infra/device-pairing-state.js";
 import {
   getPairedDevice,
   listDevicePairing,
@@ -58,6 +63,85 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
   beforeEach(() => {
     // Each case uses a distinct identityName, matching the host+device cooldown key.
     probeMock.mockReset();
+  });
+
+  test.each([
+    { name: "disabled during probe", lockApproval: false, next: false },
+    { name: "disabled while approval waits for lock", lockApproval: true, next: false },
+    { name: "SSH user changed", lockApproval: false, next: { user: "replacement-user" } },
+    { name: "SSH identity changed", lockApproval: false, next: { identity: "/keys/replacement" } },
+    { name: "SSH scope narrowed", lockApproval: false, next: { cidrs: ["203.0.113.0/24"] } },
+    { name: "SSH timeout changed", lockApproval: false, next: { timeoutMs: 300 } },
+  ] satisfies {
+    name: string;
+    lockApproval: boolean;
+    next: GatewayNodePairingConfig["sshVerify"];
+  }[])("keeps pairing pending when $name", async ({ name, lockApproval, next }) => {
+    await attempt({
+      identityName: `ssh-policy-${name.replaceAll(" ", "-")}`,
+      configure: async () => {
+        await writeConfigFile({ gateway: { nodes: { pairing: { sshVerify: true } } } });
+      },
+      run: async ({ loaded, connectNode }) => {
+        const probe = createDeferred<NodeIdentityProbeResult>();
+        const lock = createDeferred();
+        const locked = createDeferred();
+        let lockWork: Promise<void> | undefined;
+        const approval = vi.spyOn(pairingApprovals, "approveDevicePairing");
+        probeMock.mockImplementation(() => probe.promise);
+        try {
+          const first = await connectNode();
+          expect(first.ok).toBe(false);
+          expect(probeMock).toHaveBeenCalledOnce();
+          if (lockApproval) {
+            lockWork = withDevicePairingLock(async () => {
+              locked.resolve();
+              await lock.promise;
+            });
+            await locked.promise;
+            probe.resolve({
+              status: "ok",
+              stdout: JSON.stringify({
+                deviceId: loaded.identity.deviceId,
+                publicKey: loaded.publicKey,
+              }),
+            });
+            await vi.waitFor(() => expect(approval).toHaveBeenCalledOnce());
+          }
+          const current = getRuntimeConfigSnapshot();
+          expect(current).not.toBeNull();
+          setRuntimeConfigSnapshot({
+            ...current,
+            gateway: {
+              ...current?.gateway,
+              nodes: { ...current?.gateway?.nodes, pairing: { sshVerify: next } },
+            },
+          });
+          probe.resolve({
+            status: "ok",
+            stdout: JSON.stringify({
+              deviceId: loaded.identity.deviceId,
+              publicKey: loaded.publicKey,
+            }),
+          });
+          lock.resolve();
+          await lockWork;
+          await vi.waitFor(() => expect(approval).toHaveBeenCalledOnce());
+          await approval.mock.results[0]?.value;
+          expect((await getPairedDevice(loaded.identity.deviceId)) === null).toBe(true);
+          expect((await listDevicePairing()).pending).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ deviceId: loaded.identity.deviceId }),
+            ]),
+          );
+        } finally {
+          lock.resolve();
+          probe.resolve({ status: "timeout" });
+          await lockWork;
+          approval.mockRestore();
+        }
+      },
+    });
   });
 
   test("approves device pairing and the first capability surface on a key match", async () => {

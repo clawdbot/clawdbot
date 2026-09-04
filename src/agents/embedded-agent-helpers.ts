@@ -39,10 +39,8 @@ export {
   isCloudCodeAssistFormatError,
   isContextOverflowError,
   isFailoverErrorMessage,
-  isGenericUnknownStreamErrorMessage,
   isLikelyContextOverflowError,
   isProviderRequestSizeCeilingError,
-  isTransientHttpError,
   isTimeoutErrorMessage,
 } from "./failover/classify.js";
 export type { FailoverReason } from "./failover/signal.js";

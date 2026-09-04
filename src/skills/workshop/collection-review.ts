@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -17,7 +16,6 @@ import { SessionManager } from "../../agents/sessions/index.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { CommandLane } from "../../process/lanes.js";
 import {
   MAX_RECONCILED_SKILLS,
   MAX_RECONCILED_SKILL_BYTES,
@@ -31,6 +29,7 @@ import {
 } from "./collection-review-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { readSkillUsageByFile } from "./curator.js";
+import { runSkillWorkshopReview } from "./review-run.js";
 
 const COLLECTION_REVIEW_SESSION_SEGMENT = "skill-collection-review";
 const COLLECTION_REVIEW_TIMEOUT_MS = 10 * 60_000;
@@ -86,53 +85,32 @@ async function runSkillCollectionReview(params: {
     ),
     assertCurrent: params.assertCurrent,
   };
-  const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    params.config,
+  await runSkillWorkshopReview({
+    reviewKind: "collection-review",
+    sessionId,
+    sessionKey,
+    sandboxSessionKey: sessionKey,
+    sessionManager: SessionManager.inMemory(params.workspaceDir),
+    agentId: params.agentId,
+    trigger: "cron",
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+    prompt: buildCollectionReviewPrompt(skills, params.env),
+    provider: model.provider,
+    model: model.model,
+    ...(model.authProfileId
+      ? { authProfileId: model.authProfileId, authProfileIdSource: "user" as const }
+      : {}),
+    timeoutMs: COLLECTION_REVIEW_TIMEOUT_MS,
     runId,
-    params.agentId,
-    "skill-workshop.collection-review",
-  );
-  try {
-    await runEmbeddedAgent({
-      preparedRunAdmission,
-      sessionId,
-      sessionKey,
-      sandboxSessionKey: sessionKey,
-      sessionManager: SessionManager.inMemory(params.workspaceDir),
-      agentId: params.agentId,
-      trigger: "cron",
-      lane: CommandLane.SkillWorkshopReview,
-      agentHarnessId: "openclaw",
-      agentHarnessRuntimeOverride: "openclaw",
-      workspaceDir: params.workspaceDir,
-      config: params.config,
-      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-      prompt: buildCollectionReviewPrompt(skills, params.env),
-      provider: model.provider,
-      model: model.model,
-      ...(model.authProfileId
-        ? { authProfileId: model.authProfileId, authProfileIdSource: "user" as const }
-        : {}),
-      modelSelectionLocked: true,
-      modelFallbacksOverride: [],
-      timeoutMs: COLLECTION_REVIEW_TIMEOUT_MS,
-      runId,
-      toolsAllow: ["skill_workshop"],
-      skillWorkshopProposalOnly: true,
-      disableTrajectory: true,
-      skillWorkshopCollectionReconcile: collectionReconcile,
-      skillWorkshopProposalEnv: params.env,
-      cleanupBundleMcpOnRunEnd: true,
-      bootstrapContextMode: "lightweight",
-      skillsSnapshot: { prompt: "", skills: [] },
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      suppressToolErrorWarnings: true,
-    });
-  } finally {
-    preparedRunAdmission.close();
-  }
+    toolsAllow: ["skill_workshop"],
+    skillWorkshopCollectionReconcile: collectionReconcile,
+    skillWorkshopProposalEnv: params.env,
+    bootstrapContextMode: "lightweight",
+    skillsSnapshot: { prompt: "", skills: [] },
+    reasoningLevel: "off",
+  });
   if (!collectionReconcile.result) {
     throw new Error("Skill collection review ended without reconciling the collection.");
   }
@@ -183,7 +161,11 @@ export async function runSkillCollectionReviewForAgent(params: {
                 candidate.authIdentity !== reviewModel.authIdentity,
             )
           ) {
-            throw new Error("Shared workspace agents use different collection-review identities.");
+            // Unresolved identities stay distinct; report their known cause before a mismatch.
+            throw new Error(
+              reviewModels.find((candidate) => candidate.authError)?.authError ??
+                "Shared workspace agents use different collection-review identities.",
+            );
           }
           await runSkillCollectionReview({
             config: params.config,
@@ -257,6 +239,9 @@ function resolveCollectionReviewIdentity(
   const credential = profileId ? store.profiles[profileId] : undefined;
   return {
     ...model,
+    authError: credential
+      ? undefined
+      : `Skill collection review cannot start: no resolved auth credential for provider "${model.provider}" (agent "${agentId}"). Configure a credential for this provider before shared-workspace review can run.`,
     authIdentity: credential
       ? sha256Hex(stableStringify(credential))
       : `unresolved:${agentId}:${profileId ?? model.provider}`,

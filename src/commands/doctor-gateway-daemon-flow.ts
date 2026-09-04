@@ -163,7 +163,7 @@ async function maybeReportEstablishedGatewayClients(
   deep: boolean,
   port?: number,
 ): Promise<void> {
-  if (!deep || cfg.gateway?.mode === "remote") {
+  if (!deep) {
     return;
   }
   const targetPort = port ?? resolveGatewayPort(cfg, process.env);
@@ -224,18 +224,18 @@ export async function maybeRepairGatewayDaemon(params: {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;
   }
+  // A remote health failure says nothing about the local service, even when
+  // the remote URL is loopback (for example, an SSH tunnel).
+  if (params.cfg.gateway?.mode === "remote") {
+    return;
+  }
   if (params.healthOk) {
     await maybeReportEstablishedGatewayClients(params.cfg, params.options.deep ?? false);
     return;
   }
-  if (params.healthSkipped && params.cfg.gateway?.mode === "remote") {
-    return;
-  }
 
   if (!(await shouldManageGatewayService())) {
-    if (params.cfg.gateway?.mode !== "remote") {
-      await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
-    }
+    await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
     note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
     return;
   }
@@ -252,8 +252,7 @@ export async function maybeRepairGatewayDaemon(params: {
       return null;
     }
   };
-  const isLocalDarwinGateway =
-    process.platform === "darwin" && params.cfg.gateway?.mode !== "remote";
+  const isLocalDarwinGateway = process.platform === "darwin";
   const serviceState = await readGatewayServiceState(service, { env: process.env });
   if (serviceState.loadState.status === "unknown") {
     await noteGatewayServiceInspectionFailure(serviceState.loadState);
@@ -319,13 +318,11 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
 
-  if (params.cfg.gateway?.mode !== "remote") {
-    const conflict = await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
-    if (!conflict && loaded && serviceRuntime?.status === "running") {
-      const lastError = await readLastGatewayErrorLine(process.env);
-      if (lastError) {
-        note(`Last gateway error: ${lastError}`, "Gateway");
-      }
+  const conflict = await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
+  if (!conflict && loaded && serviceRuntime?.status === "running") {
+    const lastError = await readLastGatewayErrorLine(process.env);
+    if (lastError) {
+      note(`Last gateway error: ${lastError}`, "Gateway");
     }
   }
 
@@ -341,83 +338,81 @@ export async function maybeRepairGatewayDaemon(params: {
       return;
     }
     note("Gateway service not installed.", "Gateway");
-    if (params.cfg.gateway?.mode !== "remote") {
-      if (process.platform === "linux") {
-        const systemGatewayServices = await findSystemGatewayServices();
-        if (systemGatewayServices.length > 0) {
-          note(renderBlockingSystemGatewayServices(systemGatewayServices), "Gateway");
-          return;
-        }
-      }
-      if (serviceRepairExternal) {
-        note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    if (process.platform === "linux") {
+      const systemGatewayServices = await findSystemGatewayServices();
+      if (systemGatewayServices.length > 0) {
+        note(renderBlockingSystemGatewayServices(systemGatewayServices), "Gateway");
         return;
       }
-      const install = await confirmDoctorServiceRepair(
-        params.prompter,
-        {
-          message: "Install gateway service now?",
-          initialValue: true,
-          requiresInteractiveConfirmation: true,
-        },
-        serviceRepairPolicy,
+    }
+    if (serviceRepairExternal) {
+      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+      return;
+    }
+    const install = await confirmDoctorServiceRepair(
+      params.prompter,
+      {
+        message: "Install gateway service now?",
+        initialValue: true,
+        requiresInteractiveConfirmation: true,
+      },
+      serviceRepairPolicy,
+    );
+    if (!install) {
+      note(
+        `Run ${formatCliCommand("openclaw gateway install")} when you want to install the gateway service.`,
+        "Gateway",
       );
-      if (!install) {
+    }
+    if (install) {
+      const daemonRuntime = await params.prompter.select<GatewayDaemonRuntime>(
+        {
+          message: "Gateway service runtime",
+          options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
+          initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+        },
+        DEFAULT_GATEWAY_DAEMON_RUNTIME,
+      );
+      const tokenResolution = await resolveGatewayInstallToken({
+        config: params.cfg,
+        env: process.env,
+      });
+      for (const warning of tokenResolution.warnings) {
+        note(warning, "Gateway");
+      }
+      if (tokenResolution.unavailableReason) {
         note(
-          `Run ${formatCliCommand("openclaw gateway install")} when you want to install the gateway service.`,
+          [
+            "Gateway service install aborted.",
+            tokenResolution.unavailableReason,
+            "Fix gateway auth config/token input and rerun doctor.",
+          ].join("\n"),
           "Gateway",
         );
+        return;
       }
-      if (install) {
-        const daemonRuntime = await params.prompter.select<GatewayDaemonRuntime>(
-          {
-            message: "Gateway service runtime",
-            options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-            initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
-          },
-          DEFAULT_GATEWAY_DAEMON_RUNTIME,
-        );
-        const tokenResolution = await resolveGatewayInstallToken({
-          config: params.cfg,
+      const port = resolveGatewayPort(params.cfg, process.env);
+      const { programArguments, workingDirectory, environment, environmentValueSources } =
+        await buildGatewayInstallPlan({
           env: process.env,
+          port,
+          runtime: daemonRuntime,
+          existingCommand: serviceState.command,
+          warn: (message, title) => note(message, title),
+          config: params.cfg,
         });
-        for (const warning of tokenResolution.warnings) {
-          note(warning, "Gateway");
-        }
-        if (tokenResolution.unavailableReason) {
-          note(
-            [
-              "Gateway service install aborted.",
-              tokenResolution.unavailableReason,
-              "Fix gateway auth config/token input and rerun doctor.",
-            ].join("\n"),
-            "Gateway",
-          );
-          return;
-        }
-        const port = resolveGatewayPort(params.cfg, process.env);
-        const { programArguments, workingDirectory, environment, environmentValueSources } =
-          await buildGatewayInstallPlan({
-            env: process.env,
-            port,
-            runtime: daemonRuntime,
-            existingCommand: serviceState.command,
-            warn: (message, title) => note(message, title),
-            config: params.cfg,
-          });
-        try {
-          await service.install({
-            env: process.env,
-            stdout: process.stdout,
-            programArguments,
-            workingDirectory,
-            environment,
-            environmentValueSources,
-          });
-        } catch (err) {
-          note(`Gateway service install failed: ${String(err)}`, "Gateway");
-          note(gatewayInstallErrorHint(), "Gateway");
-        }
+      try {
+        await service.install({
+          env: process.env,
+          stdout: process.stdout,
+          programArguments,
+          workingDirectory,
+          environment,
+          environmentValueSources,
+        });
+      } catch (err) {
+        note(`Gateway service install failed: ${String(err)}`, "Gateway");
+        note(gatewayInstallErrorHint(), "Gateway");
       }
     }
     return;

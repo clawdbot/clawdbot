@@ -54,4 +54,15 @@ export {
 } from "../../cron/service/active-run-cancellation.js";
 export { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
 export { reloadTaskRuntimeStateFromStore } from "../../tasks/runtime-internal.js";
-export { abortPendingChannelReloads } from "../../gateway/server-reload-contracts.js";
+export { abortPendingChannelReloads } from "../../gateway/server-reload-generation.js";
+
+export async function stopGatewayManagedProviderLocalServices(): Promise<void> {
+  const { hasManagedProviderLocalServices } =
+    await import("../../agents/provider-runtime-lifecycle.js");
+  if (!hasManagedProviderLocalServices()) {
+    return;
+  }
+  const { stopManagedProviderLocalServices } =
+    await import("../../agents/provider-local-service.js");
+  await stopManagedProviderLocalServices();
+}

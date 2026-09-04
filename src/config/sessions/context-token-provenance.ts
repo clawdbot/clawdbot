@@ -110,7 +110,9 @@ export function resolveProjectedSessionContextTokens(params: {
   // matching effective resolution instead of publishing an unknown window.
   const currentContextTokens =
     authoredContextTokens !== undefined
-      ? resolvedContextTokens
+      ? resolvedContextTokens === undefined
+        ? authoredContextTokens
+        : Math.min(authoredContextTokens, resolvedContextTokens)
       : trustedContextTokens !== undefined && resolvedContextTokens !== undefined
         ? Math.min(trustedContextTokens, resolvedContextTokens)
         : (trustedContextTokens ?? resolvedContextTokens ?? persistedResolution);

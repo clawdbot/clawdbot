@@ -13,7 +13,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { PreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
-import { materializeRuntimeCapabilities } from "../../agents/prepared-model-runtime.configured-catalog.js";
+import { materializePreparedModelCatalog } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
@@ -140,6 +140,7 @@ const modelPluginMetadataSnapshot = vi.hoisted(() => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -288,6 +289,8 @@ function requestModelsList(params: {
       agentDir,
       workspaceDir: agentDir,
       config,
+      observationConfig: config,
+      isCurrent: () => getRuntimeConfig() === config,
       authModes: params.preparedAuthModes ?? {},
       authStore:
         getPreparedRuntimeAuthProfileStoreSnapshot(agentDir) ??
@@ -643,8 +646,11 @@ describe("models.list", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const materializedCatalog = materializeRuntimeCapabilities(
-      [{ id: modelId, name: modelId, provider: "anthropic", reasoning: false }],
+    const materializedCatalog = materializePreparedModelCatalog(
+      {
+        entries: [{ id: modelId, name: modelId, provider: "anthropic", reasoning: false }],
+        routeVariants: [],
+      },
       [
         {
           provider: "anthropic",
@@ -657,7 +663,7 @@ describe("models.list", () => {
           } as never,
         },
       ],
-    );
+    ).entries;
     const { request, respond } = requestModelsList({
       view: "configured",
       runtimeConfig,
@@ -754,8 +760,11 @@ describe("models.list", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const materializedCatalog = materializeRuntimeCapabilities(
-      [{ id: modelId, name: "Claude Mythos 5", provider: "anthropic" }],
+    const materializedCatalog = materializePreparedModelCatalog(
+      {
+        entries: [{ id: modelId, name: "Claude Mythos 5", provider: "anthropic" }],
+        routeVariants: [],
+      },
       [
         {
           provider: "anthropic",
@@ -768,7 +777,7 @@ describe("models.list", () => {
           } as never,
         },
       ],
-    );
+    ).entries;
     const { request, respond } = requestModelsList({
       view: "configured",
       runtimeConfig,
@@ -1712,6 +1721,7 @@ describe("models.list", () => {
                       },
                       available,
                       tags: ["configured"],
+                      ...(authenticated ? {} : { unavailableReason: "missing-auth" }),
                     },
                   ],
                 },
@@ -2274,88 +2284,110 @@ describe("models.list", () => {
     );
   });
 
-  it("marks auth profiles available even when provider config uses non-env SecretRef markers", async () => {
-    for (const fixture of [
-      {
-        name: "file",
-        apiKey: {
-          source: "file",
-          provider: "mounted-json",
-          id: "/providers/vllm/apiKey",
-        },
-      },
-      { name: "managed-marker", apiKey: "secretref-managed" },
-    ] as const) {
-      await withModelsTestState(
-        {
-          layout: "state-only",
-          prefix: `openclaw-models-list-provider-${fixture.name}-profile-`,
-          agentEnv: "main",
-          env: {
-            OPENCLAW_TEST_PROFILE_API_KEY: "test-token",
-            VLLM_API_KEY: undefined,
+  it.each([
+    {
+      name: "unregistered file SecretRef",
+      apiKey: { source: "file", provider: "mounted-json", id: "/providers/vllm/apiKey" },
+      secrets: undefined,
+      available: false,
+      unavailableReason: "auth-failed",
+    },
+    {
+      name: "unhydrated file SecretRef",
+      apiKey: { source: "file", provider: "mounted-json", id: "/providers/vllm/apiKey" },
+      secrets: {
+        providers: {
+          "mounted-json": {
+            source: "file",
+            path: "/tmp/openclaw-test-secrets.json",
+            mode: "json",
           },
         },
-        async (state) => {
-          await state.writeAuthProfiles({
-            version: 1,
-            profiles: {
-              "vllm:env": {
-                type: "api_key",
-                provider: "vllm",
-                keyRef: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENCLAW_TEST_PROFILE_API_KEY",
-                },
-              },
-            },
-          });
-
-          const cfg = {
-            agents: {
-              defaults: {
-                models: {
-                  "vllm/*": {},
-                },
-              },
-            },
-            models: {
-              providers: {
-                vllm: {
-                  apiKey: fixture.apiKey,
-                },
-              },
-            },
-          } as unknown as OpenClawConfig;
-
-          const { request, respond } = requestModelsList({
-            view: "all",
-            runtimeConfig: cfg,
-            loadGatewayModelCatalog: vi.fn(() =>
-              Promise.resolve([{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }]),
-            ),
-            reqId: `req-models-list-provider-${fixture.name}-profile`,
-          });
-          await request;
-
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            {
-              models: [
-                {
-                  id: "llama-secure",
-                  name: "Llama Secure",
-                  provider: "vllm",
-                  available: true,
-                },
-              ],
-            },
-            undefined,
-          );
+      },
+      available: false,
+      unavailableReason: undefined,
+    },
+    {
+      name: "legacy managed marker",
+      apiKey: "secretref-managed",
+      secrets: undefined,
+      available: true,
+      unavailableReason: undefined,
+    },
+  ] as const)("honors $name ownership when another auth profile is usable", async (fixture) => {
+    await withModelsTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-models-list-provider-profile-",
+        agentEnv: "main",
+        env: {
+          OPENCLAW_TEST_PROFILE_API_KEY: "test-token",
+          VLLM_API_KEY: undefined,
         },
-      );
-    }
+      },
+      async (state) => {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "vllm:env": {
+              type: "api_key",
+              provider: "vllm",
+              keyRef: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_TEST_PROFILE_API_KEY",
+              },
+            },
+          },
+        });
+
+        const cfg = {
+          agents: {
+            defaults: {
+              models: {
+                "vllm/*": {},
+              },
+            },
+          },
+          models: {
+            providers: {
+              vllm: {
+                apiKey: fixture.apiKey,
+              },
+            },
+          },
+          ...(fixture.secrets ? { secrets: fixture.secrets } : {}),
+        } as unknown as OpenClawConfig;
+
+        const { request, respond } = requestModelsList({
+          view: "all",
+          runtimeConfig: cfg,
+          loadGatewayModelCatalog: vi.fn(() =>
+            Promise.resolve([{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }]),
+          ),
+          reqId: `req-models-list-provider-${fixture.name}-profile`,
+        });
+        await request;
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              {
+                id: "llama-secure",
+                name: "Llama Secure",
+                provider: "vllm",
+                available: fixture.available,
+                ...(fixture.unavailableReason
+                  ? { unavailableReason: fixture.unavailableReason }
+                  : {}),
+              },
+            ],
+          },
+          undefined,
+        );
+      },
+    );
   });
 
   it("projects only public model fields", async () => {

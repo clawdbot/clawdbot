@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -86,6 +86,10 @@ suite.define(() => {
               separatorDisplays: [
                 ...root.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep"),
               ].map((node) => getComputedStyle(node).display),
+              headerBottom: root.getBoundingClientRect().bottom,
+              contentTop: root.parentElement
+                ?.querySelector(".sidebar-region")
+                ?.getBoundingClientRect().top,
             };
           });
 
@@ -93,6 +97,7 @@ suite.define(() => {
             Math.abs(geometry.menu - geometry.nav),
             JSON.stringify(geometry),
           ).toBeLessThanOrEqual(0.1);
+          expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
           if (viewport.label === "desktop") {
             for (const center of [
               geometry.projectIcon,
@@ -147,7 +152,7 @@ suite.define(() => {
     { height: 844, label: "portrait", width: 390 },
     { height: 393, label: "short landscape", width: 852 },
   ] as const) {
-    it(`keeps compact ${viewport.label} transcript search below the floating header`, async () => {
+    it(`keeps compact ${viewport.label} transcript search below the task header`, async () => {
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -248,15 +253,10 @@ suite.define(() => {
       await icon.waitFor();
       await icon.locator("svg").waitFor();
       await icon.evaluate((element) => element.setAttribute("data-recovery-host", "mounted"));
-      const proofDir = path.join(
-        process.cwd(),
-        ".artifacts",
-        "control-ui-e2e",
-        "workspace-icon-recovery",
-      );
       if (captureUiProofEnabled) {
-        await mkdir(proofDir, { recursive: true });
-        await page.screenshot({ path: path.join(proofDir, "fallback.png") });
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "workspace-icon-recovery", "fallback.png"),
+        });
       }
 
       await icon.locator(".workspace-icon").waitFor({ timeout: 10_000 });
@@ -264,7 +264,9 @@ suite.define(() => {
       expect(requests).toBe(2);
       expect(await icon.getAttribute("data-recovery-host")).toBe("mounted");
       if (captureUiProofEnabled) {
-        await page.screenshot({ path: path.join(proofDir, "recovered.png") });
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "workspace-icon-recovery", "recovered.png"),
+        });
       }
     } finally {
       await suite.closeBrowserContext(context);

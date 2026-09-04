@@ -1,5 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentConfig } from "../agents/agent-scope-config.js";
 // Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
@@ -11,11 +11,17 @@ import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
-import { hasConfiguredInternalHooks } from "../hooks/configured.js";
+import { resolveInternalHookSelection } from "../hooks/configured.js";
+import {
+  createAgentToAgentPolicy,
+  resolveSandboxSessionToolsVisibility,
+  resolveSessionToolsVisibility,
+} from "../plugin-sdk/session-visibility.js";
 import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-shared.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { listPotentialMultiUserSignals } from "./audit-extra.sync.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
 
 /** Lightweight audit finding shape used by summary-only audit helpers. */
@@ -136,7 +142,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
-  const internalHooksEnabled = hasConfiguredInternalHooks(cfg);
+  const internalHooksEnabled = resolveInternalHookSelection(cfg).configured;
   const browserEnabled = isBrowserEnabled(cfg);
 
   const detail =
@@ -158,6 +164,91 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
       severity: "info",
       title: "Attack surface summary",
       detail,
+    },
+  ];
+}
+
+/** Surface default cross-agent session access, escalating when trust boundaries may differ. */
+export function collectCrossAgentSessionAccessFindings(
+  cfg: OpenClawConfig,
+): SecurityAuditFinding[] {
+  const agentIds = listAgentIds(cfg);
+  if (agentIds.length < 2 || resolveSessionToolsVisibility(cfg) !== "all") {
+    return [];
+  }
+  // Even blank allow entries are a configured restriction: the runtime denies them.
+  if (!createAgentToAgentPolicy(cfg).enabled || cfg.tools?.agentToAgent?.allow?.length) {
+    return [];
+  }
+
+  const sandboxClamp = resolveSandboxSessionToolsVisibility(cfg);
+  const reachers: string[] = [];
+  const nonReachers: string[] = [];
+  const signals: string[] = [];
+  for (const agentId of agentIds) {
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, agentId).mode;
+    if (sandboxMode !== "off") {
+      signals.push(`${agentId}: sandbox.mode="${sandboxMode}"`);
+    }
+    const tools = resolveAgentConfig(cfg, agentId)?.tools;
+    const policies = resolveToolPolicies({ cfg, agentTools: tools, sandboxMode, agentId });
+    const allowedTools = [
+      "sessions_list",
+      "sessions_history",
+      "sessions_search",
+      "sessions_send",
+      "session_status",
+    ].filter((name) => isToolAllowedByPolicies(name, policies));
+    const unclamped = sandboxMode !== "all" || sandboxClamp === "all";
+    if (unclamped && allowedTools.length > 0) {
+      const context =
+        sandboxMode === "off"
+          ? "unsandboxed sessions"
+          : sandboxMode === "non-main"
+            ? "unsandboxed main session"
+            : "sandboxed sessions (clamp disabled)";
+      reachers.push(`- ${agentId}: ${context}; allowed session tools: ${allowedTools.join(", ")}.`);
+    } else {
+      const reason = unclamped
+        ? "session tools removed by agent tool policy"
+        : "sandboxed sessions clamped to their spawn tree";
+      nonReachers.push(
+        `- ${agentId}: ${reason}; its transcripts remain readable by the agents above.`,
+      );
+    }
+    const restrictions = (["profile", "allow", "deny"] as const).filter(
+      (key) => tools?.[key] !== undefined,
+    );
+    if (restrictions.length > 0) {
+      signals.push(
+        `${agentId}: agent-level tool restrictions (${restrictions.map((key) => `tools.${key}`).join(", ")})`,
+      );
+    }
+  }
+  if (reachers.length === 0) {
+    return [];
+  }
+  signals.push(...listPotentialMultiUserSignals(cfg));
+  const trustDetail =
+    signals.length > 0
+      ? "\nTrust-boundary signals:\n" +
+        signals.map((signal) => `- ${signal}`).join("\n") +
+        "\nSandboxing, agent-level tool restrictions, or shared-user ingress suggest different trust levels, but session access remains Gateway-wide."
+      : "";
+
+  return [
+    {
+      checkId: "security.trust_model.cross_agent_session_access_default",
+      severity: signals.length > 0 ? "warn" : "info",
+      title: "Agents share Gateway-wide session access (default)",
+      detail:
+        `Agents: ${agentIds.join(", ")}\n` +
+        'tools.sessions.visibility resolves to "all" and tools.agentToAgent is enabled with no allow list.\n' +
+        "Agents that can reach other agents' sessions, including other users' transcripts:\n" +
+        [...reachers, ...nonReachers, "Incognito sessions remain hidden."].join("\n") +
+        trustDetail,
+      remediation:
+        'Set tools.sessions.visibility to "agent", "tree", or "self"; restrict tools.agentToAgent.allow to the intended requester and target ids; or set tools.agentToAgent.enabled: false. See https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent and https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway.',
     },
   ];
 }

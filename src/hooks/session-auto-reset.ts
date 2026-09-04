@@ -67,9 +67,10 @@ export function emitSessionAutoResetHook(params: {
     previousSessionMemory: params.previousSessionMemory,
   });
 
-  void runWithGatewayIndependentRootWorkContinuation(() => triggerInternalHook(event)).catch(
-    (error: unknown) => {
-      logVerbose(`session:auto-reset hook failed: ${String(error)}`);
-    },
-  );
+  void runWithGatewayIndependentRootWorkContinuation(
+    () => triggerInternalHook(event),
+    "hooks:session-auto-reset",
+  ).catch((error: unknown) => {
+    logVerbose(`session:auto-reset hook failed: ${String(error)}`);
+  });
 }

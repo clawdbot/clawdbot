@@ -65,6 +65,20 @@ IRC does not provide a replayable delivery ID or resend messages missed by a dis
 
 Named accounts inherit the channel-wide reply mode; override it with `channels.irc.accounts.<id>.replyToMode`.
 
+## Outbound text
+
+IRC sends Markdown as plain text, preserving code contents and link destinations.
+Long replies are rendered before splitting into IRC messages, so code fences and
+inline formatting remain consistent across chunk boundaries. `textChunkLimit`
+and `streaming.chunkMode` control text splitting; the socket also enforces
+IRC's line-size limit.
+
+Send directly to a channel or nick with the message CLI:
+
+```bash
+openclaw message send --channel irc --target '#openclaw' --message 'Hello from OpenClaw'
+```
+
 ## Security defaults
 
 - IRC uses raw TCP/TLS sockets outside OpenClaw operator-managed forward proxy routing. In deployments that require all egress through that forward proxy, set `channels.irc.enabled=false` unless direct IRC egress is explicitly approved.

@@ -10,10 +10,13 @@
 import { html, nothing, render } from "lit";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import "../components/modal-dialog.ts";
 import { postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
-import { formatUpdateTargetLabel } from "./update-overlay-helpers.ts";
+import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
+
+registerUpdateActionsEnglish();
 
 /** Bounds the wait for the request to be accepted before calling it a no-start. */
 const UPDATE_ACCEPT_GRACE_MS = 4_000;
@@ -24,7 +27,12 @@ type DialogPhase =
   | { kind: "working"; connected: boolean }
   | { kind: "failed"; message: string };
 
-let updateDialogActive = false;
+let updateDialog: { closeFailed: () => void } | null = null;
+
+/** The triage surface takes over only after the initiating dialog reports failure. */
+export function closeFailedUpdateDialog(): void {
+  updateDialog?.closeFailed();
+}
 
 function formatInstalledAndAvailable(
   updateAvailable: UpdateAvailable | null,
@@ -49,9 +57,9 @@ function formatInstalledAndAvailable(
 }
 
 function workingMessage(connected: boolean): string {
-  // The restart is the loud part of the wait; name it while it is happening
-  // instead of leaving the operator to interpret a frozen page.
-  return connected ? t("updates.dialog.installing") : t("updates.dialog.restarting");
+  // A disconnect alone does not prove a restart. Keep update recovery guidance
+  // separate from flows that have an explicit restart result.
+  return connected ? t("updates.dialog.installing") : t("updates.dialog.disconnected");
 }
 
 export async function confirmAndStartUpdateRuntime(
@@ -59,10 +67,9 @@ export async function confirmAndStartUpdateRuntime(
 ): Promise<void> {
   // Native confirms block reentrancy; refuse a second request rather than
   // stacking a dialog over an update that is already being reported.
-  if (updateDialogActive) {
+  if (updateDialog) {
     return;
   }
-  updateDialogActive = true;
   const host = document.createElement("div");
   document.body.append(host);
   // One surface owns the outcome at a time: the ambient copy stays hidden while
@@ -99,8 +106,15 @@ export async function confirmAndStartUpdateRuntime(
       render(nothing, host);
       host.remove();
       document.body.classList.remove(UPDATE_DIALOG_OPEN_CLASS);
-      updateDialogActive = false;
+      updateDialog = null;
       resolve();
+    };
+    updateDialog = {
+      closeFailed: () => {
+        if (phase.kind === "failed") {
+          finish();
+        }
+      },
     };
 
     const draw = () => {
@@ -126,31 +140,37 @@ export async function confirmAndStartUpdateRuntime(
                   <div class="exec-approval-sub" style="white-space: pre-line">${body}</div>
                 </div>
               </div>
-              ${details && !failed
-                ? html`<div class="exec-approval-command mono">${details}</div>`
-                : nothing}
+              ${
+                details && !failed
+                  ? html`<div class="exec-approval-command mono">${details}</div>`
+                  : nothing
+              }
               <div class="exec-approval-actions">
-                ${failed
-                  ? html`<button type="button" class="btn" autofocus @click=${finish}>
-                      ${t("common.close")}
-                    </button>`
-                  : html`
-                      <button
-                        type="button"
-                        class="btn danger ${working ? "btn--busy" : ""}"
-                        ?disabled=${working}
-                        @click=${confirm}
-                      >
-                        ${working
-                          ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
-                                "chat.updating",
-                              )}`
-                          : route.confirmLabel}
-                      </button>
-                      <button type="button" class="btn" autofocus @click=${finish}>
-                        ${working ? t("common.close") : t("common.cancel")}
-                      </button>
-                    `}
+                ${
+                  failed
+                    ? html`<button type="button" class="btn" autofocus @click=${finish}>
+                        ${t("common.close")}
+                      </button>`
+                    : html`
+                        <button
+                          type="button"
+                          class="btn danger ${working ? "btn--busy" : ""}"
+                          ?disabled=${working}
+                          @click=${confirm}
+                        >
+                          ${
+                            working
+                              ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
+                                    "chat.updating",
+                                  )}`
+                              : route.confirmLabel
+                          }
+                        </button>
+                        <button type="button" class="btn" autofocus @click=${finish}>
+                          ${working ? t("common.close") : t("common.cancel")}
+                        </button>
+                      `
+                }
               </div>
             </div>
           </openclaw-modal-dialog>

@@ -12,6 +12,7 @@ import {
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createSessionObserverAudience,
@@ -90,6 +91,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     getConfig: deps.getConfig,
   });
   type ObservedAudience = ReturnType<typeof audience.classify>;
+  const broadcastDigest = (
+    digest: SessionObserverDigest,
+    connIds: ReadonlySet<string>,
+    agentId: string,
+  ) =>
+    deps.broadcastToConnIds(
+      "session.observer",
+      digest,
+      connIds,
+      audience.deliveryOptions(digest.sessionKey, agentId),
+    );
   // Narrow run-identity guard shared by persist paths: a digest may still land
   // while its session is unwatched, but never after a newer run replaces it.
   const runStillCurrent = (runId: string, sessionKey: string, agentId: string) => () =>
@@ -105,13 +117,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       // An unpersistable session must not re-bill the utility model every cycle.
       disableModelForRun(state);
     },
-    onError: (state, error) => {
+    // JSON logging drops Error's non-enumerable fields; format before serializing.
+    onError: (state, error) =>
       observerLog.warn("session observer digest persistence failed", {
         sessionKey: state.sessionKey,
         runId: state.runId,
-        error,
-      });
-    },
+        error: formatErrorMessage(error),
+      }),
   });
   const preamblePublisher = createSessionObserverPreamblePublisher({
     now,
@@ -119,12 +131,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     clearTimeoutFn,
     isCurrent: (state) => audienceLifecycle.stateIsCurrent(state),
     publish: (state, digest) => {
-      deps.broadcastToConnIds(
-        "session.observer",
-        digest,
-        audience.recipients(state.sessionKey, state.agentId),
-        audience.deliveryOptions(state.sessionKey, state.agentId),
-      );
+      broadcastDigest(digest, audience.recipients(state.sessionKey, state.agentId), state.agentId);
       void persistAcceptedDigest(state, digest, false, "preamble");
     },
   });
@@ -161,15 +168,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       if (digest && stillCurrent()) {
         // Live subscribers already saw the in-progress digest over this event;
         // the synthesized terminal correction must reach them the same way.
-        deps.broadcastToConnIds(
-          "session.observer",
-          digest,
-          audience.recipients(digest.sessionKey, agentId),
-          audience.deliveryOptions(digest.sessionKey, agentId),
-        );
+        broadcastDigest(digest, audience.recipients(digest.sessionKey, agentId), agentId);
       }
     } catch (error) {
-      observerLog.warn("session observer terminal digest synthesis failed", { runId, error });
+      observerLog.warn("session observer terminal digest synthesis failed", {
+        runId,
+        error: formatErrorMessage(error),
+      });
     }
   }
 
@@ -260,14 +265,10 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     getConfig: deps.getConfig,
     prepareModel,
     completeModel,
-    now,
     setTimeoutFn,
     clearTimeoutFn,
     isCurrent: modelStateIsCurrent,
   });
-
-  const pendingNotes = (state: SessionObserverState) =>
-    state.notes.filter((note) => note.sequence > state.lastDigestNoteSequence);
 
   const schedule = (
     state: SessionObserverState,
@@ -285,7 +286,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.timer ||
       state.terminalHealth ||
       state.digestCount >= MAX_LIVE_DIGESTS_PER_RUN ||
-      pendingNotes(state).length < MIN_NOTES_PER_DIGEST
+      // Notes stay sequence-ordered even when the bounded buffer drops its oldest entries.
+      (state.notes.at(-MIN_NOTES_PER_DIGEST)?.sequence ?? 0) <= state.lastDigestNoteSequence
     ) {
       return;
     }
@@ -321,7 +323,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       return;
     }
     flushSessionActivityAssistantNote(state);
-    const selectedNotes = pendingNotes(state);
+    const selectedNotes = state.notes.filter(
+      (note) => note.sequence > state.lastDigestNoteSequence,
+    );
     if (!final && selectedNotes.length < MIN_NOTES_PER_DIGEST) {
       return;
     }
@@ -359,13 +363,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           }
           return;
         }
-        // A session reset swaps sessionId under the same key; a digest accepted
-        // for the old session must not reach the replacement session's watchers.
+        // A deleted/reset session cannot accept this run's digest. Disable its
+        // model work so pending notes cannot keep scheduling unpersistable results.
         if (
           state.sessionId &&
           readSession(state.sessionKey, state.agentId)?.sessionId !== state.sessionId
         ) {
-          return;
+          return disableModelForRun(state);
         }
         preamblePublisher.clear(state);
         state.consecutiveFailures = 0;
@@ -394,12 +398,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         const recipients = criticalTransition
           ? audience.criticalRecipients(state.sessionKey, state.agentId)
           : audience.recipients(state.sessionKey, state.agentId);
-        deps.broadcastToConnIds(
-          "session.observer",
-          digest,
-          recipients,
-          audience.deliveryOptions(state.sessionKey, state.agentId),
-        );
+        broadcastDigest(digest, recipients, state.agentId);
         await persistAcceptedDigest(state, digest, final);
         if (final) {
           dormantRuns.delete(state.runId);
@@ -417,7 +416,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           observerLog.warn("session observer disabled after consecutive failures", {
             sessionKey: state.sessionKey,
             runId: state.runId,
-            error,
+            error: formatErrorMessage(error),
           });
           if (final || state.finalPending || state.terminalHealth) {
             retireTerminalState(state);
@@ -733,6 +732,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       revisionFloors.clear();
       supersededRuns.clear();
       terminalRuns.clear();
+      contextlessTerminalRuns.clear();
       disabledRuns.clear();
       visibleConnections.clear();
     },

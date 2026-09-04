@@ -392,6 +392,41 @@ describe("skill collection review", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { resolvedAlpha: false, unresolvedAgent: "alpha-agent" },
+    { resolvedAlpha: true, unresolvedAgent: "beta-agent" },
+  ])(
+    "reports unresolved shared-workspace auth for $unresolvedAgent (resolved alpha: $resolvedAlpha)",
+    async ({ resolvedAlpha, unresolvedAgent }) => {
+      const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-shared-auth-");
+      if (resolvedAlpha) {
+        authStoresByAgentDir.set(path.join(testState.stateDir, "agents", "alpha-agent", "agent"), {
+          version: 1,
+          profiles: { "openai:alpha": { type: "api_key", provider: "openai", key: "alpha-key" } },
+        });
+      }
+      const result = await runReview({
+        config: {
+          agents: {
+            list: [
+              { id: "alpha-agent", default: true, workspace: workspaceDir },
+              { id: "beta-agent", workspace: workspaceDir },
+            ],
+          },
+          skills: { workshop: { autonomous: { mode: "auto" } } },
+        },
+        env: testState.env,
+      });
+
+      const authError = `no resolved auth credential for provider "openai" (agent "${unresolvedAgent}")`;
+      expect(result).toMatchObject({ status: "error", error: expect.stringContaining(authError) });
+      expect(
+        Object.values(readSkillReviewOutcomes({ env: testState.env }).collectionReviews),
+      ).toEqual([{ attemptedAtMs: expect.any(Number), error: expect.stringContaining(authError) }]);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    },
+  );
+
   it("groups symlink aliases before comparing shared-workspace identities", async () => {
     const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-real-workspace-");
     const aliasParent = await tempDirs.make("openclaw-collection-review-alias-parent-");

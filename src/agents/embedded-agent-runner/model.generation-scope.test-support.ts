@@ -113,6 +113,8 @@ export function createModelGenerationFixture(params: {
     workspaceDir: params.workspaceDir,
     activeProjectKeys: [],
     config: params.config,
+    observationConfig: params.config,
+    isCurrent: () => true,
     authModes: {},
     metadataSnapshot,
     ...(params.withRegistry === false ? {} : { pluginRegistry }),

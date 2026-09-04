@@ -60,6 +60,12 @@ them with `listMessageReceiptPlatformIds(...)` or
 `resolveMessageReceiptPrimaryId(...)` instead of keeping parallel `messageIds`
 fields.
 
+Channel actions and adapter capabilities come from the selected plugin
+registration. An omitted `actions`, `message`, or `outbound` surface is not
+filled from another plugin with the same channel ID. Prepared delivery handlers
+created inside a registry scope retain that handle when invoked after the caller
+leaves the scope.
+
 Declare live and finalizer capabilities precisely - core uses these to decide
 what a channel can do, and drift between the declared and actual behavior is a
 contract test failure:
@@ -403,9 +409,10 @@ liveness, perform network requests, or infer missing provider facts. Return:
 
 Keep temporary unavailability distinct from `null`: an adapter restart is not
 proof that a previously bound conversation is unowned.
-Use `inspectSessionBindingByConversation(...)` from
-`openclaw/plugin-sdk/session-binding-runtime` when the resolver needs this
-available/unavailable distinction.
+Use `inspectConversationBinding(...)` and its `ConversationBindingInspection`
+result from `openclaw/plugin-sdk/conversation-binding-inspection-runtime` for this
+available/unavailable distinction. This public inspection helper is synchronous,
+read-only, and does not refresh binding liveness.
 
 ### Account-scoped conversation binding support
 
@@ -551,6 +558,13 @@ subscription, and routed-elsewhere notices.
   handler stop cancels the delivery before `bindPending` runs, or when
   `bindPending` returns no handle
 - `observe` - optional delivery diagnostics hooks
+
+Native approval runtimes can receive three approval kinds: `exec`, `plugin`,
+and `system-agent`. A `system-agent` request asks an operator to approve a
+Gateway-side persistent change, such as a config write or Gateway restart.
+The runtime must render the typed approval actions and then render the final
+application result. An allowed request can finish as applied or not applied;
+do not treat the recorded approval alone as proof that the change completed.
 
 Other approval helpers:
 
@@ -736,6 +750,12 @@ surfaces:
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 
+The `threading.resolveReplyTransport` hook receives the payload's optional
+`replyToCurrent` intent separately from `replyToIsExplicit`. Channels whose
+native API requires a thread root can resolve a current-message reply against
+the admitted thread without redirecting arbitrary explicit `replyToId` targets.
+Omitted intent keeps the existing explicit-target behavior.
+
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native
 approval channels such as Matrix, Slack, Telegram, and custom chat transports
@@ -915,7 +935,8 @@ unrelated inbound runtime helpers.
   <Step title="Build the channel plugin object">
     The `ChannelPlugin` interface has many optional adapter surfaces. Start with
     the minimum - `id`, `config`, and `setup` - and add adapters as you need
-    them.
+    them. `createChatChannelPlugin` defaults omitted capabilities to direct
+    messages; declare `capabilities.chatTypes` when the channel supports more.
 
     `config.inspectAccount` is synchronous and returns metadata
     for read-only diagnostics, including disabled or configured-but-unavailable
@@ -928,6 +949,9 @@ unrelated inbound runtime helpers.
     runtime, including duplicate-account suppression. If `configured` is omitted,
     diagnostics use a recorded Gateway value when available; otherwise they report
     that configuration status is unavailable.
+    Selection before secret redemption also reads this metadata directly. Directory
+    auto-selection requires `configured: true`; callers can still select the channel
+    explicitly when configuration status is unknown.
 
     Create `src/channel.ts`:
 
@@ -1115,12 +1139,13 @@ unrelated inbound runtime helpers.
     `openclaw/plugin-sdk/plugin-command-runtime`. Create one runtime while
     planning the catalog, merge its candidates with built-in and skill entries,
     and retain the winning candidate object in the registered handler closure.
-    Once the provider catalog is finalized, call
-    `retainNativeCatalog(provider)` when at least one plugin candidate remains;
-    if listener registration can fail synchronously, call it after those
-    listeners are installed. This records the current channel-account lifecycle
-    so a registry reload restarts only accounts whose handlers retain that
-    registry generation.
+    A plugin registry replacement drains and restarts loaded channel accounts
+    so their handlers, command catalogs, and routes use the new generation.
+    Manually stopped accounts stay stopped. Ordinary channel config changes
+    still restart only the affected channel or accounts.
+    `retainNativeCatalog(provider)` is deprecated and will be removed in the
+    next breaking SDK release; existing calls only assert that the captured
+    registry generation is still active.
     Call `prepareDispatch(rawArgs)` only on that winner and execute the returned
     dispatch with `dispatch.execute(context)`. Carry an explicit
     `{ kind: "non-plugin" }` decision for retained built-in and skill winners.

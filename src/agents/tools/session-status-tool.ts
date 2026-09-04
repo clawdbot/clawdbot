@@ -64,7 +64,7 @@ import {
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
-  resolveThinkingDefaultWithRuntimeCatalog,
+  resolveThinkingDefaultWithRuntimeCatalogCore,
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
@@ -526,7 +526,7 @@ async function resolveModelOverride(params: {
           env: process.env,
         });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins,
+    manifestPlugins: manifestMetadataSnapshot,
   };
   const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
@@ -1154,7 +1154,7 @@ export function createSessionStatusTool(opts?: {
             resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
             resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
             resolveDefaultThinkingLevel: () =>
-              resolveThinkingDefaultWithRuntimeCatalog({
+              resolveThinkingDefaultWithRuntimeCatalogCore({
                 cfg,
                 provider: providerForCard,
                 model: defaultModelForCard,

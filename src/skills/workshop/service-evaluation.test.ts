@@ -86,6 +86,61 @@ async function createOwnedSkill(
 }
 
 describe("Skill Workshop proposal evaluation", () => {
+  it.each(["before", "during"])(
+    "does not publish evaluation when a target directory becomes unreadable %s evaluation",
+    async (phase) => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-incomplete-");
+      const skillDir = await createOwnedSkill(workspaceDir, "incomplete");
+      const references = path.join(skillDir, "references");
+      await fs.mkdir(references);
+      await fs.writeFile(path.join(references, "needed.md"), "Required evidence.\n");
+      const proposal = await proposeUpdateSkill({
+        workspaceDir,
+        agentId: "main",
+        skillName: "incomplete",
+        content: "# Updated\n",
+      });
+      const eventsBefore = listSkillProposalEvents({
+        workspaceDir,
+        proposalId: proposal.record.id,
+      }).events;
+      let blocked = phase === "before";
+      hookMocks.evaluate.mockImplementation(async () => {
+        blocked = true;
+        return [];
+      });
+      const denied = Object.assign(new Error(`Cannot read ${references}`), { code: "EACCES" });
+      const readdir = fs.readdir;
+      const spy = vi
+        .spyOn(fs, "readdir")
+        .mockImplementation((...args) =>
+          blocked && args[0] === references ? Promise.reject(denied) : readdir(...args),
+        );
+      try {
+        await expect(
+          evaluateSkillProposal({
+            workspaceDir,
+            agentId: "main",
+            proposalId: proposal.record.id,
+            expectedRevisionHash: proposal.revisionHash,
+          }),
+        ).rejects.toThrow(phase === "before" ? denied : "changed while evaluation was running");
+      } finally {
+        spy.mockRestore();
+      }
+      expect(hookMocks.evaluate).toHaveBeenCalledTimes(phase === "before" ? 0 : 1);
+      const after = await inspectSkillProposal(proposal.record.id, { workspaceDir });
+      expect(after?.record.evaluation).toBeUndefined();
+      expect(after?.revisionHash).toBe(proposal.revisionHash);
+      expect(
+        listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events,
+      ).toEqual(eventsBefore);
+      await expect(fs.readFile(path.join(references, "needed.md"), "utf8")).resolves.toBe(
+        "Required evidence.\n",
+      );
+    },
+  );
+
   it("persists attributed results and exposes durable lifecycle events", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-evaluation-");
     const proposal = await proposeCreateSkill({

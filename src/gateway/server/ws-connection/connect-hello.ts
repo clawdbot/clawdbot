@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
   redeemDeviceBootstrapTokenProfile,
@@ -12,6 +13,7 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
@@ -84,8 +86,11 @@ export async function sendGatewayHello(
     deviceToken,
     bootstrapDeviceTokens,
   } = state;
-  // Prefer the authenticated human; principal scopes never inherit device-token rows.
-  const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
+  // Only an upstream-verified identity owns principal recovery; owner profiles
+  // attribute shared-secret/device connections without changing their recovery scope.
+  const authenticatedPrincipal = authResult.user
+    ? (authenticatedUserProfileId ?? authResult.user)
+    : undefined;
   const recoveryScopeMaterial = authenticatedPrincipal
     ? ["principal", authenticatedPrincipal, device?.id ?? ""]
     : deviceToken?.token
@@ -115,6 +120,7 @@ export async function sendGatewayHello(
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
   const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
+  const controlUiLocation = resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
   const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
@@ -146,12 +152,17 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.SESSION_SCOPED_CHAT_METADATA,
         GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
         GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
       ],
     },
     snapshot,
+    ...(controlUiLocation
+      ? { controlUiUrl: `${controlUiLocation.origin}${controlUiLocation.basePath}` }
+      : {}),
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
@@ -216,6 +227,8 @@ export async function sendGatewayHello(
     }
   }
   try {
+    // Bootstrap bookkeeping can await; hello must supersede any earlier admission event.
+    snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {
     if (bootstrapHandoff) {

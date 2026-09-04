@@ -1,7 +1,7 @@
 // Control UI E2E proves model-aware /think completion in the rendered composer.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,10 +16,7 @@ const VIEWPORTS = [
 ] as const;
 
 suite.define(() => {
-  it.each([
-    ["elevated full", "/elevated full"],
-    ["exec gateway", "/exec gateway"],
-  ])("executes inline /%s separately from the draft", async (typedCommand, sentCommand) => {
+  it("executes a typed inline /elevated argument separately from the draft", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         deferredMethods: ["chat.send"],
@@ -31,11 +28,34 @@ suite.define(() => {
       await composer.waitFor({ state: "visible" });
       await expect.poll(() => composer.isEnabled()).toBe(true);
 
-      await composer.fill(`Keep this /${typedCommand}`);
+      await composer.fill("Keep this /elevated full");
       await composer.press("Enter");
 
       const request = await gateway.waitForRequest("chat.send");
-      expect((request.params as { message?: unknown }).message).toBe(sentCommand);
+      expect((request.params as { message?: unknown }).message).toBe("/elevated full");
+      await expect.poll(() => composer.inputValue()).toBe("Keep this ");
+    });
+  });
+
+  it("serializes a selected inline /exec host argument canonically", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.send"],
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible" });
+      await expect.poll(() => composer.isEnabled()).toBe(true);
+
+      await composer.fill("Keep this /exec");
+      await composer.press("Tab");
+      await composer.press("ArrowDown");
+      await composer.press("Enter");
+
+      const request = await gateway.waitForRequest("chat.send");
+      expect((request.params as { message?: unknown }).message).toBe("/exec host=gateway");
       await expect.poll(() => composer.inputValue()).toBe("Keep this ");
     });
   });
@@ -136,9 +156,11 @@ suite.define(() => {
           thinkingLevel: "ultra",
         });
 
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("chat-thinking-arguments", artifactRoot)
+          : undefined;
         if (artifactDir) {
-          await fs.mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             path: path.join(artifactDir, `think-arguments-${viewport.name}.png`),
             fullPage: true,

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { pathExists, root, walkDirectory } from "../../infra/fs-safe.js";
+import { hasErrnoCode } from "../../infra/errno.js";
+import { pathExists, root, walkDirectory, type WalkDirectoryEntry } from "../../infra/fs-safe.js";
 import type {
   PluginHookSkillBundleFile,
   PluginHookSkillBundleSnapshot,
@@ -11,6 +12,7 @@ import type { PreparedSkillProposalSupportFile, SkillProposalReadResult } from "
 const MAX_EVALUATION_FILES = 256;
 const MAX_EVALUATION_FILE_BYTES = 1024 * 1024;
 const MAX_EVALUATION_BUNDLE_BYTES = 8 * 1024 * 1024;
+const MAX_EVALUATION_PATH_DEPTH = 16;
 const EXCLUDED_ROOT_DIRS = new Set([".clawhub", ".clawdhub", ".openclaw"]);
 
 export async function buildSkillProposalEvaluationBundles(params: {
@@ -72,16 +74,29 @@ export async function readSkillProposalTargetTreeSha256(skillDir: string): Promi
 }
 
 async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBundleFile[]> {
-  if (!(await pathExists(skillDir))) {
-    return [];
-  }
+  const include = (entry: WalkDirectoryEntry) =>
+    entry.depth > 1 || !EXCLUDED_ROOT_DIRS.has(entry.name);
   const scanned = await walkDirectory(skillDir, {
-    maxDepth: 16,
+    // Inspect one extra level so deeper content cannot silently disappear from the hash.
+    maxDepth: MAX_EVALUATION_PATH_DEPTH + 1,
     maxEntries: MAX_EVALUATION_FILES * 2,
     symlinks: "include",
+    include,
+    descend: include,
   });
-  if (scanned.truncated) {
-    throw new Error(`Skill evaluation bundle exceeds ${MAX_EVALUATION_FILES} files.`);
+  if (
+    scanned.truncated ||
+    scanned.entries.some((entry) => entry.depth > MAX_EVALUATION_PATH_DEPTH)
+  ) {
+    throw new Error("Skill evaluation bundle exceeds traversal limits.");
+  }
+  const failed = scanned.failedDirs[0];
+  if (failed) {
+    // Only an absent create target is empty; inaccessible or partly read trees are not.
+    if (!failed.relativePath && hasErrnoCode(failed.error, "ENOENT")) {
+      return [];
+    }
+    throw failed.error;
   }
   const skillRoot = await root(skillDir);
   const files: PluginHookSkillBundleFile[] = [];
@@ -89,14 +104,10 @@ async function readSkillTreeFiles(skillDir: string): Promise<PluginHookSkillBund
   for (const entry of scanned.entries.toSorted((a, b) =>
     a.relativePath.localeCompare(b.relativePath),
   )) {
-    const portablePath = entry.relativePath.split(path.sep).join("/");
-    if (
-      !portablePath ||
-      EXCLUDED_ROOT_DIRS.has(portablePath.split("/")[0] ?? "") ||
-      entry.kind === "directory"
-    ) {
+    if (entry.kind === "directory") {
       continue;
     }
+    const portablePath = entry.relativePath.split(path.sep).join("/");
     if (entry.kind !== "file") {
       throw new Error(`Skill evaluation bundle contains unsupported entry: ${portablePath}`);
     }

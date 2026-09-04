@@ -1,4 +1,8 @@
-import type { ChatAttachment, ChatComposerMemoryFallback } from "../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatComposerMemoryFallback,
+  HumanMention,
+} from "../lib/chat/chat-types.ts";
 import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-store.ts";
 import type { ApplicationChatAttachmentHandoff } from "./context.ts";
 
@@ -13,6 +17,7 @@ type PendingChatAttachmentHandoff = {
   attachments: ChatAttachment[];
   fallbacks: Record<string, ChatComposerMemoryFallback>;
   message: string;
+  mentions?: readonly HumanMention[];
   preparedAt: number;
 };
 
@@ -50,7 +55,7 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
   };
 
   return {
-    prepare: ({ owner, paneId, scopeKey, attachments, fallbacks, message = "" }) => {
+    prepare: ({ owner, paneId, scopeKey, attachments, fallbacks, message = "", mentions }) => {
       const key = entryKey(paneId, scopeKey);
       const previous = take(key);
       const fallbackEntries = Object.entries(fallbacks);
@@ -79,6 +84,7 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
         scopeKey,
         attachments: [...attachments],
         message,
+        ...(mentions?.length ? { mentions: mentions.map((mention) => ({ ...mention })) } : {}),
         fallbacks: Object.fromEntries(
           fallbackEntries.map(([fallbackKey, fallback]) => [
             fallbackKey,
@@ -104,6 +110,7 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
           attachments: match.attachments,
           fallbacks: match.fallbacks,
           ...(match.message ? { message: match.message } : {}),
+          ...(match.mentions ? { mentions: match.mentions } : {}),
         };
       }
       releaseHandoff(match);

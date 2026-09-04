@@ -135,8 +135,6 @@ extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/mattermost/src/mattermost/slash-http.ts
 extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.test.ts
-extensions/memory-core/src/dreaming-narrative.test.ts
-extensions/memory-core/src/dreaming-narrative.ts
 extensions/memory-core/src/dreaming-phases.test.ts
 extensions/memory-core/src/dreaming-phases.ts
 extensions/memory-core/src/dreaming.test.ts
@@ -264,7 +262,6 @@ extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
 extensions/xai/realtime-voice-provider.test.ts
-extensions/xai/web-search.test.ts
 extensions/zalo/src/monitor.ts
 extensions/zalouser/src/monitor.ts
 extensions/zalouser/src/zalo-js.ts
@@ -406,7 +403,6 @@ src/agents/tools/image-tool.ts
 src/agents/tools/media-generate-background-shared.test.ts
 src/agents/tools/message-tool.test.ts
 src/agents/tools/music-generate-tool.test.ts
-src/agents/tools/music-generate-tool.ts
 src/agents/tools/session-status-tool.ts
 src/agents/tools/sessions-send-tool.ts
 src/agents/tools/sessions-spawn-tool.test.ts
@@ -494,7 +490,6 @@ src/cli/run-main.ts
 src/cli/skills-cli.commands.test.ts
 src/cli/skills-cli.ts
 src/cli/update-cli.test.ts
-src/cli/update-cli/update-command-service.ts
 src/commands/agent-via-gateway.test.ts
 src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
@@ -512,7 +507,6 @@ src/commands/doctor-gateway-services.ts
 src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-memory-search.test.ts
 src/commands/doctor-memory-search.ts
-src/commands/doctor-session-sqlite-migration-run.ts
 src/commands/doctor-session-sqlite.test.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
@@ -555,7 +549,6 @@ src/config/plugin-auto-enable.shared.ts
 src/config/redact-snapshot.test.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
-src/config/schema.ts
 src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
@@ -722,7 +715,6 @@ src/logging/diagnostic-stability.ts
 src/logging/diagnostic-support-export.ts
 src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
-src/logging/logger.ts
 src/logging/redact.test.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts

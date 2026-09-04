@@ -1,5 +1,6 @@
 const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "base",
+  "mobile-pairing-reconnect",
   "acpx-openclaw-tools-bridge",
   "feishu-channel",
   "bootstrap-persona",
@@ -13,14 +14,30 @@ const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "versioned-runtime-deps",
   "cron-scheduled-authority",
   "sqlite-volume",
+  "recovery-cleanup",
   "auth-profile-v2026-7-2-beta-5",
+  "watchos-direct-node",
 ]);
+
+// These black-box scenarios are implemented entirely by the current trusted
+// release harness and treat the selected tree only as the package under test.
+const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set(["mobile-pairing-reconnect"]);
+
+export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
+  return TRUSTED_HARNESS_OWNED_SCENARIOS.has(scenario);
+}
 
 // Registry proof needs its artifact contract; versioned auth fixtures exercise
 // legacy import rather than native state from every baseline in a broad sweep.
+// Platform pairing probes run only through explicit or dedicated scheduled
+// qualification until their runtime cost justifies aggregate release coverage.
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
-    scenario !== "prerelease-plugin-registry" && scenario !== "auth-profile-v2026-7-2-beta-5",
+    scenario !== "mobile-pairing-reconnect" &&
+    scenario !== "watchos-direct-node" &&
+    scenario !== "prerelease-plugin-registry" &&
+    scenario !== "auth-profile-v2026-7-2-beta-5" &&
+    scenario !== "recovery-cleanup",
 );
 const scenarioAliases = new Map([
   ["reported-issues", aggregateScenarios.filter((scenario) => scenario !== "sqlite-volume")],
@@ -131,11 +148,36 @@ function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec) {
   return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
 }
 
+function supportsUpgradeSurvivorWatchDirectNode(baselineSpec) {
+  if (!baselineSpec) {
+    return true;
+  }
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (!version) {
+    return true;
+  }
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 8, patch: 1 }) >= 0;
+}
+
+function supportsUpgradeSurvivorMobilePairingReconnect(baselineSpec) {
+  if (!baselineSpec) {
+    return true;
+  }
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (!version) {
+    return true;
+  }
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 7, patch: 1 }) >= 0;
+}
+
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
   return (
     (scenario !== "plugin-deps-cleanup" ||
       supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
     (scenario !== "acpx-openclaw-tools-bridge" ||
-      supportsUpgradeSurvivorAcpToolsBridge(baselineSpec))
+      supportsUpgradeSurvivorAcpToolsBridge(baselineSpec)) &&
+    (scenario !== "mobile-pairing-reconnect" ||
+      supportsUpgradeSurvivorMobilePairingReconnect(baselineSpec)) &&
+    (scenario !== "watchos-direct-node" || supportsUpgradeSurvivorWatchDirectNode(baselineSpec))
   );
 }

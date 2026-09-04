@@ -23,6 +23,7 @@ import {
   areOutboundPayloadsIntentionallySuppressed,
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
+  isOutboundDeliveryAdmissionClosedError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
@@ -511,6 +512,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     return results;
   } catch (err) {
     throwIfProducerLeaseLost();
+    if (isOutboundDeliveryAdmissionClosedError(err)) {
+      throw err;
+    }
     if (err instanceof OutboundDeliveryError && err.results.length > 0) {
       deliveredResults = err.results;
     }

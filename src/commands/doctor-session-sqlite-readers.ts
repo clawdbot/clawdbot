@@ -1,6 +1,7 @@
 /** Read-only diagnostic readers used by the session SQLite doctor mode. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { TextDecoder } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -11,6 +12,8 @@ import {
   type SessionFileEntryMigrationState,
 } from "../agents/sessions/session-manager-codec.js";
 import type { FileEntry } from "../agents/sessions/session-manager-types.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
@@ -60,6 +63,42 @@ type TranscriptEventCountResult =
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_LEGACY_COMPACTION_TARGETS = 100_000;
 
+export function resolveLegacyTranscriptPaths(
+  target: Pick<SessionStoreTarget, "agentId" | "storePath">,
+  entry: { sessionId: string; sessionFile?: unknown },
+): { transcriptPath?: string; transcriptDependencies: string[] } {
+  const legacySessionFile = typeof entry.sessionFile === "string" ? entry.sessionFile : undefined;
+  if (parseSqliteSessionFileMarker(legacySessionFile)) {
+    return { transcriptDependencies: [] };
+  }
+  const sessionsDir = path.dirname(target.storePath);
+  const relocatedPath = legacySessionFile?.trim()
+    ? path.join(sessionsDir, path.basename(legacySessionFile))
+    : undefined;
+  let defaultPath: string;
+  try {
+    defaultPath = resolveSessionFilePathCore(entry.sessionId, entry, {
+      agentId: target.agentId,
+      sessionsDir,
+    });
+  } catch (error) {
+    if (!relocatedPath) {
+      throw error;
+    }
+    defaultPath = relocatedPath;
+  }
+  const transcriptPaths = relocatedPath ? [defaultPath, relocatedPath] : [defaultPath];
+  const transcriptPath =
+    transcriptPaths.find((file) => fs.existsSync(file)) ??
+    (relocatedPath ? defaultPath : undefined);
+  // Reads may retain a foreign root after archival, but recovery artifacts are direct
+  // files in this target's sessions directory. Their dependencies must stay local too.
+  const transcriptDependencies = transcriptPaths.map((file) =>
+    path.join(sessionsDir, path.basename(file)),
+  );
+  return { transcriptPath, transcriptDependencies };
+}
+
 export function countTranscriptEventsForPath(
   transcriptPath: string | undefined,
 ): TranscriptEventCountResult {
@@ -88,16 +127,17 @@ export function createTranscriptEventReader(
   sessionId: string,
   allowMalformedPrefix = false,
   sourceFingerprint = readTranscriptFingerprint(transcriptPath),
+  originalSourcePath = transcriptPath,
 ): (append: (event: TranscriptEvent) => void) => () => void {
   return (append) => {
     // Production import owns the process-wide Gateway/SQLite-maintenance lock
     // through commit and archive. Fingerprints catch non-cooperating external edits.
     const plan = planTranscriptImport(transcriptPath, allowMalformedPrefix);
     assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
-    // V1 compactions refer to original row indexes. Stable index-derived IDs let
-    // the second pass resolve those links without retaining the transcript.
+    // V1 compactions refer to original row indexes. Hash the original source path
+    // so archive verification reproduces import IDs without retaining the transcript.
     const idPrefix = createHash("sha256")
-      .update(transcriptPath)
+      .update(originalSourcePath)
       .update("\0")
       .update(sessionId)
       .digest("hex")

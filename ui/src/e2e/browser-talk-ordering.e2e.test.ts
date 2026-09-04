@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   dispatchOpenAiTalkEvent,
@@ -18,8 +18,7 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("renders and saves overlapping replies beside their delayed user transcripts", async () => {
-    const artifactDir = path.join(process.cwd(), ".artifacts/control-ui-e2e/transcript-ordering");
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("transcript-ordering");
     await suite.withPage(
       {
         permissions: ["microphone"],

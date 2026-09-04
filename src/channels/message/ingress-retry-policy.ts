@@ -3,6 +3,11 @@
  *
  * Channel-specific non-retryable classification stays out of core; pass it in.
  */
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
+import { SESSION_WORK_START_CHANGED_ERROR_CODE } from "../../config/sessions/work-start-error.js";
 import { computeBackoff } from "../../infra/backoff.js";
 
 export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
@@ -41,6 +46,12 @@ type IngressFailureDisposition =
       attempt: number;
       message: string;
     };
+
+function isSessionStartConflictFailure(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(
+    (candidate) => extractErrorCode(candidate) === SESSION_WORK_START_CHANGED_ERROR_CODE,
+  );
+}
 
 function resolveConfig(config?: IngressRetryPolicyConfig) {
   return {
@@ -98,6 +109,7 @@ export function resolveIngressFailureDisposition(params: {
   now?: number;
 }): IngressFailureDisposition {
   const now = params.now ?? Date.now();
+  const { maxAttempts } = resolveConfig(params.config);
   const attempt = resolveIngressAttemptNumber(params.event);
   const message = params.formatError(params.err);
   const nonRetryable = params.resolveNonRetryableFailure?.(params.err) ?? null;
@@ -106,6 +118,14 @@ export function resolveIngressFailureDisposition(params: {
       kind: "fail",
       reason: nonRetryable.reason,
       message: nonRetryable.message,
+      attempt,
+    };
+  }
+  if (attempt >= maxAttempts && isSessionStartConflictFailure(params.err)) {
+    return {
+      kind: "fail",
+      reason: "session-start-conflict-retry-limit",
+      message,
       attempt,
     };
   }

@@ -1,25 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
-// Classification fixtures here exercise message/status tables. Provider-attributed
-// structured signals otherwise cross the plugin-consult gate and cold-materialize
-// the full bundled provider runtime, timing the unit test out under CI load
-// (src/agents/CLAUDE.md: no full-runtime cold loads for table coverage).
-vi.mock("../../plugins/provider-hook-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/provider-hook-runtime.js")>();
-  return {
-    ...actual,
-    resolveProviderHookPlugin: () => undefined,
-    resolveProviderPluginsForHooks: () => [],
-  };
-});
-
+import { aroundEach, describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
+import { withPreparedFailoverProviders } from "../test-helpers/provider-failover-generation.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 
 describe("classifyProviderRuntimeFailureKind", () => {
+  aroundEach((runTest) =>
+    withPreparedFailoverProviders(["openai", "google", "anthropic"], runTest),
+  );
+
   it("classifies complete HTML after an HTTP reason phrase as upstream_html", () => {
     const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>";
 

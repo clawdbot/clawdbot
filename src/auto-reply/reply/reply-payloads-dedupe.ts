@@ -32,6 +32,7 @@ type MessagingToolDedupeRouteParams = {
   originatingThreadId?: string | number;
   replyToId?: string;
   replyToIsExplicit?: boolean;
+  replyToCurrent?: boolean;
   replyDelivery?: ReplyDeliveryContext;
   accountId?: string;
 };
@@ -197,6 +198,7 @@ function resolveOriginThreadIdForPayload(params: {
   originatingThreadId?: string | number;
   replyToId?: string;
   replyToIsExplicit?: boolean;
+  replyToCurrent?: boolean;
   replyDelivery?: ReplyDeliveryContext;
 }): string | undefined {
   const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
@@ -212,6 +214,7 @@ function resolveOriginThreadIdForPayload(params: {
     threadId: originThreadId,
     replyToId,
     replyToIsExplicit: params.replyToIsExplicit,
+    replyToCurrent: params.replyToCurrent,
     replyDelivery: params.replyDelivery,
   });
   if (transport?.threadId != null) {
@@ -253,6 +256,7 @@ function getMatchingMessagingToolReplyTargets(
     originatingThreadId: params.originatingThreadId,
     replyToId: params.replyToId,
     replyToIsExplicit: params.replyToIsExplicit,
+    replyToCurrent: params.replyToCurrent,
     replyDelivery: params.replyDelivery,
   });
   return sentTargets.filter((target) => {
@@ -363,7 +367,7 @@ export function resolveMessagingToolPayloadDedupe(
 
 type FilterMessagingToolReplyPayloadParams = Omit<
   MessagingToolDedupeRouteParams,
-  "replyToId" | "replyToIsExplicit" | "replyDelivery"
+  "replyToId" | "replyToIsExplicit" | "replyToCurrent" | "replyDelivery"
 > & {
   payload: ReplyPayload;
   sentMediaUrls?: string[];
@@ -391,6 +395,7 @@ export function filterMessagingToolReplyPayload(
     replyToIsExplicit: Boolean(
       metadata?.replyToIdExplicit || params.payload.replyToTag || params.payload.replyToCurrent,
     ),
+    replyToCurrent: params.payload.replyToCurrent,
     replyDelivery: metadata?.replyDelivery,
   });
   if (!decision.shouldDedupePayloads) {
@@ -432,7 +437,7 @@ export function filterMessagingToolReplyPayload(
 export function hasSourceRoutedMessagingToolDelivery(
   params: Omit<
     MessagingToolDedupeRouteParams,
-    "replyToId" | "replyToIsExplicit" | "replyDelivery"
+    "replyToId" | "replyToIsExplicit" | "replyToCurrent" | "replyDelivery"
   > & {
     messagingToolSentTexts?: string[];
     messagingToolSentMediaUrls?: string[];

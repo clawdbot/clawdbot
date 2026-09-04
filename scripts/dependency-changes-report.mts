@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
-import { writeReportArtifact } from "./lib/report-cli-helpers.mts";
+import { REPORT_CLI_PARSE_OPTIONS, writeReportArtifact } from "./lib/report-cli-helpers.mts";
 import {
   collectAllResolvedPackagesFromLockfile,
   createBulkAdvisoryPayload,
@@ -280,12 +280,7 @@ export function parseArgs(argv: string[]) {
         rejectShortOptions: true,
       }),
     ),
-    {
-      duplicateOptionMessage: (flag) => `${flag} was provided more than once.`,
-      onUnhandledArg(arg) {
-        throw new Error(`Unsupported argument: ${arg}`);
-      },
-    },
+    REPORT_CLI_PARSE_OPTIONS,
   );
   const { baseRef, baseLockfile } = options;
   if (baseRef && baseLockfile) {

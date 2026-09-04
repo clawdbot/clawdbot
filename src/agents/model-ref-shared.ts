@@ -9,16 +9,16 @@ import {
   normalizeProviderIdForAuth as normalizeProviderIdForAuthCore,
 } from "@openclaw/model-catalog-core/provider-id";
 import {
-  collectManifestModelIdNormalizationPolicies,
   normalizeBuiltInProviderModelId,
   normalizeConfiguredProviderCatalogModelRef,
-  type ManifestModelIdNormalizationRecord,
   normalizeStaticProviderModelIdWithPolicies,
   stripSelfProviderModelPrefix,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import {
+  resolveManifestModelIdNormalizationPolicies,
+  type ManifestModelIdNormalizationSource,
+} from "../plugins/manifest-model-id-normalization.js";
 import { modelKey } from "../shared/model-key.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 export { modelKey } from "../shared/model-key.js";
@@ -29,12 +29,11 @@ export type ModelRef = {
 };
 
 export type ModelManifestNormalizationContext = {
-  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  manifestPlugins?: ManifestModelIdNormalizationSource;
 };
 
-export type ProviderModelIdNormalizationOptions = {
+export type ProviderModelIdNormalizationOptions = ModelManifestNormalizationContext & {
   allowManifestNormalization?: boolean;
-  manifestPlugins?: readonly ManifestModelIdNormalizationRecord[];
 };
 
 /** Normalize a provider ID using the shared catalog rules. */
@@ -65,22 +64,11 @@ export function normalizeStaticProviderModelId(
   if (options.allowManifestNormalization === false) {
     return normalizeBuiltInProviderModelId(normalizedProvider, model);
   }
-  if (options.manifestPlugins) {
-    return normalizeStaticProviderModelIdWithPolicies(
-      normalizedProvider,
-      model,
-      collectManifestModelIdNormalizationPolicies(options.manifestPlugins),
-    );
-  }
-  const manifestModelId =
-    normalizeProviderModelIdWithManifest({
-      provider: normalizedProvider,
-      context: {
-        provider: normalizedProvider,
-        modelId: model,
-      },
-    }) ?? model;
-  return normalizeBuiltInProviderModelId(normalizedProvider, manifestModelId);
+  return normalizeStaticProviderModelIdWithPolicies(
+    normalizedProvider,
+    model,
+    resolveManifestModelIdNormalizationPolicies({ plugins: options.manifestPlugins }),
+  );
 }
 
 /**
@@ -95,7 +83,9 @@ export function createStaticProviderModelIdNormalizer(
       normalizeBuiltInProviderModelId(normalizeProviderId(provider), model);
   }
   if (options.manifestPlugins) {
-    const policies = collectManifestModelIdNormalizationPolicies(options.manifestPlugins);
+    const policies = resolveManifestModelIdNormalizationPolicies({
+      plugins: options.manifestPlugins,
+    });
     return (provider, model) =>
       normalizeStaticProviderModelIdWithPolicies(normalizeProviderId(provider), model, policies);
   }

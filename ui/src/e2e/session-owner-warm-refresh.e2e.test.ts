@@ -9,7 +9,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Control UI warm owner-first refresh" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "session-owner-warm");
+const rosterMatch = { includeGlobal: true };
 
 function sessionRow(ownerId: string, key: string, label: string, updatedAt: number) {
   const owner = {
@@ -42,10 +42,10 @@ async function captureSidebar(page: Page, fileName: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "session-owner-warm"), { recursive: true });
   await page.locator(".sidebar-sessions").screenshot({
     animations: "disabled",
-    path: path.join(proofDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "session-owner-warm"), fileName),
   });
 }
 
@@ -54,7 +54,12 @@ suite.define(() => {
     const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureProof
-        ? { recordVideo: { dir: proofDir, size: { height: 800, width: 1200 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "session-owner-warm"),
+              size: { height: 800, width: 1200 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -79,8 +84,8 @@ suite.define(() => {
       await captureSidebar(page, "warm-before-event.png");
 
       // Hold the single warm roster projection open and observe the existing DOM.
-      const before = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const before = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey: adaRow.key,
         key: adaRow.key,
@@ -88,7 +93,7 @@ suite.define(() => {
         reason: "create",
         updatedAt: 3,
       });
-      await gateway.waitForRequest("sessions.list", { after: before });
+      await gateway.waitForRequest("sessions.list", { after: before, match: rosterMatch });
       const refreshProbe = await page.evaluateHandle(() => {
         const app = document.querySelector<
           HTMLElement & { runtime?: { context: ApplicationContext } }
@@ -140,7 +145,9 @@ suite.define(() => {
         rowRemoved: false,
       });
       expect(
-        (await gateway.getRequests("sessions.list")).slice(before).map((request) => request.params),
+        (await gateway.getRequests("sessions.list", rosterMatch))
+          .slice(before)
+          .map((request) => request.params),
       ).toEqual([
         expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
       ]);
