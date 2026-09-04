@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
 import {
   applyToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -72,18 +73,14 @@ async function createControls(catalog: McpToolCatalog, mode: "tools" | "code" = 
   const config = { tools: { toolSearch: { enabled: true, mode } } };
   const catalogRef = createToolSearchCatalogRef();
   const controls = createToolSearchTools({ config, catalogRef });
-  applyToolSearchCatalog({
-    tools: [...controls, ...materialized.tools],
-    config,
-    catalogRef,
-    mcpDiagnostics: materialized.diagnostics,
-  });
+  const tools = [...controls, ...materialized.tools];
+  applyToolSearchCatalog({ tools, config, catalogRef, mcpDiagnostics: materialized.diagnostics });
   const control = (name: string): AnyAgentTool =>
     expectDefined(
       controls.find((tool) => tool.name === name),
       `${name} control`,
     );
-  return { control, materialized };
+  return { control, materialized, catalogRef, tools };
 }
 
 describe("Tool Search with an unavailable MCP server", () => {
@@ -172,6 +169,30 @@ describe("Tool Search with an unavailable MCP server", () => {
         args: {},
       }),
     ).rejects.toThrow("Unknown tool id: mcp:memos:memos__read_note");
+  });
+
+  it("hides the outage behind a prompt-hook tool cap that cannot admit the failed server", async () => {
+    const { control, catalogRef, tools } = await createControls(makeOutageCatalog());
+    const search = control(TOOL_SEARCH_RAW_TOOL_NAME);
+    const policy = createAgentHarnessPromptToolPolicy({
+      tools,
+      catalogRef,
+      codeModeControlsEnabled: false,
+    });
+    const outage = { unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }] };
+
+    // Capped to another server's tool, no allow entry can reach "memos".
+    policy.apply({ toolsAllow: ["notes__list"] });
+    expect(catalogRef.current?.mcpDiagnostics).toBeUndefined();
+    expect((await search.execute("search-capped", { query: "memos" })).details).toEqual([]);
+
+    // Plugin-group and unrestricted hooks admit the namespace and restore the note.
+    policy.apply({ toolsAllow: ["group:plugins"] });
+    expect((await search.execute("search-group", { query: "memos" })).details).toMatchObject(
+      outage,
+    );
+    policy.apply();
+    expect((await search.execute("search-open", { query: "memos" })).details).toMatchObject(outage);
   });
 
   it("carries the outage on a code mode exec whose only action is a search", async () => {

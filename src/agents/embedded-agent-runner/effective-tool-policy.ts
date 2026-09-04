@@ -100,7 +100,7 @@ export function applyFinalEffectiveToolPolicy(
  * layers as its tools, with the server namespace standing in for them.
  */
 export function createBundleMcpServerPolicyMatcher(params: {
-  conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
+  conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   toolsAllow?: string[];
 }): (safeServerName: string) => boolean {
   const capabilityProfile = params.conversationCapabilityProfile;
@@ -111,11 +111,15 @@ export function createBundleMcpServerPolicyMatcher(params: {
     // intersects independent restrictions and reads an empty one as "no tools",
     // where a pipeline layer's empty allow list means allow-all.
     ...restrictions.map((allow) => (allow.length > 0 ? { allow } : { deny: ["*"] })),
-    ...buildConversationToolPolicyPipelineSteps({
-      capabilityProfile,
-      policies: resolveConversationToolPolicies({ capabilityProfile }),
-      includeRuntimeToolPolicy: false,
-    }).map((step) => step.policy),
+    // The prompt-hook boundary re-narrows a set the run policy already filtered
+    // and passes only its allowlist; the profile layers apply once, upstream.
+    ...(capabilityProfile
+      ? buildConversationToolPolicyPipelineSteps({
+          capabilityProfile,
+          policies: resolveConversationToolPolicies({ capabilityProfile }),
+          includeRuntimeToolPolicy: false,
+        }).map((step) => step.policy)
+      : []),
   ];
   return (safeServerName) => {
     // The failed server materialized no tools, so its namespace stands in for

@@ -2,6 +2,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
+import { createBundleMcpServerPolicyMatcher } from "../embedded-agent-runner/effective-tool-policy.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
@@ -45,6 +46,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       ? {
           ref: params.catalogRef,
           entries: [...(params.catalogEntries ?? currentCatalog.entries)],
+          mcpDiagnostics: currentCatalog.mcpDiagnostics ?? [],
           controlNames: params.codeModeControlsEnabled
             ? new Set([CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME])
             : TOOL_SEARCH_CONTROL_TOOL_NAMES,
@@ -72,10 +74,17 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       const allowedEntries = filterTools(catalog.entries, toolsAllow, (entry) =>
         isAgentTool(entry.tool) ? getPluginToolMeta(entry.tool) : undefined,
       );
+      // A failed server has no entry for the allowlist to keep or drop, so its
+      // outage note is judged by server namespace under the same allowlist;
+      // otherwise a hook capped to other tools would still name it to the model.
+      const admitsMcpServer = createBundleMcpServerPolicyMatcher({ toolsAllow });
       const catalogCount = restrictToolSearchCatalog({
         catalogRef: catalog.ref,
         allowedToolNames: new Set(allowedEntries.map((entry) => entry.name)),
         baselineEntries: catalog.entries,
+        mcpDiagnostics: catalog.mcpDiagnostics.filter((diagnostic) =>
+          admitsMcpServer(diagnostic.safeServerName),
+        ),
       });
       const allowedNames = new Set(allowedTools.map((tool) => normalizeToolPolicyName(tool.name)));
       const tools = baselineTools.filter((tool) => {

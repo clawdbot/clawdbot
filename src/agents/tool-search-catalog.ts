@@ -334,15 +334,31 @@ export function clearToolSearchCatalog(params: {
   }
 }
 
+function setCatalogMcpDiagnostics(
+  catalog: ToolSearchCatalogSession,
+  diagnostics: readonly McpToolCatalogDiagnostic[],
+): void {
+  if (diagnostics.length > 0) {
+    catalog.mcpDiagnostics = diagnostics;
+  } else {
+    delete catalog.mcpDiagnostics;
+  }
+}
+
 /** Restricts a run-scoped catalog to an already-resolved set of concrete tool names. */
 export function restrictToolSearchCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   allowedToolNames: ReadonlySet<string>;
   baselineEntries?: readonly ToolSearchCatalogEntry[];
+  /** Recorded outages that survive the same narrowing; a failed server has no entry to filter. */
+  mcpDiagnostics?: readonly McpToolCatalogDiagnostic[];
 }): number {
   const current = params.catalogRef?.current;
   if (!current) {
     return 0;
+  }
+  if (params.mcpDiagnostics) {
+    setCatalogMcpDiagnostics(current, params.mcpDiagnostics);
   }
   const metadata = catalogMetadata.get(current);
   const entries = finalizeCatalogAvailability(
@@ -504,10 +520,8 @@ export function applyToolCatalogCompaction(
     existingCatalog.entries = reboundEntries;
     // Entries fingerprint equal means no failed server regained tools, but a
     // zero-tool server can fail or recover without changing the entry set.
-    if (params.mcpDiagnostics?.length) {
-      existingCatalog.mcpDiagnostics = params.mcpDiagnostics;
-    } else if (params.mcpDiagnostics) {
-      delete existingCatalog.mcpDiagnostics;
+    if (params.mcpDiagnostics) {
+      setCatalogMcpDiagnostics(existingCatalog, params.mcpDiagnostics);
     }
   } else {
     registerToolSearchCatalog({

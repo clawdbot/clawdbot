@@ -1,7 +1,7 @@
 // Tool policy pipeline tests cover profile/allowlist filtering, diagnostics,
 // warning dedupe, and plugin-aware policy application.
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { markFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
+import { markFrozenClawToolAllowPolicy } from "../claws/tool-policy-frozen.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,

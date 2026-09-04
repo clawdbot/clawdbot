@@ -1,4 +1,4 @@
-import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
+import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-frozen.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   applyToolPolicyPipeline,
