@@ -265,43 +265,21 @@ one from an unawaited call or timer callback, fails the cell instead of silently
 reporting success. Handlers attached after a suspension still handle their
 original promises.
 
-JavaScript syntax errors, TypeScript transform errors, and tool failures proven
-to occur before execution become failed `exec` results that the model can read
-and correct across successive turns. A failed `exec` or `wait` does not automatically
-end the agent run when OpenClaw's host execution record proves that no potentially
-mutating nested action started, including before a suspended run resumed.
+JavaScript syntax errors, TypeScript transform errors, and uncaught nested tool
+failures become failed `exec` or `wait` results. The model can read the error,
+correct its code, inspect the current state, and continue with the normal tool
+surface. A failed cell does not impose a separate recovery mode or mutation budget.
 
-An exec host-policy rejection can carry this proof even after hooks, approval
-resolution, and tool implementation entry: the host owns the narrower fact that
-no command process or remote dispatch started. A corrected call runs the ordinary
-hooks and approvals again. Consumed voice confirmations stay consumed; recovery
-does not restore a grant or authorize replay.
+OpenClaw does not automatically replay a failed program. Earlier calls may have
+changed state, and a failed call may have partially applied. Inspect authoritative
+state before deciding what remains, and do not repeat completed actions. This
+also applies when `wait` resumes a suspended cell: its earlier calls belong to the
+same program.
 
-Catalog search, handle `describe()`, `skills.list()`, and `skills.read()` are
-read-only discovery. A guest error after only these operations still allows
-ordinary recovery from a failed `exec`; discovery does not count as a mutation.
-
-OpenClaw does not automatically replay a failed program. If earlier calls
-may have changed state or a failed call may have partially applied, OpenClaw
-deliberately permits one temporary read-only recovery attempt to inspect the
-current state. The internal instruction identifies OpenClaw as its source. It
-does not expose writes, sends, shell commands, or other mutations during that
-inspection.
-
-If inspection finds unfinished work, the model can request one bounded recovery.
-Code Mode stays disabled, and OpenClaw restores the normal direct-tool or Tool
-Search surface with its real tool names and argument schemas. Host-recorded
-nested-call facts block an exact repeat whose earlier effect was committed or
-uncertain. The recovery permits one mutation attempt; reads and schema discovery
-remain available afterward, but a later mutation does not run blindly when the
-first attempt fails. If no work remains, the inspection report ends the run
-without another model turn. Cancellation, explicitly terminal tool outcomes,
-sandbox restrictions, approval requirements, and tool-policy denials retain
-their existing behavior.
-
-Computer observations, including window and cursor queries, cropped screenshots,
-browser state, and dialog inspection, do not spend that mutation attempt. Browser
-preparation, input, and dialog acceptance or dismissal still count as mutations.
+Every subsequent call runs the ordinary hooks and approvals again. Consumed voice
+confirmations stay consumed; continuing after an error does not restore a grant.
+Cancellation, explicitly terminal tool outcomes, sandbox restrictions, approval
+requirements, and tool-policy denials retain their existing behavior.
 
 ### Verify the active surface
 
@@ -1164,15 +1142,11 @@ reconstructed from source code or outer results.
 
 Nested tool failures cross into the guest as catchable JavaScript errors. If
 guest code does not catch an error, `exec` or `wait` returns a failed tool
-result. Proven no-start failures and errors after only audited read-only work
-allow ordinary model recovery, including when `wait` resumes a suspended cell.
-This proof covers the cell's entire execution, not just the latest resume.
-Failed waits without that host proof remain terminal; serialized result fields
-cannot grant recovery. Possible nested side effects in a failed `exec` require
-the [read-only inspection and bounded recovery](#recover-from-tool-errors) flow
-before any further action. Network-controlled tool output and errors retain
-their existing untrusted-content wrapping and sanitization; recovering from a
-failure does not grant new permissions or replay completed side effects.
+result and the agent can continue normally. Follow the
+[tool-error guidance](#recover-from-tool-errors) to inspect possible partial
+effects before choosing another action. Network-controlled tool output and errors
+retain their existing untrusted-content wrapping and sanitization; continuing
+after a failure does not grant new permissions or replay completed side effects.
 
 Parallel nested calls are allowed up to `maxPendingToolCalls`. An oversized raw
 tool batch fails before any call in that batch is dispatched. [Swarm](/tools/swarm)

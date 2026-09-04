@@ -46,8 +46,6 @@ import {
   getInternalToolExecutionPreparer,
 } from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { hashToolCall } from "../../tool-loop-detection.js";
-import { normalizeToolPolicyName } from "../../tool-policy.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { log } from "../logger.js";
@@ -73,7 +71,6 @@ import {
   steerActiveSessionWithOptionalDeliveryWait,
 } from "./attempt-queue-message.js";
 import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
-import { registerCodeModeRecoveryJournalEntry } from "./code-mode-recovery-journal.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
   type EmbeddedAttemptDeferredLifecycleOwner,
@@ -441,13 +438,6 @@ export function prepareEmbeddedAttemptStream(input: {
               if (!recorded) {
                 throw new Error("Nested activity became invalid during transcript redaction");
               }
-              registerCodeModeRecoveryJournalEntry(recorded, {
-                actionKey: hashToolCall(
-                  normalizeToolPolicyName(toolParams.toolName),
-                  terminal.executedArguments,
-                ),
-                effectState: terminal.effectReceipt.state,
-              });
               input.nestedToolActivities.push(recorded);
             },
           );

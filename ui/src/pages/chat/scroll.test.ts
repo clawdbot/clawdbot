@@ -1,4 +1,3 @@
-// Control UI tests cover app scroll behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
@@ -14,11 +13,6 @@ import {
   scheduleCommittedChatScroll,
 } from "./scroll.ts";
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
-/** Minimal ScrollHost stub for unit tests. */
 function createScrollHost(
   overrides: {
     scrollHeight?: number;
@@ -47,10 +41,6 @@ function createScrollHost(
     renderLifecycle,
     updateComplete: Promise.resolve(),
     chatScrollElement: vi.fn<() => HTMLElement | null>().mockReturnValue(container),
-    style: { setProperty: vi.fn() } as unknown as CSSStyleDeclaration,
-    chatScrollCommitCleanup: null as (() => void) | null,
-    chatScrollFrame: null as number | null,
-    chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
@@ -72,9 +62,11 @@ function createScrollHost(
 }
 
 function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight: number) {
-  return {
-    currentTarget: { scrollHeight, scrollTop, clientHeight },
-  } as unknown as Event;
+  const event = new Event("scroll");
+  Object.defineProperty(event, "currentTarget", {
+    value: { scrollHeight, scrollTop, clientHeight },
+  });
+  return event;
 }
 
 function installAnimationFrameQueue() {
@@ -102,10 +94,6 @@ function installAnimationFrameQueue() {
     },
   };
 }
-
-/* ------------------------------------------------------------------ */
-/*  handleChatScroll – threshold tests                                 */
-/* ------------------------------------------------------------------ */
 
 describe("handleChatScroll", () => {
   it("sets chatUserNearBottom=true when within the 450px threshold", () => {
@@ -189,10 +177,6 @@ describe("handleChatScroll", () => {
   });
 });
 
-/* ------------------------------------------------------------------ */
-/*  scheduleChatScroll – respects user scroll position                 */
-/* ------------------------------------------------------------------ */
-
 describe("scheduleChatScroll", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -244,6 +228,41 @@ describe("scheduleChatScroll", () => {
     expect(cancelCommit).toHaveBeenCalledOnce();
     expect(host.chatScrollElement).not.toHaveBeenCalled();
   });
+
+  it.each(["before commit", "after commit"])(
+    "releases a cancelled render's manual jump %s",
+    (phase) => {
+      const frames = installAnimationFrameQueue();
+      const { host } = createScrollHost();
+      let commit = () => {};
+      let cancel = () => {};
+      host.renderLifecycle.afterCommit = (effect, onCancel) => {
+        cancel = () => onCancel?.();
+        commit = () => {
+          const cleanup = effect(() => {
+            cancel = () => {};
+          });
+          cancel = cleanup ?? (() => {});
+        };
+        return () => cancel();
+      };
+
+      scheduleChatScroll(host, true, false, { source: "manual" });
+      if (phase === "after commit") {
+        commit();
+      }
+      cancel();
+
+      expect(frames.callbacks).toHaveLength(0);
+      scheduleCommittedChatScroll(host);
+      expect(frames.callbacks).toHaveLength(1);
+      frames.runNext();
+      expect(host.chatScrollToEnd).toHaveBeenCalledExactlyOnceWith({
+        behavior: "auto",
+        source: "auto",
+      });
+    },
+  );
 
   it("scrolls to bottom when user is near bottom (no force)", async () => {
     const { host, container } = createScrollHost({
@@ -553,10 +572,6 @@ describe("scheduleChatScroll", () => {
   );
 });
 
-/* ------------------------------------------------------------------ */
-/*  Streaming: rapid chatStream changes should not reset scroll        */
-/* ------------------------------------------------------------------ */
-
 describe("streaming scroll behavior", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -608,11 +623,9 @@ describe("streaming scroll behavior", () => {
   });
 });
 
-/* ------------------------------------------------------------------ */
-/*  resetChatScroll                                                    */
-/* ------------------------------------------------------------------ */
-
 describe("resetChatScroll", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("resets state for new chat session", () => {
     const { host } = createScrollHost({});
     host.chatHasAutoScrolled = true;
@@ -631,19 +644,15 @@ describe("resetChatScroll", () => {
 
   it("cancels frame id zero", () => {
     const { host } = createScrollHost({});
+    vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
     const cancelFrame = vi.spyOn(window, "cancelAnimationFrame");
-    host.chatScrollFrame = 0;
+    scheduleCommittedChatScroll(host);
 
     cancelChatScroll(host);
 
     expect(cancelFrame).toHaveBeenCalledWith(0);
-    expect(host.chatScrollFrame).toBeNull();
   });
 });
-
-/* ------------------------------------------------------------------ */
-/*  Programmatic scroll ownership                                          */
-/* ------------------------------------------------------------------ */
 
 describe("programmatic scroll ownership", () => {
   beforeEach(() => {

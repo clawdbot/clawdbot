@@ -12,7 +12,6 @@ import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
-import { registerRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
@@ -35,7 +34,6 @@ import {
   createCodeModeRunOwner,
   createPendingBridgeStates,
   disposeCodeModeRun,
-  isCodeModeBridgeRepairEligible,
   pendingBridgeRequestsReplaySafe,
   pendingBridgeStatesForSettlement,
   pendingToolCalls,
@@ -420,7 +418,7 @@ async function settleCodeModeResult(params: {
         {
           error: result.pendingRequests.every((request) => request.method === "namespace")
             ? "restart-safe code mode cannot call namespace tools."
-            : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; recovery runs must use audited read, grep, or find tools.",
+            : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; use audited read, grep, or find tools.",
         },
         params.runtime.hasNetworkContent(),
       );
@@ -494,11 +492,7 @@ async function settleCodeModeResult(params: {
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
-  const finalized = output.takeResult(metadata, channels, params.runtime.hasNetworkContent());
-  if (finalized.status === "failed" && isCodeModeBridgeRepairEligible(params.bridgeDispatch)) {
-    registerRepairableCodeModeFailure(finalized);
-  }
-  return finalized;
+  return output.takeResult(metadata, channels, params.runtime.hasNetworkContent());
 }
 
 export async function runWait(params: {

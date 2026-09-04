@@ -12,11 +12,6 @@ import {
   markAgentToolExecutionUnavailable,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
-import {
-  isToolWrappedWithBeforeToolCallHook,
-  rewrapToolWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
-} from "../../agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
@@ -43,7 +38,6 @@ import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.j
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
-import { applyCodeModeRecoveryToolSurface } from "./code-mode-reconciliation.js";
 import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -103,29 +97,6 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       onToolOutcome: attempt.onToolOutcome,
       allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
     };
-    if (attempt.codeModeRecovery?.kind === "resume") {
-      if (toolSearchControlsEnabledForRun) {
-        effectiveTools = effectiveTools.map((tool) => {
-          const prepareInput = typeof tool.prepareBeforeToolCallParams === "function";
-          if (!isToolWrappedWithBeforeToolCallHook(tool)) {
-            return wrapToolWithBeforeToolCallHook(
-              tool,
-              catalogToolHookContext,
-              prepareInput ? { protectNetworkErrors: false } : undefined,
-            );
-          }
-          return prepareInput
-            ? rewrapToolWithBeforeToolCallHook(tool, catalogToolHookContext, {
-                protectNetworkErrors: false,
-              })
-            : tool;
-        });
-      }
-      effectiveTools = applyCodeModeRecoveryToolSurface({
-        tools: effectiveTools,
-        state: attempt.codeModeRecovery,
-      });
-    }
     const codeModeTools = codeModeControlsEnabledForRun
       ? createCodeModeTools({
           config: attempt.config,
@@ -187,12 +158,6 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         attempt.runId,
       ),
     );
-    if (attempt.codeModeRecovery?.kind === "inspect") {
-      effectiveTools = applyCodeModeRecoveryToolSurface({
-        tools: effectiveTools,
-        state: attempt.codeModeRecovery,
-      });
-    }
     if (codeModeControlsEnabledForRun && isCodeModeDiagnosticEnabled()) {
       logCodeModeDiagnostic(log, "final-surface", {
         runId: attempt.runId,

@@ -212,7 +212,12 @@ export async function respondWithCachedSessionList(params: {
   const modelCatalogRevision = readSessionListModelCatalogFence(params.modelCatalog);
   // Activity windows and child retention expire without mutations; hidden paginated rows
   // prevent deriving a safe deadline, so only concurrent temporal requests share work.
-  const cacheCompleted = params.request.activeMinutes === undefined && !params.request.spawnedBy;
+  // Rejected and off-page candidates can change live/goal state without a store write.
+  // Searches may coalesce in flight, but returned rows cannot fence their completed cache.
+  const cacheCompleted =
+    params.request.activeMinutes === undefined &&
+    !params.request.spawnedBy &&
+    !params.request.search?.trim();
   const completed = cacheCompleted
     ? readCompletedSessionList(state, workKey, modelCatalogRevision)
     : undefined;

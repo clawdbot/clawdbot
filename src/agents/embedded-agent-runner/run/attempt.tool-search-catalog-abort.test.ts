@@ -109,7 +109,6 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       const source = wrapToolWithBeforeToolCallHook(native);
       expect(getInternalToolExecutionPreparer(source)).toBeDefined();
       hoisted.createOpenClawCodingToolsMock.mockReturnValue([source]);
-      const observed: AssistantMessage["content"][] = [];
       const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
       await createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -127,6 +126,7 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
           let turn = 0;
           const agent = new Agent({
             initialState: { model: options.model, tools: allTools },
+            // AgentSession's result middleware normally classifies structured tool failures.
             afterToolCall: async ({ result, isError }) => ({
               isError: isError || isToolResultError(result),
             }),
@@ -146,7 +146,6 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
                       },
                     ]
                   : [{ type: "text", text: "Denied as expected." }];
-              observed.push(content);
               const message: AssistantMessage = {
                 role: "assistant",
                 content,
@@ -202,7 +201,6 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
           config: { tools: { codeMode: Boolean(code), toolSearch: false } },
         },
       });
-      expect(observed.length).toBeGreaterThanOrEqual(1);
       const outcome = outcomes.find((event) => event.toolName === (code ? "exec" : toolName));
       expect(outcome).toMatchObject({ isError: true });
       const expectedError =

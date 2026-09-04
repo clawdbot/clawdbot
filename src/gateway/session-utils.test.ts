@@ -48,7 +48,6 @@ import {
 } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
-import { resolveSessionListSearchModelFields } from "./session-utils-search.js";
 import {
   type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
@@ -1511,7 +1510,7 @@ describe("gateway session utils", () => {
 
   test.each([true, false])(
     "projects the private native model instead of outer or observed guesses (lightweight=%s)",
-    (lightweightListRow) => {
+    async (lightweightListRow) => {
       const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.6-sol" });
       const entry = (sessionId: string): InternalSessionEntry => ({
         sessionId,
@@ -1595,9 +1594,13 @@ describe("gateway session utils", () => {
         });
       const nativeRow = readRow(nativeKey);
       expect(nativeRow).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-luna" });
-      expect(
-        resolveSessionListSearchModelFields({ cfg, key: nativeKey, entry: native, rowContext }),
-      ).toContain("openai/gpt-5.6-luna");
+      const matches = await listSessionsFromStoreAsync({
+        cfg,
+        storePath: "",
+        store,
+        opts: { search: "openai/gpt-5.6-luna" },
+      });
+      expect(matches.sessions.map((row) => row.key)).toEqual([nativeKey]);
       expect(buildGatewaySessionEventFields({ sessionRow: nativeRow })).toMatchObject({
         modelProvider: "openai",
         model: "gpt-5.6-luna",

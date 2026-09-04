@@ -5,7 +5,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
@@ -37,13 +36,11 @@ import {
   resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveStoredSessionKeyForAgentStore,
-} from "./session-store-key.js";
+import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscriptBatch as readScopedSessionTitleFieldsFromTranscriptBatch } from "./session-transcript-title-reader.js";
 import type {
   SessionActorProfileIdentity,
+  SessionListActiveRunProjector,
   SessionListRowContext,
   SessionListRowContextProvider,
 } from "./session-utils-contracts.js";
@@ -55,15 +52,14 @@ import {
   shouldKeepStoreOnlyChildLink,
 } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
-import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
+import {
+  buildSessionListRowMetadataContext,
+  populateSessionListAcpMetadata,
+} from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 import {
-  appendStoredSessionModelSearchFields,
-  matchesSessionListSearch,
+  createSessionListSearchMatcher,
   resolveSessionListRowContext,
-  resolveSessionListSearchDisplayName,
-  resolveSessionListSearchModelFields,
-  shouldResolveDerivedSessionModelSearchFields,
 } from "./session-utils-search.js";
 import type {
   GatewaySessionRow,
@@ -88,6 +84,7 @@ type ListSessionsFromStoreParams = {
   opts: SessionsListParams;
   involvingActorId?: string;
   ownerFirstActorId?: string;
+  projectActiveRun?: SessionListActiveRunProjector;
 };
 
 type SessionEntrySelection = {
@@ -104,36 +101,6 @@ type SessionEntrySelection = {
   nextOffset: number | null;
   hasMore: boolean;
 };
-
-function populateSessionListAcpMetadata(params: {
-  cfg: OpenClawConfig;
-  entries: readonly SessionEntryPair[];
-  opts: SessionsListParams;
-  rowContext?: SessionListRowContext;
-}): void {
-  if (!params.rowContext || params.entries.length === 0) {
-    return;
-  }
-  const entries = params.entries.map(([key, entry]) => {
-    const parsed = parseAgentSessionKey(key);
-    const agentId = normalizeAgentId(
-      parsed?.agentId ?? params.opts.agentId ?? resolveSessionStoreAgentId(params.cfg, key),
-    );
-    return {
-      sessionKey: resolveStoredSessionKeyForAgentStore({
-        cfg: params.cfg,
-        agentId,
-        sessionKey: key,
-      }),
-      agentId,
-      entry,
-    };
-  });
-  params.rowContext.acpSessionMetaByEntry = readAcpSessionMetaBatch({
-    entries,
-    cfg: params.cfg,
-  });
-}
 
 function resolveSessionsListLimit(
   opts: SessionsListParams,
@@ -172,6 +139,7 @@ function filterSessionEntries(params: {
   restrictProfileReferences?: boolean;
   involvingActorId?: string;
   ownerFirstActorId?: string;
+  projectActiveRun?: SessionListActiveRunProjector;
 }): Pick<
   SessionEntrySelection,
   | "ownerFacet"
@@ -210,6 +178,17 @@ function filterSessionEntries(params: {
   const visibleEntries = Object.entries(store).filter(
     ([key, entry]) => params.entryFilter?.(key, entry) ?? true,
   );
+  const matchesSearch = search
+    ? createSessionListSearchMatcher({
+        cfg,
+        search,
+        now,
+        visibleEntries,
+        agentId: agentId || undefined,
+        getRowContext: params.getRowContext,
+        projectActiveRun: params.projectActiveRun,
+      })
+    : undefined;
   const allowedProfileIds =
     opts.involvingProfileId && params.restrictProfileReferences
       ? new Set(
@@ -303,33 +282,8 @@ function filterSessionEntries(params: {
     if ((label && entry.label !== label) || (boardFace && entry.boardFace !== boardFace)) {
       continue;
     }
-    if (search) {
-      const cheapFields = [
-        resolveSessionListSearchDisplayName(key, entry),
-        entry.label,
-        entry.subject,
-        entry.sessionId,
-        entry.category,
-        key,
-      ];
-      appendStoredSessionModelSearchFields(cheapFields, entry);
-      const cheapMatch = matchesSessionListSearch(cheapFields, search);
-      const derivedMatch =
-        !cheapMatch &&
-        shouldResolveDerivedSessionModelSearchFields(search) &&
-        matchesSessionListSearch(
-          resolveSessionListSearchModelFields({
-            ...(agentId ? { agentId } : {}),
-            cfg,
-            key,
-            entry,
-            rowContext: resolveSessionListRowContext(params),
-          }),
-          search,
-        );
-      if (!cheapMatch && !derivedMatch) {
-        continue;
-      }
+    if (matchesSearch && !matchesSearch(key, entry)) {
+      continue;
     }
     if (activeCutoff !== undefined && (entry.updatedAt ?? 0) < activeCutoff) {
       continue;
@@ -425,6 +379,7 @@ function selectSessionEntries(params: {
   restrictProfileReferences?: boolean;
   involvingActorId?: string;
   ownerFirstActorId?: string;
+  projectActiveRun?: SessionListActiveRunProjector;
 }): SessionEntrySelection {
   const { ownerEntries, entries: filtered, ...facets } = filterSessionEntries(params);
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
@@ -497,6 +452,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     configuredAgentIds,
     involvingActorId: params.involvingActorId,
     ownerFirstActorId: params.ownerFirstActorId,
+    projectActiveRun: params.projectActiveRun,
   });
   // The two registry caches can differ after an external worker write. Preserve
   // live child reads where the existing short-list path did not prepare a snapshot.
