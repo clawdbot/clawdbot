@@ -140,6 +140,23 @@ describe("runtime snapshot state", () => {
     expect(hashRuntimeConfigValue({ logging: { level: "info" } })).toBe(first);
   });
 
+  it("does not freeze process.env fingerprints across in-place mutations", () => {
+    const marker = `OPENCLAW_RUNTIME_SNAPSHOT_HASH_${process.pid}`;
+    const previous = process.env[marker];
+    try {
+      process.env[marker] = "before";
+      const before = hashRuntimeConfigValue(process.env);
+      process.env[marker] = "after";
+      expect(hashRuntimeConfigValue(process.env)).not.toBe(before);
+    } finally {
+      if (previous === undefined) {
+        delete process.env[marker];
+      } else {
+        process.env[marker] = previous;
+      }
+    }
+  });
+
   it.each([false, true])(
     "selects only matching runtime sources (resolution facts: %s)",
     (withFacts) => {

@@ -122,18 +122,38 @@ const managedRuntimeConfigWriteOwners = new Map<
 const runtimeConfigWriteListeners = new Set<(event: RuntimeConfigWriteNotification) => void>();
 const runtimeConfigSnapshotPreparers = new Set<(config: OpenClawConfig) => void>();
 
+const stableConfigStringifyCache = new WeakMap<object, string>();
+
+function canCacheStableConfigStringify(value: object): boolean {
+  // process.env is mutated in place. Caching it would freeze a stale fingerprint.
+  return value !== process.env;
+}
+
 function stableConfigStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value) ?? "null";
   }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableConfigStringify(entry)).join(",")}]`;
+  const cacheable = canCacheStableConfigStringify(value);
+  if (cacheable) {
+    const cached = stableConfigStringifyCache.get(value);
+    if (cached !== undefined) {
+      return cached;
+    }
   }
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).toSorted();
-  return `{${keys
-    .map((key) => `${JSON.stringify(key)}:${stableConfigStringify(record[key])}`)
-    .join(",")}}`;
+  let serialized: string;
+  if (Array.isArray(value)) {
+    serialized = `[${value.map((entry) => stableConfigStringify(entry)).join(",")}]`;
+  } else {
+    const record = value as Record<string, unknown>;
+    serialized = `{${Object.keys(record)
+      .toSorted()
+      .map((key) => `${JSON.stringify(key)}:${stableConfigStringify(record[key])}`)
+      .join(",")}}`;
+  }
+  if (cacheable) {
+    stableConfigStringifyCache.set(value, serialized);
+  }
+  return serialized;
 }
 
 function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {

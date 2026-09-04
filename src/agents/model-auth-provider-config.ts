@@ -654,6 +654,9 @@ export function providerConfigMatchesRuntimeSnapshot(params: {
   if (!inputProvider || !runtimeProvider) {
     return false;
   }
+  if (inputProvider === runtimeProvider) {
+    return true;
+  }
   const toComparableConfig = (providerConfig: ModelProviderConfig): OpenClawConfig => ({
     models: { providers: { [params.provider]: providerConfig } },
   });
