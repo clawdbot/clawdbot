@@ -80,7 +80,7 @@ All four scans use `scripts/install-periphery.sh` to install the checksum-pinned
 ## Fail-fast order
 
 1. `preflight` decides which lanes exist at all. The `docs-scope` and `changed-scope` logic are steps inside this job, not standalone jobs. Canonical `main` starts immediately in one of two parity slots; each slot admits one complete run and coalesces later pushes into its newest pending tip. Downstream jobs wait for the manifest, then eligible Blacksmith jobs restore exact dependencies from the trusted warmer or fall back to the ordinary pnpm-store cache on a miss. Pushes, pull requests, and manual runs targeting the workflow revision run preflight with native Node and skip dependency setup. Manual runs targeting a different revision install dependencies and retain that target's `tsx` tooling.
-2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs. The production dependency audit sends one complete graph with a 30-second total request budget, including retries and response reading. It warns and continues when npm is unavailable (request timeouts, connection failures, HTTP 408/429, or 5xx). Vulnerability findings, invalid inputs, malformed advisory data, oversized responses, and permanent HTTP failures remain blocking. An unavailable audit is incomplete coverage, not a clean result. Local pre-commit and release dependency audits still fail on unavailability and retain their longer retry budget.
+2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs. The production dependency audit sends one complete graph with up to four attempts and a four-minute total request budget, including retries and response reading. Timeouts, native fetch failures, HTTP 429, and 5xx responses retry with exponential backoff; retryable HTTP responses honor `Retry-After`. Attempts and recovery are logged. Persistent unavailability, vulnerability findings, invalid inputs, malformed advisory data, oversized responses, and permanent HTTP failures block CI. An unavailable audit is incomplete coverage, not a clean result. Local pre-commit and release dependency audits use the same bounded request owner and fail on unavailability.
 3. `build-artifacts` and the locale checks overlap with the fast Linux lanes. Control UI and native app source PRs exclude generated locale snapshots/resources; their serialized refresh workflows repair and auto-merge isolated generated PRs in the background. Source CI still blocks stale source inventories and unsafe localization calls. Generated PRs, manual CI, and release prep enforce full translated/platform-generated parity. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins`, `checks-fast-contracts-channels`, `checks-node-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, the screenshot shards, and `android`.
 5. `openclaw/ci-gate` waits for every selected lane. Preflight and security must succeed; downstream jobs may skip only when unselected by the manifest and existing event, runner, and compatibility conditions. An unexpected selected skip or any failed or canceled downstream job fails the aggregate. The aggregate uses `!cancelled()` so failed prerequisites still report, while canceling the workflow skips final reporting and releases its concurrency slot without waiting for another runner.
@@ -1348,9 +1348,9 @@ alert. See [GitHub's workflow notification rules](https://docs.github.com/en/act
 
 For local reproduction, run
 `node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high`. Adding `--ci`
-selects the 30-second request budget but preserves exit codes: 0 means no matching
-findings, 1 means findings or an error, and 2 means incomplete coverage. Only the
-ordinary CI shell converts exit 2 into a warning.
+selects a shorter 30-second diagnostic budget but preserves exit codes: 0 means
+no matching findings, 1 means findings or an error, and 2 means incomplete coverage.
+Ordinary CI, scheduled audits, and local hooks propagate every non-zero exit.
 
 ### Docs Agent
 
