@@ -17,7 +17,7 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
-  type DiagnosticGatewayRpcEvent,
+  type DiagnosticEventPayload,
 } from "../src/infra/diagnostic-events.js";
 import type {
   OpenClawPluginService,
@@ -112,7 +112,7 @@ it("exports first ACK before handler settlement through real authenticated WebSo
         if (!stateDir) {
           throw new Error("Gateway test hooks did not create an isolated state directory");
         }
-        const events: DiagnosticGatewayRpcEvent[] = [];
+        const events: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>[] = [];
         unsubscribe = onTrustedInternalDiagnosticEvent(
           (event) => {
             if (event.type === "gateway.rpc") {

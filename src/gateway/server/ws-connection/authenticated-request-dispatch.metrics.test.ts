@@ -8,7 +8,7 @@ import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
-  type DiagnosticGatewayRpcEvent,
+  type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 function observeRequests() {
-  const events: DiagnosticGatewayRpcEvent[] = [];
+  const events: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>[] = [];
   const finished = createDeferredCore();
   const unsubscribe = onInternalDiagnosticEvent(
     (event) => {
