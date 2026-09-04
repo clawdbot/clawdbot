@@ -7,6 +7,7 @@ import {
   waitForAskUserPromptReady,
 } from "./ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
+import type { GatewayQuestionCall } from "./gateway-question-lifecycle.js";
 
 const validArgs = {
   questions: [
@@ -19,7 +20,7 @@ const validArgs = {
   ],
 };
 
-type GatewayCall = NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>;
+type GatewayCall = GatewayQuestionCall;
 
 afterEach(() => {
   resetPendingAskUserQuestionsForTest();
