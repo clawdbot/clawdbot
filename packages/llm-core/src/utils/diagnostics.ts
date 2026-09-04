@@ -133,13 +133,13 @@ export function appendRuntimeFailureDiagnostic(
   error: unknown,
   signal?: AbortSignal,
 ): void {
-  // Built-in transports may replace an uncoded abort reason. The first abort's
-  // recorded cause remains authoritative; later cancellation cannot replace it.
-  const origin = getRunFailureOrigin(
-    (message.stopReason === "error" || message.stopReason === "aborted") && signal?.aborted
-      ? signal.reason
-      : error,
-  );
+  // Keep the source already captured before a later caller abort. Transports
+  // replacing an uncoded reason recover its origin from the first abort instead.
+  const origin =
+    getRunFailureOrigin(error) ??
+    ((message.stopReason === "error" || message.stopReason === "aborted") && signal?.aborted
+      ? getRunFailureOrigin(signal.reason)
+      : undefined);
   if (
     origin === "runtime" &&
     !message.diagnostics?.some((d) => d.type === "synthesized_run_failure")

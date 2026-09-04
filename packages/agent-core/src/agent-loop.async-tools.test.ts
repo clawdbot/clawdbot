@@ -580,6 +580,7 @@ it.each([
   "runtime-first",
   "runtime-error",
   "thrown-runtime",
+  "thrown-runtime-then-caller",
   "thrown-caller",
   "coded-runtime",
   "caller-first",
@@ -611,7 +612,7 @@ it.each([
     const response = createAssistantMessageEventStream();
     const aborted = createDeferred();
     const onAbort = () => {
-      if (boundary === "runtime-then-caller") {
+      if (boundary === "runtime-then-caller" || boundary === "thrown-runtime-then-caller") {
         agent.abort();
       }
       aborted.resolve();
@@ -641,7 +642,11 @@ it.each([
                 boundary === "coded-runtime" ? failure.message : "Request was aborted",
               );
             }
-            if (boundary === "thrown-runtime" || boundary === "thrown-caller") {
+            if (
+              boundary === "thrown-runtime" ||
+              boundary === "thrown-runtime-then-caller" ||
+              boundary === "thrown-caller"
+            ) {
               throw error;
             }
             if (boundary === "runtime-error") {
