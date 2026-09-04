@@ -227,9 +227,8 @@ export async function runProvisionSetup(
   try {
     const result = await withCrabboxWorkerEnvProfile(
       params.forwardedEnv,
-      (names, profilePath, childEnv) => {
-        params.assertAuthorized?.();
-        return runCrabboxCommand({
+      (names, profilePath, childEnv) =>
+        runCrabboxCommand({
           action: params.phase,
           args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
           binary: params.binary,
@@ -241,8 +240,8 @@ export async function runProvisionSetup(
             params.deadline,
             params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
           ),
-        });
-      },
+        }),
+      params.assertAuthorized,
     );
     if (result.termination !== "exit" || result.code !== 0) {
       throw new WorkerProviderError(crabboxCommandError(params.phase, result).message);

@@ -115,6 +115,7 @@ describe("Gateway node worker bundle installer", () => {
     const installing = ensure({
       deviceId: node.nodeId,
       artifact,
+      prewarm: true,
       authorize: () => {
         if (!authorized) {
           throw new Error("session dispatch authority closed");

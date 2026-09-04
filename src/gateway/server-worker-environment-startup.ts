@@ -176,6 +176,25 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   // reconciliation attempts to release the owning worker claims.
   const { interruptedChildPlacements } =
     params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
+  // Parent cleanup can delete the spawn record. Transfer its teardown obligation to the
+  // exact environment before any await, so another restart cannot resume the orphan child.
+  for (const child of interruptedChildPlacements) {
+    const placement = params.startup.placementStore.get(child.sessionId);
+    if (
+      placement?.sessionKey !== child.sessionKey ||
+      placement.environmentId !== child.environmentId
+    ) {
+      continue;
+    }
+    const environment = params.startup.store.get(child.environmentId);
+    if (environment) {
+      params.startup.store.requestDestroy({
+        environmentId: environment.environmentId,
+        state: environment.state,
+        lastError: "Delegated child placement lost its initiating worker turn during restart",
+      });
+    }
+  }
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {

@@ -6,7 +6,9 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 export async function withCrabboxWorkerEnvProfile<Result>(
   values: Record<string, string> | undefined,
   run: (names: string[], path: string | undefined, childEnv: NodeJS.ProcessEnv) => Promise<Result>,
+  assertAuthorized?: () => void,
 ): Promise<Result> {
+  assertAuthorized?.();
   const entries = Object.entries(values ?? {});
   const names = entries.map(([name]) => name);
   let directory: string | undefined;
@@ -24,9 +26,12 @@ export async function withCrabboxWorkerEnvProfile<Result>(
         })
         .join("\n");
       directory = await mkdtemp(join(resolvePreferredOpenClawTmpDir(), "openclaw-crabbox-env-"));
+      // Revoked turns cannot write values, but still own cleanup of the returned directory.
+      assertAuthorized?.();
       profilePath = join(directory, "setup.env");
       await writeFile(profilePath, `${profile}\n`, { mode: 0o600, flag: "wx" });
     }
+    assertAuthorized?.();
     // Explicit deletion prevents profile-backed secrets from leaking through inherited SSH argv.
     return await run(names, profilePath, {
       ...Object.fromEntries(names.map((name) => [name, undefined])),

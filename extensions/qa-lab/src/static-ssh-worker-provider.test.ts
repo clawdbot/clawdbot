@@ -63,14 +63,16 @@ describe("QA Lab static-SSH worker provider", () => {
     const provider = createStaticSshWorkerProvider();
     let checks = 0;
 
-    const error = await provider.provisionDelegated!(PROFILE, "operation-authorized", {
-      assertAuthorized: () => {
-        checks += 1;
-        if (checks > 1) {
-          throw new Error("worker turn authority changed");
-        }
-      },
-    }).catch((caught: unknown) => caught);
+    const error = await provider
+      .provisionDelegated(PROFILE, "operation-authorized", {
+        assertAuthorized: () => {
+          checks += 1;
+          if (checks > 1) {
+            throw new Error("worker turn authority changed");
+          }
+        },
+      })
+      .catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({ message: "worker turn authority changed" });
     expect(WorkerProviderError.takeCleanupComplete(error)).toBe(true);

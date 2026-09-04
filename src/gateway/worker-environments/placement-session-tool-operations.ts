@@ -77,12 +77,6 @@ function parseInterruptedDelegatedChildPlacement(
   };
 }
 
-function serializeInterruptedDelegatedChildPlacement(
-  placement: InterruptedDelegatedChildPlacement,
-): string {
-  return JSON.stringify({ version: 1, kind: "child-placement", ...placement });
-}
-
 export function bindWorkerSessionToolOperationPlacement(params: {
   db: DatabaseSync;
   instanceId: string;
@@ -90,7 +84,7 @@ export function bindWorkerSessionToolOperationPlacement(params: {
   operation: WorkerDelegatedSpawnOperation;
   placement: InterruptedDelegatedChildPlacement;
 }): void {
-  const identityJson = serializeInterruptedDelegatedChildPlacement(params.placement);
+  const identityJson = JSON.stringify({ version: 1, kind: "child-placement", ...params.placement });
   const result = executeSqliteQuerySync(
     params.db,
     query(params.db)

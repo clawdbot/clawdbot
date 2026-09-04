@@ -30,6 +30,12 @@ import {
   DEVICE_WORKER_PROVIDER_ID,
   reconcileDeviceWorker,
 } from "./worker-environments/device-provider.js";
+import { createPlacementFailureActions } from "./worker-environments/placement-dispatch-failure.js";
+import { createWorkerPlacementDispatchStartup } from "./worker-environments/placement-dispatch-startup.js";
+import {
+  REQUEST,
+  seedActivePlacement,
+} from "./worker-environments/placement-dispatch-test-fixtures.js";
 
 const DEVICE_ID = "revoked-device";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -40,6 +46,154 @@ afterEach(() => {
 });
 
 describe("gateway worker environment startup", () => {
+  it("keeps interrupted child provisioning fenced after parent cleanup and another restart", async () => {
+    const stateDir = tempDirs.make("openclaw-worker-child-restart-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const initial = await loadGatewayWorkerEnvironmentStartupState();
+      seedActivePlacement(initial.placementStore, {
+        environmentId: "parent-environment",
+        ownerEpoch: 1,
+      });
+      const claim = initial.placementStore.claimTurn({
+        ...REQUEST,
+        claimId: "parent-claim",
+        runId: "parent-run",
+        owner: { kind: "worker", environmentId: "parent-environment", ownerEpoch: 1 },
+      });
+      initial.placementStore.markWorkspaceResultPending(claim);
+      initial.placementStore.authorizeWorkerTurnTools(claim, ["sessions_spawn"]);
+      const child = { sessionId: "child-session", sessionKey: "agent:main:child", agentId: "main" };
+      const environmentId = "child-environment";
+      expect(
+        initial.placementStore.beginWorkerSessionToolOperation({
+          claim,
+          toolName: "sessions_spawn",
+          toolCallId: "spawn-child",
+          requestDigest: "spawn-digest",
+          childSessionKey: child.sessionKey,
+        }),
+      ).toMatchObject({ kind: "execute" });
+      const requested = initial.placementStore.startDispatch({
+        ...child,
+        executionMode: "worker-turn",
+      });
+      initial.placementStore.transition({
+        sessionId: child.sessionId,
+        from: "requested",
+        to: "provisioning",
+        expectedGeneration: requested.generation,
+        patch: { environmentId },
+        delegatedSpawnOperation: {
+          sourceSessionId: claim.sessionId,
+          sourceClaimId: claim.claimId,
+          toolCallId: "spawn-child",
+          requestDigest: "spawn-digest",
+        },
+      });
+      for (const id of [environmentId, "unrelated-environment"]) {
+        initial.store.createIntent({
+          environmentId: id,
+          providerId: "fake-provider",
+          profileId: "test",
+          profileSnapshot: { settings: {}, executionMode: "worker-turn" },
+          provisionOperationId: `provision:${id}`,
+        });
+        initial.store.transition({ environmentId: id, from: "requested", to: "provisioning" });
+      }
+      const destroy = vi.fn(async () => {});
+      const provision = vi.fn<WorkerProvider["provision"]>();
+      const registry = createEmptyPluginRegistry();
+      registry.workerProviders.set("fake-provider", {
+        pluginId: "fake-owner",
+        source: "/synthetic/fake-owner/index.js",
+        provider: {
+          id: "fake-provider",
+          supportedExecutionModes: ["worker-turn"],
+          resolveAllocation: async () => ({ leaseId: "child-lease", sharedHost: false }),
+          provision,
+          provisionDelegated: provision,
+          inspect: async () => ({ status: "active" }),
+          destroy,
+        },
+      });
+      const start = async () => {
+        const startup = await loadGatewayWorkerEnvironmentStartupState();
+        const runtime = await createGatewayWorkerEnvironmentRuntime({
+          getPluginRegistry: () => registry,
+          getPortalRuntime: () => undefined,
+          resolveGatewayContext: () => undefined,
+          desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+          startup,
+          log: { child: () => ({ warn: () => {} }) },
+        });
+        if (!runtime.workerEnvironmentService) {
+          throw new Error("worker environment service was not created");
+        }
+        return { startup, service: runtime.workerEnvironmentService, runtime };
+      };
+      const first = await start();
+      try {
+        await first.startup.placementStore.closeWorkerTurnToolState(claim);
+        const pending = first.startup.placementStore
+          .listPendingWorkspaceResults()
+          .find((entry) => entry.sessionId === claim.sessionId);
+        if (!pending) {
+          throw new Error("parent workspace result was not reserved");
+        }
+        first.startup.placementStore.failWorkspaceResultAndReleaseTurn(
+          pending,
+          new Error("parent interrupted"),
+        );
+        const failed = first.startup.placementStore.get(claim.sessionId);
+        if (failed?.state !== "failed") {
+          throw new Error("parent did not fail");
+        }
+        first.startup.placementStore.retireSessionPlacement({
+          sessionId: claim.sessionId,
+          expectedState: "failed",
+          expectedGeneration: failed.generation,
+        });
+      } finally {
+        await first.service.stop();
+      }
+      closeOpenClawStateDatabaseForTest();
+      const second = await start();
+      try {
+        expect(second.runtime.interruptedDelegatedChildPlacements).toEqual([]);
+        const placement = second.startup.placementStore.get(child.sessionId);
+        if (placement?.state !== "provisioning") {
+          throw new Error("child provisioning was not retained");
+        }
+        const recovery = createWorkerPlacementDispatchStartup({
+          placements: second.startup.placementStore,
+          environments: second.service,
+          failure: createPlacementFailureActions({
+            placements: second.startup.placementStore,
+            environments: second.service,
+          }),
+          runRecoveryBarrier: async ({ run }) => run("/unused-workspace"),
+          runActivationBarrier: async ({ activate }) => activate(),
+          reportTransition: (observer, value) => observer?.(value),
+        });
+        const resumeProvider = vi.fn(async () => {});
+        await recovery.resumeProvisioning(placement, resumeProvider);
+        expect(resumeProvider).not.toHaveBeenCalled();
+        expect(provision).not.toHaveBeenCalled();
+        expect(destroy).toHaveBeenCalledOnce();
+        expect(second.startup.store.get(environmentId)).toMatchObject({
+          state: "destroyed",
+          leaseId: "child-lease",
+        });
+        expect(second.startup.store.get("unrelated-environment")).toMatchObject({
+          state: "provisioning",
+          destroyRequestedAtMs: null,
+        });
+      } finally {
+        await second.service.stop();
+      }
+    });
+  });
+
   it("cleans transfer scratch before serving and removes it on shutdown", async () => {
     const stateDir = tempDirs.make("openclaw-worker-transfer-startup-");
     const transferRoot = path.join(stateDir, "tmp", "node-workspace-transfer");

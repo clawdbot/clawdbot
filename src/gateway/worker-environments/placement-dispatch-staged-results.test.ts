@@ -23,6 +23,7 @@ import { createWorkerTunnelManager } from "./tunnel.js";
 import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
+  preparedWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
@@ -116,12 +117,14 @@ describe("staged worker placement result recovery", () => {
   }
 
   it.each([
-    { interrupted: false, record: true },
-    { interrupted: true, record: true },
-    { interrupted: true, record: false },
+    { interrupted: false, record: true, destroyRequested: false },
+    { interrupted: true, record: true, destroyRequested: false },
+    { interrupted: true, record: false, destroyRequested: false },
+    { interrupted: false, record: true, destroyRequested: true },
+    { interrupted: false, record: false, destroyRequested: true },
   ])(
-    "applies a staged pending result without a tunnel and reclaims the worker ($interrupted, recorded=$record)",
-    async ({ interrupted, record }) => {
+    "applies a staged pending result without a tunnel (interrupted=$interrupted, recorded=$record, destroyRequested=$destroyRequested)",
+    async ({ interrupted, record, destroyRequested }) => {
       const workspacePath = path.join(root, "same-worker-staged-result");
       const priorConflictRef = "refs/openclaw/worker-results/prior-conflict";
       const prepareAcceptedWorkspacePublication = vi.fn(async () => {
@@ -137,6 +140,14 @@ describe("staged worker placement result recovery", () => {
       });
       const { active, claim } = seedWorkerTurn(harness);
       harness.markEnvironmentOwnerEpoch(2);
+      if (destroyRequested) {
+        // The parent descriptor may be gone on a later restart; the environment retains teardown.
+        const getEnvironment = vi.mocked(harness.environments.get).getMockImplementation()!;
+        vi.mocked(harness.environments.get).mockImplementation((id) => {
+          const environment = getEnvironment(id);
+          return environment ? { ...environment, destroyRequestedAtMs: 1_000 } : undefined;
+        });
+      }
       const staged = await stagePendingResult({
         store: placementStore,
         claim,
@@ -194,6 +205,58 @@ describe("staged worker placement result recovery", () => {
       ).not.toBe(0);
     },
   );
+
+  it("preserves an unpublished candidate after its environment is fenced and the parent descriptor is gone", async () => {
+    const workspacePath = path.join(root, "fenced-prepared-result");
+    const publishAcceptedWorkspace = vi.fn(async () => {});
+    const harness = createHarness(placementStore, { workspacePath, publishAcceptedWorkspace });
+    const { claim } = seedWorkerTurn(harness);
+    vi.mocked(harness.environments.get).mockReturnValue({
+      ...harness.attached,
+      destroyRequestedAtMs: 1_000,
+    });
+    const staged = await stagePendingResult({
+      store: placementStore,
+      claim,
+      workspacePath,
+      base: "base\n",
+      current: "worker\n",
+      record: false,
+    });
+    const candidateRef = preparedWorkerWorkspaceResultRef(staged.stagedResultRef);
+    for (const args of [
+      ["update-ref", candidateRef, staged.stagedResultRef],
+      ["update-ref", "-d", staged.stagedResultRef],
+    ]) {
+      expect(
+        (await runCommandWithTimeout(["git", "-C", workspacePath, ...args], { timeoutMs: 10_000 }))
+          .code,
+      ).toBe(0);
+    }
+    placementStore.handoffWorkspaceResultRecovery(claim);
+    await harness.service.reconcile();
+    await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+      "base\n",
+    );
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(publishAcceptedWorkspace).not.toHaveBeenCalled();
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      {
+        claimId: claim.claimId,
+        stagedResultRef: null,
+        workspaceAcceptedAtMs: null,
+      },
+    ]);
+    expect(
+      (
+        await runCommandWithTimeout(
+          ["git", "-C", workspacePath, "show-ref", "--verify", candidateRef],
+          { timeoutMs: 10_000 },
+        )
+      ).code,
+    ).toBe(0);
+  });
 
   it.each(["retained", "removed-before-restart"] as const)(
     "keeps an accepted result fenced until provider deletion succeeds (%s ref)",
