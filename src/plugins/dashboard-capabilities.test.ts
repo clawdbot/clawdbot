@@ -105,9 +105,8 @@ describe("plugin dashboard declarations", () => {
     "enforces resource path ownership (firstPublic=$firstPublic, secondPublic=$secondPublic, sharedPath=$sharedPath)",
     ({ firstPublic, secondPublic, sharedPath }) => {
       useNoBundledPlugins();
-      const plugins = [firstPublic, secondPublic].map((isPublic, index) => {
-        const kind = index === 0 ? "first" : "second";
-        const resourceName = index === 0 || sharedPath ? "shared" : "other";
+      const createRenderer = (isPublic: boolean, kind: "first" | "second") => {
+        const resourceName = kind === "first" || sharedPath ? "shared" : "other";
         return writePlugin({
           id: `renderer-${kind}`,
           body: `module.exports = {
@@ -127,10 +126,13 @@ describe("plugin dashboard declarations", () => {
             },
           };`,
         });
-      });
+      };
+      const firstPlugin = createRenderer(firstPublic, "first");
+      const secondPlugin = createRenderer(secondPublic, "second");
+      const plugins = [firstPlugin, secondPlugin];
       const registry = loadOpenClawPlugins({
         cache: false,
-        workspaceDir: plugins[0].dir,
+        workspaceDir: firstPlugin.dir,
         config: {
           plugins: {
             load: { paths: plugins.map((plugin) => plugin.file) },
@@ -139,8 +141,8 @@ describe("plugin dashboard declarations", () => {
         },
         onlyPluginIds: plugins.map((plugin) => plugin.id),
       });
-      expect(registry.plugins.find((entry) => entry.id === plugins[0].id)?.status).toBe("loaded");
-      const second = registry.plugins.find((entry) => entry.id === plugins[1].id);
+      expect(registry.plugins.find((entry) => entry.id === firstPlugin.id)?.status).toBe("loaded");
+      const second = registry.plugins.find((entry) => entry.id === secondPlugin.id);
       if (sharedPath && (firstPublic || secondPublic)) {
         expect(second).toMatchObject({ status: "error", failurePhase: "register" });
         expect(second?.error).toContain("public resource paths must be unique");
