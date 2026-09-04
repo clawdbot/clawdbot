@@ -4,6 +4,7 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
@@ -78,8 +79,8 @@ describe("Codex finalization generation ownership", () => {
         createMockPluginRegistry([
           {
             hookName: "agent_end",
-            handler: async (event: { success: boolean }) => {
-              if (!event.success) {
+            handler: async (event) => {
+              if (!isRecord(event) || !event.success) {
                 return;
               }
               enteredAgentEnd.resolve();
