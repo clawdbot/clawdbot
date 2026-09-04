@@ -80,6 +80,7 @@ describe("zai provider plugin", () => {
       subscriptionAuthDispatch: false,
       config: {
         command: "claude",
+        jsonlDialect: "claude-stream-json",
         liveSession: "claude-stdio",
         clearEnv: expect.arrayContaining(["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"]),
       },

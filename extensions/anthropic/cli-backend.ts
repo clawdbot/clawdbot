@@ -296,6 +296,7 @@ export function buildClaudeAgentSdkCliBackend(
       // emits the matching transcript UUID on assistant records.
       resumeAtArg: "--resume-session-at",
       output: "jsonl",
+      jsonlDialect: "claude-stream-json",
       liveSession: "claude-stdio",
       input: "stdin",
       modelArg: "--model",
