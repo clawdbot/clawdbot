@@ -70,7 +70,7 @@ describe("sessions page managed roster", () => {
         return task.promise;
       });
       const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-      const sessions = createSessionCapability(gateway);
+      const sessions = createTestSessionCapability(gateway);
       const page = await createRenderedPage(
         createContext(gateway, sessions),
         result("agent:main:initial"),
@@ -140,7 +140,7 @@ describe("sessions page managed roster", () => {
       return result(params?.offset ?? 0);
     });
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const page = await createRenderedPage(createContext(gateway, sessions), result(0));
     try {
       const input = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
