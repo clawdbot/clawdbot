@@ -62,4 +62,38 @@ describe("resolveResetPreservedSelection", () => {
       }),
     ).toEqual({});
   });
+
+  it("preserves operator-owned session appearance", () => {
+    expect(
+      resolveResetPreservedSelection({
+        entry: {
+          sessionId: "appearance",
+          updatedAt: 1,
+          icon: "🦞",
+          color: "blue",
+          category: "Operator group",
+          boardFace: "dashboard",
+          visibility: "draft",
+        },
+      }),
+    ).toEqual({
+      icon: "🦞",
+      color: "blue",
+      category: "Operator group",
+      boardFace: "dashboard",
+      visibility: "draft",
+    });
+  });
+
+  it("does not invent session appearance when none was set", () => {
+    expect(
+      resolveResetPreservedSelection({
+        entry: {
+          sessionId: "plain",
+          updatedAt: 1,
+          label: "plain-session",
+        },
+      }),
+    ).toEqual({});
+  });
 });

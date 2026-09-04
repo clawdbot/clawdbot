@@ -416,10 +416,7 @@ function resolveReplySessionRolloverState(
     reasoningLevel: entry.reasoningLevel,
     ttsAuto: entry.ttsAuto,
     responseUsage: entry.responseUsage,
-    ...selectSessionModelOverride(preservedSelection),
-    authProfileOverride: preservedSelection.authProfileOverride,
-    authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
-    authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
+    ...preservedSelection,
     label: entry.label,
     displayName: entry.displayName,
     // Notice debt survives rollover: erasing it here would recreate the

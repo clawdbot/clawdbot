@@ -1062,6 +1062,7 @@ test("sessions.reset preserves explicit session preferences across session rollo
     label: "Operator session",
     category: "Operator group",
     icon: "🦞",
+    color: "blue",
     boardFace: "dashboard",
     visibility: "draft",
   } satisfies Partial<InternalSessionEntry>;

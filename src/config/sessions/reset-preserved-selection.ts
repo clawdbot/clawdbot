@@ -1,4 +1,5 @@
-// Reset preservation keeps user-selected model/auth overrides while dropping automatic fallbacks.
+// Reset preservation keeps user-selected model/auth overrides and operator-owned
+// session appearance while dropping automatic fallbacks.
 import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
 import { resolveSessionModelOverrideSource } from "./model-override-provenance.js";
 import type { SessionEntry } from "./types.js";
@@ -12,14 +13,24 @@ type ResetPreservedSelectionState = Pick<
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
+  | "icon"
+  | "color"
+  | "category"
+  | "boardFace"
+  | "visibility"
 >;
 
 /**
- * Decide which model/provider/auth overrides survive a `/new` or `/reset`.
+ * Decide which model/provider/auth overrides and operator-owned appearance
+ * fields survive a `/new` or `/reset`.
  *
  * Only user-driven overrides (explicit `/model`, `sessions.patch`, etc.) are
  * preserved. Auto-created overrides (runtime fallbacks, rate-limit rotations)
  * are cleared so resets actually return the session to the configured default.
+ * Control UI appearance (`icon`, `color`, `category`, `boardFace`, `visibility`)
+ * is operator-owned presentation, not conversation state, so it is copied when
+ * present. Callers that rotate the session id still rely on the SQLite writer
+ * to drop `visibility` when identity changes.
  *
  * Legacy entries persisted before `modelOverrideSource` was tracked are
  * treated as user-driven, matching the prior reset behavior so explicit
@@ -34,6 +45,21 @@ export function resolveResetPreservedSelection(params: {
   }
 
   const preserved: Partial<ResetPreservedSelectionState> = {};
+  if (entry.icon !== undefined) {
+    preserved.icon = entry.icon;
+  }
+  if (entry.color !== undefined) {
+    preserved.color = entry.color;
+  }
+  if (entry.category !== undefined) {
+    preserved.category = entry.category;
+  }
+  if (entry.boardFace !== undefined) {
+    preserved.boardFace = entry.boardFace;
+  }
+  if (entry.visibility !== undefined) {
+    preserved.visibility = entry.visibility;
+  }
   if (resolveSessionModelOverrideSource(entry) === "user" && entry.modelOverride) {
     preserved.providerOverride = entry.providerOverride;
     preserved.modelOverride = entry.modelOverride;
