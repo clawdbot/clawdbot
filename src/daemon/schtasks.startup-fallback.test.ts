@@ -2026,7 +2026,7 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("does not relaunch when the node Scheduled Task process is already running", async () => {
+  it("does not treat a pre-existing node host as Scheduled Task launch evidence", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       fastForwardTaskStartWait();
@@ -2067,7 +2067,7 @@ describe("Windows startup fallback", () => {
       await installNodeScheduledTask(env);
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
-      expect(spawn).not.toHaveBeenCalled();
+      expectStartupFallbackSpawn();
     });
   });
 

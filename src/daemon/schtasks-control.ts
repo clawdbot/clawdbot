@@ -60,7 +60,7 @@ function runtimeSignature(runtime: Awaited<ReturnType<typeof readScheduledTaskRu
 
 /**
  * Processes observed before `schtasks /Run` that any launch-evidence path could match:
- * managed-port gateway owners, plus wrappers already running the task script.
+ * exact persisted task owners, plus wrappers already running the task script.
  *
  * Anything already in this set was not started by the run we are about to trigger,
  * so it cannot serve as evidence that Task Scheduler owns a gateway process.
@@ -88,10 +88,11 @@ async function readPreLaunchTaskPids(
         }
       }
     }
-    if (shouldManageGatewayListenerPort(env)) {
-      const command = await readScheduledTaskCommand(env).catch(() => null);
-      const port = resolveScheduledTaskCommandPort(env, command);
-      if (port) {
+    const command = await readScheduledTaskCommand(env).catch(() => null);
+    const port = resolveScheduledTaskCommandPort(env, command);
+    if (port) {
+      const manageGatewayPort = shouldManageGatewayListenerPort(env);
+      if (manageGatewayPort) {
         const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
         for (const pid of await resolveScheduledTaskOwnedGatewayPids(
           env,
@@ -100,18 +101,18 @@ async function readPreLaunchTaskPids(
         )) {
           pids.add(pid);
         }
-        // The owned-pid resolver reports a single preferred owner, but a stopped task can leave
-        // both its gateway child and its supervisor alive. Baseline every match so a survivor
-        // cannot become the resolver's answer after `/Run` and read as newly launched.
-        const installedArguments = command?.programArguments;
-        if (snapshot && installedArguments?.length) {
-          for (const argv of [
-            installedArguments,
-            [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG],
-          ]) {
-            for (const pid of findInstalledProcessPids(snapshot, port, argv, () => true)) {
-              pids.add(pid);
-            }
+      }
+      const installedArguments = command?.programArguments;
+      if (snapshot && installedArguments?.length) {
+        const candidates = manageGatewayPort
+          ? [installedArguments, [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG]]
+          : [installedArguments];
+        const matchesProcess = manageGatewayPort ? () => true : isNodeHostArgv;
+        // A stopped task can leave more than one exact child alive. Baseline every match so a
+        // survivor cannot become the resolver's answer after `/Run` and read as newly launched.
+        for (const argv of candidates) {
+          for (const pid of findInstalledProcessPids(snapshot, port, argv, matchesProcess)) {
+            pids.add(pid);
           }
         }
       }
