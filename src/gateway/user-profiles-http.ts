@@ -1,8 +1,10 @@
 // Authenticated HTTP avatar serving and Gravatar proxying for durable user profiles.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveHostAccountAvatar } from "../infra/host-account-avatar.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   formatUserProfileAvatarEtag,
@@ -342,8 +344,14 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   let uploadedAvatar: ReturnType<typeof getProfileAvatar>;
+  let hashes: string[];
   try {
     uploadedAvatar = getProfileAvatar(profileId);
+    hashes = uploadedAvatar
+      ? []
+      : getUserProfileListItem(profileId)
+          .emails.slice(0, MAX_GRAVATAR_EMAIL_LOOKUPS)
+          .map(hashEmail);
   } catch (error) {
     if (error instanceof UserProfileNotFoundError) {
       sendJson(res, 404, { ok: false, error: { type: "not_found" } });
@@ -352,31 +360,21 @@ export async function handleUserProfileAvatarHttpRequest(
     sendJson(res, 500, { ok: false, error: { type: "profile_lookup_failed" } });
     return true;
   }
-  if (uploadedAvatar) {
+  // The host account represents only the shared owner, never an authenticated person.
+  const avatar =
+    uploadedAvatar ??
+    (profileId === GATEWAY_OWNER_PROFILE_ID ? await resolveHostAccountAvatar() : null);
+  if (avatar) {
     sendAvatar(
       req,
       res,
       {
-        bytes: uploadedAvatar.bytes,
-        mime: uploadedAvatar.mime,
-        etag: formatUserProfileAvatarEtag(uploadedAvatar.sha256, uploadedAvatar.mime),
+        bytes: avatar.bytes,
+        mime: avatar.mime,
+        etag: formatUserProfileAvatarEtag(avatar.sha256, avatar.mime),
       },
       "private, max-age=0, must-revalidate",
     );
-    return true;
-  }
-
-  let hashes: string[];
-  try {
-    hashes = getUserProfileListItem(profileId)
-      .emails.slice(0, MAX_GRAVATAR_EMAIL_LOOKUPS)
-      .map(hashEmail);
-  } catch (error) {
-    if (error instanceof UserProfileNotFoundError) {
-      sendJson(res, 404, { ok: false, error: { type: "not_found" } });
-      return true;
-    }
-    sendJson(res, 500, { ok: false, error: { type: "profile_lookup_failed" } });
     return true;
   }
 
