@@ -41,7 +41,7 @@ For a loopback Gateway behind public HTTPS ingress, set `gateway.publicOrigin` t
 
 The proxy must also forward `/__openclaw__/worker-bootstrap/artifacts/<sha256>` to the Gateway, alongside its public node and worker routes. A new cloud node downloads its runtime over this authenticated HTTP route before it can connect over WebSocket. Preserve the `Authorization` header; do not expose these archives through an unauthenticated static-file route.
 
-Native node workspace access and reconciliation outlive worker RPC credential expiry; each transfer retains its own ten-minute expiry and the existing revocation and session-ownership checks.
+Node and SSH workspace access and reconciliation outlive worker RPC credential expiry, so an idle session can still stop, move, or suspend safely. Both retain the existing revocation and owner-epoch checks; node transfers also retain their own ten-minute expiry and session-ownership checks.
 
 ## Requirements
 
