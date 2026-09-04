@@ -1,3 +1,4 @@
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { html, nothing } from "lit";
 import "./chat-outbox-recovery.ts";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
@@ -54,6 +55,12 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private desktopFocus: {
+    key: string;
+    client: ChatPageHost["client"];
+    href: string;
+  } | null = null;
+
   protected renderChatPaneLayout(params: ChatPaneLayoutRenderParams) {
     const {
       state,
@@ -139,6 +146,25 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const desktopPresented =
       this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "desktop");
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
+    const desktopSource = resolveChatPaneDesktopTarget(selectedSession);
+    const desktopFocusKey = JSON.stringify([
+      state.sessionKey,
+      this.connectionGeneration,
+      desktopAvailable,
+      desktopPresented,
+      state.basePath,
+    ]);
+    if (this.desktopFocus?.key !== desktopFocusKey || this.desktopFocus.client !== state.client) {
+      this.desktopFocus = {
+        key: desktopFocusKey,
+        client: state.client,
+        href: buildControlUiFocusPath(
+          { kind: "desktop", session: state.sessionKey },
+          state.basePath,
+        ),
+      };
+    }
+    const desktopFocus = this.desktopFocus;
     const panelDefinitions = sidebarPanelDefinitions({
       state,
       themeMode: this.context.theme.resolvedMode,
@@ -151,7 +177,16 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,
-      desktopSource: resolveChatPaneDesktopTarget(selectedSession),
+      desktopSource,
+      desktopFocusHref: desktopFocus.href,
+      onDesktopFocusTargetChange: (target) => {
+        // A retained callback cannot publish a previous presentation's source or control state.
+        const href = buildControlUiFocusPath(target, state.basePath);
+        if (this.desktopFocus === desktopFocus && desktopFocus.href !== href) {
+          desktopFocus.href = href;
+          this.requestUpdate();
+        }
+      },
       dashboard:
         !this.compact && board.hasBoard ? this.renderBoardPanel(board, sidebarLayout) : nothing,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),

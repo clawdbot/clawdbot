@@ -309,134 +309,147 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expect(requestTimeouts).toEqual([300_000]);
   });
 
-  it("captures output and completes when callers only await stream.result()", async () => {
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "compaction summary" }],
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-5.4",
-      usage: { input: 11, output: 7, cacheRead: 0, cacheWrite: 0, totalTokens: 18 },
-      stopReason: "stop",
-      timestamp: 1,
-    };
-    const originalStream = {
-      [Symbol.asyncIterator]() {
-        return {
-          next() {
-            throw new Error("result-only callers should not need stream iteration");
-          },
-        };
-      },
-      result: vi.fn(async () => assistant),
-    };
-    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-      (() => originalStream) as unknown as StreamFn,
-      {
-        runId: "run-compact",
-        sessionKey: "session-key",
-        sessionId: "session-id",
+  it.each([
+    { stopReason: "stop", terminalType: "model.call.completed" },
+    { stopReason: "error", terminalType: "model.call.error" },
+    { stopReason: "aborted", terminalType: "model.call.error" },
+  ])(
+    "records $stopReason when callers only await stream.result()",
+    async ({ stopReason, terminalType }) => {
+      const assistant = {
+        role: "assistant",
+        content: [{ type: "text", text: "compaction summary" }],
+        api: "openai-responses",
         provider: "openai",
         model: "gpt-5.4",
-        trace: createDiagnosticTraceContext(),
-        contentCapture: {
-          inputMessages: true,
-          outputMessages: true,
-          toolInputs: false,
-          toolOutputs: false,
-          systemPrompt: true,
-          toolDefinitions: true,
-          anyModelContent: true,
+        usage: { input: 11, output: 7, cacheRead: 0, cacheWrite: 0, totalTokens: 18 },
+        stopReason,
+        errorMessage: stopReason === "stop" ? undefined : "synthetic provider failure",
+        timestamp: 1,
+      };
+      const originalStream = {
+        [Symbol.asyncIterator]() {
+          return {
+            next() {
+              throw new Error("result-only callers should not need stream iteration");
+            },
+          };
         },
-        nextCallId: () => "call-result-only",
-      },
-    );
-
-    const inputMessages = [{ role: "user", content: "summarize this transcript", timestamp: 1 }];
-    const events = await collectTrustedModelCallEvents(async () => {
-      const streamResult = wrapped(
-        {} as never,
+        result: vi.fn(async () => assistant),
+      };
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        (() => originalStream) as unknown as StreamFn,
         {
-          systemPrompt: "summarize accurately",
-          messages: inputMessages,
-        } as never,
-        {},
-      ) as unknown as typeof originalStream;
-      expect(await streamResult.result()).toBe(assistant);
-    });
-
-    expect(originalStream.result).toHaveBeenCalledOnce();
-    expect(events.map(({ event }) => event.type)).toEqual([
-      "model.call.started",
-      "model.call.completed",
-    ]);
-    const completedEvent = getEvent(
-      events.map((entry) => entry.event),
-      1,
-    );
-    expect(completedEvent.type).toBe("model.call.completed");
-    expect(completedEvent.callId).toBe("call-result-only");
-    expect(completedEvent.responseStreamBytes).toBe(
-      Buffer.byteLength(JSON.stringify(assistant), "utf8"),
-    );
-    expect(events[1]?.privateData.modelContent?.inputMessages).toEqual(inputMessages);
-    expect(events[1]?.privateData.modelContent?.systemPrompt).toBe("summarize accurately");
-    expect(events[1]?.privateData.modelContent?.outputMessages).toEqual([assistant]);
-  });
-
-  it("closes the underlying iterator when result() completes before the consumer abandons it", async () => {
-    // Mirrors packages/agent-core/src/agent-loop.ts: iterate, await result() on
-    // the terminal event, then return (abandoning the iterator). The iterator's
-    // return() carries provider cleanup (idle-timeout abort listeners, readers),
-    // so it must still run even though result() emits the terminal event first.
-    let returnCalled = false;
-    const doneEvent = { type: "done", message: { role: "assistant", content: "ok" } };
-    const stream = {
-      [Symbol.asyncIterator]() {
-        let emitted = false;
-        return {
-          async next() {
-            if (!emitted) {
-              emitted = true;
-              return { value: doneEvent, done: false };
-            }
-            return { value: undefined, done: true };
+          runId: "run-compact",
+          sessionKey: "session-key",
+          sessionId: "session-id",
+          provider: "openai",
+          model: "gpt-5.4",
+          trace: createDiagnosticTraceContext(),
+          contentCapture: {
+            inputMessages: true,
+            outputMessages: true,
+            toolInputs: false,
+            toolOutputs: false,
+            systemPrompt: true,
+            toolDefinitions: true,
+            anyModelContent: true,
           },
-          async return() {
-            returnCalled = true;
-            return { value: undefined, done: true };
-          },
-        };
-      },
-      result: async () => doneEvent.message,
-    };
-    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-      (() => stream) as unknown as StreamFn,
-      {
-        runId: "run-cleanup",
-        provider: "openai",
-        model: "gpt-5.4",
-        trace: createDiagnosticTraceContext(),
-        nextCallId: () => "call-cleanup",
-      },
-    );
+          nextCallId: () => "call-result-only",
+        },
+      );
 
-    const events = await collectModelCallEvents(async () => {
-      const response = wrapped({} as never, {} as never, {} as never) as unknown as typeof stream;
-      for await (const event of response as AsyncIterable<{ type: string }>) {
-        if (event.type === "done") {
-          await (response as { result: () => Promise<unknown> }).result();
+      const inputMessages = [{ role: "user", content: "summarize this transcript", timestamp: 1 }];
+      const events = await collectTrustedModelCallEvents(async () => {
+        const streamResult = wrapped(
+          {} as never,
+          {
+            systemPrompt: "summarize accurately",
+            messages: inputMessages,
+          } as never,
+          {},
+        ) as unknown as typeof originalStream;
+        expect(await streamResult.result()).toBe(assistant);
+      });
+
+      expect(originalStream.result).toHaveBeenCalledOnce();
+      expect(events.map(({ event }) => event.type)).toEqual(["model.call.started", terminalType]);
+      const terminalEvent = getEvent(
+        events.map((entry) => entry.event),
+        1,
+      );
+      expect(terminalEvent.callId).toBe("call-result-only");
+      expect(terminalEvent.responseStreamBytes).toBe(
+        Buffer.byteLength(JSON.stringify(assistant), "utf8"),
+      );
+      expect(events[1]?.privateData.modelContent?.inputMessages).toEqual(inputMessages);
+      expect(events[1]?.privateData.modelContent?.systemPrompt).toBe("summarize accurately");
+      expect(events[1]?.privateData.modelContent?.outputMessages).toEqual([assistant]);
+    },
+  );
+
+  it.each([
+    { stopReason: "stop", resultFirst: false, terminalType: "model.call.completed" },
+    { stopReason: "error", resultFirst: false, terminalType: "model.call.error" },
+    { stopReason: "error", resultFirst: true, terminalType: "model.call.error" },
+  ])(
+    "closes the $stopReason iterator with resultFirst=$resultFirst",
+    async ({ stopReason, resultFirst, terminalType }) => {
+      // Mirrors packages/agent-core/src/agent-loop.ts: iterate, await result() on
+      // the terminal event, then return (abandoning the iterator). The iterator's
+      // return() carries provider cleanup (idle-timeout abort listeners, readers),
+      // so it must still run regardless of which observer emits the terminal event.
+      let returnCalled = false;
+      const assistant = { role: "assistant", content: "ok", stopReason };
+      const terminalEvent =
+        stopReason === "stop"
+          ? { type: "done", reason: stopReason, message: assistant }
+          : { type: "error", reason: stopReason, error: assistant };
+      const stream = {
+        [Symbol.asyncIterator]() {
+          let emitted = false;
+          return {
+            async next() {
+              if (!emitted) {
+                emitted = true;
+                return { value: terminalEvent, done: false };
+              }
+              return { value: undefined, done: true };
+            },
+            async return() {
+              returnCalled = true;
+              return { value: undefined, done: true };
+            },
+          };
+        },
+        result: async () => assistant,
+      };
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        (() => stream) as unknown as StreamFn,
+        {
+          runId: "run-cleanup",
+          provider: "openai",
+          model: "gpt-5.4",
+          trace: createDiagnosticTraceContext(),
+          nextCallId: () => "call-cleanup",
+        },
+      );
+
+      const events = await collectModelCallEvents(async () => {
+        const response = wrapped({} as never, {} as never, {} as never) as unknown as typeof stream;
+        const earlyResult = resultFirst ? await response.result() : undefined;
+        for await (const event of response as AsyncIterable<{ type: string }>) {
+          expect(event).toBe(terminalEvent);
+          const result = resultFirst ? earlyResult : await response.result();
+          expect(result).toBe(assistant);
           break;
         }
-      }
-    });
+      });
 
-    expect(returnCalled).toBe(true);
-    expect(events.map((event) => event.type)).toEqual([
-      "model.call.started",
-      "model.call.completed",
-    ]);
-  });
+      expect(returnCalled).toBe(true);
+      expect(events.map((event) => event.type)).toEqual(["model.call.started", terminalType]);
+    },
+  );
 
   it("emits error events when stream iteration fails", async () => {
     const requestId = "req_provider_123";

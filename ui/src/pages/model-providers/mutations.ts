@@ -35,9 +35,9 @@ export function buildDefaultsPatch(params: {
                 params.fallbacks.length > 0
                   ? { primary: params.primary, fallbacks: [...params.fallbacks] }
                   : params.primary,
-              utilityModel: params.utilityModel,
             }
           : {}),
+        utilityModel: params.utilityModel,
         thinkingDefault:
           params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
         fastModeDefault:
