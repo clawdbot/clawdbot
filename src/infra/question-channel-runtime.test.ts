@@ -28,100 +28,140 @@ const record: QuestionRecord = {
 };
 
 describe("question channel runtime", () => {
-  it("joins a finalizer that already started before clearing its local runtime", async () => {
-    const runtime = createQuestionChannelRuntime();
-    const release = createDeferredCore();
-    const events: string[] = [];
-    const finalizerWork = release.promise.then(() => {
-      events.push("finalizer settled");
-    });
-    const finalize = vi.fn(() => finalizerWork);
-    let clearing: Promise<void[]> | undefined;
-    try {
-      runtime.handleRequested(record);
-      runtime.registerDelivery({ questionId: record.id, deliveryId: "held-finalizer", finalize });
-      runtime.handleResolved({
-        id: record.id,
-        status: "answered",
-        answers: { answers: { target: ["Production"] } },
+  it.each(["known", "unbound"] as const)(
+    "joins a %s finalizer that already started before clearing its local runtime",
+    async (binding) => {
+      const runtime = createQuestionChannelRuntime();
+      const release = createDeferredCore();
+      const events: string[] = [];
+      const finalizerWork = release.promise.then(() => {
+        events.push("finalizer settled");
       });
-      expect(finalize).toHaveBeenCalledExactlyOnceWith("Answered: Production");
+      const finalize = vi.fn(() => finalizerWork);
+      let clearing: Promise<void[]> | undefined;
+      try {
+        const register = () =>
+          runtime.registerDelivery({
+            questionId: record.id,
+            deliveryId: "held-finalizer",
+            finalize,
+          });
+        if (binding === "known") {
+          runtime.handleRequested(record);
+          register();
+          runtime.handleResolved({
+            id: record.id,
+            status: "answered",
+            answers: { answers: { target: ["Production"] } },
+          });
+        } else {
+          runtime.runWithDeliveries([record.id], register, { unbound: true });
+        }
+        expect(finalize).toHaveBeenCalledExactlyOnceWith(
+          binding === "known" ? "Answered: Production" : "Unavailable: request a new question.",
+        );
 
-      clearing = Promise.all(
-        [runtime.clear(), runtime.clear()].map((wait) =>
-          Promise.resolve(wait).then(() => {
-            events.push("runtime cleared");
-          }),
-        ),
-      );
-      await nextTurn();
-      expect(events).toEqual([]);
+        clearing = Promise.all(
+          [runtime.clear(), runtime.clear()].map((wait) =>
+            Promise.resolve(wait).then(() => {
+              events.push("runtime cleared");
+            }),
+          ),
+        );
+        await nextTurn();
+        expect(events).toEqual([]);
 
-      release.resolve();
-      await clearing;
-      expect(events).toEqual(["finalizer settled", "runtime cleared", "runtime cleared"]);
-      expect(finalize).toHaveBeenCalledOnce();
-      const nextFinalize = vi.fn();
-      runtime.handleRequested(record);
-      runtime.registerDelivery({
-        questionId: record.id,
-        deliveryId: "next-generation",
-        finalize: nextFinalize,
-      });
-      runtime.handleResolved({ id: record.id, status: "expired" });
-      expect(nextFinalize).toHaveBeenCalledExactlyOnceWith("Expired");
-    } finally {
-      release.resolve();
-      // The baseline clear does not own this promise; join the original finalizer on red too.
-      await finalizerWork;
-      await clearing;
-      await runtime.clear();
-    }
-  });
-
-  it("keeps a late finalizer on its requested Gateway owner rather than its plugin caller", async () => {
-    const runtime = createQuestionChannelRuntime();
-    const gateway = new AsyncWorkScope();
-    const pluginCaller = new AsyncWorkScope();
-    const release = createDeferredCore();
-    const finalizerWork = release.promise;
-    const finalize = vi.fn(() => finalizerWork);
-    let gatewayDrained = false;
-    let pluginDrained = false;
-    try {
-      await gateway.track(() => {
+        release.resolve();
+        await clearing;
+        expect(events).toEqual(["finalizer settled", "runtime cleared", "runtime cleared"]);
+        expect(finalize).toHaveBeenCalledOnce();
+        const nextFinalize = vi.fn();
         runtime.handleRequested(record);
-        runtime.handleResolved({
-          id: record.id,
-          status: "answered",
-          answers: { answers: { target: ["Production"] } },
+        runtime.registerDelivery({
+          questionId: record.id,
+          deliveryId: "next-generation",
+          finalize: nextFinalize,
         });
-      });
-      await pluginCaller.track(() => {
-        runtime.registerDelivery({ questionId: record.id, deliveryId: "late-plugin", finalize });
-      });
-      expect(finalize).toHaveBeenCalledExactlyOnceWith("Answered: Production");
-      const closingGateway = gateway.drain().then(() => {
-        gatewayDrained = true;
-      });
-      const closingPlugin = pluginCaller.drain().then(() => {
-        pluginDrained = true;
-      });
-      await nextTurn();
-      expect(pluginDrained).toBe(true);
-      expect(gatewayDrained).toBe(false);
+        runtime.handleResolved({ id: record.id, status: "expired" });
+        expect(nextFinalize).toHaveBeenCalledExactlyOnceWith("Expired");
+      } finally {
+        release.resolve();
+        // The baseline clear does not own this promise; join the original finalizer on red too.
+        await finalizerWork;
+        await clearing;
+        await runtime.clear();
+      }
+    },
+  );
 
-      release.resolve();
-      await Promise.all([closingGateway, closingPlugin]);
-      expect(gatewayDrained).toBe(true);
-      expect(finalize).toHaveBeenCalledOnce();
-    } finally {
-      release.resolve();
-      await finalizerWork;
-      await runtime.clear();
-      await Promise.all([gateway.drain(), pluginCaller.drain()]);
-    }
-  });
+  it.each(["known", "unbound"] as const)(
+    "keeps a %s finalizer on its captured owner rather than its plugin caller",
+    async (binding) => {
+      const runtime = createQuestionChannelRuntime();
+      const gateway = new AsyncWorkScope();
+      const pluginCaller = new AsyncWorkScope();
+      const otherGateway = new AsyncWorkScope();
+      const release = createDeferredCore();
+      const finalizerWork = release.promise;
+      const finalize = vi.fn(() => finalizerWork);
+      let gatewayDrained = false;
+      let pluginDrained = false;
+      let otherGatewayDrained = false;
+      try {
+        const register = () =>
+          runtime.registerDelivery({ questionId: record.id, deliveryId: "late-plugin", finalize });
+        if (binding === "known") {
+          await gateway.track(() => {
+            runtime.handleRequested(record);
+            runtime.handleResolved({
+              id: record.id,
+              status: "answered",
+              answers: { answers: { target: ["Production"] } },
+            });
+          });
+          await pluginCaller.track(register);
+        } else {
+          await otherGateway.track(() => runtime.handleRequested(record));
+          await gateway.track(() =>
+            runtime.runWithDeliveries(
+              [record.id],
+              () => {
+                gateway.beginClose();
+                return pluginCaller.track(register);
+              },
+              { unbound: true },
+            ),
+          );
+        }
+        expect(finalize).toHaveBeenCalledExactlyOnceWith(
+          binding === "known" ? "Answered: Production" : "Unavailable: request a new question.",
+        );
+        const closingGateway = gateway.drain().then(() => {
+          gatewayDrained = true;
+        });
+        const closingPlugin = pluginCaller.drain().then(() => {
+          pluginDrained = true;
+        });
+        const closingOtherGateway = otherGateway.drain().then(() => {
+          otherGatewayDrained = true;
+        });
+        await nextTurn();
+        expect(pluginDrained).toBe(true);
+        expect(otherGatewayDrained).toBe(true);
+        expect(gatewayDrained).toBe(false);
+
+        release.resolve();
+        await Promise.all([closingGateway, closingPlugin, closingOtherGateway]);
+        expect(gatewayDrained).toBe(true);
+        expect(finalize).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        await finalizerWork;
+        await runtime.clear();
+        await Promise.all([gateway.drain(), pluginCaller.drain(), otherGateway.drain()]);
+      }
+    },
+  );
 
   it("joins reentrant clear before releasing its finalizer and does not recreate a retention timer", async () => {
     vi.useFakeTimers();
@@ -398,6 +438,87 @@ describe("question channel runtime", () => {
       await runtime.clear();
     }
   });
+
+  it.each([
+    { binding: "known", retirement: "clear", deliveryOwner: "question" },
+    { binding: "known", retirement: "gateway retirement", deliveryOwner: "question" },
+    { binding: "known", retirement: "gateway retirement", deliveryOwner: "plugin" },
+    { binding: "known", retirement: "retention expiry", deliveryOwner: "question" },
+    { binding: "unbound", retirement: "clear", deliveryOwner: "question" },
+    { binding: "unbound", retirement: "gateway retirement", deliveryOwner: "question" },
+  ] as const)(
+    "does not revive a captured $binding delivery from $deliveryOwner scope after $retirement",
+    async ({ binding, retirement, deliveryOwner }) => {
+      vi.useFakeTimers();
+      const runtime = createQuestionChannelRuntime({ terminalRetentionMs: 50 });
+      const gateway = new AsyncWorkScope();
+      const pluginCaller = new AsyncWorkScope();
+      const capturingScope = deliveryOwner === "question" ? gateway : pluginCaller;
+      const release = createDeferredCore();
+      const staleFinalize = vi.fn();
+      const nextFinalize = vi.fn();
+      let delivery: Promise<void> | undefined;
+      try {
+        await gateway.track(() => runtime.handleRequested(record));
+        runtime.handleResolved({ id: record.id, status: "expired" });
+        await capturingScope.track(() => {
+          delivery = runtime.runWithDeliveries(
+            [record.id],
+            async () => {
+              await release.promise;
+              await pluginCaller.track(() =>
+                runtime.runWithDeliveries(
+                  [record.id],
+                  () =>
+                    runtime.registerDelivery({
+                      questionId: record.id,
+                      deliveryId: "old-message",
+                      finalize: staleFinalize,
+                    }),
+                  { unbound: binding === "unbound" },
+                ),
+              );
+            },
+            { unbound: binding === "unbound" },
+          );
+        });
+        if (retirement === "clear") {
+          await runtime.clear();
+        } else if (retirement === "gateway retirement") {
+          await gateway.drain();
+          runtime.retireGateway(gateway.signal);
+        }
+        runtime.handleRequested({ ...record, createdAtMs: 20, expiresAtMs: 100 });
+        if (retirement === "retention expiry") {
+          await vi.advanceTimersByTimeAsync(50);
+        }
+        release.resolve();
+        await delivery;
+        runtime.registerDelivery({
+          questionId: record.id,
+          deliveryId: "new-message",
+          finalize: nextFinalize,
+        });
+        runtime.handleResolved({ id: record.id, status: "cancelled" });
+        if (retirement === "retention expiry") {
+          expect(staleFinalize).toHaveBeenCalledExactlyOnceWith(
+            "Unavailable: request a new question.",
+          );
+        } else {
+          expect(staleFinalize).not.toHaveBeenCalled();
+        }
+        expect(nextFinalize).toHaveBeenCalledExactlyOnceWith("Cancelled");
+      } finally {
+        release.resolve();
+        await delivery;
+        await Promise.all([gateway.drain(), pluginCaller.drain()]);
+        await runtime.clear();
+        const remainingTimers = vi.getTimerCount();
+        vi.useRealTimers();
+        expect(remainingTimers).toBe(0);
+      }
+    },
+  );
 
   it("reports finalizer failures without retrying a double resolve", async () => {
     const error = new Error("edit failed");

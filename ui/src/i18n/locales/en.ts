@@ -3134,6 +3134,7 @@ export const en: TranslationMap & {
     },
     swarm: {
       title: "Swarm",
+      groupTitle: "Parallel tasks",
       description: "Coordinate parallel subagents and collect their results.",
       defaultPhase: "Unphased",
       progress: "{complete} of {total}",
@@ -5387,6 +5388,7 @@ export const en: TranslationMap & {
     catalogOpenTarget: "Open external sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
+    catalogOutputTruncated: "[Output truncated]",
     onboardingDisabled: "Disabled during setup",
     commandPaletteTitle: "Search or jump to… (⌘K)",
     openCommandPalette: "Open command palette",

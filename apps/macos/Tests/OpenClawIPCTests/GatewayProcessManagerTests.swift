@@ -471,7 +471,7 @@ struct GatewayProcessManagerTests {
             manager._testBeginGatewayStartGeneration()
 
             let attachment = Task { @MainActor in
-                return await manager._testAttachExistingGatewayAfterPendingDisable(port: port)
+                await manager._testAttachExistingGatewayAfterPendingDisable(port: port)
             }
             // Either the owner registers its wait or a broken restart admits a socket first.
             #expect(await iterator.next() == "disable-wait")
@@ -807,9 +807,10 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `readiness fixtures preserve other gateway owners`() async throws {
-        let port = 19120
         let url = try #require(URL(string: "ws://example.invalid"))
-        try await self.withLaunchAgentEnvironment(port: port) {
+        try await self.withLaunchAgentEnvironment {
+            let port = GatewayEnvironment.gatewayPort()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port))
             let shared = GatewayProcessManager.shared
             shared._testResetGatewayStartTask()
             shared.setTestingStatus(.stopped)
@@ -840,7 +841,8 @@ struct GatewayProcessManagerTests {
             #expect(first.manager.status == .running(details: "pid 4242"))
             #expect(second.manager.status == .stopped)
             #expect(shared.status == .stopped)
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            let expectedDaemonCalls = AppProfile.current.isActive ? [["status", "--json", "--no-probe"]] : []
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == expectedDaemonCalls)
 
             await first.connection.shutdown()
             await second.connection.shutdown()
@@ -849,37 +851,41 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `routine readiness preserves an attached gateway and control channel`() async throws {
-        let url = try #require(URL(string: "ws://127.0.0.1:9"))
-        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            self.gatewayTask(healthSucceedsAfter: 0)
-        }
-        manager.setTestingDesiredActive(true)
-        manager.setTestingLastFailureReason("health failed")
-        manager.setTestingStatus(.attachedExisting(details: "pid 4343"))
-        manager._testClearControlChannelRefreshForces()
-        manager._testClearLaunchAgentInstallEvidence()
-        manager._testSetLastObservedGatewayPID(4343)
-        let readinessPort = GatewayEnvironment.gatewayPort()
-        manager._testSetLaunchAgentReadinessFailure(port: readinessPort, pid: 4242)
-        let descriptor = self.gatewayDescriptor(pid: 4343)
-        await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: readinessPort)
-        defer {
-            manager.setTestingDesiredActive(false)
-            manager.setTestingLastFailureReason(nil)
+        try await self.withLaunchAgentEnvironment {
+            let url = try #require(URL(string: "ws://127.0.0.1:9"))
+            let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+                self.gatewayTask(healthSucceedsAfter: 0)
+            }
+            manager.setTestingDesiredActive(true)
+            manager.setTestingLastFailureReason("health failed")
+            manager.setTestingStatus(.attachedExisting(details: "pid 4343"))
             manager._testClearControlChannelRefreshForces()
             manager._testClearLaunchAgentInstallEvidence()
-            manager._testSetLastObservedGatewayPID(nil)
-            manager._testClearLaunchAgentReadinessFailure()
-        }
+            manager._testSetLastObservedGatewayPID(4343)
+            let readinessPort = GatewayEnvironment.gatewayPort()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                self.loadedGatewayStatus(port: readinessPort, pid: 4343))
+            manager._testSetLaunchAgentReadinessFailure(port: readinessPort, pid: 4242)
+            let descriptor = self.gatewayDescriptor(pid: 4343)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: readinessPort)
+            defer {
+                manager.setTestingDesiredActive(false)
+                manager.setTestingLastFailureReason(nil)
+                manager._testClearControlChannelRefreshForces()
+                manager._testClearLaunchAgentInstallEvidence()
+                manager._testSetLastObservedGatewayPID(nil)
+                manager._testClearLaunchAgentReadinessFailure()
+            }
 
-        let ready = await manager.waitForGatewayReady(timeout: 0.5)
-        #expect(ready)
-        #expect(manager.lastFailureReason == nil)
-        #expect(!manager._testHasLaunchAgentReadinessFailure())
-        #expect(manager.status == .attachedExisting(details: "pid 4343"))
-        #expect(manager._testControlChannelRefreshForces().last == false)
-        await connection.shutdown()
-        await PortGuardian.shared.setTestingDescriptor(nil, forPort: readinessPort)
+            let ready = await manager.waitForGatewayReady(timeout: 0.5)
+            #expect(ready)
+            #expect(manager.lastFailureReason == nil)
+            #expect(!manager._testHasLaunchAgentReadinessFailure())
+            #expect(manager.status == .attachedExisting(details: "pid 4343"))
+            #expect(manager._testControlChannelRefreshForces().last == false)
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: readinessPort)
+        }
     }
 
     @Test func `startup install forces the recovered control channel refresh`() async throws {
@@ -920,79 +926,85 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `readiness refreshes when the endpoint pid changes during the probe`() async throws {
-        let port = GatewayEnvironment.gatewayPort()
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0 else { return }
-                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                    let replacement = PortGuardian.Descriptor(
-                        pid: 4343,
-                        command: "openclaw-gateway",
-                        executablePath: "/tmp/openclaw-gateway")
-                    await PortGuardian.shared.setTestingDescriptor(replacement, forPort: port)
-                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                })
-        }
-        manager.setTestingDesiredActive(true)
-        manager.setTestingStatus(.attachedExisting(details: "pid 4242"))
-        manager._testClearControlChannelRefreshForces()
-        manager._testClearLaunchAgentReadinessFailure()
-        manager._testClearLaunchAgentInstallEvidence()
-        manager._testSetLastObservedGatewayPID(4242)
-        defer {
-            manager.setTestingDesiredActive(false)
+        try await self.withLaunchAgentEnvironment {
+            let port = GatewayEnvironment.gatewayPort()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port, pid: 4343))
+            let url = try #require(URL(string: "ws://example.invalid"))
+            let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                        let replacement = PortGuardian.Descriptor(
+                            pid: 4343,
+                            command: "openclaw-gateway",
+                            executablePath: "/tmp/openclaw-gateway")
+                        await PortGuardian.shared.setTestingDescriptor(replacement, forPort: port)
+                        task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                    })
+            }
+            manager.setTestingDesiredActive(true)
+            manager.setTestingStatus(.attachedExisting(details: "pid 4242"))
             manager._testClearControlChannelRefreshForces()
             manager._testClearLaunchAgentReadinessFailure()
             manager._testClearLaunchAgentInstallEvidence()
-            manager._testSetLastObservedGatewayPID(nil)
-        }
+            manager._testSetLastObservedGatewayPID(4242)
+            defer {
+                manager.setTestingDesiredActive(false)
+                manager._testClearControlChannelRefreshForces()
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+                manager._testSetLastObservedGatewayPID(nil)
+            }
 
-        let stateDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-gateway-pid-refresh-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: stateDir) }
-        let ready = await DeviceIdentityStore.withStateDirectory(stateDir) {
-            await manager.waitForGatewayReady(timeout: 0.5)
-        }
-        #expect(ready)
-        #expect(manager._testControlChannelRefreshForces().last == true)
-        #expect(manager.status == .running(details: "pid 4343"))
+            let stateDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-gateway-pid-refresh-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: stateDir) }
+            let ready = await DeviceIdentityStore.withStateDirectory(stateDir) {
+                await manager.waitForGatewayReady(timeout: 0.5)
+            }
+            #expect(ready)
+            #expect(manager._testControlChannelRefreshForces().last == true)
+            #expect(manager.status == .running(details: "pid 4343"))
 
-        await connection.shutdown()
-        await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+        }
     }
 
     @Test func `readiness retains the endpoint pid from before a launchd candidate`() async throws {
-        let port = GatewayEnvironment.gatewayPort()
-        let url = try #require(URL(string: "ws://127.0.0.1:9"))
-        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            self.gatewayTask(healthSucceedsAfter: 0)
-        }
-        let descriptor = self.gatewayDescriptor(pid: 4242)
+        try await self.withLaunchAgentEnvironment {
+            let port = GatewayEnvironment.gatewayPort()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port, pid: 4242))
+            let url = try #require(URL(string: "ws://127.0.0.1:9"))
+            let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+                self.gatewayTask(healthSucceedsAfter: 0)
+            }
+            let descriptor = self.gatewayDescriptor(pid: 4242)
 
-        manager.setTestingDesiredActive(true)
-        manager.setTestingStatus(.running(details: "pid 4141"))
-        manager._testClearControlChannelRefreshForces()
-        manager._testClearLaunchAgentReadinessFailure()
-        manager._testClearLaunchAgentInstallEvidence()
-        manager._testSetLastObservedGatewayPID(4141)
-        manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
-        await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
-        defer {
-            manager.setTestingDesiredActive(false)
+            manager.setTestingDesiredActive(true)
+            manager.setTestingStatus(.running(details: "pid 4141"))
             manager._testClearControlChannelRefreshForces()
             manager._testClearLaunchAgentReadinessFailure()
             manager._testClearLaunchAgentInstallEvidence()
-            manager._testSetLastObservedGatewayPID(nil)
+            manager._testSetLastObservedGatewayPID(4141)
+            manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
+            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+            defer {
+                manager.setTestingDesiredActive(false)
+                manager._testClearControlChannelRefreshForces()
+                manager._testClearLaunchAgentReadinessFailure()
+                manager._testClearLaunchAgentInstallEvidence()
+                manager._testSetLastObservedGatewayPID(nil)
+            }
+
+            #expect(await manager.waitForGatewayReady(timeout: 0.5))
+            #expect(manager._testControlChannelRefreshForces().last == true)
+            #expect(manager.status == .running(details: "pid 4242"))
+
+            await connection.shutdown()
+            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }
-
-        #expect(await manager.waitForGatewayReady(timeout: 0.5))
-        #expect(manager._testControlChannelRefreshForces().last == true)
-        #expect(manager.status == .running(details: "pid 4242"))
-
-        await connection.shutdown()
-        await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
     }
 
     @Test func `responsive health rejection does not arm launchd repair`() async throws {
@@ -1052,36 +1064,40 @@ struct GatewayProcessManagerTests {
         let stateDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-ready-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: stateDir) }
-        try await DeviceIdentityStore.withStateDirectory(stateDir) {
-            let port = GatewayEnvironment.gatewayPort()
-            let url = try #require(URL(string: "ws://example.invalid"))
-            let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-                self.gatewayTask(healthSucceedsAfter: 1)
-            }
-            let descriptor = self.gatewayDescriptor(pid: 4242)
+        try await self.withLaunchAgentEnvironment {
+            try await DeviceIdentityStore.withStateDirectory(stateDir) {
+                let port = GatewayEnvironment.gatewayPort()
+                // Named profiles require the healthy listener to match their managed service.
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port))
+                let url = try #require(URL(string: "ws://example.invalid"))
+                let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+                    self.gatewayTask(healthSucceedsAfter: 1)
+                }
+                let descriptor = self.gatewayDescriptor(pid: 4242)
 
-            manager.setTestingDesiredActive(true)
-            manager.setTestingStatus(.starting)
-            manager._testClearLaunchAgentReadinessFailure()
-            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
-            defer {
-                manager.setTestingDesiredActive(false)
-                manager.setTestingLastFailureReason(nil)
+                manager.setTestingDesiredActive(true)
+                manager.setTestingStatus(.starting)
                 manager._testClearLaunchAgentReadinessFailure()
-                manager._testSetLastObservedGatewayPID(nil)
+                await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+                defer {
+                    manager.setTestingDesiredActive(false)
+                    manager.setTestingLastFailureReason(nil)
+                    manager._testClearLaunchAgentReadinessFailure()
+                    manager._testSetLastObservedGatewayPID(nil)
+                }
+
+                // The readiness budget covers the unavailable reply and retry; cold
+                // connection setup must not consume the behavior under test.
+                _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
+                #expect(await manager.waitForGatewayReady(timeout: 1))
+                #expect(session.snapshotMakeCount() == 1)
+                #expect(session.latestTask()?.snapshotSendCount() == 4)
+                #expect(manager.status == .running(details: "pid 4242"))
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+                await connection.shutdown()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             }
-
-            // The readiness budget covers the unavailable reply and retry; cold
-            // connection setup must not consume the behavior under test.
-            _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
-            #expect(await manager.waitForGatewayReady(timeout: 1))
-            #expect(session.snapshotMakeCount() == 1)
-            #expect(session.latestTask()?.snapshotSendCount() == 4)
-            #expect(manager.status == .running(details: "pid 4242"))
-            #expect(!manager._testHasLaunchAgentReadinessFailure())
-
-            await connection.shutdown()
-            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }
     }
 

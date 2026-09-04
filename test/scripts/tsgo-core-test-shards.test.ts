@@ -225,20 +225,18 @@ process.exit(result.status??1);
 `,
       );
       fs.chmodSync(compiler, 0o755);
-      const driver = write(
-        "check.mts",
-        `
-import {createChangedCoreTestCheck} from './scripts/run-tsgo-core-test-shards.mts';
-const check=createChangedCoreTestCheck([${JSON.stringify(leaf)}],process.env);
-const boundary=await check.checkBoundary();
-process.exitCode=boundary || await check.checkTypes();
-`,
-      );
-      const check = async () => {
+      const driver = path.join(root, "scripts/run-tsgo-core-test-shards.mts");
+      const changedArgs = (paths: string[]) => ["--changed-paths-json", JSON.stringify(paths)];
+      const check = async (paths = [leaf]) => {
         write("compiler-events.jsonl", "");
         const result = await lifetime.track(
           runNodeScript(
-            ["--import", pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href, driver],
+            [
+              "--import",
+              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+              driver,
+              ...changedArgs(paths),
+            ],
             { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
             undefined,
             { cwd: root, signal, requireProcessTreeExit: true },
@@ -270,6 +268,10 @@ process.exitCode=boundary || await check.checkTypes();
         "test/tsconfig/tsconfig.core.test.agents-other.json",
         "test/tsconfig/tsconfig.core.test.agents-tools.json",
       ]);
+      // A removed rename source has no current root: keep the full canonical check.
+      const renamed = await check([leaf, "src/agents/old.test.ts"]);
+      expect(renamed.result.status, renamed.result.stderr).toBe(0);
+      expect(renamed.builds).toEqual(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
       write(leaf, "export type Value = string;\n");
       const brokenConsumer = await check();
       expect(brokenConsumer.result.status).not.toBe(0);
@@ -295,7 +297,12 @@ setInterval(()=>{},1000);
       const cancel = new AbortController();
       const running = lifetime.track(
         runNodeScript(
-          ["--import", pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href, driver],
+          [
+            "--import",
+            pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+            driver,
+            ...changedArgs([leaf]),
+          ],
           { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
           undefined,
           {

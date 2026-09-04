@@ -103,12 +103,21 @@ describe("plugin blob store", () => {
       await store.register("one", new Uint8Array([1]), { order: 1 }, { ttlMs: 10 });
       vi.setSystemTime(2_011);
       await store.register("two", new Uint8Array([2]), { order: 2 }, { ttlMs: 10 });
-      await expect(store.deleteExpiredKey("one")).resolves.toEqual(
-        expect.objectContaining({ key: "one", metadata: { order: 1 } }),
-      );
+      await expect(store.deleteExpiredKey("one")).resolves.toEqual({
+        key: "one",
+        metadata: { order: 1 },
+        sizeBytes: 1,
+        createdAt: 2_000,
+        expiresAt: 2_010,
+      });
       await expect(store.deleteExpiredKey("two")).resolves.toBeUndefined();
       await expect(store.deleteExpired()).resolves.toEqual([]);
       await expect(store.lookup("two")).resolves.toMatchObject({ metadata: { order: 2 } });
+      vi.setSystemTime(2_022);
+      await expect(store.deleteExpired()).resolves.toEqual([
+        { key: "two", metadata: { order: 2 }, sizeBytes: 1, createdAt: 2_011, expiresAt: 2_021 },
+      ]);
+      await expect(store.deleteExpired()).resolves.toEqual([]);
     });
   });
 
@@ -342,6 +351,11 @@ describe("plugin blob store", () => {
       ).run("diffs", "artifacts", "corrupt", "{", Buffer.from([7]), 1, null);
       await expect(store.lookup("corrupt")).rejects.toMatchObject({
         code: "PLUGIN_BLOB_CORRUPT",
+        operation: "lookup",
+      });
+      await expect(store.entries()).rejects.toMatchObject({
+        code: "PLUGIN_BLOB_CORRUPT",
+        operation: "entries",
       });
     });
   });
@@ -360,7 +374,10 @@ describe("plugin blob store", () => {
       ).run("diffs", "artifacts", "corrupt", "{", Buffer.from([7]), 5_000, 5_010);
 
       vi.setSystemTime(5_011);
-      await expect(store.deleteExpired()).rejects.toMatchObject({ code: "PLUGIN_BLOB_CORRUPT" });
+      await expect(store.deleteExpired()).rejects.toMatchObject({
+        code: "PLUGIN_BLOB_CORRUPT",
+        operation: "sweep",
+      });
       expect(
         db
           .prepare(
@@ -372,6 +389,7 @@ describe("plugin blob store", () => {
 
       await expect(store.deleteExpiredKey("corrupt")).rejects.toMatchObject({
         code: "PLUGIN_BLOB_CORRUPT",
+        operation: "sweep",
       });
       expect(
         db

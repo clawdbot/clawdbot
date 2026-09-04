@@ -113,7 +113,6 @@ const repositoryScriptEntries = [
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
-  "scripts/pr-gates-lock.mts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
   // merge.sh invokes this native review-authority parser by path.
   "scripts/pr-lib/clawsweeper-review-gate.mjs!",
@@ -123,8 +122,6 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/print-live-docker-plugin-selection.mjs!",
-  // Maintainer proof harnesses are invoked manually from PR evidence.
-  "scripts/proof-136410-status-harness-record.ts!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
@@ -186,6 +183,8 @@ const rootEntries = [
   "src/docker-healthcheck.ts!",
   // Uploaded in the worker bundle and launched by rsync; no static host import exists.
   "src/worker/workspace-rsync-receiver.ts!",
+  // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
+  "src/gateway/plugin-channel-reload-targets.ts!",
   // Shipped compatibility facade for statusCommand and getStatusSummary.
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
@@ -429,7 +428,6 @@ const config = {
     "scripts/**/*.d.{mts,ts}",
     "**/live-*.ts",
     "src/shared/text/assistant-visible-text.ts",
-    bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
   ],
   // Knip's `ignoreFiles` only suppresses unused-file findings. Test helpers

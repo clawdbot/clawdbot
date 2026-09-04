@@ -659,6 +659,10 @@ export class ChatComposerPersistence {
 
   constructor(private readonly getState: () => DurableChatComposerPersistenceState | undefined) {}
 
+  get active(): boolean {
+    return this.ready;
+  }
+
   start() {
     const state = this.getState();
     if (!state) {

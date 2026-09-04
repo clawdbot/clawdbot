@@ -338,6 +338,46 @@ public enum ChatRunStartupPhase: String, Codable, Sendable {
     case startingModel = "starting_model"
 }
 
+public struct CanvasDocumentViewParams: Codable, Sendable {
+    public let docid: String
+
+    public init(
+        docid: String)
+    {
+        self.docid = docid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case docid = "docId"
+    }
+}
+
+public struct CanvasDocumentViewResult: Codable, Sendable {
+    public let html: String
+    public let sandboxurl: String
+    public let sandboxport: Int
+    public let sandboxorigin: String?
+
+    public init(
+        html: String,
+        sandboxurl: String,
+        sandboxport: Int,
+        sandboxorigin: String? = nil)
+    {
+        self.html = html
+        self.sandboxurl = sandboxurl
+        self.sandboxport = sandboxport
+        self.sandboxorigin = sandboxorigin
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case html
+        case sandboxurl = "sandboxUrl"
+        case sandboxport = "sandboxPort"
+        case sandboxorigin = "sandboxOrigin"
+    }
+}
+
 public struct BoardTab: Codable, Sendable {
     public let tabid: String
     public let title: String

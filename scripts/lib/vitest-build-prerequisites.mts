@@ -51,15 +51,18 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  {
-    file: "src/gateway/server-sidecar-retention.test.ts",
+  ...[
+    "src/gateway/server-sidecar-retention.test.ts",
+    "src/gateway/server.config-patch.test.ts",
+  ].map((file) => ({
+    file,
     configs: [
       "test/vitest/vitest.gateway-server.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
-    mode: "runtime",
+    mode: "runtime" as const,
     dir: "src/gateway",
-  },
+  })),
   ...[
     "src/gateway/gateway-active-memory.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",
@@ -89,13 +92,12 @@ export function resolveVitestRuntimeCliSelections(
   args: string[],
   env: NodeJS.ProcessEnv,
 ): TestSelection[] {
-  // Consumer aliases describe other ways to select it, not sibling projects
-  // admitted by this invocation. Keep the actual config through preparation.
-  return runtimeConsumers
-    .filter((consumer) =>
-      consumer.configs.some((candidate) => includesRuntimeConfig([config], candidate)),
-    )
-    .map((consumer) => ({ configs: [config], cli: { args, dir: consumer.dir, env } }));
+  return runtimeConsumers.flatMap(({ configs, dir }) => {
+    // Preserve the matched project scope; broad roots must not apply another
+    // consumer's directory to scoped exclusions.
+    const selected = configs.filter((candidate) => includesRuntimeConfig([config], candidate));
+    return selected.length ? [{ configs: selected, cli: { args, dir, env } }] : [];
+  });
 }
 
 /**

@@ -1,4 +1,5 @@
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { captureGatewayReplyRunRestartAbort } from "../auto-reply/reply/reply-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   abortChatRunById,
@@ -13,6 +14,7 @@ import {
   type ChatRunEntry,
   type ChatRunState,
 } from "./server-chat-state.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayShutdownTimeout, recordGatewayShutdownWarning } from "./server-shutdown.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
@@ -94,6 +96,7 @@ async function sleepForRestartReplyDrain(delayMs: number): Promise<void> {
 }
 
 export type GatewayRunShutdownParams = {
+  resolveGatewayContext: GatewayContextResolver;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatQueuedTurns: QueuedChatTurnMap;
   restartRecoveryCandidates?: Map<string, RestartRecoveryCandidate>;
@@ -107,6 +110,7 @@ export type GatewayRunShutdownParams = {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   markMainSessionsAbortedForRestart?: (params: {
+    resolveGatewayContext: GatewayContextResolver;
     activeRuns: RestartRecoveryCandidate[];
     reason: string;
     isActiveRun: (run: RestartRecoveryCandidate) => boolean;
@@ -235,12 +239,15 @@ async function markActiveRunsForRestartRecovery(
     reason: string;
     warnings: string[];
   },
-): Promise<void> {
+): Promise<number> {
   if (!params.markMainSessionsAbortedForRestart) {
-    return;
+    return 0;
   }
   await settleTerminalSessionPersistenceForRestart(params.chatAbortControllers);
   const activeRuns = collectActiveRestartSessionRefs(params);
+  const activeEntries = new Map(params.chatAbortControllers);
+  const recoveryCandidates = new Map(params.restartRecoveryCandidates);
+  const abortReplyRuns = captureGatewayReplyRunRestartAbort(params.resolveGatewayContext);
   try {
     const markerTimeout = createGatewayShutdownTimeout(
       RESTART_MARKER_SLOW_WARNING_MS,
@@ -248,6 +255,7 @@ async function markActiveRunsForRestartRecovery(
     );
     const markerOutcome = Promise.resolve(
       params.markMainSessionsAbortedForRestart({
+        resolveGatewayContext: params.resolveGatewayContext,
         activeRuns,
         reason: params.reason,
         isActiveRun: (run) => {
@@ -255,11 +263,14 @@ async function markActiveRunsForRestartRecovery(
           const candidate = params.restartRecoveryCandidates?.get(run.runId);
           return (
             (entry &&
+              entry === activeEntries.get(run.runId) &&
               !entry.controller.signal.aborted &&
               (entry.registrationCleanupRequested !== true ||
                 entry.projectSessionTerminalPersisted !== true) &&
               entry.lifecycleGeneration === run.lifecycleGeneration) ||
-            candidate?.lifecycleGeneration === run.lifecycleGeneration
+            (candidate !== undefined &&
+              candidate === recoveryCandidates.get(run.runId) &&
+              candidate.lifecycleGeneration === run.lifecycleGeneration)
           );
         },
       }),
@@ -282,12 +293,22 @@ async function markActiveRunsForRestartRecovery(
       throw firstOutcome.error;
     }
     for (const run of activeRuns) {
-      params.restartRecoveryCandidates?.delete(run.runId);
+      if (params.restartRecoveryCandidates?.get(run.runId) === recoveryCandidates.get(run.runId)) {
+        params.restartRecoveryCandidates?.delete(run.runId);
+      }
     }
   } catch (err) {
     shutdownLog.warn(`failed to mark active main session(s) for restart recovery: ${String(err)}`);
     recordGatewayShutdownWarning(params.warnings, "restart-main-session-marker");
   }
+  // Disposing a tool cell can settle its result and start a finalizer. Cancel its
+  // parent after the marker settles, including failures, before resource teardown.
+  return abortReplyRuns((sessionId, error) => {
+    shutdownLog.warn(
+      `failed to cancel reply for restart: sessionId=${sessionId} error=${String(error)}`,
+    );
+    recordGatewayShutdownWarning(params.warnings, "restart-reply-abort");
+  });
 }
 
 /** Cancels only this Gateway's exact controller registrations. */
@@ -377,8 +398,11 @@ export async function prepareGatewayRunShutdown(
   if (drainResult?.drained === false && abortedQueuedTurns > 0) {
     shutdownLog.warn(`aborted ${abortedQueuedTurns} queued turn(s) during restart shutdown`);
   }
-  await markActiveRunsForRestartRecovery({ ...params, reason: "gateway restart shutdown" });
-  const abortedRuns = abortActiveRuns(params, true);
+  const abortedReplies = await markActiveRunsForRestartRecovery({
+    ...params,
+    reason: "gateway restart shutdown",
+  });
+  const abortedRuns = abortActiveRuns(params, true) + abortedReplies;
   if (drainResult?.drained) {
     shutdownLog.info(`restart reply drain completed after ${drainResult.elapsedMs}ms`);
   } else if (drainResult && abortedRuns > 0) {

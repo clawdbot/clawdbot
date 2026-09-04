@@ -196,6 +196,17 @@ function expectElement<T extends Element>(
   return element;
 }
 
+function expectCanvasWidget(
+  container: Element,
+  expected: { docId: string; title: string; preferredHeight?: number; sessionKey?: string },
+) {
+  expect(container.querySelectorAll("openclaw-canvas-widget-view")).toHaveLength(1);
+  const widget = expectElement(container, "openclaw-canvas-widget-view", HTMLElement);
+  expect(widget).toMatchObject(expected);
+  expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
+  return widget;
+}
+
 function requireFetchCallForUrl(fetchMock: ReturnType<typeof vi.fn>, expectedUrl: string) {
   const call = fetchMock.mock.calls.find(([url]) => url === expectedUrl) as
     | [string, RequestInit?]
@@ -5729,9 +5740,9 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false },
     );
 
-    expectElement(container, ".chat-bubble", HTMLElement);
-    const iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
-    expect(iframe.getAttribute("title")).toBe("Tic-Tac-Toe");
+    const bubble = expectElement(container, ".chat-bubble", HTMLElement);
+    const widget = expectCanvasWidget(container, { docId: "cv_tictactoe", title: "Tic-Tac-Toe" });
+    expect(bubble.contains(widget)).toBe(true);
   });
 
   it("opens only safe assistant image URLs in the lightbox", () => {
@@ -5767,31 +5778,39 @@ describe("grouped chat rendering", () => {
     expect(onOpenImage).not.toHaveBeenCalled();
   });
 
-  it("routes inline canvas blocks through the scoped canvas host when available", () => {
+  it("uses authenticated widgets for scripts and the scoped canvas host for strict previews", () => {
     const container = document.createElement("div");
-    renderAssistantMessage(
-      container,
-      createAssistantMessage(
-        [
-          { type: "text", text: "Rendered inline." },
-          {
-            type: "canvas",
-            preview: createCanvasPreview({
-              viewId: "cv_inline_scoped",
-              title: "Scoped preview",
-              preferredHeight: 320,
-            }),
-          },
-        ],
-        { id: "assistant-scoped-canvas" },
-      ),
-      {
-        canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
-      },
+    const message = createAssistantMessage(
+      [
+        { type: "text", text: "Rendered inline." },
+        {
+          type: "canvas",
+          preview: createCanvasPreview({
+            viewId: "cv_inline_scoped",
+            title: "Scoped preview",
+            preferredHeight: 320,
+          }),
+        },
+      ],
+      { id: "assistant-scoped-canvas" },
     );
+    const options = {
+      canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
+      sessionKey: "agent:main:canvas",
+    };
+    renderAssistantMessage(container, message, options);
+    expectCanvasWidget(container, {
+      docId: "cv_inline_scoped",
+      title: "Scoped preview",
+      preferredHeight: 320,
+      sessionKey: options.sessionKey,
+    });
 
-    const iframe = container.querySelector(".chat-tool-card__preview-frame");
-    expect(iframe?.getAttribute("src")).toBe(
+    renderAssistantMessage(container, message, { ...options, embedSandboxMode: "strict" });
+    expect(container.querySelector("openclaw-canvas-widget-view")).toBeNull();
+    const iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
+    expect(iframe.getAttribute("sandbox")).toBe("");
+    expect(iframe.getAttribute("src")).toBe(
       "http://127.0.0.1:19003/__openclaw__/cap/cap_123/__openclaw__/canvas/documents/cv_inline_scoped/index.html",
     );
   });
@@ -5829,14 +5848,13 @@ describe("grouped chat rendering", () => {
       { showToolCalls: true },
     );
 
-    const allPreviews = container.querySelectorAll(".chat-tool-card__preview-frame");
-    expect(allPreviews).toHaveLength(1);
+    const widget = expectCanvasWidget(container, {
+      docId: "cv_canvas_live_history",
+      title: "Live history preview",
+      preferredHeight: 420,
+    });
     const bubble = expectElement(container, ".chat-group.assistant .chat-bubble", HTMLElement);
-    const iframe = expectElement(bubble, ".chat-tool-card__preview-frame", HTMLIFrameElement);
-    expect(iframe.getAttribute("src")).toBe(
-      "/__openclaw__/canvas/documents/cv_canvas_live_history/index.html",
-    );
-    expect(iframe.getAttribute("title")).toBe("Live history preview");
+    expect(bubble.contains(widget)).toBe(true);
     expect(bubble.querySelector(".chat-text")?.textContent?.trim()).toBe("This item is ready.");
   });
 
@@ -5859,11 +5877,12 @@ describe("grouped chat rendering", () => {
       { showToolCalls: true, isToolMessageExpanded: () => true },
     );
 
-    expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
-    const iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
-    expect(iframe.getAttribute("src")).toBe(
-      "/__openclaw__/canvas/documents/cv_inline_tool_canvas/index.html",
-    );
+    const bubble = expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
+    const widget = expectCanvasWidget(container, {
+      docId: "cv_inline_tool_canvas",
+      title: "Inline demo",
+    });
+    expect(bubble.contains(widget)).toBe(true);
     expect(container.querySelector(".chat-tool-msg-summary")).not.toBeNull();
   });
 
@@ -5882,7 +5901,7 @@ describe("grouped chat rendering", () => {
     ).not.toBeNull();
   });
 
-  it("renders hidden assistant_message canvas results with the configured sandbox", () => {
+  it("renders hidden assistant_message canvas results through the widget host for script-capable policies", () => {
     const container = document.createElement("div");
     const renderCanvas = (params: { embedSandboxMode?: "trusted"; suffix: string }) =>
       renderMessageGroups(
@@ -5906,12 +5925,11 @@ describe("grouped chat rendering", () => {
 
     renderCanvas({ suffix: "default" });
 
-    let iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
-    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(iframe.getAttribute("src")).toBe(
-      "/__openclaw__/canvas/documents/cv_inline_default/index.html",
-    );
-    expect(iframe.getAttribute("title")).toBe("Inline demo");
+    expectCanvasWidget(container, {
+      docId: "cv_inline_default",
+      title: "Inline demo",
+      preferredHeight: 360,
+    });
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe(
       "Inline canvas result.",
     );
@@ -5920,11 +5938,14 @@ describe("grouped chat rendering", () => {
     );
 
     renderCanvas({ embedSandboxMode: "trusted", suffix: "trusted" });
-    iframe = expectElement(container, ".chat-tool-card__preview-frame", HTMLIFrameElement);
-    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+    expectCanvasWidget(container, {
+      docId: "cv_inline_trusted",
+      title: "Inline demo",
+      preferredHeight: 360,
+    });
   });
 
-  it("recreates canvas preview iframes when the sandbox policy changes", () => {
+  it("switches between strict canvas iframes and authenticated widgets when the policy changes", () => {
     const container = document.createElement("div");
     const renderCanvas = (embedSandboxMode: "strict" | "scripts") =>
       renderMessageGroups(
@@ -5953,13 +5974,25 @@ describe("grouped chat rendering", () => {
     expect(strictIframe.getAttribute("sandbox")).toBe("");
 
     renderCanvas("scripts");
-    const scriptsIframe = expectElement(
+    const widget = expectCanvasWidget(container, {
+      docId: "cv_inline_sandbox-change",
+      title: "Inline demo",
+    });
+    expect(container.contains(strictIframe)).toBe(false);
+
+    renderCanvas("strict");
+    expect(container.contains(widget)).toBe(false);
+    expect(container.querySelector("openclaw-canvas-widget-view")).toBeNull();
+    const nextStrictIframe = expectElement(
       container,
       ".chat-tool-card__preview-frame",
       HTMLIFrameElement,
     );
-    expect(scriptsIframe).not.toBe(strictIframe);
-    expect(scriptsIframe.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(nextStrictIframe).not.toBe(strictIframe);
+    expect(nextStrictIframe.getAttribute("sandbox")).toBe("");
+    expect(nextStrictIframe.getAttribute("src")).toBe(
+      "/__openclaw__/canvas/documents/cv_inline_sandbox-change/index.html",
+    );
   });
 
   it("renders assistant_message canvas results in the assistant bubble even when tool rows are visible", () => {
@@ -6008,14 +6041,12 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    const allPreviews = container.querySelectorAll(".chat-tool-card__preview-frame");
-    expect(allPreviews).toHaveLength(1);
+    const widget = expectCanvasWidget(container, {
+      docId: "cv_inline_visible",
+      title: "Inline demo",
+    });
     const bubble = expectElement(container, ".chat-group.assistant .chat-bubble", HTMLElement);
-    const iframe = expectElement(bubble, ".chat-tool-card__preview-frame", HTMLIFrameElement);
-    expect(iframe.getAttribute("src")).toBe(
-      "/__openclaw__/canvas/documents/cv_inline_visible/index.html",
-    );
-    expect(iframe.getAttribute("title")).toBe("Inline demo");
+    expect(bubble.contains(widget)).toBe(true);
     expect(bubble.querySelector(".chat-text")?.textContent?.trim()).toBe("Inline canvas result.");
     expect(
       container.querySelector(".chat-group.tool .chat-tool-msg-summary__label")?.textContent,

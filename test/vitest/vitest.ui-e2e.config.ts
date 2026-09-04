@@ -5,7 +5,7 @@ import {
   loadPatternListFromEnv,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
-import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { preserveIndependentVitestProject, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 
 const mediaTranscriptRealGatewayTest =
@@ -25,6 +25,7 @@ const uiE2eIncludePatterns = [
 ];
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
@@ -44,6 +45,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
   "ui/src/e2e/chat-export-attribution.e2e.test.ts",
+  "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
   "ui/src/e2e/child-session-load-errors.e2e.test.ts",
   "ui/src/e2e/community-invite-showing.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
@@ -141,6 +143,7 @@ export function createUiE2eVitestConfig(
       include,
       maxWorkers: Math.min(2, baseTest.maxWorkers),
       // ui-e2e-projects-contract-v1: frozen-target preflight may select these projects.
+      // Each project already composes the complete shared config and must not inherit it again.
       projects: [
         {
           ...base,
@@ -188,7 +191,7 @@ export function createUiE2eVitestConfig(
             name: "ui-e2e-serial-standalone",
           },
         },
-      ],
+      ].map(preserveIndependentVitestProject),
       // Refit needs native file totals; verbose still reports cases to the output watchdog.
       reporters: [...baseTest.reporters, "default"],
       sequence: { ...baseSequence, sequencer: UiE2eSequencer },

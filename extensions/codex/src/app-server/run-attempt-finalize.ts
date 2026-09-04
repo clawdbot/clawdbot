@@ -367,6 +367,8 @@ export async function finalizeCodexAttempt(
             mirroredMessages: mirrorOutcome.mirroredMessages,
             settledMessages: result.messagesSnapshot,
             turnId: activeTurnId,
+            signal: params.abortSignal,
+            assertActive: () => params.hostCapabilities.assertActive(),
           })
         : undefined) ?? Object.freeze({ source: "unavailable" as const }))
     : undefined;

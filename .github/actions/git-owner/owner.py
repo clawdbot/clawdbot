@@ -551,12 +551,11 @@ def terminal_diagnostic(error, owner_code):
 
 
 if __name__ == "__main__":
+    exit_code = 0
     try:
         main()
-    except FetchTimeout:
-        raise SystemExit(124)
-    except GitFailure as error:
-        raise SystemExit(error.code)
+    except (FetchTimeout, GitFailure) as error:
+        exit_code = 124 if isinstance(error, FetchTimeout) else error.code
     except Exception as error:
         name, diagnostic = "unknown", "unavailable"
         try:
@@ -570,4 +569,6 @@ if __name__ == "__main__":
             print(f"[ci-git-owner] diagnostic={diagnostic}", file=sys.stderr)
         except BaseException:
             pass
-        raise SystemExit(125)
+        exit_code = 125
+    # Exit outside the handler: Python 3.9 can loop while chaining cyclic contexts.
+    raise SystemExit(exit_code)

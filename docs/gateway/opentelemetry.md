@@ -418,6 +418,44 @@ bounds; content remains off by default.
 
 ## Exported metrics
 
+### Gateway RPC
+
+Authenticated Gateway WebSocket requests emit these metrics while diagnostics
+and an interested exporter are enabled. They exclude the connection handshake,
+malformed request frames, and HTTP routes.
+
+| Metric                                   | Type      | Measurement                                                       |
+| ---------------------------------------- | --------- | ----------------------------------------------------------------- |
+| `openclaw.gateway.rpc.requests`          | counter   | Valid requests received, including requests subsequently rejected |
+| `openclaw.gateway.rpc.first_response_ms` | histogram | Receipt through the first successfully sent response              |
+| `openclaw.gateway.rpc.handler_ms`        | histogram | Actual handler invocation through return or throw                 |
+| `openclaw.gateway.rpc.admission_ms`      | histogram | Receipt through actual handler invocation                         |
+| `openclaw.gateway.rpc.queue_wait_ms`     | histogram | Wait for operator request start permission, when applicable       |
+| `openclaw.gateway.rpc.outcomes`          | counter   | Observations by phase and outcome                                 |
+
+Request and timing metrics have only `openclaw.gateway.rpc.method`: a canonical
+core method name, `other` for plugin methods, or `unknown`. Outcome metrics have
+only `openclaw.gateway.rpc.phase` and `openclaw.gateway.rpc.outcome`, so errors do
+not multiply every method's series. No request, connection, session, or trace IDs
+appear in metric attributes.
+
+Admission includes authorization, lazy router and handler loading, and operator
+start-queue wait. Queue wait is a subset of admission for handlers that start; it is separate
+from command/session lane `openclaw.queue.wait_ms`. Handler and admission samples
+exist only for invoked handlers. Queue wait is recorded when dispatch settles.
+
+A sent response means the WebSocket sender accepted the frame, not that the
+client received it. Early acknowledgments count as the first response; later
+responses do not add another sample. Unavailable or suppressed sends contribute
+outcomes but no first-response sample. A handler may return before a retained
+callback sends its response, and detached agent work can continue afterward.
+These durations measure elapsed time, including asynchronous waits, rather than
+CPU time or event-loop blocking time.
+
+Observations use the bounded diagnostic queue. Check
+`openclaw.diagnostic.async_queue.dropped` before treating counts or latency
+distributions as complete during saturation.
+
 ### Model usage
 
 - `openclaw.tokens` (counter, attrs: `openclaw.token`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.agent`)
@@ -531,6 +569,11 @@ Liveness warnings also emit:
 - `openclaw.telemetry.exporter.events` (counter, attrs: `openclaw.exporter`, `openclaw.signal`, `openclaw.status`, optional `openclaw.reason`, optional `openclaw.errorCategory`; exporter lifecycle/failure self-telemetry)
 
 ## Exported spans
+
+- `openclaw.gateway.rpc.response`, `openclaw.gateway.rpc.handler`, `openclaw.gateway.rpc.dispatch`
+  - Completed phase observations with `openclaw.gateway.rpc.method`, `openclaw.gateway.rpc.phase`, and `openclaw.gateway.rpc.outcome`
+  - Handler spans include `openclaw.gateway.rpc.admission_ms`; dispatch spans include `openclaw.gateway.rpc.response`, the response state at dispatch settlement
+  - Preserve a supplied upstream request parent; they do not introduce a long-lived RPC parent span or change downstream trace propagation
 
 - `openclaw.model.usage`
   - `openclaw.channel`, `openclaw.provider`, `openclaw.model`
@@ -678,6 +721,16 @@ for usage methods and request options.
 - `webhook.received` / `webhook.processed` / `webhook.error`
 - `message.queued` / `message.processed`
 - `message.delivery.started` / `message.delivery.completed` / `message.delivery.error`
+
+**Gateway RPC**
+
+- `gateway.rpc` - trusted request observations with phases `received`, `response`,
+  `handler`, and `dispatch`. Response outcomes are `ok`, `error`, `unavailable`,
+  or `suppressed`; handler outcomes are `returned` or `threw`; dispatch outcomes
+  are `returned`, `threw`, `rejected`, or `cancelled`. Dispatch records its response
+  state (`none`, `sent`, `unavailable`, or `suppressed`) at settlement; a later
+  response can still arrive. Durations and queue/admission semantics are described
+  in [Gateway RPC metrics](/gateway/opentelemetry#gateway-rpc).
 
 **Queue and session**
 

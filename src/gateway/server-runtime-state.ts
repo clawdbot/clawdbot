@@ -426,6 +426,7 @@ export async function createGatewayHttpTransport(params: {
       const sandboxServers = bindHosts.map(() =>
         createSandboxHostHttpServer(
           params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+          resolvePluginRouteRegistry,
         ),
       );
       // Register before binding so normal runtime cleanup closes a partially

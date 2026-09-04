@@ -6,6 +6,7 @@ import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js"
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveSessionBoundaryPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import * as runSessionTarget from "../../agents/run-session-target.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
@@ -14,7 +15,9 @@ import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import * as agentRunRegistry from "../../infra/agent-run-registry.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import {
+  getGatewayRestartDrainSignal,
   isGatewaySubordinateWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import {
@@ -23,9 +26,11 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
+import * as autonomousApply from "./autonomous-apply.js";
 import { readSkillReviewOutcomes } from "./collection-review-state.js";
 import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
 import { inspectSkillProposal, listSkillProposals, proposeCreateSkill } from "./service.js";
+import * as workshopService from "./service.js";
 
 const runEmbeddedAgent = vi.hoisted(() => vi.fn());
 
@@ -42,7 +47,7 @@ vi.mock("../../agents/run-session-target.js", () => ({
 }));
 vi.mock("../../agents/sessions/index.js", () => ({
   SessionManager: {
-    openModelContext: vi.fn(() => ({})),
+    openModelContextAsync: vi.fn(async () => ({})),
   },
 }));
 
@@ -77,10 +82,171 @@ afterEach(async () => {
 });
 
 describe("experience review auto apply", () => {
+  it.each(["target resolution", "context acquisition"] as const)(
+    "rejects a review reset during %s before starting the model",
+    async (boundary) => {
+      const workspaceDir = await tempDirs.make("openclaw-experience-read-reset-");
+      const acquired = createDeferred();
+      const release = createDeferred();
+      const registration = vi.spyOn(agentRunRegistry, "registerAgentRunContext");
+      const restartSignal = getGatewayRestartDrainSignal();
+      const acquire = vi.spyOn(SessionManager, "openModelContextAsync");
+      if (boundary === "context acquisition") {
+        const implementation = acquire.getMockImplementation()!;
+        acquire.mockImplementationOnce(async (...args) => {
+          acquired.resolve();
+          await release.promise;
+          return implementation(...args);
+        });
+      } else {
+        const resolve = vi.mocked(runSessionTarget.resolveAgentRunSessionTarget);
+        const implementation = resolve.getMockImplementation()!;
+        resolve.mockImplementationOnce(async (...args) => {
+          acquired.resolve();
+          await release.promise;
+          return implementation(...args);
+        });
+      }
+      runEmbeddedAgent.mockResolvedValue({ meta: { durationMs: 1 } });
+      const review = runSkillExperienceReview(
+        {
+          ctx: {
+            sessionId: "foreground-session",
+            sessionKey: "agent:main:read-reset",
+            workspaceDir,
+            modelProviderId: "openai",
+            modelId: "gpt-test",
+            foregroundPromptContext: foregroundPromptContext(workspaceDir),
+          },
+          config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
+        },
+        { getCurrentConfig: () => ({}) },
+      );
+      const settled = review.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await Promise.race([acquired.promise, settled]);
+        resetGatewayWorkAdmission();
+        expect(restartSignal.aborted).toBe(true);
+        expect(getGatewayRestartDrainSignal().aborted).toBe(false);
+        if (boundary === "context acquisition") {
+          expect(acquire.mock.lastCall?.[1]?.signal).toBe(restartSignal);
+        }
+        release.resolve();
+        expect(await settled).toMatchObject({ message: "gateway runtime reset" });
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        expect(getAgentRunContext(registration.mock.calls[0]![0])).toBeUndefined();
+        expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+          outcome: "failed",
+          error: expect.stringContaining("gateway runtime reset"),
+        });
+      } finally {
+        release.resolve();
+        await settled;
+        acquire.mockRestore();
+        registration.mockRestore();
+      }
+    },
+  );
+
+  it.each(["model result", "configuration", "proposal inspection"] as const)(
+    "leaves a proposal pending when reset during %s",
+    async (boundary) => {
+      const workspaceDir = await tempDirs.make("openclaw-experience-apply-reset-");
+      const acquired = createDeferred();
+      const release = createDeferred();
+      const config = { skills: { workshop: { autonomous: { mode: "auto" as const } } } };
+      const waitForReset = async () => {
+        acquired.resolve();
+        await release.promise;
+      };
+      const apply = vi.spyOn(autonomousApply, "applyAutonomousSkillProposal");
+      const originalInspect = workshopService.inspectSkillProposal;
+      const inspect = vi.spyOn(workshopService, "inspectSkillProposal");
+      if (boundary === "proposal inspection") {
+        inspect.mockImplementationOnce(async (...args) => {
+          const proposal = await originalInspect(...args);
+          await waitForReset();
+          return proposal;
+        });
+      }
+      runEmbeddedAgent.mockImplementation(async (params) => {
+        const tool = createSkillWorkshopTool({
+          workspaceDir: params.workspaceDir,
+          config: params.config,
+          agentId: params.agentId,
+          origin: params.skillWorkshopOrigin,
+          proposalOnly: params.skillWorkshopProposalOnly,
+          autonomousCapture: params.skillWorkshopAutonomousCapture,
+          proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+        });
+        await tool.execute("review-create", {
+          action: "create",
+          name: "deployment-preflight",
+          description: "Check deployment prerequisites before retrying.",
+          proposal_content: "# Deployment Preflight\n\nVerify prerequisites before deploy.\n",
+        });
+        if (boundary === "model result") {
+          await waitForReset();
+        }
+        return { meta: { durationMs: 1 } };
+      });
+      const review = runSkillExperienceReview(
+        {
+          ctx: {
+            sessionId: "foreground-session",
+            sessionKey: "agent:main:apply-reset",
+            workspaceDir,
+            modelProviderId: "openai",
+            modelId: "gpt-test",
+            foregroundPromptContext: foregroundPromptContext(workspaceDir),
+          },
+          config,
+        },
+        {
+          getCurrentConfig: async () => {
+            if (boundary === "configuration") {
+              await waitForReset();
+            }
+            return config;
+          },
+        },
+      );
+      const settled = review.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await Promise.race([acquired.promise, settled]);
+        resetGatewayWorkAdmission();
+        release.resolve();
+        expect(await settled).toMatchObject({ message: "gateway runtime reset" });
+        expect(apply).not.toHaveBeenCalled();
+        expect((await listSkillProposals({ workspaceDir })).proposals[0]).toMatchObject({
+          status: "pending",
+        });
+        await expect(
+          fs.stat(path.join(workspaceDir, "skills", "deployment-preflight", "SKILL.md")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+          outcome: "failed",
+          error: expect.stringContaining("gateway runtime reset"),
+        });
+      } finally {
+        release.resolve();
+        await settled;
+        inspect.mockRestore();
+        apply.mockRestore();
+      }
+    },
+  );
+
   it("records acquisition failure and releases its registered review", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-read-failure-");
     const registration = vi.spyOn(agentRunRegistry, "registerAgentRunContext");
-    vi.spyOn(SessionManager, "openModelContext").mockImplementationOnce(() => {
+    vi.spyOn(SessionManager, "openModelContextAsync").mockImplementationOnce(async () => {
       throw new Error("synthetic acquisition failure");
     });
     try {

@@ -329,7 +329,7 @@ user skill directly.
     | `/tts on\|off\|status\|chat\|latest\|provider\|limit\|summary\|audio\|help` | Control TTS. See [TTS](/tools/tts) |
     | `/activation mention\|always` | Set group activation mode |
     | `/bash <command>` | Run a host shell command. Alias: `! <command>`. Requires `commands.bash: true` |
-    | `!poll [sessionId]` | Check a background bash job |
+    | `!poll [sessionId]` | Check a background bash job; acknowledge its pending completion notice only after the terminal reply is delivered. Failed or suppressed replies retain the notice |
     | `!stop [sessionId]` | Stop a background bash job |
   </Accordion>
 </AccordionGroup>

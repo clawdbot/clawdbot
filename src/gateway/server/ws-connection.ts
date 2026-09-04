@@ -20,7 +20,11 @@ import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
 import type { NodeReapprovalCoordinator } from "../node-reapproval-coordinator.js";
 import { clearNodeWakeState } from "../node-wake-state.js";
-import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
+import {
+  indexPluginNodeCapabilitySurfaces,
+  reconcileClientPluginNodeCapabilities,
+  type PluginNodeCapabilitySurface,
+} from "../plugin-node-capability.js";
 import type { GatewayConnectionWork } from "../server-connection-work.js";
 import {
   WEBSOCKET_CLOSE_GRACE_MS,
@@ -568,6 +572,16 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       if (closed || client) {
         return false;
       }
+      if (
+        next.connect.role === "node" &&
+        !reconcileClientPluginNodeCapabilities(
+          next,
+          indexPluginNodeCapabilitySurfaces(getPluginNodeCapabilities?.() ?? []),
+          () => close(1012, "node capabilities changed"),
+        )
+      ) {
+        return false;
+      }
       if (next.worker) {
         for (const existing of clients) {
           if (existing.worker?.environmentId === next.worker.environmentId) {
@@ -604,27 +618,30 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       return true;
     };
 
+    const connectionLifecycle = {
+      socket,
+      connectionWork,
+      connId,
+      isStartupPending,
+      send,
+      close,
+      isClosed: () => closed,
+      clearHandshakeTimer: () => clearTimeout(handshakeTimer),
+      getClient: () => client,
+      setClient,
+      setHandshakeState: (next: "pending" | "connected" | "failed") => {
+        handshakeState = next;
+      },
+      advanceHandshakePhase,
+      setCloseCause,
+      setLastFrameMeta,
+      logGateway,
+      logWsControl,
+    };
     if (connectionKind === "worker") {
       cleanupWorkerConnection = attachWorkerWsMessageHandler({
-        socket,
-        connectionWork,
-        connId,
+        ...connectionLifecycle,
         service: workerConnectionService,
-        isStartupPending,
-        send,
-        close,
-        isClosed: () => closed,
-        clearHandshakeTimer: () => clearTimeout(handshakeTimer),
-        getClient: () => client,
-        setClient,
-        setHandshakeState: (next) => {
-          handshakeState = next;
-        },
-        advanceHandshakePhase,
-        setCloseCause,
-        setLastFrameMeta,
-        logGateway,
-        logWsControl,
         publicAdmission: publicWorkerIngress,
       });
       return;
@@ -639,11 +656,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     }
 
     attachGatewayWsMessageHandlerOnDemand({
-      socket,
-      connectionWork,
+      ...connectionLifecycle,
       upgradeReq,
       ingressAttribution,
-      connId,
       bootId: params.bootId,
       remoteAddr,
       remotePort,
@@ -663,7 +678,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       rateLimiter,
       browserRateLimiter,
       nodeReapprovalCoordinator,
-      isStartupPending,
       isPendingWorkerNodeSetup,
       gatewayMethods,
       events,
@@ -672,22 +686,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       buildRequestContext,
       nodeLifecycleDispatch,
       refreshHealthSnapshot,
-      send,
-      close,
-      isClosed: () => closed,
-      clearHandshakeTimer: () => clearTimeout(handshakeTimer),
-      getClient: () => client,
-      setClient,
-      setHandshakeState: (next) => {
-        handshakeState = next;
-      },
-      advanceHandshakePhase,
-      setCloseCause,
-      setLastFrameMeta,
       originCheckMetrics,
-      logGateway,
       logHealth,
-      logWsControl,
     });
   });
 }

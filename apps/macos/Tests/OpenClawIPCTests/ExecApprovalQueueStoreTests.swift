@@ -197,7 +197,7 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
         let socket = try await readySocket()
         let sequence = await requestLog.nextEventSequence()
         let event = #"{"type":"event","event":"\#(name)","seq":\#(sequence),"payload":\#(payload)}"#
-        socket.emitReceiveSuccessOnce(.data(Data(event.utf8)))
+        socket.emitReceiveSuccess(.data(Data(event.utf8)))
     }
 
     private func readySocket() async throws -> GatewayTestWebSocketTask {

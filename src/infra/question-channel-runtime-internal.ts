@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   QuestionRecord,
   QuestionResolvedEvent,
@@ -26,6 +27,11 @@ type QuestionChannelEntry = {
 type QuestionChannelRuntime = {
   handleRequested: (record: QuestionRecord) => void;
   handleResolved: (event: QuestionResolvedEvent) => void;
+  runWithDeliveries: <T>(
+    questionIds: readonly (string | undefined)[],
+    run: () => T,
+    options?: { unbound?: boolean },
+  ) => T;
   registerDelivery: (params: {
     questionId: string;
     deliveryId: string;
@@ -73,10 +79,30 @@ export function createQuestionChannelRuntime(
   } = {},
 ): QuestionChannelRuntime {
   const entries = new Map<string, QuestionChannelEntry>();
+  const retainedEntries = new Set<QuestionChannelEntry>();
+  const deliveryContext = new AsyncLocalStorage<{
+    entries: Map<string, QuestionChannelEntry | undefined>;
+    finalizers: AsyncWorkScope;
+    owner: AbortSignal | undefined;
+    track: ReturnType<typeof captureAsyncWorkTracker>;
+  }>();
   const retiredGateways = new WeakSet<AbortSignal>();
   let finalizers = new AsyncWorkScope();
   let clearing: Promise<void> | undefined;
   const terminalRetentionMs = options.terminalRetentionMs ?? TERMINAL_DELIVERY_RETENTION_MS;
+
+  const runFinalizer = (
+    questionId: string,
+    deliveryId: string,
+    finalize: QuestionDeliveryFinalizer,
+    statusLine: string,
+    track: ReturnType<typeof captureAsyncWorkTracker>,
+  ) => {
+    // Reset joins the original callback; its captured owner retains descendants.
+    void finalizers
+      .track(() => track(() => runWithRetainedGatewayRootWork(() => finalize(statusLine))))
+      .catch((error: unknown) => options.onFinalizeError?.(error, questionId, deliveryId));
+  };
 
   const finalizeDelivery = (
     questionId: string,
@@ -93,22 +119,24 @@ export function createQuestionChannelRuntime(
       record: entry.record,
       event: entry.terminal,
     });
-    // Global reset joins the original callback; descendants retain the requested
-    // Gateway's tracker. A late plugin caller supplies no replacement lifetime.
-    void finalizers
-      .track(() => entry.track(() => runWithRetainedGatewayRootWork(() => finalize(statusLine))))
-      .catch((error: unknown) => options.onFinalizeError?.(error, questionId, deliveryId));
+    runFinalizer(questionId, deliveryId, finalize, statusLine, entry.track);
   };
 
-  const scheduleCleanup = (questionId: string, entry: QuestionChannelEntry) => {
-    if (entry.cleanupTimer || entries.get(questionId) !== entry) {
+  const releaseEntry = (entry: QuestionChannelEntry) => {
+    retainedEntries.delete(entry);
+    if (entries.get(entry.record.id) === entry) {
+      entries.delete(entry.record.id);
+    }
+    clearTimeout(entry.cleanupTimer);
+    entry.deliveries.clear();
+    entry.finalizedDeliveryIds.clear();
+  };
+
+  const scheduleCleanup = (entry: QuestionChannelEntry) => {
+    if (entry.cleanupTimer || !retainedEntries.has(entry)) {
       return;
     }
-    entry.cleanupTimer = setTimeout(() => {
-      if (entries.get(questionId) === entry) {
-        entries.delete(questionId);
-      }
-    }, terminalRetentionMs);
+    entry.cleanupTimer = setTimeout(() => releaseEntry(entry), terminalRetentionMs);
     entry.cleanupTimer.unref?.();
   };
 
@@ -120,14 +148,15 @@ export function createQuestionChannelRuntime(
       }
       // The host publishes Requested before delivery; callbacks cannot create
       // entries. A fresh accepted request may reuse an id after the manager's grace.
-      clearTimeout(entries.get(record.id)?.cleanupTimer);
-      entries.set(record.id, {
+      const entry: QuestionChannelEntry = {
         record,
         owner,
         track: captureAsyncWorkTracker(),
         deliveries: new Map(),
         finalizedDeliveryIds: new Set(),
-      });
+      };
+      retainedEntries.add(entry);
+      entries.set(record.id, entry);
     },
     handleResolved(event) {
       const entry = entries.get(event.id);
@@ -138,11 +167,62 @@ export function createQuestionChannelRuntime(
       for (const [deliveryId, finalize] of entry.deliveries) {
         finalizeDelivery(event.id, entry, deliveryId, finalize);
       }
-      scheduleCleanup(event.id, entry);
+      scheduleCleanup(entry);
+    },
+    runWithDeliveries(questionIds, run, deliveryOptions) {
+      if (!questionIds.some(Boolean)) {
+        return run();
+      }
+      const parent = deliveryContext.getStore();
+      const captured = new Map(parent?.entries);
+      for (const id of questionIds) {
+        if (id && (deliveryOptions?.unbound || !captured.has(id))) {
+          captured.set(id, deliveryOptions?.unbound ? undefined : entries.get(id));
+        }
+      }
+      // Retain the pre-send generation across queues. Restored custody cannot
+      // borrow a retry caller's binding for a different, regenerated payload.
+      return deliveryContext.run(
+        {
+          entries: captured,
+          finalizers: parent?.finalizers ?? finalizers,
+          owner: parent ? parent.owner : getAsyncWorkSignal(),
+          track: parent ? parent.track : captureAsyncWorkTracker(),
+        },
+        run,
+      );
     },
     registerDelivery({ questionId, deliveryId, finalize }) {
-      const entry = entries.get(questionId);
-      if (!entry || entry.finalizedDeliveryIds.has(deliveryId)) {
+      const captured = deliveryContext.getStore();
+      if (
+        clearing ||
+        (captured &&
+          (captured.finalizers !== finalizers ||
+            (captured.owner && retiredGateways.has(captured.owner))))
+      ) {
+        return;
+      }
+      const entry = captured?.entries.has(questionId)
+        ? captured.entries.get(questionId)
+        : entries.get(questionId);
+      if (entry?.owner && retiredGateways.has(entry.owner)) {
+        return;
+      }
+      if (!entry || !retainedEntries.has(entry)) {
+        // Lost or expired bindings cannot use a replacement request. Disable
+        // every native target on the still-live delivery owner.
+        if (captured?.entries.has(questionId)) {
+          runFinalizer(
+            questionId,
+            deliveryId,
+            finalize,
+            "Unavailable: request a new question.",
+            captured.track,
+          );
+        }
+        return;
+      }
+      if (entry.finalizedDeliveryIds.has(deliveryId)) {
         return;
       }
       entry.deliveries.set(deliveryId, finalize);
@@ -152,10 +232,9 @@ export function createQuestionChannelRuntime(
       // The Gateway calls this after joining received work and its finalizers,
       // not at beginClose: an admitted resolve can still finalize deliveries.
       retiredGateways.add(owner);
-      for (const [id, entry] of entries) {
+      for (const entry of retainedEntries) {
         if (entry.owner === owner) {
-          clearTimeout(entry.cleanupTimer);
-          entries.delete(id);
+          releaseEntry(entry);
         }
       }
     },
@@ -163,10 +242,9 @@ export function createQuestionChannelRuntime(
       if (clearing) {
         return clearing;
       }
-      for (const entry of entries.values()) {
-        clearTimeout(entry.cleanupTimer);
+      for (const entry of retainedEntries) {
+        releaseEntry(entry);
       }
-      entries.clear();
       clearing = finalizers.drain().then(() => {
         finalizers = new AsyncWorkScope();
         clearing = undefined;

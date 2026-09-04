@@ -490,8 +490,6 @@ export function resolveGatewayScopedTools(params: {
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
             sessionStore: params.cfg.session?.store,
-            mainKey: params.cfg.session?.mainKey,
-            sessionScope: params.cfg.session?.scope,
             eventRouting: resolveEventSessionRoutingPolicy({
               cfg: params.cfg,
               sessionKey: params.sessionKey,

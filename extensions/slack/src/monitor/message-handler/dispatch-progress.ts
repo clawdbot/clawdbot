@@ -23,7 +23,7 @@ import {
   type SlackNativeStreamSnapshot,
 } from "../../progress-blocks.js";
 import { applyAppendOnlyStreamUpdate } from "../../stream-mode.js";
-import { appendSlackStream, stopSlackStream } from "../../streaming.js";
+import { appendSlackStream } from "../../streaming.js";
 import {
   resolveExplicitSlackProgressTitle,
   resolveSlackProgressStyle,
@@ -387,11 +387,8 @@ export function createSlackProgressRuntime(runtimeParams: {
     progressDraft.markFinalReplyStarted();
     const streamReady = await nativeTransport.waitForStart();
     const finalThreadTs = delivery.streamSession?.threadTs ?? delivery.nativeProgressStreamThreadTs;
-    // A short narration leaves the session buffered locally (`delivered` false)
-    // because `stop` can be its first network call. Requiring delivery here
-    // sent the final normally and then finalized the stream anyway, which is
-    // the two-message outcome this path exists to avoid; stop-time rejection
-    // already falls back through SlackStreamNotDeliveredError.
+    // Optional progress may still be buffered locally. Join its stream so
+    // final delivery cannot leave a second message to be flushed by stop.
     const canFinishInStream =
       payload.isError !== true &&
       streamReady &&
@@ -451,30 +448,10 @@ export function createSlackProgressRuntime(runtimeParams: {
     if (delivery.nativeProgressStreamStartPromise) {
       await delivery.nativeProgressStreamStartPromise.catch(() => null);
     }
-    const session = delivery.streamSession;
-    if (session && !session.stopped) {
-      try {
-        if (completionChunks?.length) {
-          nativeProgressCompletionSent = true;
-        }
-        const stopResult = await stopSlackStream({
-          session,
-          ...(completionChunks?.length ? { chunks: completionChunks } : {}),
-          ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-        });
-        delivery.acknowledgeStoppedStreamedDeliveries(session, stopResult?.messageId);
-      } catch (err) {
-        const error = formatSlackError(err);
-        // stopSlackStream makes the one-shot session terminal before throwing.
-        // Settle delivery bookkeeping before releasing that handle.
-        delivery.emitAcknowledgedStreamedDeliveries();
-        delivery.emitFailedPendingStreamedDeliveries(error);
-        logVerbose(`slack-stream: failed to rotate native progress stream (${error})`);
-      }
+    if (completionChunks?.length) {
+      nativeProgressCompletionSent = true;
     }
-    if (session?.stoppedBySlack) {
-      delivery.acknowledgeStoppedStreamedDeliveries(session);
-    }
+    await delivery.finishStream(completionChunks);
     delivery.streamSession = null;
     delivery.nativeProgressStreamStartPromise = null;
     delivery.nativeProgressStreamThreadTs = undefined;

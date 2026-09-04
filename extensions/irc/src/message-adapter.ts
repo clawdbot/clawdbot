@@ -3,6 +3,7 @@ import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contrac
 import {
   createReplyToFanout,
   defineChannelMessageAdapter,
+  type ChannelMessageSendTextContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
@@ -16,14 +17,22 @@ function toIrcMessageResult({ target, ...result }: SendIrcResult) {
   };
 }
 
-async function sendIrcMessage(...args: Parameters<typeof sendMessageIrc>) {
-  return toIrcMessageResult(await sendMessageIrc(...args));
+async function sendIrcMessage(ctx: ChannelMessageSendTextContext, text = ctx.text) {
+  return toIrcMessageResult(
+    await sendMessageIrc(ctx.to, text, {
+      cfg: ctx.cfg as CoreConfig,
+      accountId: ctx.accountId ?? undefined,
+      replyTo: ctx.replyToId ?? undefined,
+      abortSignal: ctx.signal,
+      onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    }),
+  );
 }
 
 export const sendFormattedIrcText: NonNullable<
   ChannelOutboundAdapter["sendFormattedText"]
 > = async (ctx) => {
-  const { chunkMarkdownTextWithMode, resolveChunkMode, resolveTextChunkLimit } =
+  const { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } =
     await import("openclaw/plugin-sdk/reply-chunking");
   const accountId = ctx.accountId ?? undefined;
   const textLimit =
@@ -32,37 +41,21 @@ export const sendFormattedIrcText: NonNullable<
       fallbackLimit: ircOutboundBaseAdapter.textChunkLimit,
     });
   const chunkMode = ctx.formatting?.chunkMode ?? resolveChunkMode(ctx.cfg, "irc", accountId);
-  const chunkText = (text: string) =>
-    ctx.formatting
-      ? ircOutboundBaseAdapter.chunker(text, textLimit, { formatting: ctx.formatting })
-      : ircOutboundBaseAdapter.chunker(text, textLimit);
-  let chunks: string[];
-  if (chunkMode === "newline") {
-    const blocks = chunkMarkdownTextWithMode(ctx.text, textLimit, chunkMode);
-    if (blocks.length === 0 && ctx.text) {
-      blocks.push(ctx.text);
-    }
-    chunks = blocks.flatMap((block) => {
-      const blockChunks = chunkText(block);
-      return blockChunks.length === 0 && block ? [block] : blockChunks;
-    });
-  } else {
-    chunks = chunkText(ctx.text);
-  }
-
   const nextReplyToId = createReplyToFanout(ctx);
   const results = await sendIrcMessages(
     ctx.to,
-    chunks.map((text) => {
-      const replyTo = nextReplyToId();
-      return replyTo ? { text, replyTo } : { text };
-    }),
+    ctx.text,
     {
       cfg: ctx.cfg,
       accountId,
       abortSignal: ctx.abortSignal,
       onPlatformSendDispatch: ctx.onPlatformSendDispatch,
     },
+    (preparedText) =>
+      chunkTextWithMode(preparedText, textLimit, chunkMode).map((text) => ({
+        text,
+        replyTo: nextReplyToId(),
+      })),
     async (result) => {
       await ctx.onDeliveryResult?.(attachChannelToResult("irc", toIrcMessageResult(result)));
     },
@@ -80,17 +73,8 @@ export const ircMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
-    text: async ({ cfg, to, text, accountId, replyToId }) =>
-      await sendIrcMessage(to, text, {
-        cfg: cfg as CoreConfig,
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-      }),
-    media: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
-      await sendIrcMessage(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
-        cfg: cfg as CoreConfig,
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-      }),
+    text: sendIrcMessage,
+    media: (ctx) =>
+      sendIrcMessage(ctx, ctx.mediaUrl ? `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}` : ctx.text),
   },
 });

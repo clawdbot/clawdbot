@@ -21,5 +21,6 @@ const questionChannelRuntime = resolveGlobalSingleton(
 
 export const handleQuestionChannelRequested = questionChannelRuntime.handleRequested;
 export const handleQuestionChannelResolved = questionChannelRuntime.handleResolved;
+export const runWithQuestionChannelDeliveries = questionChannelRuntime.runWithDeliveries;
 export const registerQuestionChannelDelivery = questionChannelRuntime.registerDelivery;
 export const retireQuestionChannelGateway = questionChannelRuntime.retireGateway;

@@ -22,7 +22,11 @@ export class MemoryIndexDatabase {
   vectorDegradedWriteWarningShown = false;
   closed = false;
 
-  constructor(readonly db: DatabaseSync) {}
+  constructor(
+    readonly db: DatabaseSync,
+    readonly release: () => void = () => closeMemoryDatabase(db),
+    readonly readOnly = false,
+  ) {}
 }
 
 // One process-lifetime container; stores belong only to their awaited rebuild.
@@ -68,14 +72,12 @@ export abstract class MemoryManagerDatabaseContext {
     try {
       const result = await reindexDatabase.run({ manager: this, database }, run);
       // Publication attaches the finished file only after its writer closes.
-      closeMemoryDatabase(database.db);
+      database.release();
       return result;
     } finally {
-      if (database.db.isOpen) {
-        try {
-          closeMemoryDatabase(database.db);
-        } catch {}
-      }
+      try {
+        database.release();
+      } catch {}
     }
   }
 }

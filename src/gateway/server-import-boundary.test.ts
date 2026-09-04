@@ -183,7 +183,7 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "../tasks/task-registry.maintenance.js"');
     expect(serverImpl).toContain('import("../tasks/task-registry.maintenance.js")');
     expect(serverImpl).not.toContain('from "../secrets/runtime.js"');
-    expect(readSource("src/gateway/server-reload-handlers.ts")).not.toContain(
+    expect(readSource("src/gateway/server-reload-managed.ts")).not.toContain(
       'from "../secrets/runtime.js"',
     );
     const wsConnection = readSource("src/gateway/server/ws-connection.ts");

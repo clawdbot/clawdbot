@@ -36,6 +36,7 @@ import {
 } from "../plugins/current-plugin-metadata-state.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  captureGatewayRootWorkAdmissionContinuationScope,
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -181,8 +182,9 @@ describe("diffConfigPaths", () => {
     { prev: { mcp: { apps: { enabled: true } } }, next: {} },
   ])("preserves the Apps restart boundary for whole MCP changes", ({ prev, next }) => {
     const changedPaths = diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes());
-    expect(changedPaths).toEqual(["mcp.apps"]);
-    expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
+    const plan = buildGatewayReloadPlan(changedPaths);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(changedPaths);
   });
 
   it.each(["speech", "realtime"] as const)("reloads only changed Talk %s owners", (surface) => {
@@ -421,12 +423,16 @@ describe("buildGatewayReloadPlan", () => {
     "browser.enabled",
     "browser.evaluateEnabled",
     "browser.ssrfPolicy.allowedHostnames",
-    "browser.extensionRelay.enabled",
-    "browser.tabCleanup.enabled",
+    "browser.extensionRelay.allowLegacyAuth",
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
     "gateway.auth.mode",
     "discovery.wideArea.domain",
+    "diagnostics.enabled",
+    "diagnostics.otel.endpoint",
+    "acp.backend",
+    "memory.search.enabled",
+    "security.unknownPolicy",
     "secrets.egressProxy.enabled",
     "secrets.egressProxy.allowedHosts",
     "secrets.egressProxy.bypassHosts",
@@ -474,7 +480,27 @@ describe("buildGatewayReloadPlan", () => {
     "gateway.nodes.browser.mode",
     "gateway.nodes.browser.node",
     "gateway.push.apns.relay.baseUrl",
-  ])("hot-applies Gateway request policy without restarting subsystems: %s", (path) => {
+    "gateway.publicOrigin",
+    "mcp.apps.sandboxOrigin",
+    "approvals.exec.enabled",
+    "approvals.plugin.targets",
+    "auth.order.openai",
+    "auth.profiles.primary.mode",
+    "broadcast.strategy",
+    "memory.citations",
+    "worktreeRoot",
+    "cloudWorkers.projectProfiles.project",
+    "security.audit.suppressions",
+    "security.installPolicy",
+    "diagnostics.cacheTrace.enabled",
+    "acp.runtime.installCommand",
+    "attachments.ttlHours",
+    "update.checkOnStart",
+    "update.channel",
+    "update.auto.enabled",
+    "telemetry.enabled",
+    "telemetry.consentedAt",
+  ])("hot-applies operation policy without restarting subsystems: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
 
     expect(plan).toMatchObject({
@@ -506,6 +532,9 @@ describe("buildGatewayReloadPlan", () => {
           auth: { rateLimit: { maxAttempts: 5 } },
         },
         discovery: { mdns: { mode: "off" } },
+        mcp: { apps: { sandboxOrigin: "https://sandbox.example" } },
+        auth: { order: { openai: ["primary"] } },
+        diagnostics: { cacheTrace: { enabled: true } },
       },
       restartReasons: [],
     },
@@ -521,8 +550,9 @@ describe("buildGatewayReloadPlan", () => {
           controlUi: { environment: { label: "Test", color: "teal" }, basePath: "/chat" },
           nodes: { pairing: { sshVerify: false } },
         },
+        mcp: { apps: { sandboxOrigin: "https://sandbox.example", sandboxPort: 18792 } },
       },
-      restartReasons: ["gateway.port", "gateway.controlUi.basePath"],
+      restartReasons: ["gateway.port", "gateway.controlUi.basePath", "mcp.apps.sandboxPort"],
     },
   ] satisfies { name: string; config: OpenClawConfig; restartReasons: string[] }[])(
     "preserves $name when adding or removing Gateway config",
@@ -548,8 +578,24 @@ describe("buildGatewayReloadPlan", () => {
 
   it.each([
     {
+      path: "agents.defaults.workspace",
+      expected: { reloadInternalHooks: true, reloadHooks: false, restartGmailWatcher: false },
+    },
+    {
+      path: "agents.entries.qa.workspace",
+      expected: { reloadInternalHooks: true, refreshHooksPolicy: true, restartHeartbeat: true },
+    },
+    {
       path: "hooks.gmail.account",
       expected: { restartGmailWatcher: true, reloadHooks: true },
+    },
+    {
+      path: "hooks.internal.enabled",
+      expected: { reloadInternalHooks: true, reloadHooks: false, restartGmailWatcher: false },
+    },
+    {
+      path: "hooks.internal.entries.session-memory.enabled",
+      expected: { reloadInternalHooks: true, reloadHooks: false, restartGmailWatcher: false },
     },
     {
       path: "mcp.servers.context7.command",
@@ -603,6 +649,11 @@ describe("buildGatewayReloadPlan", () => {
       noopPaths: [],
       reconcileSystemJobs: true,
     });
+    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
+  });
+
+  it("keeps an internal hook reconciliation action out of the no-op commit path", () => {
+    const plan = { ...buildGatewayReloadPlan([]), reloadInternalHooks: true };
     expect(isNoopGatewayReloadPlan(plan)).toBe(false);
   });
 
@@ -720,6 +771,30 @@ describe("buildGatewayReloadPlan", () => {
 
   const sharedChannelSettings = [
     {
+      path: "tts",
+      before: { tts: { auto: "off" } },
+      after: { tts: { auto: "always" } },
+      empty: {},
+    },
+    {
+      path: "surfaces",
+      before: { surfaces: { telegram: { silentReply: { group: "allow" } } } },
+      after: { surfaces: { telegram: { silentReply: { group: "disallow" } } } },
+      empty: {},
+    },
+    {
+      path: "acp.stream",
+      before: { acp: { stream: { deliveryMode: "final_only" } } },
+      after: { acp: { stream: { deliveryMode: "live" } } },
+      empty: { acp: {} },
+    },
+    {
+      path: "diagnostics.flags",
+      before: { diagnostics: { flags: [] } },
+      after: { diagnostics: { flags: ["timeline"] } },
+      empty: { diagnostics: {} },
+    },
+    {
       path: "agents.defaults.mediaMaxMb",
       before: { agents: { defaults: { mediaMaxMb: 4 } } },
       after: { agents: { defaults: { mediaMaxMb: 1 } } },
@@ -736,6 +811,34 @@ describe("buildGatewayReloadPlan", () => {
       before: { channels: { modelByChannel: { telegram: { "123": "openai/before" } } } },
       after: { channels: { modelByChannel: { telegram: { "123": "openai/after" } } } },
       empty: { channels: {} },
+    },
+    {
+      path: "messages.inbound",
+      before: { messages: { inbound: { debounceMs: 100 } } },
+      after: { messages: { inbound: { debounceMs: 500 } } },
+      empty: { messages: {} },
+    },
+    {
+      path: "messages.ackReactionScope",
+      before: { messages: { ackReactionScope: "group-mentions" } },
+      after: { messages: { ackReactionScope: "all" } },
+      empty: { messages: {} },
+    },
+    {
+      path: "commands",
+      before: { commands: { native: true } },
+      after: { commands: { native: false } },
+      empty: {},
+    },
+    {
+      path: "accessGroups",
+      before: {
+        accessGroups: { reviewers: { type: "message.senders", members: { telegram: ["100"] } } },
+      },
+      after: {
+        accessGroups: { reviewers: { type: "message.senders", members: { telegram: ["200"] } } },
+      },
+      empty: {},
     },
   ] satisfies Array<{
     path: string;
@@ -4935,16 +5038,38 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("preserves intent when the direct in-process reload fails before its watcher echo", async () => {
+  it("retries a failed RPC write under independent watcher admission after its request settles", async () => {
     const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("direct-retry"));
-    const harness = createReloaderHarness(readSnapshot);
-    harness.onRestart.mockRejectedValueOnce(new Error("restart admission failed"));
-
-    harness.emitWrite({
-      ...makeZeroDebounceHookWrite("direct-retry"),
-      afterWrite: { mode: "restart", reason: "retry direct intent" },
+    const harness = createReloaderHarness(readSnapshot, {
+      runTransaction: runWithGatewayIndependentRootWorkAdmission,
     });
-    await vi.runAllTimersAsync();
+    harness.onRestart.mockRejectedValueOnce(new Error("restart admission failed"));
+    const request = tryBeginGatewayRootWorkAdmission();
+    if (!request) {
+      throw new Error("expected gateway request admission");
+    }
+    try {
+      await request.run(async () => {
+        const continuation = captureGatewayRootWorkAdmissionContinuationScope();
+        if (!continuation) {
+          throw new Error("expected originating gateway request continuation");
+        }
+        const application = createRuntimeConfigWriteApplication(continuation.run);
+        harness.emitWrite(
+          attachRuntimeConfigWriteApplication(
+            {
+              ...makeZeroDebounceHookWrite("direct-retry"),
+              afterWrite: { mode: "restart", reason: "retry direct intent" },
+            },
+            application,
+          ),
+        );
+        await vi.runAllTimersAsync();
+        await expect(application.result).resolves.toBe("failed");
+      });
+    } finally {
+      request.release();
+    }
 
     await flushWatcherChange(harness);
 

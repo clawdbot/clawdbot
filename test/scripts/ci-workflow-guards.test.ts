@@ -3,6 +3,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   globSync,
   mkdirSync,
@@ -379,6 +380,7 @@ function runCiManifestFixture(options: {
   nodeTestShards?: Record<string, unknown>[];
   changedPlannerSource?: string | null;
   changedPaths?: string[] | null;
+  changedCoreTestSupport?: boolean;
   repository?: string;
   eventName?: "pull_request" | "push" | "workflow_dispatch";
   historicalCompatibility?: boolean;
@@ -449,6 +451,24 @@ function runCiManifestFixture(options: {
         `,
       "utf8",
     );
+    if (options.changedCoreTestSupport) {
+      for (const file of [
+        "scripts/changed-lanes.mts",
+        "scripts/lib/changed-path-facts.mjs",
+        "scripts/lib/arg-utils.mts",
+        "scripts/lib/arg-utils.runtime.mjs",
+        "scripts/lib/direct-run.mjs",
+        "scripts/lib/merge-head-diff-base.mjs",
+        "scripts/lib/record-shared.mjs",
+        "packages/normalization-core/src/stable-stringify.ts",
+        "scripts/run-tsgo-core-test-shards.mts",
+        "scripts/run-additional-boundary-checks.mts",
+      ]) {
+        const target = path.join(root, file);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, readFileSync(file));
+      }
+    }
     const iosCapabilities = options.iosCapabilities ?? options.bundledPlanner;
     const iosBuildCapability = options.iosBuildCapability ?? iosCapabilities;
     const nativeI18nCapabilities = options.nativeI18nCapabilities ?? options.bundledPlanner;
@@ -1637,6 +1657,8 @@ function runCheckShardFixture(options: {
     stripeSupport?: boolean;
     hostedContract?: boolean;
     failStripe?: string;
+    changedPathsJson?: string;
+    boundary?: boolean;
   };
 }): {
   calls: string[];
@@ -1663,6 +1685,22 @@ function runCheckShardFixture(options: {
 const args = process.argv.slice(2);
 appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node " + args.join(" ")].join("\\t") + "\\n");
 if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process.exit(17);
+`,
+    );
+  }
+  if (options.types?.boundary) {
+    writeFileSync(
+      path.join(root, "scripts/run-additional-boundary-checks.mts"),
+      readFileSync("scripts/run-additional-boundary-checks.mts"),
+    );
+    for (const directory of ["scripts/lib", "packages", "node_modules"]) {
+      symlinkSync(path.resolve(directory), path.join(root, directory), "dir");
+    }
+    writeFileSync(
+      path.join(root, "scripts/check-native-state-schema-version.mjs"),
+      `
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node scripts/check-native-state-schema-version.mjs"].join("\\t") + "\\n");
 `,
     );
   }
@@ -1700,6 +1738,7 @@ if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process
     preflightOutputs: {
       compatibility_target: String(options.frozenTarget),
       run_format_check: "false",
+      changed_core_test_paths_json: options.types?.changedPathsJson ?? "",
     },
   };
   const rows: { name: string; step: WorkflowStep; matrix: Record<string, unknown> }[] = [];
@@ -1716,6 +1755,15 @@ if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process
     }
   }
   rows.push({ name: "central", step: checkShardStep, matrix: { task: options.task ?? "guards" } });
+  if (options.types?.boundary) {
+    rows.push({
+      name: "boundary",
+      step: workflow.jobs["check-additional-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run additional check shard",
+      ),
+      matrix: { group: "boundaries" },
+    });
+  }
   // Rows are independent (matrix fail-fast:false); each real Bash body owns its halt.
   const runs = rows.map((row) => {
     const resolveValue = (value: unknown) =>
@@ -9658,6 +9706,103 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   );
 
+  it("routes eligible core test leaves to one type owner before runner allocation", () => {
+    const changedPaths = [
+      "src/commands/doctor-config-preflight.plugin-persistence.test.ts",
+      "docs/ci.md",
+    ];
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedCoreTestSupport: true,
+      eventName: "pull_request",
+      changedPaths,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.outputs.changed_core_test_paths_json).toBe(
+      JSON.stringify(changedPaths.slice(0, 1)),
+    );
+    const result = runCheckShardFixture({
+      frozenTarget: false,
+      task: "test-types",
+      scripts: ["tsgo:scripts", "tsgo:test:root"],
+      types: {
+        compose: true,
+        changedPathsJson: manifest.outputs.changed_core_test_paths_json,
+        boundary: true,
+      },
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.rows).toEqual([
+      { name: "central", status: 0 },
+      { name: "boundary", status: 0 },
+    ]);
+    expect(result.typeCalls.filter((call) => call.row === "central")).toEqual([
+      {
+        row: "central",
+        localCheck: null,
+        command: `node --changed-paths-json ${JSON.stringify(changedPaths.slice(0, 1))} --concurrency 2`,
+      },
+      ...["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"].map((command) => ({
+        row: "central",
+        localCheck: "0",
+        command: `pnpm ${command}`,
+      })),
+    ]);
+    expect(
+      result.typeCalls
+        .filter((call) => call.row === "boundary")
+        .map((call) => call.command)
+        .toSorted(),
+    ).toEqual(
+      BOUNDARY_CHECKS.filter((check) => check.label !== "lint:tmp:tsgo-core-boundary")
+        .map((check) => [check.command, ...check.args].join(" "))
+        .toSorted(),
+    );
+    const workflow = readCiWorkflow();
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["check-test-types-hosted-core-shard"].if, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerProfile: "hybrid",
+        preflightOutputs: manifest.outputs,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { changedPaths: null, invalid: true },
+    { changedPaths: [] },
+    { changedPaths: ["docs/ci.md"] },
+    { changedPaths: ["src/commands/doctor.test.ts", "package.json"] },
+    { changedPaths: ["src/commands/doctor.test.ts", "src/shared.test-support.ts"] },
+    { changedPaths: ["packages/mermaid-renderer/src/render.test.ts"] },
+    { changedPaths: ["src/gateway/gateway-acp-bind.live.test.ts"] },
+    { changedPaths: ["src/commands/doctor.test.ts"], changedCoreTestSupport: false },
+    { changedPaths: ["src/commands/doctor.test.ts"], eventName: "push" as const },
+    { changedPaths: ["src/commands/doctor.test.ts"], eventName: "workflow_dispatch" as const },
+    {
+      changedPaths: ["src/commands/doctor.test.ts"],
+      scopeEnv: { OPENCLAW_CI_CHANGED_PATHS_JSON: "invalid" },
+      invalid: true,
+    },
+  ])("retains full type owners for ineligible manifest inputs %j", (options) => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedCoreTestSupport: true,
+      eventName: "pull_request",
+      ...options,
+    });
+    if ("invalid" in options) {
+      expect(manifest.status).not.toBe(0);
+      expect(manifest.output).toContain("Current PR CI requires complete changed paths");
+      expect(manifest.outputs.changed_core_test_paths_json).toBeUndefined();
+    } else {
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.changed_core_test_paths_json).toBe("");
+    }
+  });
+
   it.each([
     ["hybrid", "pull_request", false, true, true, true],
     ["github", "workflow_dispatch", false, true, true, true],
@@ -11849,6 +11994,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(privateServerFiles).toEqual(uiE2ePrivateServerTestFiles);
     expect(helperPrivateServerFiles.toSorted()).toEqual([
+      "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
       "ui/src/e2e/child-session-load-errors.e2e.test.ts",
       "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
       "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
@@ -13636,6 +13782,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expected: { "pnpm-store-warmup": true, "check-lint-hosted-core-shard": true },
     },
     {
+      label: "targeted core test PR",
+      context: {
+        eventName: "pull_request",
+        runnerProfile: "hybrid",
+        preflightOutputs: { changed_core_test_paths_json: '["src/commands/doctor.test.ts"]' },
+      },
+      expected: {
+        "check-shard": true,
+        "check-additional-shard": true,
+        "check-lint-hosted-core-shard": true,
+        "check-test-types-hosted-core-shard": false,
+      },
+    },
+    {
       label: "Blacksmith has no hosted stripes",
       context: { frozenTarget: true },
       expected: {
@@ -13776,6 +13936,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const outcome = runCiGateFixture(renderCiGateEnvironment(context, results));
     expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(0);
+    if (context.preflightOutputs?.changed_core_test_paths_json) {
+      for (const terminal of ["failure", "skipped"]) {
+        const missingOwner = runCiGateFixture(
+          renderCiGateEnvironment(context, { ...results, "check-shard": terminal }),
+        );
+        expect(missingOwner.status).not.toBe(0);
+      }
+    }
   });
 
   it("runs Node 22 compatibility only from manual CI dispatches", () => {
@@ -15832,7 +16000,85 @@ it("pins simple release admission owners before selected checkout and preserves 
     expect(body).not.toMatch(/backoff\(|for attempt in range/u);
   }
 
+  const request = parse(readFileSync(".github/workflows/linux-app-release-request.yml", "utf8"));
   const linux = parse(readFileSync(workflows[0].file, "utf8"));
+  expect(request["run-name"]).toBe(
+    "Linux App Release Request [${{ inputs.tag }}] desktop=${{ inputs['desktop-test-bundles'] }}",
+  );
+  expect(request.permissions).toEqual({});
+  expect(Object.keys(request.on.workflow_dispatch.inputs)).toEqual(["tag", "desktop-test-bundles"]);
+  expect(request.jobs.validate_request.permissions).toBeUndefined();
+  expect(JSON.stringify(request)).not.toContain("${{ secrets.");
+  expect(linux.on).toEqual({
+    workflow_run: {
+      workflows: ["Linux App Release Request"],
+      branches: ["main"],
+      types: ["completed"],
+    },
+  });
+  const releaseDocs = expectDefined(
+    readFileSync("apps/linux/README.md", "utf8").split("## Releases\n")[1],
+    "Linux release documentation",
+  );
+  expect(releaseDocs).toMatch(/dispatch `Linux App Release Request` from `main`/u);
+  expect(releaseDocs).toContain("stable release tag in `tag`");
+  expect(releaseDocs).toMatch(/optional\s+`desktop-test-bundles` input/u);
+  expect(releaseDocs).toMatch(/successful request automatically triggers `Linux App Release`/u);
+  expect(releaseDocs).not.toContain("release-publish/");
+  expect(linux.permissions).toEqual({});
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.repository.full_name == 'openclaw/openclaw'",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.event == 'workflow_dispatch'",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.head_branch == 'main'",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.head_sha == github.workflow_sha",
+  );
+  expect(linux.jobs.validate_release.if).toContain(
+    "github.event.workflow_run.conclusion == 'success'",
+  );
+  const tauriSigningEnvNames = [
+    "TAURI_SIGNING_PRIVATE_KEY",
+    "TAURI_SIGNING_PRIVATE_KEY_PATH",
+    "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    "TAURI_PRIVATE_KEY",
+    "TAURI_PRIVATE_KEY_PATH",
+    "TAURI_PRIVATE_KEY_PASSWORD",
+    "TAURI_KEY_PASSWORD",
+  ];
+  const selectedTagJobs = ["validate_release", "build_linux", "build_macos", "build_windows"];
+  for (const jobName of selectedTagJobs) {
+    const job = linux.jobs[jobName];
+    const checkout = expectDefined(
+      (job.steps as WorkflowStep[]).find(({ name }) => name === "Checkout selected tag"),
+      `${jobName} selected-tag checkout`,
+    );
+    expect(job.permissions, jobName).toEqual({ contents: "read" });
+    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
+    const jobJson = JSON.stringify(job);
+    expect(jobJson, jobName).not.toContain("${{ secrets.");
+    for (const envName of tauriSigningEnvNames) {
+      expect(jobJson, jobName).not.toContain(envName);
+    }
+  }
+  expect(
+    Object.entries(linux.jobs)
+      .filter(
+        ([, job]) =>
+          (job as { permissions?: { contents?: string } }).permissions?.contents === "write",
+      )
+      .map(([name]) => name),
+  ).toEqual(["publish"]);
+  expect(linux.jobs.publish.permissions).toEqual({ contents: "write" });
+  expect(
+    Object.entries(linux.jobs)
+      .filter(([, job]) => JSON.stringify(job).includes("${{ secrets.TAURI_SIGNING_PRIVATE_KEY"))
+      .map(([name]) => name),
+  ).toEqual(["sign_linux", "sign_desktop"]);
   const linuxSteps = linux.jobs.validate_release.steps as WorkflowStep[];
   expect(
     linuxSteps.find(({ name }) => name === "Checkout trusted release tooling")?.with,
@@ -15840,6 +16086,8 @@ it("pins simple release admission owners before selected checkout and preserves 
     ref: "${{ github.workflow_sha }}",
     path: ".release-tooling",
     "persist-credentials": false,
+    "sparse-checkout":
+      "apps/linux/src-tauri/tauri.conf.json\nscripts/lib/record-shared.mjs\nscripts/release-tooling-identity.mjs\n",
   });
   const tooling = linuxSteps.find(({ name }) => name === "Verify trusted release tooling identity");
   expect(tooling?.env).toMatchObject({
@@ -15854,10 +16102,1049 @@ it("pins simple release admission owners before selected checkout and preserves 
   expect(linuxSteps.indexOf(tooling!)).toBeLessThan(
     linuxSteps.findIndex(({ id }) => id === "ancestry"),
   );
-  for (const name of ["build_linux", "build_macos", "build_windows"]) {
-    expect(linux.jobs[name].steps[0].with.ref).toBe(
-      "${{ needs.validate_release.outputs.tag_sha }}",
+  expect(linux.jobs.validate_release.outputs).toEqual({
+    desktop_test_bundles: "${{ steps.request.outputs.desktop_test_bundles }}",
+    release_tag: "${{ steps.request.outputs.release_tag }}",
+    tag_sha: "${{ steps.ancestry.outputs.tag_sha }}",
+    updater_pubkey: "${{ steps.updater_trust.outputs.updater_pubkey }}",
+  });
+  const releaseRequest = expectDefined(
+    linuxSteps.find(({ id }) => id === "request"),
+    "trusted release request validation",
+  );
+  expect(releaseRequest.env).toEqual({
+    REQUEST_TITLE: "${{ github.event.workflow_run.display_title }}",
+  });
+  expect(releaseRequest.run).toContain("Release request title does not match");
+  expect(releaseRequest.run).toContain('echo "release_tag=${BASH_REMATCH[1]}"');
+  expect(releaseRequest.run).toContain('echo "desktop_test_bundles=${BASH_REMATCH[3]}"');
+  const requestRoot = tempDirs.make("openclaw-linux-release-request-");
+  const requestOutput = path.join(requestRoot, "output");
+  const acceptedRequest = spawnSync("bash", ["-c", releaseRequest.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_OUTPUT: requestOutput,
+      REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=true",
+    },
+  });
+  expect(acceptedRequest.status, `${acceptedRequest.stdout}${acceptedRequest.stderr}`).toBe(0);
+  expect(readFileSync(requestOutput, "utf8")).toBe(
+    "release_tag=v2026.8.2\ndesktop_test_bundles=true\n",
+  );
+  const rejectedRequest = spawnSync("bash", ["-c", releaseRequest.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GITHUB_OUTPUT: requestOutput,
+      REQUEST_TITLE: "Linux App Release Request [v2026.8.2] desktop=true extra",
+    },
+  });
+  expect(rejectedRequest.status).toBe(1);
+  const updaterTrust = expectDefined(
+    linuxSteps.find(({ id }) => id === "updater_trust"),
+    "updater trust-root validation",
+  );
+  expect(updaterTrust.run).toContain("selected_config=apps/linux/src-tauri/tauri.conf.json");
+  expect(updaterTrust.run).toContain(
+    "trusted_config=.release-tooling/apps/linux/src-tauri/tauri.conf.json",
+  );
+  expect(updaterTrust.run).toContain('-L "$selected_config"');
+  expect(updaterTrust.run).toContain('-L "$trusted_config"');
+  expect(updaterTrust.run).toContain('"$selected_pubkey" != "$trusted_pubkey"');
+  expect(updaterTrust.run).toContain('echo "updater_pubkey=$trusted_pubkey" >> "$GITHUB_OUTPUT"');
+  for (const jobName of ["build_linux", "build_macos", "build_windows"]) {
+    const steps = linux.jobs[jobName].steps as WorkflowStep[];
+    const checkoutIndex = steps.findIndex(({ name }) => name === "Checkout selected tag");
+    expect(steps[checkoutIndex]?.with?.ref).toBe("${{ needs.validate_release.outputs.tag_sha }}");
+    expect(checkoutIndex, `${jobName} selected checkout order`).toBeGreaterThan(0);
+    expect(
+      steps.slice(0, checkoutIndex).some(({ uses }) => uses?.startsWith("./")),
+      `${jobName} pre-checkout local action`,
+    ).toBe(false);
+    expect(
+      steps.slice(checkoutIndex + 1).some(({ uses }) => uses?.startsWith("./")),
+      `${jobName} selected-tag local action`,
+    ).toBe(false);
+    expect(JSON.stringify(steps), `${jobName} Actions cache usage`).not.toContain("actions/cache");
+    const install = expectDefined(
+      steps.find(({ name }) => name === "Install selected-tag dependencies"),
+      `${jobName} dependency install`,
     );
+    expect(steps.indexOf(install), `${jobName} install order`).toBeGreaterThan(checkoutIndex);
+    expect(install.run).toContain("corepack enable");
+    expect(install.run).toContain("pnpm install --frozen-lockfile");
+  }
+  const linuxBuildSteps = linux.jobs.build_linux.steps as WorkflowStep[];
+  const selectedTagCheckout = linuxBuildSteps.findIndex(
+    ({ name }) => name === "Checkout selected tag",
+  );
+  const trustedToolingCheckout = linuxBuildSteps.findIndex(
+    ({ name }) => name === "Checkout trusted Linux packaging tooling",
+  );
+  const selectedTagInstall = linuxBuildSteps.findIndex(
+    ({ name }) => name === "Install selected-tag dependencies",
+  );
+  expect(selectedTagCheckout).toBeGreaterThan(0);
+  expect(selectedTagInstall).toBeGreaterThan(selectedTagCheckout);
+  expect(trustedToolingCheckout).toBe(selectedTagInstall + 1);
+  const trustedToolingOptions = linuxBuildSteps[trustedToolingCheckout]?.with;
+  expect(trustedToolingOptions).toMatchObject({
+    ref: "${{ github.workflow_sha }}",
+    path: ".release-tooling",
+    "fetch-depth": 1,
+    "persist-credentials": false,
+    "sparse-checkout-cone-mode": false,
+  });
+  const trustedToolingFiles = [
+    "apps/linux/scripts/stage-appimage-gstreamer.sh",
+    "apps/linux/scripts/tauri-appimage-tools.sh",
+    "apps/linux/scripts/tauri-appimage-tools-x86_64.tsv",
+    "apps/linux/scripts/finalize-appimage.sh",
+    "apps/linux/tests/packaged_runtime_smoke.py",
+    "apps/linux/tests/first_run.py",
+  ];
+  expect(String(trustedToolingOptions?.["sparse-checkout"]).trim().split("\n")).toEqual(
+    trustedToolingFiles,
+  );
+  const packagedRuntimeSmoke = "apps/linux/tests/packaged_runtime_smoke.py";
+  const firstRunDriver = path.posix.join(path.posix.dirname(packagedRuntimeSmoke), "first_run.py");
+  expect(readFileSync(packagedRuntimeSmoke, "utf8")).toContain(
+    'Path(__file__).with_name("first_run.py")',
+  );
+  expect(firstRunDriver).toBe("apps/linux/tests/first_run.py");
+  expect(trustedToolingFiles).toContain(firstRunDriver);
+  expect(
+    path.posix.join(path.posix.dirname(`.release-tooling/${packagedRuntimeSmoke}`), "first_run.py"),
+  ).toBe(".release-tooling/apps/linux/tests/first_run.py");
+  const buildLinuxBundles = expectDefined(
+    linuxBuildSteps.find(({ name }) => name === "Build Linux companion bundles"),
+    "Linux bundle build step",
+  );
+  expect(buildLinuxBundles["working-directory"]).toBe("apps/linux/src-tauri");
+  expect(buildLinuxBundles.run).toContain('\\"createUpdaterArtifacts\\":false');
+  expect(buildLinuxBundles.run).toContain('\\"useLocalToolsDir\\":false');
+  const buildLinuxJson = JSON.stringify(linux.jobs.build_linux);
+  expect(buildLinuxJson).not.toContain("${{ secrets.");
+  for (const name of tauriSigningEnvNames) {
+    expect(buildLinuxJson).not.toContain(name);
+  }
+  const finalizeAppImage = expectDefined(
+    linuxBuildSteps.find(({ name }) => name === "Finalize AppImage"),
+    "Linux AppImage finalizer step",
+  );
+  for (const name of tauriSigningEnvNames) {
+    expect(finalizeAppImage.env ?? {}).not.toHaveProperty(name);
+  }
+  expect(finalizeAppImage.run).not.toContain("signer sign");
+  expect(linuxBuildSteps.find(({ name }) => name === "Sign finalized AppImage")).toBeUndefined();
+  expect(linux.jobs.build_linux.outputs).toEqual({
+    deb_artifact_id: "${{ steps.upload_deb.outputs.artifact-id }}",
+    unsigned_appimage_artifact_id: "${{ steps.upload_appimage.outputs.artifact-id }}",
+  });
+  expect(linuxBuildSteps.find(({ id }) => id === "upload_deb")?.with).toMatchObject({
+    name: "linux-app-release-deb",
+    path: "dist/linux-app/release/*.deb",
+  });
+  expect(linuxBuildSteps.find(({ id }) => id === "upload_appimage")?.with).toMatchObject({
+    name: "linux-app-release-unsigned-appimage",
+    path: "dist/linux-app/unsigned/*.AppImage",
+  });
+  const signingJob = linux.jobs.sign_linux;
+  const signingSteps = signingJob.steps as WorkflowStep[];
+  expect(signingJob.needs).toEqual(["validate_release", "build_linux"]);
+  expect(signingJob.permissions).toEqual({});
+  expect(signingJob.outputs).toEqual({
+    signed_appimage_artifact_id: "${{ steps.upload_signed_appimage.outputs.artifact-id }}",
+  });
+  expect(
+    signingSteps.map(({ uses }) => uses).filter((uses): uses is string => uses !== undefined),
+  ).toEqual([DOWNLOAD_ARTIFACT_V8, UPLOAD_ARTIFACT_V7]);
+  expect(signingSteps.some((step) => step["working-directory"] !== undefined)).toBe(false);
+  const signingBodies = signingSteps.map(({ run }) => run ?? "").join("\n");
+  expect(signingBodies).not.toMatch(/(?:^|\s)(?:git|cargo)\s|\.release-tooling|apps\/linux\//mu);
+  expect(signingBodies).not.toMatch(/\b(?:npm|pnpm|npx|corepack)\b/u);
+  expect(
+    signingSteps.find(({ name }) => name === "Download finalized unsigned AppImage")?.with,
+  ).toEqual({
+    "artifact-ids": "${{ needs.build_linux.outputs.unsigned_appimage_artifact_id }}",
+    path: "dist/signing-input",
+  });
+  const signAppImage = expectDefined(
+    signingSteps.find(({ name }) => name === "Sign finalized AppImage"),
+    "Linux AppImage signing step",
+  );
+  expect(signAppImage.env).toMatchObject({
+    RELEASE_TAG: "${{ needs.validate_release.outputs.release_tag }}",
+    TAG_SHA: "${{ needs.validate_release.outputs.tag_sha }}",
+    TAURI_SIGNING_PRIVATE_KEY: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
+    UPDATER_PUBLIC_KEY: "${{ needs.validate_release.outputs.updater_pubkey }}",
+  });
+  const signingToolsInstaller = expectDefined(
+    signingSteps.find(({ name }) => name === "Install trusted signing tools"),
+    "Linux signing tools installer",
+  );
+  expect(linux.env).toMatchObject({
+    MINISIGN_ARCHIVE_SHA256: "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73",
+    MINISIGN_BINARY_SHA256: "2c74dffcc1c9a5ee55957c60971998ace2b89f22585631594ec2152c588af8db",
+    MINISIGN_URL:
+      "https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz",
+    TAURI_CLI_ARCHIVE_SHA256: "6864602a34292aa6f2ad40ae019eebe5c1064d6c623fe20696a8a8974067e60b",
+    TAURI_CLI_BINARY_SHA256: "23a27f61c50417fe87c92fa958fb56ecc8de7c791f78df3cac046c8579b45897",
+    TAURI_CLI_URL:
+      "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v2.11.4/cargo-tauri-x86_64-unknown-linux-gnu.tgz",
+  });
+  expect(signingToolsInstaller.run?.match(/--proto '=https' --tlsv1\.2/gu)).toHaveLength(2);
+  expect(signingToolsInstaller.run?.match(/--connect-timeout 10 --max-time 120/gu)).toHaveLength(2);
+  expect(signingToolsInstaller.run).toContain('--output "$minisign_archive" "$MINISIGN_URL"');
+  expect(signingToolsInstaller.run).toContain(
+    'printf \'%s  %s\\n\' "$MINISIGN_ARCHIVE_SHA256" "$minisign_archive" | sha256sum --check -',
+  );
+  expect(signingToolsInstaller.run).toContain(
+    'tar -xzf "$minisign_archive" -C "${RUNNER_TEMP}/bin" --strip-components=2 \\\n  minisign-linux/x86_64/minisign',
+  );
+  expect(signingToolsInstaller.run).toContain(
+    'printf \'%s  %s\\n\' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |',
+  );
+  expect(signingToolsInstaller.run).toContain(
+    'printf \'%s  %s\\n\' "$TAURI_CLI_ARCHIVE_SHA256" "$tauri_archive" | sha256sum --check -',
+  );
+  expect(signingToolsInstaller.run).toContain('--output "$tauri_archive" "$TAURI_CLI_URL"');
+  expect(signingToolsInstaller.run).toContain(
+    'tar -xzf "$tauri_archive" -C "${RUNNER_TEMP}/bin" cargo-tauri',
+  );
+  expect(signingToolsInstaller.run).toContain(
+    'printf \'%s  %s\\n\' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |',
+  );
+  expect(signingToolsInstaller.run).toContain(
+    'chmod 0555 "${RUNNER_TEMP}/bin/cargo-tauri" "${RUNNER_TEMP}/bin/minisign"',
+  );
+  expect(signingToolsInstaller.run).toContain('"${RUNNER_TEMP}/bin/cargo-tauri" --version');
+  expect(signingToolsInstaller.run).toContain('"${RUNNER_TEMP}/bin/minisign" -v');
+  expect(signingToolsInstaller.run).not.toMatch(
+    /apt-get|GITHUB_PATH|(?:^|\n)\s*(?:export\s+)?PATH=/u,
+  );
+  expect(signAppImage.run).toContain(
+    'printf \'%s  %s\\n\' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri"',
+  );
+  expect(signAppImage.run).toContain(
+    'printf \'%s  %s\\n\' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign"',
+  );
+  expect(signAppImage.run).toContain('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$appimage"');
+  expect(signAppImage.run).toContain(
+    "unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+  );
+  const signAppImageRun = expectDefined(signAppImage.run, "AppImage signing command");
+  expect(signAppImageRun.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeGreaterThan(
+    signAppImageRun.indexOf('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$appimage"'),
+  );
+  expect(signAppImageRun.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeLessThan(
+    signAppImageRun.indexOf('"${RUNNER_TEMP}/bin/minisign" -Vm "$appimage"'),
+  );
+  expect(signAppImage.run).toContain('before=$(sha256sum "$appimage")');
+  expect(signAppImage.run).toContain('after=$(sha256sum "$appimage")');
+  expect(signAppImage.run).toContain('base64 --decode < "${appimage}.sig"');
+  expect(signAppImage.run).toContain('"${RUNNER_TEMP}/bin/minisign" -Vm "$appimage"');
+  expect(signAppImage.run).not.toMatch(/\b(?:curl|wget|npm|pnpm|npx|corepack)\b|https?:\/\//u);
+  expect(signAppImage.run).not.toMatch(/(?:^|\n)\s*(?:export\s+)?PATH=/u);
+  expect(signAppImage.run).not.toContain("finalize-appimage.sh");
+  expect(signingSteps.find(({ id }) => id === "upload_signed_appimage")?.with).toMatchObject({
+    name: "linux-app-release-signed-appimage",
+    path: "dist/linux-app",
+  });
+  for (const [jobName, job] of Object.entries(linux.jobs)) {
+    if (jobName === "sign_linux" || jobName === "sign_desktop") {
+      continue;
+    }
+    expect(JSON.stringify(job), `${jobName} must not reference signer binaries`).not.toMatch(
+      /\$\{RUNNER_TEMP\}\/bin\/(?:cargo-tauri|minisign)/u,
+    );
+  }
+  const macosBuildSteps = linux.jobs.build_macos.steps as WorkflowStep[];
+  const buildMacos = expectDefined(
+    macosBuildSteps.find(({ name }) => name === "Build macOS test bundles"),
+    "macOS bundle build step",
+  );
+  expect(buildMacos.run).toContain('\\"createUpdaterArtifacts\\":false');
+  const stageMacos = expectDefined(
+    macosBuildSteps.find(({ name }) => name === "Verify and stage unsigned macOS bundles"),
+    "macOS unsigned staging step",
+  );
+  expect(stageMacos.run).toContain(
+    "archives=(apps/linux/src-tauri/target/release/bundle/macos/*.app.tar.gz)",
+  );
+  expect(stageMacos.run).toContain(
+    "signatures=(apps/linux/src-tauri/target/release/bundle/macos/*.sig)",
+  );
+  expect(stageMacos.run).toContain(
+    'tar -czf "$archive" -C "$(dirname "${apps[0]}")" "$(basename "${apps[0]}")"',
+  );
+  expect(linux.jobs.build_macos.outputs).toEqual({
+    dmg_artifact_id: "${{ steps.upload_dmg.outputs.artifact-id }}",
+    unsigned_updater_artifact_id: "${{ steps.upload_updater.outputs.artifact-id }}",
+  });
+  expect(macosBuildSteps.find(({ id }) => id === "upload_dmg")?.with).toMatchObject({
+    name: "macos-app-release-dmg",
+    path: "dist/macos-app/release/*.dmg",
+  });
+  expect(macosBuildSteps.find(({ id }) => id === "upload_updater")?.with).toMatchObject({
+    name: "macos-app-release-unsigned-updater",
+    path: "dist/macos-app/unsigned/*.app.tar.gz",
+  });
+
+  const windowsBuildSteps = linux.jobs.build_windows.steps as WorkflowStep[];
+  const buildWindows = expectDefined(
+    windowsBuildSteps.find(({ name }) => name === "Build Windows test bundle"),
+    "Windows bundle build step",
+  );
+  expect(buildWindows.run).toContain('\\"createUpdaterArtifacts\\":false');
+  const stageWindows = expectDefined(
+    windowsBuildSteps.find(({ name }) => name === "Verify and stage unsigned Windows bundle"),
+    "Windows unsigned staging step",
+  );
+  expect(stageWindows.run).toContain(
+    'Get-ChildItem "apps/linux/src-tauri/target/release/bundle/nsis/*.sig"',
+  );
+  expect(linux.jobs.build_windows.outputs).toEqual({
+    unsigned_updater_artifact_id: "${{ steps.upload_updater.outputs.artifact-id }}",
+  });
+  expect(windowsBuildSteps.find(({ id }) => id === "upload_updater")?.with).toMatchObject({
+    name: "windows-app-release-unsigned-updater",
+    path: "dist/windows-app/unsigned/*.exe",
+  });
+
+  const desktopSigningJob = linux.jobs.sign_desktop;
+  const desktopSigningSteps = desktopSigningJob.steps as WorkflowStep[];
+  expect(desktopSigningJob.needs).toEqual(["validate_release", "build_macos", "build_windows"]);
+  expect(desktopSigningJob.permissions).toEqual({});
+  expect(desktopSigningJob.outputs).toEqual({
+    signed_desktop_artifact_id: "${{ steps.upload_signed_desktop.outputs.artifact-id }}",
+  });
+  expect(
+    desktopSigningSteps
+      .map(({ uses }) => uses)
+      .filter((uses): uses is string => uses !== undefined),
+  ).toEqual([DOWNLOAD_ARTIFACT_V8, DOWNLOAD_ARTIFACT_V8, UPLOAD_ARTIFACT_V7]);
+  expect(desktopSigningSteps.some((step) => step["working-directory"] !== undefined)).toBe(false);
+  const desktopSigningBodies = desktopSigningSteps.map(({ run }) => run ?? "").join("\n");
+  expect(desktopSigningBodies).not.toMatch(
+    /(?:^|\s)(?:git|cargo)\s|\.release-tooling|apps\/linux\//mu,
+  );
+  expect(desktopSigningBodies).not.toMatch(/\b(?:npm|pnpm|npx|corepack)\b/u);
+  expect(
+    desktopSigningSteps.find(({ name }) => name === "Download finalized macOS updater archive")
+      ?.with,
+  ).toEqual({
+    "artifact-ids": "${{ needs.build_macos.outputs.unsigned_updater_artifact_id }}",
+    path: "dist/signing-input/macos",
+  });
+  expect(
+    desktopSigningSteps.find(({ name }) => name === "Download finalized Windows updater installer")
+      ?.with,
+  ).toEqual({
+    "artifact-ids": "${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}",
+    path: "dist/signing-input/windows",
+  });
+  const signDesktop = expectDefined(
+    desktopSigningSteps.find(({ name }) => name === "Sign finalized desktop updater bundles"),
+    "desktop updater signing step",
+  );
+  expect(signDesktop.env).toMatchObject({
+    RELEASE_TAG: "${{ needs.validate_release.outputs.release_tag }}",
+    TAG_SHA: "${{ needs.validate_release.outputs.tag_sha }}",
+    TAURI_SIGNING_PRIVATE_KEY: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
+    UPDATER_PUBLIC_KEY: "${{ needs.validate_release.outputs.updater_pubkey }}",
+  });
+  expect(desktopSigningSteps.find(({ name }) => name === "Install trusted signing tools")).toEqual(
+    signingToolsInstaller,
+  );
+  expect(signDesktop.run).toContain(
+    'printf \'%s  %s\\n\' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri"',
+  );
+  expect(signDesktop.run).toContain(
+    'printf \'%s  %s\\n\' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign"',
+  );
+  expect(signDesktop.run).toContain('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$macos"');
+  expect(signDesktop.run).toContain('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$windows"');
+  expect(signDesktop.run).toContain(
+    "unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+  );
+  const signDesktopRun = expectDefined(signDesktop.run, "desktop updater signing command");
+  expect(signDesktopRun.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeGreaterThan(
+    signDesktopRun.indexOf('"${RUNNER_TEMP}/bin/cargo-tauri" signer sign "$windows"'),
+  );
+  expect(signDesktopRun.indexOf("unset TAURI_SIGNING_PRIVATE_KEY")).toBeLessThan(
+    signDesktopRun.indexOf('"${RUNNER_TEMP}/bin/minisign" -Vm "$macos"'),
+  );
+  expect(signDesktop.run).toContain('macos_before=$(sha256sum "$macos")');
+  expect(signDesktop.run).toContain('windows_after=$(sha256sum "$windows")');
+  expect(signDesktop.run).toContain('"${RUNNER_TEMP}/bin/minisign" -Vm "$macos"');
+  expect(signDesktop.run).toContain('"${RUNNER_TEMP}/bin/minisign" -Vm "$windows"');
+  expect(signDesktop.run).not.toMatch(/\b(?:curl|wget|npm|pnpm|npx|corepack)\b|https?:\/\//u);
+  expect(signDesktop.run).not.toMatch(/(?:^|\n)\s*(?:export\s+)?PATH=/u);
+  expect(desktopSigningSteps.find(({ id }) => id === "upload_signed_desktop")?.with).toMatchObject({
+    name: "desktop-test-release-signed-updaters",
+    path: "dist/desktop-test",
+  });
+
+  expect(linux.jobs.publish.needs).toContain("sign_linux");
+  expect(linux.jobs.publish.needs).toContain("sign_desktop");
+  expect(linux.jobs.publish.if).toContain("needs.sign_linux.result == 'success'");
+  expect(linux.jobs.publish.if).toContain("needs.sign_desktop.result == 'success'");
+  expect(linux.jobs.publish.if).not.toContain("inputs.");
+  expect(
+    (linux.jobs.publish.steps as WorkflowStep[]).find(
+      ({ name }) => name === "Download Debian bundle",
+    )?.with,
+  ).toEqual({
+    "artifact-ids": "${{ needs.build_linux.outputs.deb_artifact_id }}",
+    path: "dist/input/linux/release",
+  });
+  expect(
+    (linux.jobs.publish.steps as WorkflowStep[]).find(
+      ({ name }) => name === "Download signed AppImage",
+    )?.with,
+  ).toEqual({
+    "artifact-ids": "${{ needs.sign_linux.outputs.signed_appimage_artifact_id }}",
+    path: "dist/input/linux",
+  });
+  expect(
+    (linux.jobs.publish.steps as WorkflowStep[]).find(
+      ({ name }) => name === "Download macOS test DMG",
+    )?.with,
+  ).toEqual({
+    "artifact-ids": "${{ needs.build_macos.outputs.dmg_artifact_id }}",
+    path: "dist/input/macos/release",
+  });
+  expect(
+    (linux.jobs.publish.steps as WorkflowStep[]).find(
+      ({ name }) => name === "Download signed desktop updater bundles",
+    )?.with,
+  ).toEqual({
+    "artifact-ids": "${{ needs.sign_desktop.outputs.signed_desktop_artifact_id }}",
+    path: "dist/input",
+  });
+  const publishLinuxBundles = expectDefined(
+    (linux.jobs.publish.steps as WorkflowStep[]).find(
+      ({ name }) => name === "Assemble release assets and updater manifest",
+    ),
+    "Linux release publication step",
+  );
+  expect(publishLinuxBundles.run).toContain(
+    'linux_signature=$(cat "dist/input/linux/signatures/OpenClaw-${version}-amd64.AppImage.sig")',
+  );
+  expect(publishLinuxBundles.run).toContain(
+    '"linux-x86_64": {signature: $linux_signature, url: $linux_url}',
+  );
+  const appImageToolsPath = "apps/linux/scripts/tauri-appimage-tools.sh";
+  const appImageToolsManifestPath = "apps/linux/scripts/tauri-appimage-tools-x86_64.tsv";
+  const appImageTools = readFileSync(appImageToolsPath, "utf8");
+  const appImageToolsManifest = readFileSync(appImageToolsManifestPath, "utf8");
+  expect(appImageTools).toContain("prepare)");
+  expect(appImageTools).toContain('verify_directory "$tools_dir" "$2"');
+  expect(appImageTools).toContain("--proto '=https' --tlsv1.2");
+  expect(appImageTools).toContain("--connect-timeout 10 --max-time 120");
+  expect(appImageTools).toContain("--retry 3 --retry-all-errors");
+  expect(appImageTools).toContain('mv -Tn -- "$staging_dir" "$tools_dir"');
+  expect(appImageTools).toContain('fail "refusing existing Tauri tool cache: $tools_dir"');
+  expect(appImageTools).toContain('runtime_name=".appimage-runtime-x86_64"');
+  expect(appImageTools).toContain('offset=$("$plugin" --appimage-offset)');
+  expect(appImageTools).toContain('cmp --silent --bytes="$offset" -- "$plugin" "$runtime"');
+  expect(appImageToolsManifest.trim().split("\n")).toEqual([
+    [
+      "AppRun-x86_64",
+      "https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64",
+      "f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f",
+      "f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f",
+      "0555",
+    ].join("\t"),
+    [
+      "linuxdeploy-x86_64.AppImage",
+      "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-x86_64.AppImage",
+      "e762bea85c8eb0d4b3508d46e5c1f037f717d0f9303ae3b4aafc8b04991fa1ef",
+      "20eebde3c18ae2e44279bd624fc72482503aece216d5d77f10932235342f71c1",
+      "0755",
+    ].join("\t"),
+    [
+      "linuxdeploy-plugin-gtk.sh",
+      "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/b5eb8d05b4c0ed40107fe2158c5d8527f94568ef/linuxdeploy-plugin-gtk.sh",
+      "cb379f9b0733e9ad9f8bd78f8c2fa038aef2478523bb7d4c8e64ff6a1ea3501a",
+      "cb379f9b0733e9ad9f8bd78f8c2fa038aef2478523bb7d4c8e64ff6a1ea3501a",
+      "0555",
+    ].join("\t"),
+    [
+      "linuxdeploy-plugin-gstreamer.sh",
+      "https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gstreamer/2a2e67491c32995a3f279ad0ecbe77abd512b42a/linuxdeploy-plugin-gstreamer.sh",
+      "c107b49d84edbffc6ab226ed1007e0626a4f7aa2c3a36b7782bef62351d49e94",
+      "c107b49d84edbffc6ab226ed1007e0626a4f7aa2c3a36b7782bef62351d49e94",
+      "0555",
+    ].join("\t"),
+    [
+      "linuxdeploy-plugin-appimage.AppImage",
+      "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage",
+      "0441769ab38009504d2678c38cd7e526955388dd30a215b4a20afaa5471652f2",
+      "0441769ab38009504d2678c38cd7e526955388dd30a215b4a20afaa5471652f2",
+      "0555",
+    ].join("\t"),
+  ]);
+  expect(appImageTools).toMatch(/continuous[\s\S]*digest-pinned/u);
+
+  const prLinux = parse(readFileSync(".github/workflows/linux-app.yml", "utf8"));
+  const workflowContracts = [
+    {
+      job: prLinux.jobs.build,
+      helper: appImageToolsPath,
+      label: "pull request",
+    },
+    {
+      job: linux.jobs.build_linux,
+      helper: `.release-tooling/${appImageToolsPath}`,
+      label: "release",
+    },
+  ];
+  for (const contract of workflowContracts) {
+    const steps = contract.job.steps as WorkflowStep[];
+    const prepareIndex = steps.findIndex(({ name }) => name === "Prepare pinned AppImage tools");
+    const buildIndex = steps.findIndex(({ name }) => name === "Build Linux companion bundles");
+    const finalizeIndex = steps.findIndex(({ name }) => name === "Finalize AppImage");
+    expect(prepareIndex, `${contract.label} prepare`).toBeGreaterThan(0);
+    expect(buildIndex, `${contract.label} build`).toBe(prepareIndex + 1);
+    expect(finalizeIndex, `${contract.label} finalize`).toBe(buildIndex + 1);
+    for (const index of [prepareIndex, buildIndex, finalizeIndex]) {
+      expect(steps[index]?.env?.XDG_CACHE_HOME, `${contract.label} cache path`).toBe(
+        "${{ runner.temp }}/openclaw-tauri-cache",
+      );
+    }
+    expect(steps[buildIndex]?.env?.LDAI_RUNTIME_FILE, `${contract.label} runtime path`).toBe(
+      "${{ runner.temp }}/openclaw-tauri-cache/tauri/.appimage-runtime-x86_64",
+    );
+    expect(steps[prepareIndex]?.run, contract.label).toContain(`${contract.helper} prepare`);
+    expect(steps[prepareIndex]?.run, contract.label).toContain(
+      `${contract.helper} verify pre-build`,
+    );
+    expect(steps[buildIndex]?.run, contract.label).toContain("@tauri-apps/cli@2.11.4");
+    expect(steps[buildIndex]?.run, contract.label).toMatch(/\\?"useLocalToolsDir\\?":false/u);
+    expect(steps[finalizeIndex]?.run, contract.label).toMatch(
+      /finalize-appimage\.sh "?\\?\$?bundle_dir"?|finalize-appimage\.sh apps\/linux\/src-tauri\/target\/release\/bundle\/appimage/u,
+    );
+    expect(JSON.stringify(contract.job), contract.label).not.toContain("${{ secrets.");
+  }
+  const finalizerSource = readFileSync("apps/linux/scripts/finalize-appimage.sh", "utf8");
+  const postBuildVerifications =
+    finalizerSource.match(/"\$tools_helper" verify post-build/gu) ?? [];
+  expect(postBuildVerifications).toHaveLength(2);
+  expect(finalizerSource.indexOf(postBuildVerifications[0]!)).toBeLessThan(
+    finalizerSource.indexOf("mapfile -d '' forbidden_libraries"),
+  );
+  expect(finalizerSource.lastIndexOf(postBuildVerifications[1]!)).toBeLessThan(
+    finalizerSource.indexOf('"$plugin" --appdir "$appdir"'),
+  );
+  expect(finalizerSource).toContain('LDAI_RUNTIME_FILE="$runtime"');
+  if (process.platform === "linux") {
+    const selectedTagRoot = tempDirs.make("openclaw-linux-release-v2026.8.2-");
+    const trustedTools = path.join(
+      selectedTagRoot,
+      ".release-tooling/apps/linux/scripts/tauri-appimage-tools.sh",
+    );
+    const trustedToolsManifest = path.join(
+      selectedTagRoot,
+      ".release-tooling/apps/linux/scripts/tauri-appimage-tools-x86_64.tsv",
+    );
+    const trustedFinalizer = path.join(
+      selectedTagRoot,
+      ".release-tooling/apps/linux/scripts/finalize-appimage.sh",
+    );
+    const trustedSmoke = path.join(
+      selectedTagRoot,
+      ".release-tooling/apps/linux/tests/packaged_runtime_smoke.py",
+    );
+    const trustedFirstRun = path.join(
+      selectedTagRoot,
+      ".release-tooling/apps/linux/tests/first_run.py",
+    );
+    const bundleDir = path.join(
+      selectedTagRoot,
+      "apps/linux/src-tauri/target/release/bundle/appimage",
+    );
+    const appDir = path.join(bundleDir, "OpenClaw.AppDir");
+    const appImage = path.join(bundleDir, "OpenClaw_2026.8.2_amd64.AppImage");
+    const cacheRoot = path.join(selectedTagRoot, ".cache");
+    const toolSourceDir = path.join(selectedTagRoot, "tool-sources");
+    const fakeBin = path.join(selectedTagRoot, "fake-bin");
+    const pluginSentinel = path.join(selectedTagRoot, "plugin-executed");
+    const toolNames = [
+      "AppRun-x86_64",
+      "linuxdeploy-x86_64.AppImage",
+      "linuxdeploy-plugin-gtk.sh",
+      "linuxdeploy-plugin-gstreamer.sh",
+      "linuxdeploy-plugin-appimage.AppImage",
+    ] as const;
+    mkdirSync(path.dirname(trustedFinalizer), { recursive: true });
+    mkdirSync(path.dirname(trustedSmoke), { recursive: true });
+    mkdirSync(toolSourceDir, { recursive: true });
+    mkdirSync(fakeBin, { recursive: true });
+    copyFileSync("apps/linux/scripts/tauri-appimage-tools.sh", trustedTools);
+    copyFileSync("apps/linux/scripts/tauri-appimage-tools-x86_64.tsv", trustedToolsManifest);
+    copyFileSync("apps/linux/scripts/finalize-appimage.sh", trustedFinalizer);
+    copyFileSync("apps/linux/tests/packaged_runtime_smoke.py", trustedSmoke);
+    copyFileSync("apps/linux/tests/first_run.py", trustedFirstRun);
+    chmodSync(trustedTools, 0o755);
+    chmodSync(trustedFinalizer, 0o755);
+
+    const toolSources = new Map<string, Buffer>();
+    for (const toolName of toolNames) {
+      const contents =
+        toolName === "linuxdeploy-plugin-appimage.AppImage"
+          ? Buffer.from(
+              [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                'if [[ ${1:-} == "--appimage-offset" ]]; then',
+                "  printf '16\\n'",
+                "  exit 0",
+                "fi",
+                '[[ "$1" == "--appdir" && -d "$2" ]]',
+                '[[ -f "${LDAI_RUNTIME_FILE:?}" ]]',
+                'printf "executed\\n" > "$PLUGIN_SENTINEL"',
+                'cat "$LDAI_RUNTIME_FILE" > "$LDAI_OUTPUT"',
+                `printf '\\n#!/bin/sh\\nexit 0\\n' >> "$LDAI_OUTPUT"`,
+                'chmod +x "$LDAI_OUTPUT"',
+                "",
+              ].join("\n"),
+            )
+          : Buffer.from(`#!/bin/sh\n# synthetic ${toolName}\nexit 0\n`);
+      toolSources.set(toolName, contents);
+      writeFileSync(path.join(toolSourceDir, toolName), contents, { mode: 0o755 });
+    }
+    const preBuildLinuxdeploy = Buffer.from(
+      expectDefined(toolSources.get("linuxdeploy-x86_64.AppImage"), "linuxdeploy source"),
+    );
+    const postBuildLinuxdeploy = Buffer.from(preBuildLinuxdeploy);
+    postBuildLinuxdeploy.fill(0, 8, 11);
+    const digest = (contents: Buffer) => createHash("sha256").update(contents).digest("hex");
+    const writeSyntheticManifest = (wrongDigest = false) => {
+      writeFileSync(
+        trustedToolsManifest,
+        toolNames
+          .map((toolName, index) => {
+            const contents = expectDefined(toolSources.get(toolName), `${toolName} source`);
+            const preBuildDigest = wrongDigest && index === 0 ? "0".repeat(64) : digest(contents);
+            const postBuildDigest =
+              toolName === "linuxdeploy-x86_64.AppImage"
+                ? digest(postBuildLinuxdeploy)
+                : digest(contents);
+            const mode = toolName === "linuxdeploy-x86_64.AppImage" ? "0755" : "0555";
+            return [
+              toolName,
+              `https://example.invalid/${toolName}`,
+              preBuildDigest,
+              postBuildDigest,
+              mode,
+            ].join("\t");
+          })
+          .join("\n") + "\n",
+      );
+    };
+    writeFileSync(
+      path.join(fakeBin, "curl"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "output=",
+        "url=",
+        "while [[ $# -gt 0 ]]; do",
+        '  case "$1" in',
+        "    --output) output=$2; shift 2 ;;",
+        "    https://*) url=$1; shift ;;",
+        "    *) shift ;;",
+        "  esac",
+        "done",
+        '[[ -n "$output" && -n "$url" ]]',
+        'if [[ ${CACHE_RACE_TOOL:-} == "${url##*/}" ]]; then',
+        '  mkdir -p "$XDG_CACHE_HOME/tauri"',
+        '  printf "raced\\n" > "$XDG_CACHE_HOME/tauri/race-marker"',
+        "fi",
+        'cp "$TOOL_SOURCE_DIR/${url##*/}" "$output"',
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const toolEnv = {
+      ...process.env,
+      PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+      TOOL_SOURCE_DIR: toolSourceDir,
+      XDG_CACHE_HOME: cacheRoot,
+    };
+    writeSyntheticManifest(true);
+    const rejectedPrepare = spawnSync(trustedTools, ["prepare"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: toolEnv,
+    });
+    expect(rejectedPrepare.status).not.toBe(0);
+    expect(existsSync(path.join(cacheRoot, "tauri"))).toBe(false);
+
+    writeSyntheticManifest();
+    const rejectedRacedPrepare = spawnSync(trustedTools, ["prepare"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: {
+        ...toolEnv,
+        CACHE_RACE_TOOL: "linuxdeploy-plugin-appimage.AppImage",
+      },
+    });
+    expect(
+      rejectedRacedPrepare.status,
+      `${rejectedRacedPrepare.stdout}${rejectedRacedPrepare.stderr}`,
+    ).not.toBe(0);
+    expect(readFileSync(path.join(cacheRoot, "tauri/race-marker"), "utf8")).toBe("raced\n");
+    expect(globSync(path.join(cacheRoot, ".tauri-tools.*"))).toEqual([]);
+    rmSync(path.join(cacheRoot, "tauri"), { recursive: true });
+
+    const prepared = spawnSync(trustedTools, ["prepare"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: toolEnv,
+    });
+    expect(prepared.status, `${prepared.stdout}${prepared.stderr}`).toBe(0);
+    expect(globSync(path.join(cacheRoot, ".tauri-tools.*"))).toEqual([]);
+    const verifiedPreBuild = spawnSync(trustedTools, ["verify", "pre-build"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: toolEnv,
+    });
+    expect(verifiedPreBuild.status, `${verifiedPreBuild.stdout}${verifiedPreBuild.stderr}`).toBe(0);
+    const toolsDir = path.join(cacheRoot, "tauri");
+    const runtime = path.join(toolsDir, ".appimage-runtime-x86_64");
+    const appImagePlugin = expectDefined(
+      toolSources.get("linuxdeploy-plugin-appimage.AppImage"),
+      "AppImage plugin source",
+    );
+    expect(readFileSync(runtime)).toEqual(appImagePlugin.subarray(0, 16));
+    expect(statSync(runtime).mode & 0o777).toBe(0o444);
+    const rejectedStaleCache = spawnSync(trustedTools, ["prepare"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: toolEnv,
+    });
+    expect(rejectedStaleCache.status).not.toBe(0);
+
+    const linuxdeploy = path.join(toolsDir, "linuxdeploy-x86_64.AppImage");
+    writeFileSync(linuxdeploy, postBuildLinuxdeploy);
+    chmodSync(linuxdeploy, 0o755);
+    const verifiedPostBuild = spawnSync(trustedTools, ["verify", "post-build"], {
+      cwd: selectedTagRoot,
+      encoding: "utf8",
+      env: toolEnv,
+    });
+    expect(verifiedPostBuild.status, `${verifiedPostBuild.stdout}${verifiedPostBuild.stderr}`).toBe(
+      0,
+    );
+
+    const resetBundle = () => {
+      rmSync(bundleDir, { force: true, recursive: true });
+      mkdirSync(path.join(appDir, "usr/lib"), { recursive: true });
+      writeFileSync(path.join(appDir, "usr/lib/libwayland-client.so.0"), "host-incompatible");
+      writeFileSync(appImage, "pre-finalized");
+      chmodSync(appImage, 0o755);
+      writeFileSync(`${appImage}.sig`, "stale-signature");
+      rmSync(pluginSentinel, { force: true });
+    };
+    const runFinalizer = () =>
+      spawnSync(trustedFinalizer, [bundleDir], {
+        cwd: selectedTagRoot,
+        encoding: "utf8",
+        env: {
+          ...toolEnv,
+          PLUGIN_SENTINEL: pluginSentinel,
+        },
+      });
+    const restoreTool = (toolName: (typeof toolNames)[number]) => {
+      const contents =
+        toolName === "linuxdeploy-x86_64.AppImage"
+          ? postBuildLinuxdeploy
+          : expectDefined(toolSources.get(toolName), `${toolName} source`);
+      rmSync(path.join(toolsDir, toolName), { force: true });
+      writeFileSync(path.join(toolsDir, toolName), contents, { mode: 0o755 });
+      chmodSync(
+        path.join(toolsDir, toolName),
+        toolName === "linuxdeploy-x86_64.AppImage" ? 0o755 : 0o555,
+      );
+    };
+
+    for (const toolName of toolNames) {
+      resetBundle();
+      const tool = path.join(toolsDir, toolName);
+      chmodSync(tool, 0o755);
+      writeFileSync(tool, Buffer.concat([readFileSync(tool), Buffer.from("tampered")]));
+      const rejected = runFinalizer();
+      expect(rejected.status, `${toolName}: ${rejected.stdout}${rejected.stderr}`).not.toBe(0);
+      expect(existsSync(pluginSentinel), `${toolName} plugin execution`).toBe(false);
+      expect(existsSync(path.join(appDir, "usr/lib/libwayland-client.so.0")), toolName).toBe(true);
+      expect(readFileSync(appImage, "utf8"), toolName).toBe("pre-finalized");
+      expect(readFileSync(`${appImage}.sig`, "utf8"), toolName).toBe("stale-signature");
+      restoreTool(toolName);
+    }
+
+    resetBundle();
+    const appRun = path.join(toolsDir, "AppRun-x86_64");
+    rmSync(appRun);
+    symlinkSync(path.join(toolSourceDir, "AppRun-x86_64"), appRun);
+    const rejectedSymlink = runFinalizer();
+    expect(rejectedSymlink.status).not.toBe(0);
+    expect(existsSync(pluginSentinel)).toBe(false);
+    restoreTool("AppRun-x86_64");
+
+    resetBundle();
+    const gtkPlugin = path.join(toolsDir, "linuxdeploy-plugin-gtk.sh");
+    chmodSync(gtkPlugin, 0o444);
+    const rejectedNonExecutable = runFinalizer();
+    expect(rejectedNonExecutable.status).not.toBe(0);
+    expect(existsSync(pluginSentinel)).toBe(false);
+    restoreTool("linuxdeploy-plugin-gtk.sh");
+
+    resetBundle();
+    chmodSync(runtime, 0o644);
+    writeFileSync(runtime, Buffer.concat([readFileSync(runtime), Buffer.from("tampered")]));
+    const rejectedRuntime = runFinalizer();
+    expect(rejectedRuntime.status).not.toBe(0);
+    expect(existsSync(pluginSentinel)).toBe(false);
+    expect(existsSync(path.join(appDir, "usr/lib/libwayland-client.so.0"))).toBe(true);
+    expect(readFileSync(appImage, "utf8")).toBe("pre-finalized");
+    writeFileSync(runtime, appImagePlugin.subarray(0, 16), { mode: 0o644 });
+    chmodSync(runtime, 0o444);
+
+    resetBundle();
+    const finalized = runFinalizer();
+    expect(finalized.status, `${finalized.stdout}${finalized.stderr}`).toBe(0);
+    expect(readFileSync(appImage).subarray(0, 16)).toEqual(appImagePlugin.subarray(0, 16));
+    expect(readFileSync(appImage, "utf8")).toContain("#!/bin/sh");
+    expect(existsSync(`${appImage}.sig`)).toBe(false);
+    expect(existsSync(path.join(appDir, "usr/lib/libwayland-client.so.0"))).toBe(false);
+    expect(readFileSync(pluginSentinel, "utf8")).toBe("executed\n");
+
+    writeFileSync(
+      path.join(appDir, "usr/lib/libwayland-client.so.0"),
+      "post-finalization-smoke-fixture",
+    );
+    expect(existsSync(path.join(selectedTagRoot, "apps/linux/scripts/finalize-appimage.sh"))).toBe(
+      false,
+    );
+    const smokeChild = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "from pathlib import Path",
+          "import subprocess",
+          "import sys",
+          'child = Path(sys.argv[1]).with_name("first_run.py")',
+          "assert child.is_file()",
+          'subprocess.run([sys.executable, str(child), "--help"], check=True)',
+        ].join("; "),
+        trustedSmoke,
+      ],
+      { cwd: selectedTagRoot, encoding: "utf8" },
+    );
+    expect(smokeChild.status, `${smokeChild.stdout}${smokeChild.stderr}`).toBe(0);
+
+    const writeSigningToolFixtures = (root: string) => {
+      const bin = path.join(root, "bin");
+      const poisonBin = path.join(root, "poison-bin");
+      const tauri = path.join(bin, "cargo-tauri");
+      const tauriLog = path.join(root, "cargo-tauri.log");
+      const minisignLog = path.join(root, "minisign.log");
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(poisonBin, { recursive: true });
+      writeFileSync(
+        tauri,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          '[[ "$#" -eq 3 && "$1" == "signer" && "$2" == "sign" ]]',
+          '[[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]',
+          '[[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]',
+          'printf "%s\\n" "$*" >> "$TAURI_SIGN_LOG"',
+          'printf "ephemeral-signature:%s" "$(basename "$3")" | base64 > "$3.sig"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        path.join(bin, "minisign"),
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          '[[ "$#" -eq 6 && "$1" == "-Vm" && "$3" == "-x" && "$5" == "-p" ]]',
+          '[[ -z "${TAURI_SIGNING_PRIVATE_KEY+x}" ]]',
+          '[[ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD+x}" ]]',
+          '[[ -s "$2" && -s "$4" && -s "$6" ]]',
+          '[[ "$(cat "$6")" == "ephemeral-public-key" ]]',
+          'printf "%s\\n" "$(basename "$2")" >> "$MINISIGN_LOG"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      for (const command of ["cargo-tauri", "minisign", "npm", "pnpm", "npx", "corepack"]) {
+        writeFileSync(path.join(poisonBin, command), "#!/bin/sh\nexit 97\n", { mode: 0o755 });
+      }
+      return {
+        minisignBinarySha256: createHash("sha256")
+          .update(readFileSync(path.join(bin, "minisign")))
+          .digest("hex"),
+        minisignLog,
+        path: `${poisonBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        tauriBinarySha256: createHash("sha256").update(readFileSync(tauri)).digest("hex"),
+        tauriLog,
+      };
+    };
+
+    const signingRoot = tempDirs.make("openclaw-linux-signing-job-");
+    const signingInput = path.join(signingRoot, "dist/signing-input");
+    const finalizedArtifact = path.join(signingInput, "OpenClaw-2026.8.2-amd64.AppImage");
+    mkdirSync(signingInput, { recursive: true });
+    writeFileSync(finalizedArtifact, "trusted-finalized-bytes");
+    const linuxSigningTools = writeSigningToolFixtures(signingRoot);
+    const signed = spawnSync("bash", ["-c", signAppImage.run ?? ""], {
+      cwd: signingRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: linuxSigningTools.path,
+        RELEASE_TAG: "v2026.8.2",
+        RUNNER_TEMP: signingRoot,
+        TAG_SHA: "a".repeat(40),
+        MINISIGN_BINARY_SHA256: linuxSigningTools.minisignBinarySha256,
+        TAURI_CLI_BINARY_SHA256: linuxSigningTools.tauriBinarySha256,
+        TAURI_SIGN_LOG: linuxSigningTools.tauriLog,
+        TAURI_SIGNING_PRIVATE_KEY: "ephemeral-test-key",
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "ephemeral-test-password",
+        UPDATER_PUBLIC_KEY: Buffer.from("ephemeral-public-key").toString("base64"),
+        MINISIGN_LOG: linuxSigningTools.minisignLog,
+      },
+    });
+    expect(signed.status, `${signed.stdout}${signed.stderr}`).toBe(0);
+    expect(readFileSync(finalizedArtifact, "utf8")).toBe("trusted-finalized-bytes");
+    expect(
+      readFileSync(
+        path.join(signingRoot, "dist/linux-app/release/OpenClaw-2026.8.2-amd64.AppImage"),
+        "utf8",
+      ),
+    ).toBe("trusted-finalized-bytes");
+    expect(
+      readFileSync(
+        path.join(signingRoot, "dist/linux-app/signatures/OpenClaw-2026.8.2-amd64.AppImage.sig"),
+        "utf8",
+      ),
+    ).toBe(
+      `${Buffer.from("ephemeral-signature:OpenClaw-2026.8.2-amd64.AppImage").toString("base64")}\n`,
+    );
+    expect(readFileSync(linuxSigningTools.tauriLog, "utf8")).toBe(
+      "signer sign dist/signing-input/OpenClaw-2026.8.2-amd64.AppImage\n",
+    );
+    expect(readFileSync(linuxSigningTools.minisignLog, "utf8")).toBe(
+      "OpenClaw-2026.8.2-amd64.AppImage\n",
+    );
+    expect(existsSync(path.join(signingRoot, ".release-tooling"))).toBe(false);
+    expect(existsSync(path.join(signingRoot, "apps"))).toBe(false);
+
+    const desktopSigningRoot = tempDirs.make("openclaw-desktop-signing-job-");
+    const macosInput = path.join(
+      desktopSigningRoot,
+      "dist/signing-input/macos/OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz",
+    );
+    const windowsInput = path.join(
+      desktopSigningRoot,
+      "dist/signing-input/windows/OpenClaw-2026.8.2-windows-x86_64.exe",
+    );
+    mkdirSync(path.dirname(macosInput), { recursive: true });
+    mkdirSync(path.dirname(windowsInput), { recursive: true });
+    writeFileSync(macosInput, "finalized-macos-updater-bytes");
+    writeFileSync(windowsInput, "finalized-windows-updater-bytes");
+    const desktopSigningTools = writeSigningToolFixtures(desktopSigningRoot);
+    const desktopSigned = spawnSync("bash", ["-c", signDesktop.run ?? ""], {
+      cwd: desktopSigningRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: desktopSigningTools.path,
+        RELEASE_TAG: "v2026.8.2",
+        RUNNER_TEMP: desktopSigningRoot,
+        TAG_SHA: "a".repeat(40),
+        MINISIGN_BINARY_SHA256: desktopSigningTools.minisignBinarySha256,
+        TAURI_CLI_BINARY_SHA256: desktopSigningTools.tauriBinarySha256,
+        TAURI_SIGN_LOG: desktopSigningTools.tauriLog,
+        TAURI_SIGNING_PRIVATE_KEY: "ephemeral-test-key",
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "ephemeral-test-password",
+        UPDATER_PUBLIC_KEY: Buffer.from("ephemeral-public-key").toString("base64"),
+        MINISIGN_LOG: desktopSigningTools.minisignLog,
+      },
+    });
+    expect(desktopSigned.status, `${desktopSigned.stdout}${desktopSigned.stderr}`).toBe(0);
+    expect(readFileSync(macosInput, "utf8")).toBe("finalized-macos-updater-bytes");
+    expect(readFileSync(windowsInput, "utf8")).toBe("finalized-windows-updater-bytes");
+    expect(
+      readFileSync(
+        path.join(
+          desktopSigningRoot,
+          "dist/desktop-test/macos/release/OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz",
+        ),
+        "utf8",
+      ),
+    ).toBe("finalized-macos-updater-bytes");
+    expect(
+      readFileSync(
+        path.join(
+          desktopSigningRoot,
+          "dist/desktop-test/windows/release/OpenClaw-2026.8.2-windows-x86_64.exe",
+        ),
+        "utf8",
+      ),
+    ).toBe("finalized-windows-updater-bytes");
+    expect(
+      Buffer.from(
+        readFileSync(
+          path.join(
+            desktopSigningRoot,
+            "dist/desktop-test/macos/signatures/OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz.sig",
+          ),
+          "utf8",
+        ),
+        "base64",
+      ).toString(),
+    ).toContain("OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz");
+    expect(
+      Buffer.from(
+        readFileSync(
+          path.join(
+            desktopSigningRoot,
+            "dist/desktop-test/windows/signatures/OpenClaw-2026.8.2-windows-x86_64.exe.sig",
+          ),
+          "utf8",
+        ),
+        "base64",
+      ).toString(),
+    ).toContain("OpenClaw-2026.8.2-windows-x86_64.exe");
+    expect(readFileSync(desktopSigningTools.tauriLog, "utf8")).toBe(
+      "signer sign dist/signing-input/macos/OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz\n" +
+        "signer sign dist/signing-input/windows/OpenClaw-2026.8.2-windows-x86_64.exe\n",
+    );
+    expect(readFileSync(desktopSigningTools.minisignLog, "utf8")).toBe(
+      "OpenClaw-2026.8.2-darwin-aarch64.app.tar.gz\nOpenClaw-2026.8.2-windows-x86_64.exe\n",
+    );
+    expect(existsSync(path.join(desktopSigningRoot, ".release-tooling"))).toBe(false);
+    expect(existsSync(path.join(desktopSigningRoot, "apps"))).toBe(false);
+  }
+  const linuxBuildBodies = linuxBuildSteps.map(({ run }) => run ?? "").join("\n");
+  for (const helper of [
+    "apps/linux/scripts/stage-appimage-gstreamer.sh",
+    "apps/linux/scripts/finalize-appimage.sh",
+    "apps/linux/tests/packaged_runtime_smoke.py",
+  ]) {
+    expect(linuxBuildBodies).toContain(`.release-tooling/${helper}`);
+    expect(linuxBuildBodies).not.toMatch(new RegExp(`(^|\\s)${helper.replaceAll(".", "\\.")}`));
   }
   const linuxBody = expectDefined(
     (linux.jobs.validate_release.steps as WorkflowStep[]).find(

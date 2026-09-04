@@ -69,6 +69,90 @@ function createMetricsHarness() {
 }
 
 describe("diagnostics-prometheus service", () => {
+  it("records Gateway RPC timings by method and outcomes without method multiplication", () => {
+    const metrics = createMetricsHarness();
+    const base = {
+      ...baseEvent(),
+      type: "gateway.rpc" as const,
+      method: "sessions.list",
+      trace: { traceId: "4bf92f3577b34da6a3ce929d0e0e4736" },
+    };
+    for (const event of [
+      { ...base, phase: "received" },
+      { ...base, phase: "response", outcome: "ok", durationMs: 250 },
+      { ...base, phase: "handler", outcome: "returned", durationMs: 400, admissionMs: 100 },
+      {
+        ...base,
+        phase: "dispatch",
+        outcome: "returned",
+        durationMs: 500,
+        queueWaitMs: 75,
+        response: "sent",
+      },
+      { ...base, method: "health", phase: "response", outcome: "ok", durationMs: 10 },
+      { ...base, method: "health", phase: "response", outcome: "error", durationMs: 20 },
+    ] satisfies DiagnosticEventPayload[]) {
+      metrics.record(event, trusted);
+    }
+
+    const rendered = metrics.render();
+    expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="sessions.list"} 1');
+    for (const [method, metric, sum, count] of [
+      ["sessions.list", "first_response", 0.25, 1],
+      ["sessions.list", "handler", 0.4, 1],
+      ["sessions.list", "admission", 0.1, 1],
+      ["sessions.list", "queue_wait", 0.075, 1],
+      ["health", "first_response", 0.03, 2],
+    ]) {
+      expect(rendered).toContain(
+        `openclaw_gateway_rpc_${metric}_seconds_sum{method="${method}"} ${sum}`,
+      );
+      expect(rendered).toContain(
+        `openclaw_gateway_rpc_${metric}_seconds_count{method="${method}"} ${count}`,
+      );
+    }
+    expect(rendered).toContain(
+      'openclaw_gateway_rpc_outcomes_total{outcome="ok",phase="response"} 2',
+    );
+    expect(rendered).not.toContain(base.trace.traceId);
+    expect(rendered).not.toMatch(/openclaw_gateway_rpc_outcomes_total\{[^\n]*method=/);
+    metrics.stop();
+  });
+
+  it("keeps rejected and unsent RPC observations out of response and handler timings", () => {
+    const metrics = createMetricsHarness();
+    const base = { ...baseEvent(), type: "gateway.rpc" as const, method: "unknown" };
+    for (const event of [
+      { ...base, phase: "received" },
+      { ...base, phase: "response", outcome: "unavailable", durationMs: 20 },
+      { ...base, phase: "response", outcome: "suppressed", durationMs: 30 },
+      {
+        ...base,
+        phase: "dispatch",
+        outcome: "rejected",
+        durationMs: 30,
+        response: "suppressed",
+      },
+    ] satisfies DiagnosticEventPayload[]) {
+      metrics.record(event, trusted);
+    }
+    metrics.record({ ...base, phase: "response", outcome: "ok", durationMs: 50 }, untrusted);
+    const rendered = metrics.render();
+    expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="unknown"} 1');
+    for (const outcome of ["unavailable", "suppressed"]) {
+      expect(rendered).toContain(
+        `openclaw_gateway_rpc_outcomes_total{outcome="${outcome}",phase="response"} 1`,
+      );
+    }
+    expect(rendered).toContain(
+      'openclaw_gateway_rpc_outcomes_total{outcome="rejected",phase="dispatch"} 1',
+    );
+    for (const metric of ["first_response", "handler", "admission", "queue_wait"]) {
+      expect(rendered).not.toContain(`openclaw_gateway_rpc_${metric}_seconds`);
+    }
+    metrics.stop();
+  });
+
   it("records trusted run metrics without raw diagnostic identifiers", () => {
     const metrics = createMetricsHarness();
 
@@ -769,6 +853,47 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("turn-should-not-export");
   });
 
+  it("keeps existing operational samples updating when RPC timings fill the shared cap", () => {
+    const metrics = createMetricsHarness();
+    const queue = {
+      ...baseEvent(),
+      type: "queue.lane.dequeue" as const,
+      lane: "main",
+      queueSize: 1,
+      waitMs: 10,
+    };
+    metrics.record(queue, trusted);
+    // This covers the current core-method table's cardinality without importing core internals.
+    for (let index = 0; index < 426; index += 1) {
+      const base = { ...baseEvent(), type: "gateway.rpc" as const, method: `core.method.${index}` };
+      for (const event of [
+        { ...base, phase: "received" },
+        { ...base, phase: "response", outcome: "ok", durationMs: 10 },
+        { ...base, phase: "handler", outcome: "returned", durationMs: 10, admissionMs: 1 },
+        {
+          ...base,
+          phase: "dispatch",
+          outcome: "returned",
+          durationMs: 11,
+          queueWaitMs: 1,
+          response: "sent",
+        },
+      ] satisfies DiagnosticEventPayload[]) {
+        metrics.record(event, trusted);
+      }
+    }
+    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 87");
+    metrics.record({ ...queue, queueSize: 2 }, trusted);
+    const existing = metrics.render();
+    expect(existing).toContain('openclaw_queue_lane_size{lane="main"} 2');
+    expect(existing).toContain('openclaw_queue_lane_wait_seconds_count{lane="main"} 2');
+    expect(existing).toContain("openclaw_prometheus_series_dropped_total 87");
+    metrics.record({ ...queue, lane: "later" }, trusted);
+    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 89");
+    expect(metrics.render()).not.toContain('lane="later"');
+    metrics.stop();
+  });
+
   it("caps metric series growth and reports dropped series", () => {
     const metrics = createMetricsHarness();
 
@@ -791,6 +916,14 @@ describe("diagnostics-prometheus service", () => {
 
     expect(rendered).toContain("# TYPE openclaw_prometheus_series_dropped_total counter");
     expect(rendered).toContain("openclaw_prometheus_series_dropped_total ");
+    metrics.record(
+      { ...baseEvent(), type: "gateway.rpc", method: "health", phase: "received" },
+      trusted,
+    );
+    const saturated = metrics.render();
+    expect(saturated).not.toContain("openclaw_gateway_rpc_requests_total");
+    expect(saturated).not.toBe(rendered);
+    metrics.stop();
   });
 
   it("subscribes to internal diagnostics and renders scrape text", () => {

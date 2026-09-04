@@ -405,14 +405,20 @@ Schema 9 stores an `agent_databases.path` value relative to the state directory 
 
 ## Integrity checks
 
-| When                                        | Check                                                           |
-| ------------------------------------------- | --------------------------------------------------------------- |
-| Every open                                  | Validate the `schema_meta` table and primary metadata row       |
-| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan |
-| Gateway background verifier                 | Run the full scan about once daily and log results              |
-| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database    |
+| When                                        | Check                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------- |
+| Every open                                  | Validate the `schema_meta` table and primary metadata row           |
+| Every physical writable agent-database open | Run full integrity, foreign-key, schema, and canonical-index checks |
+| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan     |
+| Gateway background verifier                 | Run the full scan about once daily and log results                  |
+| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database        |
 
-The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier owns the slower recurring full scan for live databases that do not need migration.
+The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
+
+Memory search and maintenance managers borrow the verified per-agent connection. Acquisition does not reopen or rescan a healthy shared handle. Native and transformed plugin modules share the same process-owned connection lifecycle, query cache, and commit observers. Nested synchronous writes use SQLite savepoints on that connection. A manager retains that exact connection against cache eviction until its work drains, then releases its borrow without closing the database. Explicit quarantine and disposal still revoke it. Full memory rebuilds use separate temporary shadow databases and publish their derived tables in one synchronous transaction. Read-only memory status keeps its separate diagnostic connection and does not create or migrate a missing database.
+
+The shared cache targets 64 handles, but live borrows, synchronous transactions, and incognito state are not evicted. After owners release them, the next new connection trims idle handles back to that target.
+
 Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
 
 Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.

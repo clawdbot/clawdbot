@@ -171,6 +171,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     const command = `
       process.on("SIGTERM", () => {
         require("node:fs").writeFileSync(${JSON.stringify(termPath)}, String(process.pid));
+        process.exit(0);
       });
       require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
       setInterval(() => {}, 1000);
@@ -212,8 +213,8 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       await expect(supervisor.waitForScope(runId)).rejects.toThrow("cleanup identity lost");
       await expect(run.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
       await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
-      // Observe the anchor's TERM before its unchanged grace; neither the timeout
-      // result nor the failed join may disable its independent group cleanup.
+      // TERM must still reach the command after failed cleanup joins. Dedicated
+      // escalation cases cover commands that keep running through the TERM grace.
       await waitForPidFile(termPath, 5_000, realDelay);
       await waitFor(() => !isAlive(startedPid));
     } finally {
