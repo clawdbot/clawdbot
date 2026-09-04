@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessageEvent, Model } from "@openclaw/llm-core";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
   createOpenAICompletionsToolCallDeltaNormalizer,
   createOpenAIEncryptedToolCallReasoningTracker,
+  extractToolCallThoughtSignature,
   finalizeOpenAICompletionsToolCalls,
 } from "../providers/openai-completions-tool-calls.js";
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
@@ -32,7 +32,6 @@ import {
 import { getCompat } from "./openai-transport-params.js";
 import {
   createModelStreamCooperativeScheduler,
-  isOpenAICompletionsThinkingEnabled,
   normalizeOpenAICompletionsTextDelta,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
@@ -72,27 +71,6 @@ type CompletionsStreamOptions = {
     }
   | { mode?: "managed"; beforeContentBlock?: never }
 );
-
-function extractToolCallThoughtSignature(toolCall: unknown): string | undefined {
-  const tc = toolCall as Record<string, unknown> | undefined;
-  if (!tc) {
-    return undefined;
-  }
-  const extra = (tc.extra_content as Record<string, unknown> | undefined)?.google as
-    | Record<string, unknown>
-    | undefined;
-  const fromExtra = extra?.thought_signature;
-  if (typeof fromExtra === "string" && fromExtra.length > 0) {
-    return fromExtra;
-  }
-  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
-    ?.thought_signature;
-  if (typeof fromFunction === "string" && fromFunction.length > 0) {
-    return fromFunction;
-  }
-  const fromToolCall = tc.thought_signature;
-  return typeof fromToolCall === "string" && fromToolCall.length > 0 ? fromToolCall : undefined;
-}
 
 export async function processCompletionsStream(
   responseStream: AsyncIterable<ChatCompletionChunk>,
@@ -521,7 +499,6 @@ export async function processCompletionsStream(
       }
     }
     const rawChoiceDelta = choice.delta ?? choice.message;
-    // Prefer delta when present; message-only chunks are the compat snapshot contract.
     currentTextFrameKind = choice.delta != null ? "delta" : "snapshot";
     if (!rawChoiceDelta) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
@@ -713,24 +690,6 @@ export async function processCompletionsStream(
   if (output.stopReason === "toolUse") {
     tagPendingCommentaryText(output.content);
   }
-}
-
-function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
-  return options?.reasoningEffort ?? options?.reasoning ?? "high";
-}
-
-export function shouldEmitOpenAICompletionsReasoning(
-  model: OpenAIModeModel,
-  options: OpenAICompletionsOptions | undefined,
-) {
-  if (!model.reasoning) {
-    return false;
-  }
-  const effort = resolveOpenAICompletionsReasoningEffort(options);
-  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
-    return false;
-  }
-  return true;
 }
 
 function hasOpenAICompletionsReasoningUsageActivity(

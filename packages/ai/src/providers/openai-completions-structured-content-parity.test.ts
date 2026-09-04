@@ -240,10 +240,11 @@ const scenarios: StructuredContentScenario[] = [
     expectedContent: [{ type: "text", text: "Safety refusal." }],
   },
   {
+    // >=8 exact-replay contract (#136262): identical long deltas are cumulative replays, not appends.
     name: "identical refusals intentionally repeated across separate chunks",
     choice: { delta: { refusal: "Safety refusal." } },
     followupChoice: { delta: { refusal: "Safety refusal." } },
-    expectedContent: [{ type: "text", text: "Safety refusal.Safety refusal." }],
+    expectedContent: [{ type: "text", text: "Safety refusal." }],
   },
   {
     name: "documented mixed assistant text and refusal parts",

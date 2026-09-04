@@ -8,7 +8,7 @@ import {
 } from "../../../../src/logging/diagnostic-run-activity.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import { createLlmRuntime } from "../stream.js";
-import { shouldEmitOpenAICompletionsReasoning } from "./openai-completions-stream.js";
+import { shouldEmitOpenAICompletionsReasoning } from "./openai-completions-params.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 
