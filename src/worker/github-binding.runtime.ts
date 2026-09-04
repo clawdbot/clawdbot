@@ -62,7 +62,8 @@ async function bindWorkerGitHubCheckout(
     }
     const fetched = await git(["fetch", "--quiet", "origin", binding.branch], 60_000);
     if (fetched.code !== 0) {
-      if (fetched.stderr.includes("couldn't find remote ref")) {
+      const remoteBranch = await git(["ls-remote", "--exit-code", "--heads", "origin", branch]);
+      if (remoteBranch.code === 2) {
         return;
       }
       throw new Error(`git fetch failed (exit ${fetched.code})`);
@@ -84,10 +85,36 @@ async function bindWorkerGitHubCheckout(
     if (signal?.aborted) {
       return;
     }
+    const listPaths = async (args: string[]) =>
+      (await requireGit(args)).split("\0").filter(Boolean);
+    const [added, untracked, ignored] = await Promise.all([
+      listPaths([
+        "diff",
+        "--name-only",
+        "--diff-filter=A",
+        "--no-renames",
+        "-z",
+        "HEAD",
+        "FETCH_HEAD",
+        "--",
+      ]),
+      listPaths(["ls-files", "--others", "--exclude-standard", "-z"]),
+      listPaths(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]),
+    ]);
+    const localPaths = [...untracked, ...ignored];
+    const hasPathPrefixCollision = added.some((addedPath) =>
+      localPaths.some(
+        (localPath) =>
+          addedPath.startsWith(`${localPath}/`) || localPath.startsWith(`${addedPath}/`),
+      ),
+    );
+    if (hasPathPrefixCollision) {
+      log.warn(`GitHub checkout fast-forward skipped: local path conflicts with ${binding.branch}`);
+      return;
+    }
     // Paths already missing before the move are the session's own deletions and stay
     // deleted; only files the incoming commits introduce are materialized.
-    const listDeleted = async () =>
-      (await requireGit(["ls-files", "--deleted", "-z"])).split("\0").filter(Boolean);
+    const listDeleted = () => listPaths(["ls-files", "--deleted", "-z"]);
     const deletedBefore = new Set(await listDeleted());
     await requireGit(["reset", "--mixed", "FETCH_HEAD"]);
     const missing = (await listDeleted()).filter((file) => !deletedBefore.has(file));
