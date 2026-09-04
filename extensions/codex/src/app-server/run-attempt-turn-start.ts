@@ -32,7 +32,7 @@ import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
-  createCodexUsageLimitPromptError,
+  CodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
@@ -287,7 +287,7 @@ export async function startCodexAttemptTurn(
           result: buildCodexTurnStartFailureResult({
             params,
             message: usageLimitError.message,
-            promptError: createCodexUsageLimitPromptError(usageLimitError.message),
+            promptError: new CodexUsageLimitPromptError(usageLimitError.message),
             messagesSnapshot,
             systemPromptReport,
           }),
