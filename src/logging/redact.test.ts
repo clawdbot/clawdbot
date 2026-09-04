@@ -1534,6 +1534,11 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("r8_ABC…stuv");
   });
 
+  it("preserves an fc-shaped suffix embedded in a UUID", () => {
+    const profileId = "40cbc896-5872-4f9a-8bfc-21b3b0b25840";
+    expect(redactSensitiveText(profileId, { mode: "tools" })).toBe(profileId);
+  });
+
   it("masks expanded vendor-prefix token corpus", () => {
     const fireworksTokens = [
       { token: `fw-${"C".repeat(40)}`, redacted: "fw-CCC…CCCC" },
