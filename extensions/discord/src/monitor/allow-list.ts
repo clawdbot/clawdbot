@@ -290,38 +290,32 @@ export function resolveDiscordOwnerAccess(params: {
   ownerAllowList: DiscordAllowList | null;
   ownerAllowed: boolean;
 } {
-  const ownerAllowFrom = params.allowFrom?.filter(
-    (entry) => (normalizeOptionalString(entry) ?? "") !== "*",
-  );
   const ownerAllowList = normalizeDiscordAllowList(
-    ownerAllowFrom && ownerAllowFrom.length > 0 ? ownerAllowFrom : undefined,
+    params.allowFrom?.filter((entry) => (normalizeOptionalString(entry) ?? "") !== "*"),
     DISCORD_OWNER_ALLOWLIST_PREFIXES,
   );
-  const ownerAllowed = ownerAllowList
-    ? allowListMatches(
-        ownerAllowList,
-        {
-          id: params.sender.id,
-          name: params.sender.name,
-          tag: params.sender.tag,
-        },
-        { allowNameMatching: params.allowNameMatching },
-      )
-    : false;
-  return { ownerAllowList, ownerAllowed };
+  return {
+    ownerAllowList,
+    ownerAllowed:
+      ownerAllowList !== null &&
+      allowListMatches(ownerAllowList, params.sender, {
+        allowNameMatching: params.allowNameMatching,
+      }),
+  };
 }
 
 export function resolveDiscordCommandOwnerAllowFrom(cfg: OpenClawConfig): string[] | undefined {
-  // Doctor canonicalizes legacy owner prefixes; transport allowlist parsing must
-  // not grant different owner authority than the shared command authorization.
-  // A present noncanonical list stays empty so callers cannot fall back to channel access.
+  // Doctor owns channel:user:id repair. Bare targets (user:, pk:, mentions) are
+  // shipped owner config; keep their matcher without re-reading the retired envelope.
+  // An unrepaired Discord override stays empty instead of inheriting channel access.
   const entries = (cfg.commands?.ownerAllowFrom ?? [])
     .map((entry) => String(entry).trim())
     .filter((entry) => entry && (/^(discord|user|pk):/i.test(entry) || !entry.includes(":")));
   return entries.length > 0
     ? entries
+        .filter((entry) => !/^discord:user:/i.test(entry))
         .map((entry) => entry.replace(/^discord:/i, "").trim())
-        .filter((entry) => entry && !entry.includes(":"))
+        .filter(Boolean)
     : undefined;
 }
 

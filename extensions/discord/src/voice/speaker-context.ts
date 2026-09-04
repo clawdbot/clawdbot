@@ -4,6 +4,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { Client } from "../internal/discord.js";
+import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
 
 const SPEAKER_CONTEXT_CACHE_TTL_MS = 60_000;
@@ -46,7 +47,11 @@ export class DiscordVoiceSpeakerContextResolver {
       label: identity.label,
       name: identity.name,
       tag: identity.tag,
-      senderIsOwner: this.params.ownerAllowFrom?.includes(identity.id) === true,
+      senderIsOwner: resolveDiscordOwnerAccess({
+        allowFrom: this.params.ownerAllowFrom,
+        sender: identity,
+        allowNameMatching: false,
+      }).ownerAllowed,
     };
     this.setCachedContext(guildId, userId, context);
     return context;

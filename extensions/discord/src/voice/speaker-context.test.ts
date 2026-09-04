@@ -19,10 +19,16 @@ describe("DiscordVoiceSpeakerContextResolver", () => {
   it.each([
     { owner: "123456789012345678", senderIsOwner: true },
     { owner: "discord:123456789012345678", senderIsOwner: true },
+    { owner: "user:123456789012345678", senderIsOwner: true },
+    { owner: "pk:123456789012345678", senderIsOwner: true },
+    { owner: "<@123456789012345678>", senderIsOwner: true },
+    { owner: "<@!123456789012345678>", senderIsOwner: true },
     { owner: "discord:user:123456789012345678", senderIsOwner: false },
     { owner: "slack:123456789012345678", senderIsOwner: false },
     { owner: "discord:*", senderIsOwner: false },
-  ])("uses canonical command-owner IDs for voice: $owner", async ({ owner, senderIsOwner }) => {
+    { owner: "user:*", senderIsOwner: false },
+    { owner: "pk:*", senderIsOwner: false },
+  ])("preserves owner target authority for voice: $owner", async ({ owner, senderIsOwner }) => {
     const id = "123456789012345678";
     const fetchMember = vi.fn().mockResolvedValue({ user: { id, username: "ada" } });
     const access = resolveDiscordVoiceAccess({
