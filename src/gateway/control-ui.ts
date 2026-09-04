@@ -695,7 +695,16 @@ export async function handleControlUiAssistantMediaRequest(
       "Content-Disposition",
       buildAssistantMediaContentDisposition(filename, contentType),
     );
-    res.setHeader("Cache-Control", "no-cache");
+    // Canonical inbound refs are immutable. A private cache may reuse those bytes only
+    // while the URL's signed ticket remains valid; mutable local paths still revalidate.
+    const cacheMaxAge =
+      resolvedReference.kind === "inbound" && ticket !== undefined
+        ? Math.max(0, Math.floor((ticket.exp - Date.now()) / 1000))
+        : undefined;
+    res.setHeader(
+      "Cache-Control",
+      cacheMaxAge === undefined ? "no-cache" : `private, max-age=${cacheMaxAge}`,
+    );
     const byteResponse = resolveByteResponse({
       // Allowed paths are mutable; matching size and mtime cannot prove unchanged bytes.
       file: { size: opened.stat.size },
