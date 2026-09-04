@@ -77,6 +77,10 @@ export type ChannelHandler = {
     payloads: NormalizedPayloadForChannelDelivery[],
   ) => NormalizedPayloadForChannelDelivery[];
   sendTextOnlyErrorPayloads?: boolean;
+  preferPayloadForMedia?: (
+    payload: ReplyPayload,
+    overrides?: OutboundMessageSendOverrides,
+  ) => boolean;
   renderPresentation?: (
     payload: ReplyPayload,
     sourcePresentation?: MessagePresentation,

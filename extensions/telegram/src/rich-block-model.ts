@@ -95,6 +95,10 @@ export type InputRichBlockListItem = {
 
 type InputMediaUrl<K extends string> = { type: K; media: string };
 
+export function isVoiceNoteMedia(source: string | null | undefined): boolean {
+  return typeof source === "string" && /\.(?:ogg|opus|oga)(?:[?#]|$)/i.test(source);
+}
+
 export type InputRichBlock =
   | InputRichBlockParagraph
   | InputRichBlockHeading
@@ -362,6 +366,52 @@ export function countInputRichBlockMedia(block: InputRichBlock): number {
     default:
       return 0;
   }
+}
+
+/** Exact media sources referenced by a typed rich-block tree. */
+export function inputRichBlockMediaSources(blocks: readonly InputRichBlock[]): Set<string> {
+  const sources = new Set<string>();
+  const visit = (block: InputRichBlock) => {
+    switch (block.type) {
+      case "photo":
+        sources.add(block.photo.media);
+        break;
+      case "video":
+        sources.add(block.video.media);
+        break;
+      case "audio":
+        sources.add(block.audio.media);
+        break;
+      case "animation":
+        sources.add(block.animation.media);
+        break;
+      case "voice_note":
+        sources.add(block.voice_note.media);
+        break;
+      case "collage":
+      case "slideshow":
+      case "blockquote":
+      case "details":
+        block.blocks.forEach(visit);
+        break;
+      case "list":
+        block.items.forEach((item) => item.blocks.forEach(visit));
+        break;
+      case "anchor":
+      case "divider":
+      case "footer":
+      case "heading":
+      case "map":
+      case "mathematical_expression":
+      case "paragraph":
+      case "pre":
+      case "pullquote":
+      case "table":
+        break;
+    }
+  };
+  blocks.forEach(visit);
+  return sources;
 }
 
 export function richTextToPlainString(text: RichText): string {

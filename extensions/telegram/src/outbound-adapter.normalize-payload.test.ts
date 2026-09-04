@@ -78,6 +78,49 @@ describe("telegramOutbound normalizePayload", () => {
   });
 
   it.each([
+    { name: "string buttons", buttons: "not a keyboard" },
+    { name: "non-array row", buttons: [{ text: "Open task" }] },
+    { name: "non-string label", buttons: [[{ text: 42, callback_data: "open" }]] },
+  ])("suppresses malformed $name without adopting fallback text", ({ buttons }) => {
+    expect(
+      telegramOutbound.normalizePayload?.({
+        cfg: {},
+        payload: {
+          fallbackText: { text: "Summary" },
+          channelData: { telegram: { buttons } },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("merges valid fallback buttons without treating a non-string quote as text", () => {
+    const buttons = [[{ text: "Open task", callback_data: "open" }]];
+    const fallbackText = { text: "Summary", replacesPayloadIndex: 0 };
+    const payloads = [
+      { text: "Summary", channelData: { telegram: { quoteText: 42, effect: "spark" } } },
+      {
+        text: "Summary",
+        fallbackText,
+        channelData: { telegram: { buttons, quoteText: false } },
+      },
+    ];
+
+    expect(
+      telegramOutbound.normalizePayloadBatch?.({
+        cfg: {},
+        payloads: payloads.map((payload, index) => ({ index, payload })),
+      }),
+    ).toEqual([
+      {
+        ...payloads[0],
+        fallbackText,
+        channelData: { telegram: { buttons, quoteText: 42, effect: "spark" } },
+      },
+      null,
+    ]);
+  });
+
+  it.each([
     { name: "media", payload: { mediaUrl: "https://example.test/report.png" } },
     { name: "location", payload: { location: { latitude: 1, longitude: 2 } } },
     {

@@ -1247,7 +1247,7 @@ extensions/telegram/src/miniapp/routes.ts	1
 extensions/telegram/src/monitor.ts	2
 extensions/telegram/src/network-config.ts	1
 extensions/telegram/src/network-errors.ts	8
-extensions/telegram/src/outbound-adapter.ts	5
+extensions/telegram/src/outbound-adapter.ts	1
 extensions/telegram/src/outbound-media.ts	2
 extensions/telegram/src/outbound-message-context.ts	1
 extensions/telegram/src/poll-answer-context.ts	1

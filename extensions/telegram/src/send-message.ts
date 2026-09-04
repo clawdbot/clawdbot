@@ -9,6 +9,7 @@ import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { telegramCaptionDeliveryMetadata } from "./caption.js";
+import { mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import {
@@ -18,6 +19,7 @@ import {
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
 import { buildTelegramThreadReplyParams } from "./reply-parameters.js";
+import { resolveTelegramRichLocalMedia, type TelegramRichLocalMedia } from "./rich-local-media.js";
 import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
 import {
   logTelegramOutboundSendOk,
@@ -467,11 +469,72 @@ async function sendMessageTelegramWithContext(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  const textResult = await sendChunkedText(text, "text send");
+  const richLocalMedia =
+    useRichMessages && opts.forceDocument !== true && opts.richLocalMedia === undefined
+      ? await resolveTelegramRichLocalMedia({
+          text,
+          maxBytes: mediaMaxBytes,
+          mediaAccess: opts.mediaAccess,
+          mediaLocalRoots: opts.mediaLocalRoots,
+          mediaReadFile: opts.mediaReadFile,
+        })
+      : undefined;
+  const degradedRichLocalMedia: TelegramRichLocalMedia[] = [];
+  const textResult = await sendChunkedText(richLocalMedia?.text ?? text, "text send", {
+    richLocalMedia: opts.richLocalMedia ?? richLocalMedia?.media,
+    onRichLocalMediaDegraded: (media) => degradedRichLocalMedia.push(...media),
+  });
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
     direction: "outbound",
   });
-  return textResult;
+  if (degradedRichLocalMedia.length === 0) {
+    return textResult;
+  }
+  // Telegram rejected the rich upload and the text degraded to plain chunks
+  // that only name these files; deliver the originals as legacy media so the
+  // attachment survives the fallback. The text already carried the buttons,
+  // the single-use reply, and the final projection part.
+  const mediaOpts: TelegramSendOpts = {
+    ...opts,
+    buttons: undefined,
+    richLocalMedia: undefined,
+    promptContextProjectionPlan: undefined,
+    ...(singleUseReplyTo
+      ? { replyToMessageId: undefined, replyToIdSource: undefined, replyToMode: undefined }
+      : {}),
+  };
+  const mediaResults: TelegramSendResult[] = [];
+  for (const media of degradedRichLocalMedia) {
+    try {
+      mediaResults.push(
+        await sendMessageTelegramWithContext(
+          to,
+          "",
+          {
+            ...mediaOpts,
+            mediaUrl: media.source,
+            ...(media.media.type === "voice_note" ? { asVoice: true } : {}),
+          },
+          apiContext,
+        ),
+      );
+    } catch (error) {
+      throw mergeTelegramPartialDeliveryError(error, {
+        messageIds: [
+          ...sender.parts.map((part) => String(part.messageId)),
+          ...mediaResults.map((result) => result.messageId),
+        ],
+        ...(textResult.receipt ? { receipt: textResult.receipt } : {}),
+        visibleReplySent: true,
+      });
+    }
+  }
+  const receipt = createMessageReceiptFromOutboundResults({
+    results: [textResult, ...mediaResults],
+    kind: "text",
+  });
+  receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+  return { ...(mediaResults.at(-1) ?? textResult), receipt };
 }

@@ -207,6 +207,24 @@ export type ChannelOutboundAdapter = {
     params: ChannelOutboundNormalizePayloadBatchParams,
   ) => ReadonlyArray<ReplyPayload | null>;
   sendTextOnlyErrorPayloads?: boolean;
+  /**
+   * Opt a media-bearing payload into one `sendPayload` call instead of core's
+   * default `sendMedia` fan-out. The callback is a routing decision only;
+   * returning false preserves the normal text/media fallback path.
+   *
+   * When this returns true, `sendPayload` owns every text and media part in the
+   * original payload, including ordering, reply semantics, and any fallback for
+   * media it cannot embed. `forceDocument` is forwarded so adapters can decline
+   * the combined route when it would change the caller's requested media mode.
+   * Core ignores this hook unless the selected message/outbound durable-final
+   * capability map explicitly declares `payload: true`.
+   */
+  preferPayloadForMedia?: (params: {
+    payload: ReplyPayload;
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    forceDocument?: boolean;
+  }) => boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {
     cfg: OpenClawConfig;

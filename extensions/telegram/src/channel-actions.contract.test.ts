@@ -92,7 +92,9 @@ describe("telegram actions contract", () => {
         expect(hints?.rules.join(" ")).toContain("Bot API 10.3 blocks");
         expect(hints?.rules.join(" ")).toContain("<details><summary>");
         expect(hints?.rules.join(" ")).toContain("Not MarkdownV2/parse_mode");
-        expect(hints?.rules.join(" ")).toContain("Media https URLs only, block-level only");
+        expect(hints?.rules.join(" ")).toContain(
+          "Media src: https URL or absolute local path under the allowed media roots",
+        );
       } else {
         expect(hints?.rules.join(" ")).toContain("Telegram rich OFF");
         expect(hints?.rules.join(" ")).toContain("richMessages");

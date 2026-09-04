@@ -4,6 +4,7 @@ import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
+import type { TelegramRichLocalMedia } from "./rich-local-media.js";
 import type { TelegramApiOverride } from "./send-context.js";
 import type { OpenClawConfig } from "./send.runtime.js";
 
@@ -49,6 +50,8 @@ export type TelegramSendOpts = {
   buttons?: TelegramInlineButtons;
   /** Send image as document to avoid Telegram compression. Defaults to false. */
   forceDocument?: boolean;
+  /** @internal Resolved local media to include in the rich message. */
+  richLocalMedia?: readonly TelegramRichLocalMedia[];
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
   /** @internal Revalidate durable custody before a send operation, not after throttle waits. */

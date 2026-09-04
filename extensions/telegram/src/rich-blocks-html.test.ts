@@ -101,6 +101,23 @@ describe("block HTML islands", () => {
     expect(blocks.some((block) => block.type === "photo")).toBe(false);
   });
 
+  it("maps attached tg media references without changing HTTPS media", () => {
+    const blocks = blocksFor(
+      [
+        '<img src="tg://photo?id=chart_1"/>',
+        '<video src="tg://video?id=clip-2"></video>',
+        '<audio src="tg://audio?id=track_3"></audio>',
+        '<img src="https://example.com/remote.jpg"/>',
+      ].join("\n\n"),
+    );
+    expect(blocks).toMatchObject([
+      { type: "photo", photo: { media: "tg://photo?id=chart_1" } },
+      { type: "video", video: { media: "tg://video?id=clip-2" } },
+      { type: "audio", audio: { media: "tg://audio?id=track_3" } },
+      { type: "photo", photo: { media: "https://example.com/remote.jpg" } },
+    ]);
+  });
+
   it("maps tg-math-block, tg-map, hr, aside, and anchor islands", () => {
     const blocks = blocksFor(
       [

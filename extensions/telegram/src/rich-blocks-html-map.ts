@@ -2,6 +2,7 @@
 // and island discovery, on top of the fragment parser in rich-blocks-html.ts.
 import { tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
 import {
+  isVoiceNoteMedia,
   richTextToPlainString,
   type InputRichBlock,
   type InputRichBlockListItem,
@@ -42,7 +43,12 @@ const BLOCK_ISLAND_TAGS = new Set([
   "a",
 ]);
 
-const MEDIA_SRC_RE = /^https:\/\//i;
+const MEDIA_SRC_RE = /^(?:https:\/\/|tg:\/\/(?:photo|video|audio)\?id=[A-Za-z0-9_-]{1,64}$)/i;
+
+function isTelegramRichMediaSourceForElement(src: string, element: string) {
+  const match = /^tg:\/\/(photo|video|audio)\?id=[A-Za-z0-9_-]{1,64}$/i.exec(src);
+  return !match || match[1] === (element === "img" ? "photo" : element);
+}
 
 // True when a container holds meaningful content outside its allowed children;
 // such islands stay literal instead of silently dropping the stray content.
@@ -63,7 +69,7 @@ function mediaBlockFromElement(
   const hasBody = node.children.some((child) =>
     child.kind === "text" ? child.text.trim() !== "" : true,
   );
-  if (!MEDIA_SRC_RE.test(src) || hasBody) {
+  if (!MEDIA_SRC_RE.test(src) || !isTelegramRichMediaSourceForElement(src, node.name) || hasBody) {
     return undefined;
   }
   const withCaption = caption ? { caption } : {};
@@ -82,7 +88,7 @@ function mediaBlockFromElement(
     // OGG/Opus is Telegram's voice-note family; the music `audio` type rejects
     // it (live-verified RICH_MESSAGE_AUDIO_INVALID), and a Vorbis ogg fails
     // under both types, so voice_note strictly dominates for these extensions.
-    if (/\.(?:ogg|opus|oga)(?:[?#]|$)/i.test(src)) {
+    if (isVoiceNoteMedia(src)) {
       return {
         type: "voice_note",
         voice_note: { type: "voice_note", media: src },
