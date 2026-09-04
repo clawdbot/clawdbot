@@ -248,18 +248,19 @@ describe("mcp connection resolver helpers", () => {
     const previousExternalRestartPolicy = isGatewaySigusr1RestartExternallyAllowed();
 
     try {
-      // Model provisioning is independent of plugin-owned MCP revocation.
-      // Keep Gateway refreshes observable without starting provider discovery or auth warmup.
+      // Keep Gateway refresh scheduling observable without starting provider discovery.
       const refreshPreparedModelRuntimeSnapshots = vi
         .spyOn(await import("./prepared-model-runtime.js"), "refreshPreparedModelRuntimeSnapshots")
         .mockResolvedValue(undefined);
       const refreshContextWindowCache = vi
         .spyOn(await import("./context.js"), "refreshContextWindowCache")
         .mockResolvedValue(undefined);
-      vi.spyOn(
-        await import("./model-provider-auth.js"),
-        "warmCurrentProviderAuthStateOffMainThread",
-      ).mockResolvedValue(undefined);
+      const warmCurrentProviderAuthStateOffMainThread = vi
+        .spyOn(
+          await import("./model-provider-auth.js"),
+          "warmCurrentProviderAuthStateOffMainThread",
+        )
+        .mockResolvedValue(undefined);
       const previous = createMcpProofPluginRegistry();
       previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
         serverName: "user-mail",
@@ -395,6 +396,9 @@ describe("mcp connection resolver helpers", () => {
         catalogMode: "static",
       });
       expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+      expect(warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig, {
+        isCancelled: expect.any(Function),
+      });
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(isPluginRegistryRetired(previous.registry)).toBe(true);
       expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();

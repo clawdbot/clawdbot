@@ -88,6 +88,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -2202,20 +2203,15 @@ private fun ProgressCardPill(
   card: ChatProgressCard,
   hasActiveRun: Boolean,
   modifier: Modifier = Modifier,
+  attachedToComposer: Boolean = false,
 ) {
   val steps = card.steps
   val currentStep =
     steps.firstOrNull { it.status == ChatPlanStepStatus.InProgress }
       ?: steps.firstOrNull { it.status == ChatPlanStepStatus.Pending }
       ?: steps.lastOrNull { it.status == ChatPlanStepStatus.Completed }
-  val completedCount = steps.count { it.status == ChatPlanStepStatus.Completed }
-  val currentPosition =
-    if (steps.isNotEmpty() && completedCount == steps.size) {
-      steps.size
-    } else {
-      (steps.indexOf(currentStep) + 1).coerceAtLeast(1)
-    }
   val complete = progressCardIsComplete(card, hasActiveRun)
+  val currentPosition = if (complete) steps.size else (steps.indexOf(currentStep) + 1).coerceAtLeast(1)
   var expanded by rememberSaveable { mutableStateOf(false) }
   LaunchedEffect(complete) {
     if (complete) expanded = false
@@ -2234,7 +2230,19 @@ private fun ProgressCardPill(
       nativeString("\$activityLabel \u00b7 \$currentPosition/\${steps.size}", activityLabel, currentPosition, steps.size)
     }
 
-  Column(modifier = modifier.fillMaxWidth().heightIn(max = 240.dp).testTag("chat-progress-card")) {
+  val attachedShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+  val baseModifier = modifier.fillMaxWidth().heightIn(max = 240.dp).testTag("chat-progress-card")
+  val progressModifier =
+    if (attachedToComposer) {
+      baseModifier
+        .clip(attachedShape)
+        .background(ClawTheme.colors.surface)
+        .border(1.dp, ClawTheme.colors.borderStrong, attachedShape)
+        .padding(bottom = 18.dp)
+    } else {
+      baseModifier
+    }
+  Column(modifier = progressModifier) {
     Surface(
       onClick = { expanded = !expanded },
       modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
@@ -2490,58 +2498,54 @@ private fun ChatComposer(
       )
     }
 
-    if (voiceNoteState is VoiceNoteRecorderState.Recording || voiceNoteState is VoiceNoteRecorderState.Preparing) {
-      progressCard?.let { card ->
-        ProgressCardPill(card = card, hasActiveRun = pendingRunCount > 0, modifier = Modifier.weight(1f, fill = false))
-      }
-    }
-
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      if (voiceNoteState is VoiceNoteRecorderState.Recording) {
-        VoiceNoteRecordingControls(
-          elapsedMs = voiceNoteElapsedMs,
-          level = voiceNoteLevel,
-          onCancel = onCancelVoiceNote,
-          onDone = onFinishVoiceNote,
-          modifier = Modifier.weight(1f),
-        )
-      } else if (voiceNoteState is VoiceNoteRecorderState.Preparing) {
-        VoiceNotePreparing(modifier = Modifier.weight(1f))
-      } else {
-        ChatInputPill(
-          progressCard = progressCard,
-          progressCardHasActiveRun = pendingRunCount > 0,
-          value = value,
-          onValueChange = onValueChange,
-          onPickImages = onPickImages,
-          onPickAudioOrDocument = onPickAudioOrDocument,
-          onPickVideo = onPickVideo,
-          onStartVoiceNote = onStartVoiceNote,
-          recordVoiceNoteEnabled = recordVoiceNoteEnabled,
-          dictationActive = dictationActive,
-          dictationEnabled = dictationEnabled,
-          onToggleDictation = onToggleDictation,
-          talkActive = talkActive,
-          onToggleTalk = onToggleTalk,
-          runActive = pendingRunCount > 0,
-          onAbort = onAbort,
-          hasContent = hasContent,
-          sendEnabled = sendEnabled,
-          onSend = onSend,
-          selectedModelLabel = selectedModelLabel,
-          modelPickerEnabled = modelPickerEnabled,
-          onOpenModelPicker = onOpenModelPicker,
-          thinkingLevel = thinkingLevel,
-          thinkingOptions = thinkingOptions,
-          thinkingSupported = thinkingSupported,
-          thinkingLevelEnabled = thinkingLevelEnabled,
-          fastMode = fastMode,
-          fastModeEnabled = fastModeEnabled,
-          onFastModeChange = onFastModeChange,
-          onThinkingLevelChange = onThinkingLevelChange,
-          contextUsage = contextUsage,
-          modifier = Modifier.weight(1f),
-        )
+    val attachedProgress = progressCard != null && voiceNoteState !is VoiceNoteRecorderState.Recording && voiceNoteState !is VoiceNoteRecorderState.Preparing
+    Column(verticalArrangement = Arrangement.spacedBy(if (attachedProgress) (-18).dp else 4.dp)) {
+      progressCard?.let { card -> ProgressCardPill(card, pendingRunCount > 0, Modifier.weight(1f, fill = false), attachedProgress) }
+      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (voiceNoteState is VoiceNoteRecorderState.Recording) {
+          VoiceNoteRecordingControls(
+            elapsedMs = voiceNoteElapsedMs,
+            level = voiceNoteLevel,
+            onCancel = onCancelVoiceNote,
+            onDone = onFinishVoiceNote,
+            modifier = Modifier.weight(1f),
+          )
+        } else if (voiceNoteState is VoiceNoteRecorderState.Preparing) {
+          VoiceNotePreparing(modifier = Modifier.weight(1f))
+        } else {
+          ChatInputPill(
+            value = value,
+            onValueChange = onValueChange,
+            onPickImages = onPickImages,
+            onPickAudioOrDocument = onPickAudioOrDocument,
+            onPickVideo = onPickVideo,
+            onStartVoiceNote = onStartVoiceNote,
+            recordVoiceNoteEnabled = recordVoiceNoteEnabled,
+            dictationActive = dictationActive,
+            dictationEnabled = dictationEnabled,
+            onToggleDictation = onToggleDictation,
+            talkActive = talkActive,
+            onToggleTalk = onToggleTalk,
+            runActive = pendingRunCount > 0,
+            onAbort = onAbort,
+            hasContent = hasContent,
+            sendEnabled = sendEnabled,
+            onSend = onSend,
+            selectedModelLabel = selectedModelLabel,
+            modelPickerEnabled = modelPickerEnabled,
+            onOpenModelPicker = onOpenModelPicker,
+            thinkingLevel = thinkingLevel,
+            thinkingOptions = thinkingOptions,
+            thinkingSupported = thinkingSupported,
+            thinkingLevelEnabled = thinkingLevelEnabled,
+            fastMode = fastMode,
+            fastModeEnabled = fastModeEnabled,
+            onFastModeChange = onFastModeChange,
+            onThinkingLevelChange = onThinkingLevelChange,
+            contextUsage = contextUsage,
+            modifier = Modifier.weight(1f),
+          )
+        }
       }
     }
 
@@ -3069,8 +3073,6 @@ internal fun canSelectChatPermissionMode(
 
 @Composable
 private fun ChatInputPill(
-  progressCard: ChatProgressCard?,
-  progressCardHasActiveRun: Boolean,
   value: String,
   onValueChange: (String) -> Unit,
   onPickImages: () -> Unit,
@@ -3115,9 +3117,6 @@ private fun ChatInputPill(
     shadowElevation = 1.dp,
   ) {
     Column {
-      progressCard?.let { card ->
-        ProgressCardPill(card = card, hasActiveRun = progressCardHasActiveRun, modifier = Modifier.weight(1f, fill = false))
-      }
       ChatTextFieldValueAdapter(
         value = value,
         onValueChange = onValueChange,

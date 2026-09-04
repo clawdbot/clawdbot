@@ -164,13 +164,14 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
     rawUsage = value.usage;
     // The stream contract returns failed assistant messages without throwing.
     // Keep their terminal fact for both iterator and result-only completion.
+    // Abort state takes precedence over transport errors raised during cancellation.
     if (
       value.role === "assistant" &&
       (value.stopReason === "error" || value.stopReason === "aborted")
     ) {
       state.terminalError ??= Object.assign(
         new Error(typeof value.errorMessage === "string" ? value.errorMessage : value.stopReason),
-        { code: value.errorCode },
+        { code: value.stopReason === "aborted" ? "ABORT_ERR" : value.errorCode },
       );
     }
   } catch {

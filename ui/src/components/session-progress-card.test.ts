@@ -306,6 +306,79 @@ describe("renderSessionProgressCard", () => {
     expect(card?.open).toBe(true);
   });
 
+  it("expands after the matching final and collapses again for the next run", () => {
+    const container = document.createElement("div");
+    const renderRun = (activeRunId: string | null, completedRunId: string | null) =>
+      render(
+        renderSessionProgressCard(
+          progressCard,
+          "composer",
+          undefined,
+          activeRunId ? "running" : completedRunId ? "done" : undefined,
+          RUN_STARTED_MS,
+          completedRunId ? RUN_ENDED_MS : undefined,
+          activeRunId !== null,
+          true,
+          { activeRunId, completedRunId },
+        ),
+        container,
+      );
+
+    renderRun("run-1", null);
+    const card = container.querySelector<HTMLDetailsElement>(
+      '[data-progress-card-placement="composer"]',
+    );
+    expect(card?.open).toBe(false);
+
+    card!.open = true;
+    renderRun("run-1", null);
+    expect(card?.open).toBe(true);
+
+    card!.open = false;
+    renderRun(null, "run-1");
+    expect(card?.open).toBe(true);
+
+    card!.open = false;
+    renderRun(null, "run-1");
+    expect(card?.open).toBe(false);
+
+    renderRun("run-2", "run-1");
+    expect(card?.open).toBe(false);
+    renderRun(null, "run-2");
+    expect(card?.open).toBe(true);
+  });
+
+  it("does not change disclosure at run boundaries when auto-collapse is disabled", () => {
+    const container = document.createElement("div");
+    const renderRun = (activeRunId: string | null, completedRunId: string | null) =>
+      render(
+        renderSessionProgressCard(
+          progressCard,
+          "composer",
+          undefined,
+          activeRunId ? "running" : completedRunId ? "done" : undefined,
+          RUN_STARTED_MS,
+          completedRunId ? RUN_ENDED_MS : undefined,
+          activeRunId !== null,
+          false,
+          { activeRunId, completedRunId },
+        ),
+        container,
+      );
+
+    renderRun("run-1", null);
+    const card = container.querySelector<HTMLDetailsElement>(
+      '[data-progress-card-placement="composer"]',
+    );
+    expect(card?.open).toBe(true);
+
+    card!.open = false;
+    renderRun(null, "run-1");
+    expect(card?.open).toBe(false);
+    renderRun("run-2", null);
+    expect(card?.open).toBe(false);
+  });
+
   it("keeps the collapsed counter in the summary action column", () => {
     const container = document.createElement("div");
     render(renderSessionProgressCard(progressCard, "composer"), container);
@@ -417,7 +490,7 @@ describe("renderSessionProgressCard", () => {
     expect(container.querySelector("[data-outcome=failed]")).toBeNull();
   });
 
-  it("starts completed composer progress collapsed", () => {
+  it("starts completed composer progress collapsed without replaying an old final", () => {
     const container = document.createElement("div");
     render(
       renderSessionProgressCard(
@@ -428,6 +501,13 @@ describe("renderSessionProgressCard", () => {
           ),
         },
         "composer",
+        undefined,
+        "done",
+        RUN_STARTED_MS,
+        RUN_ENDED_MS,
+        false,
+        true,
+        { completedRunId: "run-before-mount" },
       ),
       container,
     );

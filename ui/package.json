@@ -3,10 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "dev": "vite",
-    "preview": "vite preview",
-    "test": "vitest run --config vitest.config.ts"
+    "build": "node ../scripts/run-node-package-bin.mts vite build",
+    "dev": "node ../scripts/run-node-package-bin.mts vite",
+    "preview": "node ../scripts/run-node-package-bin.mts vite preview",
+    "test": "node ../scripts/run-node-package-bin.mts vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "@awesome.me/webawesome": "3.12.0",
