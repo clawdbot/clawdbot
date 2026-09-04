@@ -241,8 +241,8 @@ export class TerminalSessionManager {
 
     const sessionId = randomUUID();
     const buffer = new TerminalOutputRing(this.scrollbackChars);
-    // getConnIds runs only when output emits, after `session` below is assigned,
-    // so the forward reference from this closure is safe.
+    // getConnIds runs after `session` below is assigned, including for incoming
+    // chunks before output emits, so the forward reference is safe.
     const output = new TerminalOutputController({
       backend,
       getConnIds: () => terminalSessionRecipientIds(session),

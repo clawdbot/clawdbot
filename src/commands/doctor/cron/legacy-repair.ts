@@ -14,12 +14,12 @@ import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   loadCronQuarantinedJobs,
   resolveCronJobsStorePath,
+  saveCronJobsStore,
   saveCronJobsStoreWithMetadata,
   saveCronQuarantinedJobs,
   type CronQuarantinedJob,
   type QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
-import { saveCronJobsStoreWithTransactionHooks } from "../../../cron/store/transaction-hooks.js";
 import type { CronJob } from "../../../cron/types.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
@@ -334,16 +334,12 @@ export async function applyLegacyCronStoreRepair(params: {
             },
           );
         } else {
-          await saveCronJobsStoreWithTransactionHooks(
-            state.storePath,
-            store,
-            {
-              ...(quarantine ? { quarantine } : {}),
-              ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
-              preserveRuntimeState: true,
-            },
-            { beforeWrite: assertSnapshotCurrent },
-          );
+          await saveCronJobsStore(state.storePath, store, {
+            ...(quarantine ? { quarantine } : {}),
+            ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
+            preserveRuntimeState: true,
+            transactionHooks: { beforeWrite: assertSnapshotCurrent },
+          });
         }
       } else if (quarantine) {
         saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });

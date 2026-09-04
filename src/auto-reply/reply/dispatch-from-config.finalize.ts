@@ -176,6 +176,20 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       if (finalReply.queuedFinal) {
         finalDeliveries.push(finalReply.dispatcherOutcome);
       }
+      // Queue admission can still be cancelled or fail. Keep the owner's receipt
+      // until this exact final payload settles as delivered.
+      const onFinalDeliverySuccess = getReplyPayloadMetadata(reply)?.onFinalDeliverySuccess;
+      if (onFinalDeliverySuccess) {
+        if (finalReply.dispatcherOutcome) {
+          registerReplyDispatcherSettledTask(dispatcher, async () => {
+            if ((await finalReply.dispatcherOutcome) === "delivered") {
+              onFinalDeliverySuccess();
+            }
+          });
+        } else if (finalReply.routedFinalCount > 0) {
+          onFinalDeliverySuccess();
+        }
+      }
       // Metadata survives usage, threading, and transcript decoration; object identity does not.
       if (pendingContinuationSettlement && getReplyPayloadMetadata(reply)?.continuationStatus) {
         if (finalReply.dispatcherOutcome) {

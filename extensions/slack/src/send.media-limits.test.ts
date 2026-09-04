@@ -107,7 +107,7 @@ vi.mock("@slack/bolt", () => {
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
   createSlackStartupAuthClient: () => provider.client,
-  getSlackListenerUploadCompletionClient: () => provider.client,
+  getSlackListenerWriteClient: () => provider.client,
 }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -161,7 +161,7 @@ describe("Slack configured limits on real local files", () => {
           agents: { defaults: { mediaMaxMb: 0.1 / (1024 * 1024) } },
           channels: { slack: { mediaMaxMb: testCase.mediaMaxMb } },
         },
-        eventScope: { teamId: "TWORKSPACE", client, uploadCompletionClient: client },
+        eventScope: { teamId: "TWORKSPACE", client, writeClient: client },
         mediaUrl: mediaPath,
         mediaLocalRoots: [state.workspaceDir],
         forceDocument: true,

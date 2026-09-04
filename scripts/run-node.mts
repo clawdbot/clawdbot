@@ -796,9 +796,11 @@ const refuseImmutableDeploymentMutation = async (
 };
 
 const SIGNAL_EXIT_CODES = {
+  SIGHUP: 129,
   SIGINT: 130,
   SIGTERM: 143,
 };
+const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 const isSignalKey = (signal: NodeJS.Signals): signal is keyof typeof SIGNAL_EXIT_CODES =>
   Object.hasOwn(SIGNAL_EXIT_CODES, signal);
@@ -1126,11 +1128,8 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
     if (forceKillTimer) {
       clearTimeout(forceKillTimer);
     }
-    if (onSigInt) {
-      deps.process.off("SIGINT", onSigInt);
-    }
-    if (onSigTerm) {
-      deps.process.off("SIGTERM", onSigTerm);
+    for (const [signal, handler] of signalHandlers) {
+      deps.process.off(signal, handler);
     }
   };
 
@@ -1146,15 +1145,12 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
     }, RUN_NODE_SIGNAL_FORCE_KILL_AFTER_MS);
   };
 
-  const onSigInt = () => {
-    forwardSignal("SIGINT");
-  };
-  const onSigTerm = () => {
-    forwardSignal("SIGTERM");
-  };
-
-  deps.process.on("SIGINT", onSigInt);
-  deps.process.on("SIGTERM", onSigTerm);
+  const signalHandlers = FORWARDED_SIGNALS.map(
+    (signal) => [signal, () => forwardSignal(signal)] as const,
+  );
+  for (const [signal, handler] of signalHandlers) {
+    deps.process.on(signal, handler);
+  }
 
   try {
     return await new Promise<SpawnedProcessResult>((resolve) => {
@@ -1420,12 +1416,14 @@ export const acquireRunNodeBuildLock = async (deps: RunNodeLockDeps): Promise<()
       };
       const onSignal = () => removeLockDir();
       const onExit = () => removeLockDir();
-      deps.process.on("SIGINT", onSignal);
-      deps.process.on("SIGTERM", onSignal);
+      for (const signal of FORWARDED_SIGNALS) {
+        deps.process.on(signal, onSignal);
+      }
       deps.process.on("exit", onExit);
       return () => {
-        deps.process.off("SIGINT", onSignal);
-        deps.process.off("SIGTERM", onSignal);
+        for (const signal of FORWARDED_SIGNALS) {
+          deps.process.off(signal, onSignal);
+        }
         deps.process.off("exit", onExit);
         removeLockDir();
       };
