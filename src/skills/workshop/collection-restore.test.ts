@@ -252,7 +252,7 @@ describe("skill collection backup and restore", () => {
         bytes: await Promise.all(preservedFiles.map((file) => fs.readFile(file))),
         entries: await Promise.all(
           [workspaceDir, backupDir].map(async (dir) =>
-            (await fs.readdir(dir, { recursive: true })).sort(),
+            (await fs.readdir(dir, { recursive: true })).toSorted(),
           ),
         ),
       });
