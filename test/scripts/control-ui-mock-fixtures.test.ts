@@ -26,20 +26,27 @@ describe("Control UI mock surface fixtures", () => {
     const mock = buildBackgroundTasksMock(BASE_TIME);
     const cases = mock.methodResponses["tasks.list"].cases;
     const active = cases.find(
-      (entry) => entry.match && "status" in entry.match && entry.match.status[0] === "queued",
+      (entry) => Array.isArray(entry.match?.status) && entry.match.status[0] === "queued",
     );
     const recent = cases.find(
       (entry) => entry.match && "sortBy" in entry.match && entry.match.sortBy === "endedAt",
     );
+    const cli = cases.find((entry) => entry.match?.sessionKey === "agent:main:production-export");
 
-    expect(active?.response.tasks.map((task) => task.status)).toEqual([
-      "queued",
-      "running",
-      "running",
+    expect(active?.response.tasks.map((task) => task.status)).toEqual(["queued", "running"]);
+    expect(active?.response.tasks.map((task) => task.runtime)).toEqual(["subagent", "subagent"]);
+    expect(cli?.response.tasks).toEqual([
+      expect.objectContaining({ kind: "exec", runtime: "cli", status: "running" }),
     ]);
     expect(recent?.response.tasks.map((task) => task.status)).toEqual(
       expect.arrayContaining(["completed", "failed", "cancelled", "timed_out"]),
     );
+    expect(
+      cases.find((entry) => entry.match?.limit === 500 && entry.match?.status)?.response.tasks,
+    ).toEqual(
+      expect.arrayContaining([...(active?.response.tasks ?? []), ...(cli?.response.tasks ?? [])]),
+    );
+    expect(cases.at(-1)).toEqual({ response: { tasks: [] } });
     expect(mock.methodResponses["tasks.cancel"].cases).toHaveLength(8);
   });
 

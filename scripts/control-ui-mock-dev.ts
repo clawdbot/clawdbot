@@ -672,6 +672,14 @@ function buildModelProviderMocks(baseTime: number) {
           outputTokens: 0,
           totalTokens: 96_000_000,
         },
+        {
+          name: "claude-opus-4-8",
+          inputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          totalTokens: 31_000_000,
+        },
       ],
       categories: [
         { name: "Sessions", amount: 61.13 },
@@ -782,6 +790,19 @@ function buildModelProviderMocks(baseTime: number) {
       providers: [anthropicUsage, openaiUsage, openrouterUsage, copilotUsage],
     },
     models: [
+      { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic", available: true },
+      {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        provider: "anthropic",
+        available: true,
+        contextWindow: 1_000_000,
+        contextWindows: [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ],
+        contextWindowDefault: "1m",
+      },
       {
         id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
@@ -799,7 +820,7 @@ function buildModelProviderMocks(baseTime: number) {
       },
       {
         id: "gpt-5.6-luna",
-        name: "Codex",
+        name: "GPT-5.6 Luna",
         provider: "openai",
         available: true,
         contextWindow: 200_000,
@@ -813,7 +834,8 @@ function buildModelProviderMocks(baseTime: number) {
         reasoning: true,
         supportsTools: true,
       },
-      { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", provider: "google", available: false },
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", available: true },
+      { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
       { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter", available: true },
     ],
   };
@@ -1319,7 +1341,7 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
     ],
     [
       "What changed in the provider defaults?",
-      "The session uses **Codex** with medium reasoning. The picker also exposes low, high, and extra-high choices.",
+      "The session uses **GPT-5.6 Luna** with medium reasoning. The picker also exposes low, high, and extra-high choices.",
     ],
     [
       "Prepare a compact handoff.",

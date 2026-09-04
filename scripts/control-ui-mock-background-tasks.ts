@@ -8,7 +8,7 @@ function historyMessage(role: "assistant" | "user", text: string, timestamp: num
   };
 }
 
-function finishedTask(n: number, now: number) {
+function finishedTask(n: number, now: number, sessionKey: string) {
   const status = n === 3 ? "failed" : n === 4 ? "cancelled" : n === 5 ? "timed_out" : "completed";
   const task = {
     id: `task-mock-finished-${n}`,
@@ -21,6 +21,8 @@ function finishedTask(n: number, now: number) {
     startedAt: now - n * 600_000,
     endedAt: now - n * 500_000,
     updatedAt: now - n * 500_000,
+    sessionKey,
+    ownerKey: sessionKey,
   };
   if (status === "failed") {
     return { ...task, error: "The fixture audit found an invalid event scope." };
@@ -56,6 +58,7 @@ export function buildBackgroundTasksMock(baseTime: number) {
   const taskSessionKey = "agent:openclaw-mock:subagent:mock-task-1";
   const secondTaskSessionKey = "agent:openclaw-mock:subagent:mock-task-2";
   const requesterSessionKey = "agent:main:main";
+  const cliSessionKey = "agent:main:production-export";
   const tasks = [
     {
       id: "task-mock-queued",
@@ -91,8 +94,9 @@ export function buildBackgroundTasksMock(baseTime: number) {
     {
       id: "task-mock-running-2",
       taskId: "task-mock-running-2",
+      kind: "exec",
       status: "running",
-      runtime: "subagent",
+      runtime: "cli",
       agentId: "openclaw-mock",
       title: "Audit gateway event scope guards",
       createdAt: now - 95_000,
@@ -100,15 +104,14 @@ export function buildBackgroundTasksMock(baseTime: number) {
       updatedAt: now - 1_000,
       progressSummary: "Comparing agent-scoped task event paths",
       diffStat: { files: 2, added: 55, removed: 21 },
-      sessionKey: requesterSessionKey,
-      ownerKey: requesterSessionKey,
-      childSessionKey: secondTaskSessionKey,
+      sessionKey: cliSessionKey,
+      ownerKey: cliSessionKey,
     },
-    finishedTask(1, now),
-    finishedTask(2, now),
-    finishedTask(3, now),
-    finishedTask(4, now),
-    finishedTask(5, now),
+    finishedTask(1, now, requesterSessionKey),
+    finishedTask(2, now, requesterSessionKey),
+    finishedTask(3, now, requesterSessionKey),
+    finishedTask(4, now, requesterSessionKey),
+    finishedTask(5, now, requesterSessionKey),
   ];
   return {
     sessions: [taskSessionKey, secondTaskSessionKey].map((key) => ({ key })),
@@ -145,13 +148,18 @@ export function buildBackgroundTasksMock(baseTime: number) {
       },
     },
     methodResponses: {
-      // One live subagent task exercises the rail, collapsed badge, and running-task status row.
+      // Subagents exercise their activity rows; the detached CLI task exercises
+      // the aggregate status row that production shows after a foreground turn.
       "tasks.list": {
         cases: [
           {
             match: { status: ["queued", "running"], sessionKey: requesterSessionKey },
             response: {
-              tasks: tasks.filter((task) => task.status === "queued" || task.status === "running"),
+              tasks: tasks.filter(
+                (task) =>
+                  task.sessionKey === requesterSessionKey &&
+                  (task.status === "queued" || task.status === "running"),
+              ),
             },
           },
           {
@@ -163,6 +171,39 @@ export function buildBackgroundTasksMock(baseTime: number) {
             response: {
               tasks: tasks.filter(
                 (task) =>
+                  task.sessionKey === requesterSessionKey &&
+                  (task.status === "completed" ||
+                    task.status === "failed" ||
+                    task.status === "timed_out" ||
+                    task.status === "cancelled"),
+              ),
+            },
+          },
+          {
+            match: { status: ["queued", "running"], sessionKey: cliSessionKey },
+            response: {
+              tasks: tasks.filter(
+                (task) =>
+                  task.sessionKey === cliSessionKey &&
+                  (task.status === "queued" || task.status === "running"),
+              ),
+            },
+          },
+          {
+            match: { status: ["queued", "running"], limit: 500 },
+            response: {
+              tasks: tasks.filter((task) => task.status === "queued" || task.status === "running"),
+            },
+          },
+          {
+            match: {
+              status: ["completed", "failed", "timed_out", "cancelled"],
+              sortBy: "endedAt",
+              limit: 200,
+            },
+            response: {
+              tasks: tasks.filter(
+                (task) =>
                   task.status === "completed" ||
                   task.status === "failed" ||
                   task.status === "timed_out" ||
@@ -170,7 +211,10 @@ export function buildBackgroundTasksMock(baseTime: number) {
               ),
             },
           },
-          { response: { tasks } },
+          { match: { limit: 500 }, response: { tasks } },
+          // Production scopes chat task queries to their session. The empty
+          // fallback prevents main-session work from appearing in unrelated chats.
+          { response: { tasks: [] } },
         ],
       },
       "tasks.get": { cases: tasks.map(taskDetailCase) },
