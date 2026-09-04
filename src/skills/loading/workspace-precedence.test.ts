@@ -9,6 +9,7 @@ import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { createSyntheticSourceInfo } from "./skill-contract.js";
 import { loadMergedWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
@@ -127,7 +128,10 @@ describe("buildWorkspaceSkillsPrompt", () => {
   it("loads Workshop skills below managed and above bundled", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workshop-precedence");
     const managedDir = path.join(workspaceDir, ".managed");
-    const workshopDir = path.join(workspaceDir, ".workshop");
+    const config = {
+      agents: { entries: { main: { agentDir: path.join(workspaceDir, ".agent") } } },
+    };
+    const workshopDir = resolveWorkshopSkillsDir(config, "main");
     const bundledDir = path.join(workspaceDir, ".bundled");
     for (const [root, name, description] of [
       [managedDir, "managed-wins", "Managed version"],
@@ -140,8 +144,9 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
     const entries = loadMergedWorkspaceSkills({
       agentWorkspaceDir: workspaceDir,
+      config,
+      agentId: "main",
       managedSkillsDir: managedDir,
-      workshopSkillsDir: workshopDir,
       bundledSkillsDir: bundledDir,
       pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
     });

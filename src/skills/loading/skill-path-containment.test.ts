@@ -11,6 +11,7 @@ import {
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import { readSkillFrontmatterSafe } from "./local-loader.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
@@ -237,7 +238,10 @@ describe("skill path containment", () => {
     "rejects symlinked skills in the Workshop-owned directory",
     async () => {
       const workspaceDir = await createTempWorkspaceDir();
-      const workshopSkillsDir = path.join(workspaceDir, ".workshop");
+      const config = {
+        agents: { entries: { main: { agentDir: path.join(workspaceDir, ".agent") } } },
+      };
+      const workshopSkillsDir = resolveWorkshopSkillsDir(config, "main");
       const outsideDir = await createTempWorkspaceDir();
       const outsideSkillDir = path.join(outsideDir, "outside-workshop-skill");
       await writeSkill({
@@ -253,7 +257,7 @@ describe("skill path containment", () => {
       );
       const warn = captureWarningLogger();
 
-      const entries = loadTestWorkspaceSkills(workspaceDir, { workshopSkillsDir });
+      const entries = loadTestWorkspaceSkills(workspaceDir, { config, agentId: "main" });
 
       expect(entries).toEqual([]);
       expect(firstWarningLine(warn)).toContain("source=openclaw-workshop");

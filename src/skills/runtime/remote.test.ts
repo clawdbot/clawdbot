@@ -329,13 +329,20 @@ describe("skills-remote", () => {
     { command: "system.which", failure: "throw" },
     { command: "system.run", failure: "result" },
     { command: "system.run", failure: "throw" },
-  ])(
-    "clears stale bins after a probe failure ($command/$failure)",
-    async ({ command, failure }) => {
+  ].flatMap((scenario) => [
+    { ...scenario, skills: undefined },
+    { ...scenario, skills: ["remote-skill"] },
+  ]))(
+    "clears stale bins after a probe failure ($command/$failure, skills=$skills)",
+    async ({ command, failure, skills }) => {
       await resetSkillsRefreshForTest();
       const nodeId = `node-${randomUUID()}`;
       const bin = `bin-${randomUUID()}`;
       const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: { ...cfg.agents?.defaults, skills },
+      };
       try {
         const invokeCalls: string[] = [];
         setTestSkillsRemoteRegistry(nodeId, {

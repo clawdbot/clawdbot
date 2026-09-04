@@ -3,10 +3,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
-import type { ParsedSkillFrontmatter } from "../types.js";
-import { loadSkillsFromDirSafe, type LocalSkillLoadDiagnostic } from "./local-loader.js";
+import {
+  loadSkillsFromDirSafe,
+  type LoadedLocalSkill,
+  type LocalSkillLoadDiagnostic,
+} from "./local-loader.js";
 import type { PluginSkillRoot } from "./plugin-skills.js";
-import type { Skill } from "./skill-contract.js";
 import { compactSkillPath } from "./skill-paths.js";
 import {
   canonicalSkillDirForSource,
@@ -21,10 +23,7 @@ import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlin
 
 const skillsLogger = createSubsystemLogger("skills");
 
-export type LoadedSkillRecord = {
-  skill: Skill;
-  frontmatter?: ParsedSkillFrontmatter;
-  rejectHardlinks: boolean;
+export type LoadedSkillRecord = LoadedLocalSkill & {
   syncSourceDir?: string;
   syncDirName?: string;
 };
@@ -55,13 +54,7 @@ function loadContainedSkillRecords(params: {
     rejectHardlinks: params.rejectHardlinks,
     onDiagnostic: (diagnostic) => warnInvalidSkill(params.source, diagnostic),
   });
-  const records = loaded.skills
-    .map((skill) => ({
-      skill,
-      frontmatter: loaded.frontmatterByFilePath.get(skill.filePath),
-      rejectHardlinks: params.rejectHardlinks,
-    }))
-    .filter((record) => path.resolve(record.skill.baseDir) === expectedBaseDir);
+  const records = loaded.filter((record) => path.resolve(record.skill.baseDir) === expectedBaseDir);
   const canonicalSkillDir = params.canonicalSkillDir;
   return canonicalSkillDir
     ? records.map((record) => canonicalizeLoadedSkillRecord(record, canonicalSkillDir))

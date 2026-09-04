@@ -353,9 +353,11 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const bins = new Set<string>();
     for (const agentId of listAgentIds(cfg)) {
+      // Node inventories include missing requirements, not only locally usable skills.
       const entries = loadWorkspaceSkills(resolveAgentWorkspaceDir(cfg, agentId), {
         config: cfg,
         agentId,
+        agentSkillFilter: "ignore",
       });
       for (const bin of collectSkillBins(entries)) {
         bins.add(bin);

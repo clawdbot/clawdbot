@@ -14,7 +14,7 @@ import {
   resolveSkillInvocationPolicy,
   resolveSkillManifestMetadata,
 } from "../loading/frontmatter.js";
-import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "../loading/local-loader.js";
+import { loadSkillsFromDirSafe } from "../loading/local-loader.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { installSkill } from "./install.js";
@@ -69,13 +69,8 @@ function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
   const skills = loadSkillsFromDirSafe({
     dir: path.join(workspaceDir, "skills"),
     source: "openclaw-workspace",
-  }).skills;
-  return skills.map((skill) => {
-    const frontmatter =
-      readSkillFrontmatterSafe({
-        rootDir: skill.baseDir,
-        filePath: skill.filePath,
-      }) ?? {};
+  });
+  return skills.map(({ skill, frontmatter }) => {
     const invocation = resolveSkillInvocationPolicy(frontmatter);
     return {
       skill,

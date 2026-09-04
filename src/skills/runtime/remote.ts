@@ -508,7 +508,12 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
   const requiredBins = new Set<string>();
   for (const agentId of listAgentIds(params.cfg)) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-    const entries = loadWorkspaceSkills(workspaceDir, { config: params.cfg, agentId });
+    // Probe prerequisites before host eligibility can hide remote-only skills.
+    const entries = loadWorkspaceSkills(workspaceDir, {
+      config: params.cfg,
+      agentId,
+      agentSkillFilter: "ignore",
+    });
     for (const bin of collectRequiredBins(entries, "darwin")) {
       requiredBins.add(bin);
     }
