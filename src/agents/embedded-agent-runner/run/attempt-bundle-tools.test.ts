@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   acquireSessionMcpRuntime: vi.fn(),
   materializeBundleMcpToolsForRun: vi.fn(),
   applyFinalEffectiveToolPolicy: vi.fn(),
+  admitsMcpServer: vi.fn(),
+  createBundleMcpServerPolicyMatcher: vi.fn(),
   filterRuntimeCompatibleTools: vi.fn(),
 }));
 
@@ -39,6 +41,7 @@ vi.mock("../../tool-schema-projection.js", () => ({
 
 vi.mock("../effective-tool-policy.js", () => ({
   applyFinalEffectiveToolPolicy: mocks.applyFinalEffectiveToolPolicy,
+  createBundleMcpServerPolicyMatcher: mocks.createBundleMcpServerPolicyMatcher,
 }));
 
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
@@ -53,6 +56,8 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     mocks.applyFinalEffectiveToolPolicy
       .mockReset()
       .mockImplementation(({ bundledTools }: { bundledTools: unknown[] }) => bundledTools);
+    mocks.admitsMcpServer.mockReset().mockReturnValue(true);
+    mocks.createBundleMcpServerPolicyMatcher.mockReset().mockReturnValue(mocks.admitsMcpServer);
     mocks.filterRuntimeCompatibleTools
       .mockReset()
       .mockImplementation((tools: unknown[]) => ({ tools, diagnostics: [] }));
@@ -307,16 +312,12 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     const result = await prepareEmbeddedAttemptBundleTools(input);
 
     expect(result.mcpDiagnostics).toEqual(diagnostics);
-    // The failed server is admitted through the same final policy as real
-    // bundle tools: one probe per server, carrying its bundle-mcp metadata.
-    expect(mocks.applyFinalEffectiveToolPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bundledTools: [expect.objectContaining({ name: "memos__server" })],
-      }),
-    );
+    // Server-level visibility is decided by the safe server name the tool
+    // namespace is built from, not by a fabricated stand-in tool.
+    expect(mocks.admitsMcpServer).toHaveBeenCalledWith("memos");
   });
 
-  it("drops recorded MCP catalog failures for servers the final policy hides", async () => {
+  it("drops recorded MCP catalog failures for servers the policy hides", async () => {
     const input = createInput([], []);
     input.attempt.config = { plugins: { enabled: false } };
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
@@ -331,11 +332,11 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         },
       ],
     });
-    mocks.applyFinalEffectiveToolPolicy.mockImplementation(() => []);
+    mocks.admitsMcpServer.mockReturnValue(false);
 
     const result = await prepareEmbeddedAttemptBundleTools(input);
 
-    expect(result.mcpDiagnostics).toBeUndefined();
+    expect(result.mcpDiagnostics).toEqual([]);
   });
 
   it("never exposes client functions when the attempt disables every tool", async () => {

@@ -15,9 +15,11 @@ import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
-import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
+import {
+  applyFinalEffectiveToolPolicy,
+  createBundleMcpServerPolicyMatcher,
+} from "../effective-tool-policy.js";
 import { log } from "../logger.js";
-import { filterMcpDiagnosticsByToolPolicy } from "./attempt-bundle-mcp-diagnostics.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -240,26 +242,24 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       return schemaProjection.tools;
     };
     const uncompactedEffectiveTools = projectTools(tools);
+    // Same allow/deny inputs the two passes above apply to materialized MCP
+    // tools, resolved against the server namespace instead of a tool name: a
+    // failed catalog load leaves that server's tool names unknown.
+    const admitsMcpServer = createBundleMcpServerPolicyMatcher({
+      conversationCapabilityProfile: runtimeCapabilityProfile,
+      toolsAllow: effectiveToolsAllow,
+    });
     return {
       bundleLspRuntime,
       bundleMcpRuntime,
       clientTools,
       // `bundleMcpRuntime` is the materializeBundleMcpToolsForRun result, whose
       // `diagnostics` records which configured servers failed this run's catalog
-      // load. Carry that fact with the tools it explains so the Tool Search
-      // catalog can name an outage instead of reporting a bare miss; a server
-      // the policy hides stays hidden when it fails.
-      mcpDiagnostics: filterMcpDiagnosticsByToolPolicy(bundleMcpRuntime?.diagnostics, (probes) =>
-        applyFinalEffectiveToolPolicy({
-          bundledTools: applyEmbeddedAttemptToolsAllow(probes, effectiveToolsAllow, {
-            toolMeta: (tool) => getPluginToolMeta(tool),
-          }),
-          config: params.attempt.config,
-          workspaceDir: params.setup.effectiveWorkspace,
-          metadataSnapshot: bundleMetadataSnapshot,
-          conversationCapabilityProfile: runtimeCapabilityProfile,
-          warn: (message) => log.warn(message),
-        }),
+      // load. Carry that fact with the tools it explains so Tool Search can name
+      // the outage instead of reporting a bare miss; a server whose tools the
+      // policy could never admit stays hidden when it fails too.
+      mcpDiagnostics: bundleMcpRuntime?.diagnostics?.filter((diagnostic) =>
+        admitsMcpServer(diagnostic.safeServerName),
       ),
       tools,
       uncompactedEffectiveTools,

@@ -39,16 +39,14 @@ export async function runCodeMode(params: {
     signal: params.signal,
     onUpdate: params.onUpdate,
   });
-  return withUnavailableMcpServers(
-    {
-      ok: true,
-      // JSON IPC already detached and normalized the child's result.
-      value: value ?? null,
-      logs,
-      telemetry: runtime.telemetry(),
-    },
-    params.ctx,
-  );
+  const result = {
+    ok: true,
+    // JSON IPC already detached and normalized the child's result.
+    value: value ?? null,
+    logs,
+    telemetry: runtime.telemetry(),
+  };
+  return withUnavailableMcpServers(result, params.ctx);
 }
 
 function buildCodeModeChildArgs(): string[] {

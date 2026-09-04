@@ -3,13 +3,18 @@ import { GetPromptResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
 import type { McpCatalogTool, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";
+import {
+  applyFinalEffectiveToolPolicy,
+  createBundleMcpServerPolicyMatcher,
+} from "./embedded-agent-runner/effective-tool-policy.js";
+import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 
@@ -82,14 +87,19 @@ function makeConfiguredRuntime(
 
 async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
   cfg: OpenClawConfig;
+  serverName?: string;
+  toolNames?: string[];
+  toolsAllow?: string[];
 }): Promise<string[]> {
   const runtime = await createBundleMcpToolRuntime({
     workspaceDir: "/workspace",
     cfg: params.cfg,
-    createRuntime: () => makeConfiguredRuntime(),
+    createRuntime: () => makeConfiguredRuntime(params),
   });
   const filtered = applyFinalEffectiveToolPolicy({
-    bundledTools: runtime.tools,
+    bundledTools: applyEmbeddedAttemptToolsAllow(runtime.tools, params.toolsAllow, {
+      toolMeta: (tool) => getPluginToolMeta(tool),
+    }),
     config: params.cfg,
     conversationCapabilityProfile: resolveConversationCapabilityProfile({ config: params.cfg }),
     warn: () => {},
@@ -347,5 +357,92 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
     const originalPrompt = structuredClone(prompt);
     prompt.description = "A later server-side edit";
     expect(consumeMcpCodeModeGuestResult(result)).toEqual(originalPrompt);
+  });
+});
+
+// Regression coverage for #137398. A server whose catalog load failed exposes no
+// tool names, so its outage diagnostic is admitted by the server namespace. That
+// decision must agree with the one the same policy makes about that server's
+// tools: an operator who could still reach a memos tool learns memos is down
+// (otherwise the model keeps retrying a generic lookup miss), and one who could
+// never reach any memos tool learns nothing about it.
+describe("failed MCP server outages follow the same policy as that server's tools (#137398)", () => {
+  const mcp = { servers: { memos: { command: "node", args: ["memos.mjs"] } } };
+  const outageCases: Array<{
+    label: string;
+    tools?: OpenClawConfig["tools"];
+    toolsAllow?: string[];
+    visible: boolean;
+  }> = [
+    { label: "the coding profile", tools: { profile: "coding" }, visible: true },
+    { label: "the minimal profile", tools: { profile: "minimal" }, visible: false },
+    {
+      label: "tools.deny: ['bundle-mcp']",
+      tools: { profile: "coding", deny: ["bundle-mcp"] },
+      visible: false,
+    },
+    {
+      label: "an allowlist naming one memos tool",
+      tools: { allow: ["memos__read_note"] },
+      visible: true,
+    },
+    {
+      label: "an exact deny of one memos tool",
+      tools: { profile: "coding", deny: ["memos__read_note"] },
+      visible: true,
+    },
+    {
+      label: "a deny glob covering part of the memos namespace",
+      tools: { profile: "coding", deny: ["memos__s*"] },
+      visible: true,
+    },
+    {
+      label: "a deny glob covering the whole memos namespace",
+      tools: { profile: "coding", deny: ["memos__*"] },
+      visible: false,
+    },
+    {
+      label: "an allowlist naming another server",
+      tools: { allow: ["notes__lookup"] },
+      visible: false,
+    },
+    {
+      label: "an allow and a deny naming the same memos tool",
+      tools: { allow: ["memos__read_note"], deny: ["memos__read_note"] },
+      visible: false,
+    },
+    {
+      label: "a runtime allowlist that shares no memos tool with the config allowlist",
+      tools: { allow: ["memos__read_note"] },
+      toolsAllow: ["memos__write_note"],
+      visible: false,
+    },
+    {
+      label: "a runtime allowlist naming one memos tool",
+      toolsAllow: ["memos__read_note"],
+      visible: true,
+    },
+    {
+      label: "a runtime allowlist naming another server",
+      toolsAllow: ["notes__lookup"],
+      visible: false,
+    },
+  ];
+
+  it.each(outageCases)("names the memos outage under $label: $visible", async (testCase) => {
+    const config: OpenClawConfig = { ...(testCase.tools ? { tools: testCase.tools } : {}), mcp };
+    const admitsMcpServer = createBundleMcpServerPolicyMatcher({
+      conversationCapabilityProfile: resolveConversationCapabilityProfile({ config }),
+      toolsAllow: testCase.toolsAllow,
+    });
+    const namesWhenHealthy = await buildConfiguredMcpToolNamesAtRequestBoundary({
+      cfg: config,
+      serverName: "memos",
+      toolNames: ["read_note", "write_note"],
+      toolsAllow: testCase.toolsAllow,
+    });
+
+    expect(admitsMcpServer("memos")).toBe(testCase.visible);
+    expect(namesWhenHealthy.length > 0).toBe(testCase.visible);
   });
 });

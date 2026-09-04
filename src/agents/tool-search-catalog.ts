@@ -1,8 +1,8 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { generateSecureHex } from "../infra/secure-random.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
-import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -273,7 +273,6 @@ function registerToolSearchCatalog(params: {
   entries: ToolSearchCatalogEntry[];
   append?: boolean;
   toolExecutionAllow?: readonly string[];
-  fingerprint?: string;
   mcpDiagnostics?: readonly McpToolCatalogDiagnostic[];
 }): void {
   const prior = params.append ? params.catalogRef.current : undefined;
@@ -505,12 +504,10 @@ export function applyToolCatalogCompaction(
     existingCatalog.entries = reboundEntries;
     // Entries fingerprint equal means no failed server regained tools, but a
     // zero-tool server can fail or recover without changing the entry set.
-    if (params.mcpDiagnostics !== undefined) {
-      if (params.mcpDiagnostics.length > 0) {
-        existingCatalog.mcpDiagnostics = params.mcpDiagnostics;
-      } else {
-        delete existingCatalog.mcpDiagnostics;
-      }
+    if (params.mcpDiagnostics?.length) {
+      existingCatalog.mcpDiagnostics = params.mcpDiagnostics;
+    } else if (params.mcpDiagnostics) {
+      delete existingCatalog.mcpDiagnostics;
     }
   } else {
     registerToolSearchCatalog({

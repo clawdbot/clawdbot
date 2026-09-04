@@ -255,7 +255,8 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
-      return formatToolSearchControlResult(withUnavailableMcpServers(result, ctx), runtime, {
+      const outcome = withUnavailableMcpServers(result, ctx);
+      return formatToolSearchControlResult(outcome, runtime, {
         terminalBatchStatus: result.status,
         compact: true,
       });
@@ -294,7 +295,8 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
-      return formatToolSearchControlResult(withUnavailableMcpServers(result, ctx), runtime, {
+      const outcome = withUnavailableMcpServers(result, ctx);
+      return formatToolSearchControlResult(outcome, runtime, {
         terminalBatchStatus: result.status,
         compact: true,
       });

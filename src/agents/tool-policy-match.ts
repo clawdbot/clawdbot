@@ -2,7 +2,11 @@
  * Runtime matcher for sandbox tool policies. Deny patterns always win, then
  * an empty allow list means "allow everything not denied".
  */
-import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
+import {
+  compileGlobPatterns,
+  matchesAnyGlobPattern,
+  mayMatchGlobWithPrefix,
+} from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
   expandToolGroups,
@@ -95,4 +99,46 @@ export function isToolAllowedByPolicies(
   policies: Array<SandboxToolPolicy | undefined>,
 ) {
   return policies.every((policy) => isToolAllowedByPolicyName(name, policy));
+}
+
+/**
+ * Whether layered policies could still admit some tool inside a namespace prefix
+ * (an MCP `server__`) whose tool names are unknown after a failed catalog load.
+ * Allow entries naming concrete tools are decided as tools, so deny wins over
+ * them and layers must agree; where only globs reach the prefix the namespace
+ * survives unless a deny wildcard covers every name under it.
+ */
+export function policiesAdmitToolNamespace(
+  prefix: string,
+  policies: Array<SandboxToolPolicy | undefined>,
+): boolean {
+  const namespace = normalizeToolPolicyName(prefix);
+  const mayReach = (entry: string) =>
+    entry.includes("*")
+      ? mayMatchGlobWithPrefix(entry, namespace)
+      : entry.length > namespace.length && entry.startsWith(namespace);
+  const namedTools = new Set<string>();
+  for (const policy of policies) {
+    const allow = expandToolGroups(policy?.allow);
+    const reaching = allow.filter(mayReach);
+    if (allow.length > 0 && reaching.length === 0) {
+      return false;
+    }
+    // A layer that reaches the prefix only through a glob cannot enumerate what
+    // the failed server might have exposed; one that names tools outright can.
+    if (reaching.length > 0 && !reaching.some((entry) => entry.includes("*"))) {
+      for (const entry of reaching) {
+        namedTools.add(entry);
+      }
+    }
+  }
+  if (namedTools.size > 0) {
+    return [...namedTools].some((name) => isToolAllowedByPolicies(name, policies));
+  }
+  return !policies.some((policy) =>
+    expandToolGroups(policy?.deny).some(
+      (entry) =>
+        entry.indexOf("*") === entry.length - 1 && namespace.startsWith(entry.slice(0, -1)),
+    ),
+  );
 }
