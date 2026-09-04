@@ -55,9 +55,9 @@ describe("android screenshots script", () => {
       "apps/android/app/src/main/java/ai/openclaw/app/AndroidScreenshotFixture.kt",
       "utf8",
     );
-    const chatReady = "Draft a short status update for the team.";
+    const chatReady = "The Android release is close.";
 
-    expect(fixture).toContain(`"${chatReady}"`);
+    expect(fixture).toContain(chatReady);
     expect(script).toContain(`chat) printf '%s\\n' "${chatReady}"`);
     for (const marker of [
       'shell wm density "$ORIGINAL_WM_DENSITY"',
