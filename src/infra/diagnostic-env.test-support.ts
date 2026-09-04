@@ -1,4 +1,20 @@
 import { withEnvAsync } from "../test-utils/env.js";
+import { mergeProcessEnv, resolveEnvironmentValue } from "./process-env.js";
+
+// Capture before platform mocks or env replacement: clearing a Windows fork's native
+// parent removes libuv's bootstrap fallback. Uppercase roots also survive logical POSIX probes.
+const nativePlatform = process.platform;
+const nativeBootstrapEnv: NodeJS.ProcessEnv =
+  nativePlatform === "win32"
+    ? {
+        SYSTEMROOT: resolveEnvironmentValue(process.env, "SYSTEMROOT", nativePlatform),
+        WINDIR: resolveEnvironmentValue(process.env, "WINDIR", nativePlatform),
+      }
+    : {};
+
+export function createDiagnosticFixtureRouting(routing: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return mergeProcessEnv([routing, nativeBootstrapEnv], nativePlatform);
+}
 
 export const diagnosticCanaries = {
   DIAGNOSTIC_NEUTRAL_CANARY: "synthetic-neutral",

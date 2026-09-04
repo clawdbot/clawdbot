@@ -1,6 +1,7 @@
 import childProcess from "node:child_process";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  createDiagnosticFixtureRouting,
   diagnosticCanaries,
   diagnosticEnvReportScript,
   withSyntheticDiagnosticEnv,
@@ -11,8 +12,13 @@ afterEach(() => vi.restoreAllMocks());
 
 it("isolates the lock-owner ps child while retaining its stable locale and timezone", async () => {
   const nativeExec = childProcess.execFileSync;
+  const routing = createDiagnosticFixtureRouting({
+    PATH: "/fixture/bin",
+    HOME: "/fixture/home",
+    LC_ALL: "C",
+    TZ: "UTC",
+  });
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-  const routing = { PATH: "/fixture/bin", HOME: "/fixture/home", LC_ALL: "C", TZ: "UTC" };
   await withSyntheticDiagnosticEnv(
     { ...routing, LC_ALL: "fr_FR.UTF-8", TZ: "Pacific/Honolulu" },
     async () => {

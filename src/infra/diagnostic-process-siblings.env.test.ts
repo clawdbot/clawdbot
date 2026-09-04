@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { forceFreePort, forceFreePortAndWait } from "../cli/ports.js";
 import {
+  createDiagnosticFixtureRouting,
   diagnosticCanaries,
   diagnosticEnvReportScript,
   withSyntheticDiagnosticEnv,
@@ -37,7 +38,13 @@ it.each([
 ])("projects the environment at the %s launch boundary", async (surface) => {
   const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "diagnostic-siblings-")));
-  const routing = { PATH: root, HOME: root, TMPDIR: root, LANG: "C", TZ: "UTC" };
+  const routing = createDiagnosticFixtureRouting({
+    PATH: root,
+    HOME: root,
+    TMPDIR: root,
+    LANG: "C",
+    TZ: "UTC",
+  });
   vi.spyOn(process, "platform", "get").mockReturnValue(
     surface === "CLI netstat" ? "win32" : "darwin",
   );

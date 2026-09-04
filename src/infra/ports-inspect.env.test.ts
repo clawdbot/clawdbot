@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
+  createDiagnosticFixtureRouting,
   diagnosticCanaries,
   diagnosticEnvReportScript,
   withSyntheticDiagnosticEnv,
@@ -29,7 +30,14 @@ describe.skipIf(process.platform === "win32")("native port diagnostic environmen
 async function checkDiagnostics(family: "single" | "batch" | "connections", fallback: boolean) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "diagnostic-env-")));
   const reportPath = path.join(root, "children.jsonl");
-  const routing = { PATH: root, HOME: root, TMPDIR: root, LANG: "C", LC_ALL: "C", TZ: "UTC" };
+  const routing = createDiagnosticFixtureRouting({
+    PATH: root,
+    HOME: root,
+    TMPDIR: root,
+    LANG: "C",
+    LC_ALL: "C",
+    TZ: "UTC",
+  });
   const report = diagnosticEnvReportScript(routing);
   const port = 43123;
   const connected = family === "connections";
