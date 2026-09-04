@@ -2,18 +2,18 @@
 import {
   assertUpdateGenerationBrokerReceiptIsValid,
   buildUpdateGenerationBrokerOperationId,
-  type UpdateGenerationBrokerReceipt,
-  type UpdateGenerationBrokerReceiptOf,
 } from "./update-generation-confined-filesystem.js";
 import type {
   UpdateGenerationCleanupEvidence,
   UpdateGenerationFailureAdjudicationEvidence,
   UpdateGenerationMaterializationEvidence,
   UpdateGenerationProjection,
+  UpdateGenerationBrokerReceipt,
+  UpdateGenerationBrokerReceiptOf,
   UpdateGenerationRetainedPairEvidence,
   UpdateGenerationSelection,
   UpdateGenerationSelectionEvidence,
-} from "./update-generation-contract.js";
+} from "./update-generation-contract-types.js";
 
 type BrokerEvidence =
   | UpdateGenerationMaterializationEvidence

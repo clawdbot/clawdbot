@@ -230,9 +230,11 @@ describe("real update executor generation ownership", () => {
         filesystem,
         ledger,
         runtime: expect.objectContaining({
+          adjudicateTransaction: expect.any(Function),
           buildReceiptId: expect.any(Function),
           performBrokerOperation: expect.any(Function),
           persistReceipt: expect.any(Function),
+          reconcilePendingBrokerMutation: expect.any(Function),
         }),
         update: expect.objectContaining({ root: ROOT, installSpec: "openclaw@latest" }),
       }),

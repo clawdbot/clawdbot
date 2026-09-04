@@ -1,9 +1,9 @@
-import type { UpdateGenerationBrokerReceipt } from "./update-generation-confined-filesystem.js";
 /** Strict decoding plus transition rebuilding for durable transaction records. */
 import {
   updateGenerationTransactionReceiptSchema,
   updateGenerationTransactionRecordSchema,
 } from "./update-generation-contract-schema.js";
+import type { UpdateGenerationBrokerReceipt } from "./update-generation-contract-types.js";
 import {
   appendDecodedUpdateGenerationReceipt,
   type UpdateGenerationTransactionReceipt,

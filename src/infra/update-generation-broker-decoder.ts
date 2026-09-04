@@ -2,7 +2,7 @@ import { isProxy } from "node:util/types";
 import type {
   UpdateGenerationBrokerReceipt,
   UpdateGenerationBrokerRequest,
-} from "./update-generation-confined-filesystem.js";
+} from "./update-generation-contract-types.js";
 import { isSafeUpdateGenerationEntrypointPath } from "./update-generation-entrypoint-path.js";
 
 type Literal = boolean | number | string;

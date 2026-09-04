@@ -4,7 +4,7 @@ import {
   decodeUpdateGenerationBrokerReceipt,
   UPDATE_GENERATION_BROKER_MAX_ARRAY_LENGTH,
 } from "./update-generation-broker-decoder.js";
-import type { UpdateGenerationBrokerReceipt } from "./update-generation-confined-filesystem.js";
+import type { UpdateGenerationBrokerReceipt } from "./update-generation-contract-types.js";
 import { isSafeUpdateGenerationEntrypointPath } from "./update-generation-entrypoint-path.js";
 const generationIdSchema = z.string().regex(/^[a-f0-9]{32}$/u);
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);

@@ -11,19 +11,26 @@ import {
   decodeUpdateGenerationBrokerRequest,
 } from "./update-generation-broker-decoder.js";
 import type {
-  UpdateGenerationDescriptor,
-  UpdateGenerationManifest,
+  UpdateGenerationAuthenticatedBrokerReceiptOf,
+  UpdateGenerationBrokerOperationKind,
+  UpdateGenerationBrokerReceipt,
+  UpdateGenerationBrokerReceiptOf,
+  UpdateGenerationBrokerRequest,
+  UpdateGenerationRetainedPair,
   UpdateGenerationSelection,
-} from "./update-generation-contract.js";
+} from "./update-generation-contract-types.js";
 import { isSafeUpdateGenerationEntrypointPath } from "./update-generation-entrypoint-path.js";
 
-export type UpdateGenerationBrokerOperationKind =
-  | "materialize-generation"
-  | "sync-parent-directory"
-  | "switch-selector"
-  | "cleanup-generations"
-  | "verify-retained-pair"
-  | "observe-recovery";
+export type {
+  UpdateGenerationAuthenticatedBrokerReceiptOf,
+  UpdateGenerationBrokerOperationKind,
+  UpdateGenerationBrokerReceipt,
+  UpdateGenerationBrokerReceiptOf,
+  UpdateGenerationBrokerRequest,
+  UpdateGenerationBrokerSignature,
+  UpdateGenerationObservedGeneration,
+  UpdateGenerationRetainedPair,
+} from "./update-generation-contract-types.js";
 
 export function buildUpdateGenerationBrokerOperationId(params: {
   intentReceiptId: string;
@@ -32,117 +39,6 @@ export function buildUpdateGenerationBrokerOperationId(params: {
   assertNonEmpty(params.intentReceiptId, "intent receipt id");
   return `${params.intentReceiptId}:broker:${params.kind}`;
 }
-
-type UpdateGenerationBrokerRequestBase<Kind extends UpdateGenerationBrokerOperationKind> = {
-  formatVersion: 1;
-  kind: Kind;
-  brokerId: string;
-  namespaceKey: string;
-  transactionId: string;
-  operationId: string;
-  expectedRevision: string | null;
-};
-
-export type UpdateGenerationBrokerRequest =
-  | (UpdateGenerationBrokerRequestBase<"materialize-generation"> & {
-      role: "previous" | "candidate";
-      sourceArtifactId: string;
-      manifest: UpdateGenerationManifest;
-      generation: UpdateGenerationDescriptor;
-    })
-  | (UpdateGenerationBrokerRequestBase<"sync-parent-directory"> & {
-      parent: "generations" | "selector";
-      afterOperationId: string;
-    })
-  | (UpdateGenerationBrokerRequestBase<"switch-selector"> & {
-      expected: UpdateGenerationSelection | null;
-      next: UpdateGenerationSelection;
-    })
-  | (UpdateGenerationBrokerRequestBase<"cleanup-generations"> & {
-      generationIds: string[];
-      protectedGenerationIds: string[];
-    })
-  | (UpdateGenerationBrokerRequestBase<"verify-retained-pair"> & {
-      selected: UpdateGenerationSelection;
-      rollback: UpdateGenerationSelection;
-    })
-  | UpdateGenerationBrokerRequestBase<"observe-recovery">;
-
-export type UpdateGenerationBrokerSignature = {
-  algorithm: "ed25519";
-  keyId: string;
-  signedPayloadSha256: string;
-  valueBase64: string;
-};
-
-export type UpdateGenerationObservedGeneration = {
-  generationId: string;
-  manifestSha256: string;
-  parentDirectoryDurable: boolean;
-};
-
-export type UpdateGenerationRetainedPair = {
-  selected: UpdateGenerationSelection;
-  rollback: UpdateGenerationSelection;
-  selectedManifestVerified: true;
-  rollbackManifestVerified: true;
-};
-
-type UpdateGenerationBrokerReceiptBase<Kind extends UpdateGenerationBrokerOperationKind> = {
-  formatVersion: 1;
-  kind: Kind;
-  brokerId: string;
-  namespaceKey: string;
-  transactionId: string;
-  operationId: string;
-  requestSha256: string;
-  previousRevision: string | null;
-  revision: string | null;
-  recordedAtMs: number;
-  signature: UpdateGenerationBrokerSignature;
-};
-
-export type UpdateGenerationBrokerReceipt =
-  | (UpdateGenerationBrokerReceiptBase<"materialize-generation"> & {
-      role: "previous" | "candidate";
-      sourceArtifactId: string;
-      manifest: UpdateGenerationManifest;
-      generation: UpdateGenerationDescriptor;
-    })
-  | (UpdateGenerationBrokerReceiptBase<"sync-parent-directory"> & {
-      parent: "generations" | "selector";
-      afterOperationId: string;
-      durable: true;
-    })
-  | (UpdateGenerationBrokerReceiptBase<"switch-selector"> & {
-      previous: UpdateGenerationSelection | null;
-      selected: UpdateGenerationSelection;
-    })
-  | (UpdateGenerationBrokerReceiptBase<"cleanup-generations"> & {
-      generationIds: string[];
-      removedGenerationIds: string[];
-      deferred: Array<{ generationId: string; reason: string }>;
-      protectedGenerationIds: string[];
-    })
-  | (UpdateGenerationBrokerReceiptBase<"verify-retained-pair"> & {
-      retainedPair: UpdateGenerationRetainedPair;
-    })
-  | (UpdateGenerationBrokerReceiptBase<"observe-recovery"> & {
-      selector: UpdateGenerationSelection | null;
-      selectorDurable: boolean;
-      generations: UpdateGenerationObservedGeneration[];
-      retainedPair: UpdateGenerationRetainedPair | null;
-    });
-
-export type UpdateGenerationBrokerReceiptOf<Kind extends UpdateGenerationBrokerOperationKind> =
-  Extract<UpdateGenerationBrokerReceipt, { kind: Kind }>;
-
-declare const authenticatedBrokerReceipt: unique symbol;
-export type UpdateGenerationAuthenticatedBrokerReceiptOf<
-  Kind extends UpdateGenerationBrokerOperationKind,
-> = UpdateGenerationBrokerReceiptOf<Kind> & {
-  readonly [authenticatedBrokerReceipt]: true;
-};
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const GENERATION_ID = /^[a-f0-9]{32}$/u;

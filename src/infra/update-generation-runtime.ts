@@ -13,6 +13,8 @@ import { updateGenerationSelectionSchema } from "./update-generation-contract-sc
 import {
   buildUpdateGenerationReceiptId,
   pendingUpdateGenerationBrokerMutationKind,
+  type UpdateGenerationDescriptor,
+  type UpdateGenerationManifest,
   type UpdateGenerationRole,
   type UpdateGenerationServiceIntent,
 } from "./update-generation-contract.js";
@@ -22,15 +24,29 @@ import {
   type UpdateGenerationLedgerCompareAndSwapResult,
   type UpdateGenerationTransactionSnapshot,
 } from "./update-generation-ledger-hook.js";
+import {
+  adjudicateUpdateGenerationTransaction,
+  reconcilePendingUpdateGenerationBrokerMutation,
+  type UpdateGenerationReconciledBrokerMutation,
+  type UpdateGenerationRecoveryAction,
+  type UpdateGenerationRecoveryDecision,
+  type UpdateGenerationRuntimeObservation,
+} from "./update-generation-recovery.js";
 
 type UpdateGenerationRuntimeTypes = Readonly<{
   brokerSignature: UpdateGenerationBrokerSignature;
   observedGeneration: UpdateGenerationObservedGeneration;
   retainedPair: UpdateGenerationRetainedPair;
+  descriptor: UpdateGenerationDescriptor;
+  manifest: UpdateGenerationManifest;
   role: UpdateGenerationRole;
   serviceIntent: UpdateGenerationServiceIntent;
   compareAndSwapResult: UpdateGenerationLedgerCompareAndSwapResult;
   snapshot: UpdateGenerationTransactionSnapshot;
+  reconciledBrokerMutation: UpdateGenerationReconciledBrokerMutation;
+  recoveryAction: UpdateGenerationRecoveryAction;
+  recoveryDecision: UpdateGenerationRecoveryDecision;
+  runtimeObservation: UpdateGenerationRuntimeObservation;
 }>;
 
 declare const updateGenerationRuntimeTypes: unique symbol;
@@ -46,6 +62,8 @@ export type UpdateGenerationRuntime = Readonly<{
   pendingBrokerMutationKind: typeof pendingUpdateGenerationBrokerMutationKind;
   authenticateTransactionRecord: typeof authenticateUpdateGenerationTransactionRecord;
   persistReceipt: typeof persistUpdateGenerationReceipt;
+  adjudicateTransaction: typeof adjudicateUpdateGenerationTransaction;
+  reconcilePendingBrokerMutation: typeof reconcilePendingUpdateGenerationBrokerMutation;
   readonly [updateGenerationRuntimeTypes]?: UpdateGenerationRuntimeTypes;
 }>;
 
@@ -60,4 +78,6 @@ export const UPDATE_GENERATION_RUNTIME: UpdateGenerationRuntime = Object.freeze(
   pendingBrokerMutationKind: pendingUpdateGenerationBrokerMutationKind,
   authenticateTransactionRecord: authenticateUpdateGenerationTransactionRecord,
   persistReceipt: persistUpdateGenerationReceipt,
+  adjudicateTransaction: adjudicateUpdateGenerationTransaction,
+  reconcilePendingBrokerMutation: reconcilePendingUpdateGenerationBrokerMutation,
 });
