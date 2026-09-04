@@ -517,7 +517,6 @@ function makePluginReloadResult(
   overrides: Partial<GatewayPluginReloadResult> = {},
 ): GatewayPluginReloadResult {
   return {
-    restartChannels: new Set(),
     activeChannels: new Set(),
     ...overrides,
   };
@@ -2792,7 +2791,11 @@ describe("gateway hot reload superseded tail recovery", () => {
       sourceConfig: { logging: { level: "debug" } },
       prepareRuntimeConfig,
     });
-    hoisted.refreshContextWindowCache.mockRejectedValueOnce(new Error("detached tail failed"));
+    let current = true;
+    hoisted.refreshContextWindowCache.mockImplementationOnce(async () => {
+      current = false;
+      throw new Error("detached tail failed");
+    });
     const plan = createHotTailPlan({
       changedPaths: ["agents.defaults.workspace"],
       hotReasons: ["agents.defaults.workspace"],
@@ -2804,7 +2807,7 @@ describe("gateway hot reload superseded tail recovery", () => {
         { agents: { defaults: { workspace: "/tmp/a" } } },
         {
           sourceConfig: { agents: { defaults: { workspace: "/tmp/a" } } },
-          isCurrent: () => false,
+          isCurrent: () => current,
           publish: async (commit) => await commit(),
         },
       );
@@ -2839,6 +2842,7 @@ describe("gateway hot reload superseded tail recovery", () => {
       sourceConfig: configA,
       prepareRuntimeConfig: prepareA,
     });
+    let current = true;
     let rejectTail: ((error: Error) => void) | undefined;
     hoisted.refreshContextWindowCache.mockImplementationOnce(
       async () =>
@@ -2854,12 +2858,13 @@ describe("gateway hot reload superseded tail recovery", () => {
     try {
       const staleTail = handlers.applyHotReload(plan, configA, {
         sourceConfig: configA,
-        isCurrent: () => false,
+        isCurrent: () => current,
         publish: async (commit) => await commit(),
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(hoisted.refreshContextWindowCache).toHaveBeenCalledOnce();
 
+      current = false;
       handlers.pauseGatewayRestartForConfigCandidate();
       const acceptedBeforeTailFailure = handlers.acceptRestartConfig(configC);
       expect(acceptedBeforeTailFailure.debt).toBeUndefined();
@@ -4260,12 +4265,15 @@ describe("gateway channel hot reload handlers", () => {
     expect(events).toEqual(["stop:discord:alpha"]);
   });
 
-  it("rechecks agent work admitted after plugin reload leaves the channel running", async () => {
+  it("rechecks agent work admitted before newly activated plugin channels start", async () => {
     const events: string[] = [];
+    const pluginServicesStarted = createDeferred();
     const channels = createRecordedChannelHandlers(events);
     const reloadPlugins = vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
       await params.beforeReplace(new Set());
+      await params.commitRuntime();
       hoisted.activeEmbeddedRunCount.value = 1;
+      pluginServicesStarted.resolve();
       return makePluginReloadResult({ activeChannels: new Set(["discord"]) });
     });
     const logReload = { info: vi.fn(), warn: vi.fn() };
@@ -4275,16 +4283,15 @@ describe("gateway channel hot reload handlers", () => {
 
     try {
       await withChannelReloadsEnabled(async () => {
-        await withDiscordAccounts(["default", "alpha"], async () => {
-          reload = applyHotReload(createAccountReloadPlan(["alpha"], { reloadPlugins: true }), {});
-          await vi.advanceTimersByTimeAsync(0);
-          expect(events).toEqual([]);
-          expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("(discord)"));
+        reload = applyHotReload(createPluginReloadPlan(), {});
+        await Promise.race([pluginServicesStarted.promise, reload]);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events).toEqual([]);
+        expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("(discord)"));
 
-          hoisted.activeEmbeddedRunCount.value = 0;
-          await vi.advanceTimersByTimeAsync(500);
-          await reload;
-        });
+        hoisted.activeEmbeddedRunCount.value = 0;
+        await vi.advanceTimersByTimeAsync(500);
+        await reload;
       });
     } finally {
       hoisted.activeEmbeddedRunCount.value = 0;
@@ -4293,7 +4300,7 @@ describe("gateway channel hot reload handlers", () => {
       await reload?.catch(() => {});
     }
 
-    expect(events).toEqual(["stop:discord:alpha", "start:discord:alpha"]);
+    expect(events).toEqual(["stop:discord:undefined", "start:discord:undefined"]);
     expect(reloadPlugins).toHaveBeenCalledOnce();
   });
 
@@ -4403,15 +4410,14 @@ describe("gateway channel hot reload handlers", () => {
       }
       return new Map();
     });
-    const { applyHotReload } = createGatewayReloadHandlers({
-      setState,
-      startChannel,
-      stopChannel,
-      logChannels,
-      logReload,
-    });
-
     await withGatewayRestartSignal(async (signalSpy) => {
+      const { applyHotReload } = createGatewayReloadHandlers({
+        setState,
+        startChannel,
+        stopChannel,
+        logChannels,
+        logReload,
+      });
       await withChannelReloadsEnabled(async () => {
         await expect(
           applyHotReload(createChannelReloadPlan(["telegram", "discord"]), {}),
@@ -6203,7 +6209,6 @@ describe("gateway plugin hot reload handlers", () => {
         await params.commitRuntime();
         events.push(`plugin:${targetEnv[envKey]}`);
         return makePluginReloadResult({
-          restartChannels: new Set(["discord"]),
           activeChannels: new Set(["discord"]),
         });
       },
@@ -6470,6 +6475,71 @@ describe("gateway plugin hot reload handlers", () => {
     },
   );
 
+  it("keeps torn-down channels stopped when supersession defers plugin recovery", async () => {
+    const servicesStopping = createDeferred();
+    const releaseServices = createDeferred();
+    const cleanupFailure = new Error("Plugin replacement superseded after service teardown");
+    const events: string[] = [];
+    let current = true;
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const publish = vi.fn(async (commit: () => Promise<void>) => await commit());
+    const reloadPlugins: ReloadHandlerParams["reloadPlugins"] = async (params) => {
+      await params.beforeReplace(new Set(["discord"]));
+      events.push("services:stopping");
+      servicesStopping.resolve();
+      await releaseServices.promise;
+      expect(params.isAborted?.()).toBe(true);
+      params.onReplacementTeardownFailure(cleanupFailure);
+      throw cleanupFailure;
+    };
+    const handlers = createReloadHandlersForTest(
+      undefined,
+      {
+        stop: vi.fn(async (channel) => {
+          events.push(`stop:${channel}`);
+        }),
+        start: vi.fn(async (channel) => {
+          events.push(`start:${channel}`);
+          return new Map();
+        }),
+      },
+      reloadPlugins,
+      undefined,
+      requestRecoveryRestart,
+    );
+    const config: OpenClawConfig = { plugins: { enabled: true } };
+    const reload = handlers.applyHotReload(createPluginReloadPlan(), config, {
+      sourceConfig: config,
+      isCurrent: () => current,
+      publish,
+    });
+    const rejected = expect(reload).rejects.toBe(cleanupFailure);
+    try {
+      await servicesStopping.promise;
+      handlers.pauseGatewayRestartForConfigCandidate();
+      current = false;
+      releaseServices.resolve();
+      await rejected;
+
+      expect(events).toEqual(["stop:discord", "services:stopping"]);
+      expect(publish).not.toHaveBeenCalled();
+      expect(handlers.setState).not.toHaveBeenCalled();
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      const accepted = handlers.acceptRestartConfig({
+        ...config,
+        logging: { level: "debug" },
+      });
+      expect(accepted.debt?.retainDebtAcrossConfigChanges).toBe(true);
+      expect(accepted.debt?.plan.restartReasons).toEqual([
+        "hot reload recovery: plugin service replacement teardown",
+      ]);
+    } finally {
+      releaseServices.resolve();
+      await rejected;
+      handlers.stopRestartRetries();
+    }
+  });
+
   it("rolls back unrelated aggregate plugin failures without requesting cleanup recovery", async () => {
     const events: string[] = [];
     const planningFailure = new AggregateError(
@@ -6510,7 +6580,7 @@ describe("gateway plugin hot reload handlers", () => {
     expect(handlers.setState).not.toHaveBeenCalled();
   });
 
-  it("restarts only the account retaining a command catalog on plugin replacement", async () => {
+  it("restarts channel command handlers against the replacement registry", async () => {
     const discordPlugin = createChannelTestPluginBase({
       id: "discord",
       config: {
@@ -6560,11 +6630,7 @@ describe("gateway plugin hot reload handlers", () => {
         }),
       },
       vi.fn(async (params): Promise<GatewayPluginReloadResult> => {
-        const beforeReplace = params.beforeReplace as (
-          channels: ReadonlySet<ChannelKind>,
-          accounts?: ReadonlyMap<ChannelKind, ReadonlySet<string>>,
-        ) => Promise<void>;
-        await beforeReplace(new Set(), new Map([["discord", new Set(["catalog-account"])]]));
+        await params.beforeReplace(new Set(["discord"]));
         await params.commitRuntime();
         setActivePluginRegistry(nextRegistry);
         events.push("registry:next");
@@ -6589,11 +6655,7 @@ describe("gateway plugin hot reload handlers", () => {
         ),
     );
 
-    expect(events).toEqual([
-      "stop:discord:catalog-account",
-      "registry:next",
-      "start:discord:catalog-account",
-    ]);
+    expect(events).toEqual(["stop:discord:all", "registry:next", "start:discord:all"]);
     if (staleDispatch.kind === "plugin") {
       await expect(
         staleDispatch.execute({
@@ -6628,7 +6690,6 @@ describe("gateway plugin hot reload handlers", () => {
         }): Promise<GatewayPluginReloadResult> => {
           await params.commitRuntime();
           return makePluginReloadResult({
-            restartChannels: new Set(["discord"]),
             activeChannels: new Set(["discord"]),
           });
         },
@@ -6781,16 +6842,10 @@ describe("gateway plugin hot reload handlers", () => {
     });
     const reloadPlugins = vi.fn(
       async (params: {
-        beforeReplace: (
-          channels: ReadonlySet<ChannelKind>,
-          accounts?: ReadonlyMap<ChannelKind, ReadonlySet<string>>,
-        ) => Promise<void>;
+        beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
         commitRuntime: () => Promise<void>;
       }): Promise<GatewayPluginReloadResult> => {
-        await params.beforeReplace(
-          new Set(["discord"]),
-          new Map([["slack", new Set(["catalog-account"])]]),
-        );
+        await params.beforeReplace(new Set(["discord", "slack"]));
         await params.commitRuntime();
         return makePluginReloadResult({ activeChannels: new Set(["discord"]) });
       },
@@ -6819,27 +6874,24 @@ describe("gateway plugin hot reload handlers", () => {
     ).rejects.toThrow("publication failed");
 
     expect(events).toEqual([
-      "stop:slack:catalog-account",
       "stop:discord:all",
-      "start:slack:catalog-account",
+      "stop:slack:all",
       "start:discord:all",
+      "start:slack:all",
     ]);
     expect(pruneInactiveChannelAccountState).not.toHaveBeenCalled();
     expect(handlers.setState).not.toHaveBeenCalled();
   });
 
-  it("restarts pre-stopped account targets when plugin replacement is cancelled", async () => {
+  it("restarts pre-stopped channels when plugin replacement is cancelled", async () => {
     const events: string[] = [];
     const pruneInactiveChannelAccountState = vi.fn();
     const reloadPlugins = vi.fn(
       async (params: {
-        beforeReplace: (
-          channels: ReadonlySet<ChannelKind>,
-          accounts?: ReadonlyMap<ChannelKind, ReadonlySet<string>>,
-        ) => Promise<void>;
+        beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
         isAborted?: () => boolean;
       }): Promise<GatewayPluginReloadResult> => {
-        await params.beforeReplace(new Set(), new Map([["discord", new Set(["catalog-account"])]]));
+        await params.beforeReplace(new Set(["discord"]));
         expect(params.isAborted?.()).toBe(false);
         return makePluginReloadResult({ cancelled: true });
       },
@@ -6863,7 +6915,7 @@ describe("gateway plugin hot reload handlers", () => {
       handlers.applyHotReload(createPluginReloadPlan(), { plugins: { enabled: true } }),
     ).rejects.toThrow("config hot reload cancelled by config supersession or in-process restart");
 
-    expect(events).toEqual(["stop:discord:catalog-account", "start:discord:catalog-account"]);
+    expect(events).toEqual(["stop:discord:all", "start:discord:all"]);
     expect(pruneInactiveChannelAccountState).not.toHaveBeenCalled();
     expect(handlers.setState).not.toHaveBeenCalled();
   });
@@ -6941,18 +6993,21 @@ describe("gateway plugin hot reload handlers", () => {
     expect(setState).not.toHaveBeenCalled();
   });
 
-  it("stops removed channel plugins from broad activation before swapping plugin runtime", async () => {
+  it("stops removed channels before plugin replacement and starts newly active channels", async () => {
     const restoreChannelReloadEnv = enableChannelReloadsForTest();
     const gatewayState = createDefaultGatewayReloadState();
     const setState = vi.fn();
-    const startChannel = vi.fn(async () => new Map());
     const events: string[] = [];
+    const startChannel = vi.fn(async (channel: ChannelKind) => {
+      events.push(`start:${channel}`);
+      return new Map();
+    });
     const activeChannels = new Set<ChannelKind>(["slack"]);
     const pruneInactiveChannelAccountState = vi.fn(() => {
       events.push("prune");
     });
-    const stopChannel = vi.fn(async () => {
-      events.push("stop");
+    const stopChannel = vi.fn(async (channel: ChannelKind) => {
+      events.push(`stop:${channel}`);
     });
     const reloadPlugins = vi.fn(
       async (params: {
@@ -6996,7 +7051,7 @@ describe("gateway plugin hot reload handlers", () => {
 
     const [reloadParams] = reloadPlugins.mock.calls.at(-1) ?? [];
     const reloadParamsRecord = reloadParams as
-      | { nextConfig?: unknown; sourceConfig?: unknown; changedPaths?: unknown }
+      | { nextConfig?: unknown; sourceConfig?: unknown }
       | undefined;
     expect(reloadParamsRecord?.nextConfig).toEqual({
       plugins: {
@@ -7004,11 +7059,23 @@ describe("gateway plugin hot reload handlers", () => {
       },
     });
     expect(reloadParamsRecord?.sourceConfig).toBe(sourceConfig);
-    expect(reloadParamsRecord?.changedPaths).toEqual(["plugins.enabled"]);
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
-    expect(startChannel).not.toHaveBeenCalled();
+    expect(stopChannel.mock.calls).toEqual([
+      ["discord", undefined, { manual: false }],
+      ["slack", undefined, { manual: false }],
+    ]);
+    expect(startChannel).toHaveBeenCalledExactlyOnceWith("slack", undefined, {
+      preserveManualStop: true,
+      skipUnavailableAccounts: true,
+    });
     expect(pruneInactiveChannelAccountState).toHaveBeenCalledExactlyOnceWith(activeChannels);
-    expect(events).toEqual(["reload:start", "stop", "registry:replace", "prune"]);
+    expect(events).toEqual([
+      "reload:start",
+      "stop:discord",
+      "registry:replace",
+      "prune",
+      "stop:slack",
+      "start:slack",
+    ]);
     expect(setState).toHaveBeenCalledTimes(1);
   });
 
@@ -7033,7 +7100,6 @@ describe("gateway plugin hot reload handlers", () => {
         await params.beforeReplace(new Set(["discord"]));
         events.push("registry:replace");
         return makePluginReloadResult({
-          restartChannels: new Set(["discord"]),
           activeChannels: new Set(["discord"]),
         });
       },
@@ -7100,6 +7166,48 @@ describe("deferred channel reload abort generation", () => {
       requestRecoveryRestart: options?.requestRecoveryRestart,
       logChannels,
     });
+
+  it("cancels the old reload at restart without aborting its successor", async () => {
+    const oldChannels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
+    const nextChannels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const oldHandlers = createTestHandlers(logChannels, oldChannels);
+    hoisted.activeTaskBlockers.push(makeActiveTaskBlocker());
+    vi.useFakeTimers();
+    const oldReload = oldHandlers
+      .applyHotReload(abortChannelReloadPlan, {})
+      .catch((error: unknown) => error);
+
+    try {
+      await vi.advanceTimersByTimeAsync(10);
+      resetGatewayRestartStateForInProcessRestart();
+      hoisted.activeTaskBlockers.length = 0;
+      const nextHandlers = createTestHandlers(logChannels, nextChannels);
+      const nextReload = nextHandlers
+        .applyHotReload({ ...abortChannelReloadPlan, reloadInternalHooks: true }, {})
+        .then(
+          () => null,
+          (error: unknown) => error,
+        );
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(await oldReload).toBeInstanceOf(GatewayHotReloadCancelledError);
+      expect(await nextReload).toBeNull();
+      expect(oldChannels.stop).not.toHaveBeenCalled();
+      expect(oldChannels.start).not.toHaveBeenCalled();
+      expect(nextChannels.stop).toHaveBeenCalledExactlyOnceWith("whatsapp", undefined, {
+        manual: false,
+      });
+      expect(nextChannels.start).toHaveBeenCalledExactlyOnceWith("whatsapp", undefined, {
+        preserveManualStop: true,
+        skipUnavailableAccounts: true,
+      });
+    } finally {
+      hoisted.activeTaskBlockers.length = 0;
+      await vi.advanceTimersByTimeAsync(500);
+      await oldReload;
+    }
+  });
 
   it("abortPendingChannelReloads cancels a waiting deferred channel reload", async () => {
     const logChannels = { info: vi.fn(), error: vi.fn() };
@@ -7228,7 +7336,6 @@ describe("deferred channel reload abort generation", () => {
       const reloadPlugins: ReloadHandlerParams["reloadPlugins"] = async (params) => {
         await params.commitRuntime();
         return makePluginReloadResult({
-          restartChannels: new Set(["whatsapp"]),
           activeChannels: new Set(["whatsapp"]),
         });
       };
@@ -7516,7 +7623,8 @@ describe("deferred channel reload abort generation", () => {
         startChannel: channels.start,
         stopChannel: channels.stop,
         reloadPlugins: async (params) => {
-          await params.beforeReplace(new Set(), new Map([["whatsapp", new Set(["default"])]]));
+          // This replacement activates a channel with no predecessor account to stop.
+          await params.beforeReplace(new Set());
           if (params.isAborted?.()) {
             return makePluginReloadResult({ cancelled: true });
           }
@@ -7543,7 +7651,7 @@ describe("deferred channel reload abort generation", () => {
         request = submitWrite(nextConfig, "same-write", 1);
         expect(reloader.isConfigReloadSettled()).toBe(false);
         await vi.advanceTimersByTimeAsync(10);
-        expect(channels.stop).toHaveBeenCalledOnce();
+        expect(channels.stop).not.toHaveBeenCalled();
         expect(reloader.isConfigReloadSettled()).toBe(false);
         blocker = tryBeginGatewayRootWorkAdmission();
         if (!blocker) {
@@ -7570,7 +7678,7 @@ describe("deferred channel reload abort generation", () => {
               : "applied",
         );
         if (successor === "prepared refresh failure") {
-          expect(channels.stop).toHaveBeenCalledOnce();
+          expect(channels.stop).not.toHaveBeenCalled();
           expect(channels.start).not.toHaveBeenCalled();
           expect(requestRecoveryRestart).toHaveBeenCalledOnce();
           expect(hoisted.rejectPendingPreparedModelRuntimeReplacement).toHaveBeenCalledOnce();

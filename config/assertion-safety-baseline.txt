@@ -953,7 +953,7 @@ extensions/qa-channel/src/channel-actions.ts	2
 extensions/qa-channel/src/channel-base.ts	6
 extensions/qa-channel/src/channel.ts	5
 extensions/qa-channel/src/gateway.ts	2
-extensions/qa-channel/src/inbound.ts	6
+extensions/qa-channel/src/inbound.ts	2
 extensions/qa-channel/src/setup.ts	2
 extensions/qa-lab/src/agentic-parity-report.ts	1
 extensions/qa-lab/src/auth-profile.fixture.ts	3
@@ -2777,7 +2777,6 @@ src/gateway/chat-tool-titles.ts	2
 src/gateway/cli-session-history.claude-activity.ts	1
 src/gateway/cli-session-history.claude.ts	15
 src/gateway/cli-session-history.merge.ts	6
-src/gateway/config-reload-plan.ts	5
 src/gateway/control-ui-plugin-auth-cookie.ts	1
 src/gateway/control-ui-session-pr-subscriptions.ts	2
 src/gateway/control-ui.ts	2
@@ -2826,7 +2825,7 @@ src/gateway/server-channels.ts	1
 src/gateway/server-chat-state.ts	1
 src/gateway/server-chat.ts	5
 src/gateway/server-close.ts	1
-src/gateway/server-core-runtime.ts	2
+src/gateway/server-core-runtime.ts	1
 src/gateway/server-cron-reconciled.ts	1
 src/gateway/server-cron.ts	5
 src/gateway/server-http-upgrades.ts	2

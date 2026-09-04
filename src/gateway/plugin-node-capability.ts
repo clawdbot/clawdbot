@@ -1,12 +1,16 @@
 // Capability-token helpers for plugin-hosted node surfaces.
 import { randomBytes } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   asDateTimestampMs,
   asPositiveSafeInteger,
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 
 /** Path marker used to scope plugin-hosted node URLs with one-time capabilities. */
 export const PLUGIN_NODE_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
@@ -50,6 +54,34 @@ export function indexPluginNodeCapabilitySurfaces(
     }
   }
   return indexed;
+}
+
+/** Reconnect changed nodes so the handshake owns newly scoped URLs and capabilities. */
+export function reconcileClientPluginNodeCapabilities(
+  client: GatewayWsClient,
+  surfaces: Record<string, PluginNodeCapabilitySurface>,
+  close?: () => void,
+): boolean {
+  // Legacy descriptor changes alter session protocol ceilings. Current nodes only
+  // need affected caps or URLs, including URLs retained after policy narrows caps.
+  if (
+    client.connect.role !== "node" ||
+    (client.connect.maxProtocol < PROTOCOL_VERSION
+      ? isDeepStrictEqual(client.pluginNodeCapabilitySurfaces ?? {}, surfaces)
+      : [...(client.connect.caps ?? []), ...Object.keys(client.pluginSurfaceUrls ?? {})].every(
+          (surface) =>
+            isDeepStrictEqual(client.pluginNodeCapabilitySurfaces?.[surface], surfaces[surface]),
+        ))
+  ) {
+    return true;
+  }
+  invalidateGatewayPolicyClient(client, {
+    reason: "plugin-node-capabilities-changed",
+    code: 1012,
+    message: "node capabilities changed",
+    close,
+  });
+  return false;
 }
 
 /** Parsed URL details after extracting path/query capability tokens. */

@@ -199,6 +199,8 @@ export const browserPluginReload = {
     "browser.cdpUrl",
     "browser.noSandbox",
     "browser.extraArgs",
+    "browser.snapshotDefaults",
+    "browser.tabCleanup",
   ],
 };
 

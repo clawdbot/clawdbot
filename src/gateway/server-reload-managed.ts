@@ -20,7 +20,6 @@ import {
   GatewayConfigReloadSupersededError,
   GatewayHotReloadRecoveryError,
   GatewayHotReloadStaleSecretsError,
-  abortPendingChannelReloads,
   type AcceptedRestartTarget,
   type AcceptedRestartTargetOwnership,
   type CurrentRuntimeSecretsPreparation,
@@ -31,6 +30,7 @@ import {
   type ManagedGatewayConfigReloaderParams,
   type RuntimeSecretsPreflightParams,
 } from "./server-reload-contracts.js";
+import { abortPendingChannelReloads } from "./server-reload-generation.js";
 import { createGatewayReloadHandlers } from "./server-reload-hot.js";
 import {
   createManagedReloadSecretHandlers,

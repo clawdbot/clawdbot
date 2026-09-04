@@ -19,6 +19,7 @@ import {
   waitForHotReloadFact,
   type HotReloadConnection,
 } from "./gateway-config-hot-reload-fixtures.js";
+import { proveHotReloadChannelPolicy } from "./gateway-config-hot-reload-policy.js";
 
 const CHANNEL = "qa-channel";
 const MODELS = ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"] as const;
@@ -157,17 +158,19 @@ export async function proveHotReloadChannels({
         );
         return account;
       };
-      const patch = async (change: unknown) => {
+      const patch = async (change: unknown, replacePaths?: string[], refreshChannel = true) => {
         const previous = await ready("default");
         const snapshot = await rpc<{ hash: string; config: OpenClawConfig }>("config.get");
         const result = await rpc<{
           sentinel: { payload: { stats: { requiresRestart: boolean } } };
-        }>("config.patch", { baseHash: snapshot.hash, raw: JSON.stringify(change) });
+        }>("config.patch", { baseHash: snapshot.hash, raw: JSON.stringify(change), replacePaths });
         assert.equal(result.sentinel.payload.stats.requiresRestart, false);
-        await waitForHotReloadFact("channel snapshot replaced", async () => {
-          const account = await ready("default");
-          return (account.lastStartAt ?? 0) > (previous.lastStartAt ?? 0) ? account : undefined;
-        });
+        if (refreshChannel) {
+          await waitForHotReloadFact("channel snapshot replaced", async () => {
+            const account = await ready("default");
+            return (account.lastStartAt ?? 0) > (previous.lastStartAt ?? 0) ? account : undefined;
+          });
+        }
         await checkStopped();
       };
       const providerRequests = async () => {
@@ -297,6 +300,16 @@ export async function proveHotReloadChannels({
           "channels.defaults",
           "Real heartbeat model runs changed silent→delivered HEARTBEAT_OK→silent through the QA channel; the running account restarted and the manually stopped account stayed stopped",
         );
+      });
+      await proveHotReloadChannelPolicy({
+        transport,
+        state,
+        providerRequests,
+        rpc,
+        patch: (change, replacePaths) => patch(change, replacePaths, false),
+        patchChannels: patch,
+        proveGroup: group,
+        verifyContinuity: record,
       });
       if (failures.length === 0) {
         await rpc("channels.start", { channel: CHANNEL, accountId: "parked" });

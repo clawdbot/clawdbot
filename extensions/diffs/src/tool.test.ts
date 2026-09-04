@@ -1,15 +1,26 @@
 // Diffs tests cover tool plugin behavior.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
+import type { OpenClawConfig, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffsPluginDefaults } from "./config.js";
+import { registerDiffsPlugin } from "./plugin.js";
 import { DiffArtifactStore } from "./store.js";
 import { createDiffStoreHarness } from "./test-helpers.js";
 import { createDiffsTool } from "./tool.js";
 import type { DiffRenderOptions } from "./types.js";
+
+const { resolvePreferredOpenClawTmpDir } = vi.hoisted(() => ({
+  resolvePreferredOpenClawTmpDir: vi.fn(),
+}));
+
+vi.mock("../api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api.js")>()),
+  resolvePreferredOpenClawTmpDir,
+}));
 
 vi.mock("./browser.runtime.js", () => {
   throw new Error("viewer-only rendering must not load the Playwright renderer");
@@ -21,13 +32,17 @@ describe("diffs tool", () => {
   let rootDir: string;
   let store: DiffArtifactStore;
   let cleanupRootDir: () => Promise<void>;
+  let blobStore: Awaited<ReturnType<typeof createDiffStoreHarness>>["blobStore"];
 
   beforeEach(async () => {
+    resolvePreferredOpenClawTmpDir.mockReturnValue(os.tmpdir());
     ({
       rootDir,
       store,
+      blobStore,
       cleanup: cleanupRootDir,
     } = await createDiffStoreHarness("openclaw-diffs-tool-"));
+    resolvePreferredOpenClawTmpDir.mockReturnValue(rootDir);
   });
 
   afterEach(async () => {
@@ -36,7 +51,7 @@ describe("diffs tool", () => {
 
   it("returns a viewer URL in view mode", async () => {
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
     });
@@ -54,6 +69,40 @@ describe("diffs tool", () => {
       "http://127.0.0.1:18789/plugins/diffs/view/",
     );
     expect(readDetails(result).changed).toBe(true);
+  });
+
+  it("uses current public origin for retained tools after config reload", async () => {
+    let config: OpenClawConfig = { gateway: { publicOrigin: "https://first.example" } };
+    const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+    const api = createTestPluginApi({ id: "diffs", config, registerTool });
+    api.runtime.state = {
+      ...api.runtime.state,
+      openBlobStore: vi.fn().mockReturnValue(blobStore),
+    };
+    registerDiffsPlugin(api);
+    const factory = registerTool.mock.calls[0]?.[0];
+    if (typeof factory !== "function") {
+      throw new Error("Diffs did not register a tool factory");
+    }
+    const getRuntimeConfig = vi.fn(() => config);
+    const tool = factory({
+      config: { gateway: { publicOrigin: "https://authored.example" } },
+      runtimeConfig: { gateway: { publicOrigin: "https://initial.example" } },
+      getRuntimeConfig,
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("Diffs did not return a tool");
+    }
+    for (const origin of ["https://first.example", "https://second.example"]) {
+      config = { gateway: { publicOrigin: origin } };
+      const result = await tool.execute("reload-origin", {
+        before: "one\n",
+        after: "two\n",
+        mode: "view",
+      });
+      expect(String(readDetails(result).viewerUrl)).toMatch(`${origin}/plugins/diffs/view/`);
+    }
+    expect(getRuntimeConfig).toHaveBeenCalledTimes(2);
   });
 
   it("short-circuits identical before/after input without creating an artifact", async () => {
@@ -83,9 +132,7 @@ describe("diffs tool", () => {
 
   it("uses configured viewerBaseUrl when tool input omits baseUrl", async () => {
     const tool = createDiffsTool({
-      api: createApi({
-        viewerBaseUrl: "https://example.com/openclaw/",
-      }),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
       viewerBaseUrl: "https://example.com/openclaw",
@@ -108,9 +155,7 @@ describe("diffs tool", () => {
 
   it("prefers per-call baseUrl over configured viewerBaseUrl", async () => {
     const tool = createDiffsTool({
-      api: createApi({
-        viewerBaseUrl: "https://example.com/openclaw",
-      }),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
       viewerBaseUrl: "https://example.com/openclaw",
@@ -134,7 +179,7 @@ describe("diffs tool", () => {
 
   it("does not expose reserved format in the tool schema", () => {
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
     });
@@ -190,7 +235,7 @@ describe("diffs tool", () => {
     });
 
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
       screenshotter,
@@ -324,7 +369,7 @@ describe("diffs tool", () => {
 
   it("falls back to view output when both mode cannot render an image", async () => {
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
       screenshotter: {
@@ -348,7 +393,7 @@ describe("diffs tool", () => {
 
   it("falls back to view output when the default image renderer cannot load", async () => {
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
     });
@@ -368,7 +413,7 @@ describe("diffs tool", () => {
 
   it("rejects invalid base URLs as tool input errors", async () => {
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
     });
@@ -385,7 +430,7 @@ describe("diffs tool", () => {
 
   it("returns a tool input error for malformed raw arguments", async () => {
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
     });
@@ -400,7 +445,7 @@ describe("diffs tool", () => {
 
   it("rejects oversized patch payloads", async () => {
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
     });
@@ -415,7 +460,7 @@ describe("diffs tool", () => {
 
   it("classifies patch render validation failures as tool input errors", async () => {
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
     });
@@ -438,7 +483,7 @@ describe("diffs tool", () => {
 
   it("rejects oversized before/after payloads", async () => {
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
     });
@@ -455,7 +500,7 @@ describe("diffs tool", () => {
 
   it("uses configured defaults when tool params omit them", async () => {
     const tool = createDiffsTool({
-      api: createApi(),
+      getConfig: () => ({}),
       store,
       defaults: {
         ...DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -597,23 +642,6 @@ describe("diffs tool", () => {
   });
 });
 
-function createApi(pluginConfig?: Record<string, unknown>): OpenClawPluginApi {
-  return createTestPluginApi({
-    id: "diffs",
-    name: "Diffs",
-    description: "Diffs",
-    source: "test",
-    config: {
-      gateway: {
-        port: 18789,
-        bind: "loopback",
-      },
-    },
-    pluginConfig,
-    runtime: {} as OpenClawPluginApi["runtime"],
-  });
-}
-
 function createToolWithScreenshotter(
   store: DiffArtifactStore,
   screenshotter: DiffScreenshotter,
@@ -626,7 +654,7 @@ function createToolWithScreenshotter(
   },
 ) {
   return createDiffsTool({
-    api: createApi(),
+    getConfig: () => ({}),
     store,
     defaults,
     screenshotter,

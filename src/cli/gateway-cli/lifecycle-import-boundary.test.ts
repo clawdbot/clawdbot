@@ -17,7 +17,7 @@ describe("gateway lifecycle hub import boundaries", () => {
     // server-reload-handlers.ts also re-exports server-reload-hot.ts and
     // server-reload-managed.ts, so routing through it loads the hot-reload and
     // managed-reloader graphs before the gateway can accept a connection.
-    expect(hub).toContain('from "../../gateway/server-reload-contracts.js"');
+    expect(hub).toContain('from "../../gateway/server-reload-generation.js"');
     expect(hub).not.toContain('from "../../gateway/server-reload-handlers.js"');
 
     // Restart marking belongs to server close, after the drain identifies the

@@ -107,7 +107,6 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       startChannel: vi.fn(async () => new Map()),
       stopChannel: vi.fn(async () => {}),
       reloadPlugins: vi.fn(async (): Promise<GatewayPluginReloadResult> => ({
-        restartChannels: new Set(),
         activeChannels: new Set(),
       })),
       logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },

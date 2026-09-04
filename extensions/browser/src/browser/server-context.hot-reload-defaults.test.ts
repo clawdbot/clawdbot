@@ -42,7 +42,7 @@ describe("browser inherited launch settings reload", () => {
     };
   });
 
-  it("keeps restart-owned controls while refreshing launch settings", async () => {
+  it("keeps restart-owned controls while refreshing launch and cleanup settings", async () => {
     config.current.browser = {
       ...config.current.browser,
       ssrfPolicy: { allowedHostnames: ["192.0.2.10"] },
@@ -77,7 +77,7 @@ describe("browser inherited launch settings reload", () => {
       enabled: startup.enabled,
       evaluateEnabled: startup.evaluateEnabled,
       extensionRelay: startup.extensionRelay,
-      tabCleanup: startup.tabCleanup,
+      tabCleanup: { enabled: false },
     });
   });
 

@@ -265,7 +265,7 @@ export function createGatewayPluginRequestHandler(params: {
         const runRoute = async () =>
           (await withPluginRuntimeGatewayRequestScope(
             createPluginRouteRuntimeScope({
-              registry: params.registry,
+              registry,
               route,
               req,
               gatewayRequestContext,
@@ -345,7 +345,7 @@ export function createGatewayPluginUpgradeHandler(params: {
           async () =>
             (await withPluginRuntimeGatewayRequestScope(
               createPluginRouteRuntimeScope({
-                registry: params.registry,
+                registry,
                 route,
                 req,
                 gatewayRequestContext,

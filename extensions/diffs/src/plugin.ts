@@ -64,7 +64,12 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     (ctx) => {
       const pluginConfig = resolveCurrentPluginConfig();
       return createDiffsTool({
-        api,
+        getConfig: () =>
+          // SAFETY: The tool only reads this immutable runtime snapshot.
+          (ctx.getRuntimeConfig?.() ??
+            ctx.runtimeConfig ??
+            ctx.config ??
+            api.runtime.config.current()) as OpenClawConfig,
         store,
         defaults: resolveDiffsPluginDefaults(pluginConfig),
         viewerBaseUrl: resolveDiffsPluginViewerBaseUrl(pluginConfig),
