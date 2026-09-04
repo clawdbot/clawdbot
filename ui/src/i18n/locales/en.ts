@@ -5431,6 +5431,12 @@ export const en: TranslationMap & {
       showEarlier: "Show earlier",
       loadingEarlier: "Loading earlier history…",
       noMatches: "No matching messages",
+      positionRail: "Conversation position",
+      positionMarker: "{label}, marker {position} of {count}",
+      positionUserMessage: "User message",
+      positionAssistantMessage: "Assistant message",
+      positionMarkerHint:
+        "Use arrow keys to choose a marker, Enter or Space to jump, and Escape to dismiss the preview.",
     },
     pendingInputs: {
       cancelled:

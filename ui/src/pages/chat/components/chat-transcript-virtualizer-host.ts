@@ -515,6 +515,44 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.messageRowKeysById = messageRowKeysById;
   }
 
+  activeMessageId(messageIds: readonly string[]): string | null {
+    const scrollElement = this.scrollElement;
+    if (!scrollElement || messageIds.length === 0) {
+      return null;
+    }
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    const maxOffset = maxTranscriptScrollOffset(scrollElement);
+    // The reader has reached the final section even though the normal midpoint
+    // viewport anchor still points into the preceding row.
+    if (maxOffset !== null && Math.abs(maxOffset - scrollElement.scrollTop) <= 1) {
+      for (const messageId of [...messageIds].reverse()) {
+        if (this.messageRowKeysById.has(messageId)) {
+          return messageId;
+        }
+      }
+    }
+    // Measurements already include scrollMargin. Query the complete row model,
+    // not the rendered range, which can lag a jump or include a focused outlier.
+    const viewportAnchor = scrollElement.scrollTop + scrollElement.clientHeight * 0.5;
+    const activeRow = virtualizer.getVirtualItemForOffset(viewportAnchor);
+    if (!activeRow) {
+      return null;
+    }
+    let precedingId: string | null = null;
+    for (const messageId of messageIds) {
+      const rowKey = this.messageRowKeysById.get(messageId);
+      const rowIndex = rowKey ? this.rowIndexesByKey.get(rowKey) : undefined;
+      if (rowIndex === undefined) {
+        continue;
+      }
+      if (rowIndex > activeRow.index) {
+        return precedingId ?? messageId;
+      }
+      precedingId = messageId;
+    }
+    return precedingId;
+  }
+
   revealMessage(messageId: string): boolean {
     const rowKey = this.messageRowKeysById.get(messageId);
     const rowIndex = rowKey ? this.rowIndexesByKey.get(rowKey) : undefined;
