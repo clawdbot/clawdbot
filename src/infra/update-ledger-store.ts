@@ -266,6 +266,12 @@ async function openLedger(
         currentVersion = (database.prepare("PRAGMA user_version").get() as { user_version: number })
           .user_version;
         if (currentVersion === 0) {
+          const existingObject = database
+            .prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
+            .get();
+          if (existingObject) {
+            throw new Error("Refusing to initialize an update ledger in a nonempty database");
+          }
           database.exec(`
             CREATE TABLE update_ledger_heads (
               install_root TEXT PRIMARY KEY NOT NULL,

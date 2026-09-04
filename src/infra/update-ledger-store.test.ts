@@ -352,6 +352,35 @@ describe("durable update ledger store", () => {
     }
   });
 
+  it("does not claim an unrelated private version-zero database", async () => {
+    const target = await fixture("unrelated-database");
+    const unrelated = new DatabaseSync(target.databasePath);
+    unrelated.exec("CREATE TABLE unrelated (value TEXT); INSERT INTO unrelated VALUES ('kept')");
+    unrelated.close();
+    if (process.platform !== "win32") {
+      await fs.chmod(target.databasePath, 0o600);
+    }
+
+    await expect(
+      compareAndSwapUpdateLedger({
+        expectedRevision: null,
+        locator: target.locator,
+        payloadJson: JSON.stringify({ phase: "pending" }),
+        receiptId: "must-not-claim",
+      }),
+    ).rejects.toThrow("nonempty database");
+
+    const preserved = new DatabaseSync(target.databasePath, { readOnly: true });
+    try {
+      expect(preserved.prepare("SELECT value FROM unrelated").get()).toEqual({ value: "kept" });
+      expect(
+        (preserved.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+      ).toBe(0);
+    } finally {
+      preserved.close();
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "does not change permissions on an existing custom-path parent",
     async () => {
