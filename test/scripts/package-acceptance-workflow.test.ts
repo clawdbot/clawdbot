@@ -4418,6 +4418,62 @@ NODE
     }
   });
 
+  it("retries pnpm store path resolution after a transient executable download failure", () => {
+    const action = parse(readFileSync(SETUP_PNPM_STORE_CACHE_ACTION, "utf8")) as {
+      runs: { steps: WorkflowStep[] };
+    };
+    const step = action.runs.steps.find(
+      (candidate) => candidate.name === "Resolve pnpm store path",
+    );
+    expect(step?.run).toBeDefined();
+
+    const root = tempDirs.make("pnpm-store-path-retry-");
+    const binDir = join(root, "bin");
+    const attemptsPath = join(root, "attempts");
+    const sleepPath = join(root, "sleeps");
+    const outputPath = join(root, "output");
+    const storePath = join(root, "store");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, "pnpm"),
+      `#!/bin/sh
+attempts=$(cat "$MOCK_ATTEMPTS" 2>/dev/null || printf 0)
+attempts=$((attempts + 1))
+printf '%s' "$attempts" > "$MOCK_ATTEMPTS"
+if [ "$attempts" -lt 3 ]; then
+  printf 'transient pnpm download failure\\n' >&2
+  exit 1
+fi
+printf '%s\\n' "$MOCK_STORE_PATH"
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(binDir, "sleep"),
+      `#!/bin/sh
+printf '%s\\n' "$1" >> "$MOCK_SLEEPS"
+`,
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync("bash", ["-c", step?.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: outputPath,
+        MOCK_ATTEMPTS: attemptsPath,
+        MOCK_SLEEPS: sleepPath,
+        MOCK_STORE_PATH: storePath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(attemptsPath, "utf8")).toBe("3");
+    expect(readFileSync(sleepPath, "utf8")).toBe("5\n10\n");
+    expect(readFileSync(outputPath, "utf8")).toContain(`path=${storePath}`);
+  });
+
   it("runs trusted npm preflight pnpm commands from the tooling checkout", () => {
     const root = tempDirs.make("npm-preflight-tooling-pnpm-");
     const toolingDir = join(root, ".artifacts/plugin-sdk-release-tooling");
