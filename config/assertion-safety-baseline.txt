@@ -633,9 +633,8 @@ extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
 extensions/matrix/src/channel-account-paths.ts	1
 extensions/matrix/src/channel.ts	4
-extensions/matrix/src/cli-account.ts	5
+extensions/matrix/src/cli-account.ts	1
 extensions/matrix/src/cli-direct.ts	2
-extensions/matrix/src/cli-encryption.ts	1
 extensions/matrix/src/cli-shared.ts	1
 extensions/matrix/src/config-schema.ts	1
 extensions/matrix/src/directory-live.ts	3
