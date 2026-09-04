@@ -143,22 +143,27 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
 
 function retainTaskStreamingFields(state: BackgroundTasksState, task: TaskSummary): TaskSummary {
   const retained = state.taskActivityById.get(task.id);
-  const lastActivity = task.lastActivity ?? retained?.lastActivity;
+  const lastActivity = isActiveTask(task)
+    ? (task.lastActivity ?? retained?.lastActivity)
+    : undefined;
   const diffStat = task.diffStat ?? retained?.diffStat;
+  const streamingFields = {
+    ...(lastActivity ? { lastActivity } : {}),
+    ...(diffStat ? { diffStat } : {}),
+  };
   if (lastActivity || diffStat) {
-    state.taskActivityById.set(task.id, {
-      ...(lastActivity ? { lastActivity } : {}),
-      ...(diffStat ? { diffStat } : {}),
-    });
+    state.taskActivityById.set(task.id, streamingFields);
+  } else {
+    state.taskActivityById.delete(task.id);
   }
   if (lastActivity === task.lastActivity && diffStat === task.diffStat) {
     return task;
   }
-  return {
-    ...task,
-    ...(lastActivity ? { lastActivity } : {}),
-    ...(diffStat ? { diffStat } : {}),
-  };
+  const next = { ...task, ...streamingFields };
+  if (!lastActivity) {
+    delete next.lastActivity;
+  }
+  return next;
 }
 
 function prepareTaskSnapshot(state: BackgroundTasksState, task: TaskSummary): TaskSummary {

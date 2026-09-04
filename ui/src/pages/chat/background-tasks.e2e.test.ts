@@ -501,7 +501,7 @@ suite.define(() => {
     );
   });
 
-  it("streams two subagent activity rows and retains final diff chips", async () => {
+  it("retires terminal subagent text and retains final diff chips", async () => {
     const activityDir = path.join(artifactDir, "subagent-activity");
     await mkdir(activityDir, { recursive: true });
     await suite.withPage(
@@ -621,7 +621,7 @@ suite.define(() => {
             taskId: first.taskId,
             kind: first.kind,
             runtime: first.runtime,
-            status: "completed",
+            status: "cancelled",
             title: first.title,
             agentId: first.agentId,
             sessionKey: first.sessionKey,
@@ -631,21 +631,20 @@ suite.define(() => {
             startedAt: first.startedAt,
             updatedAt: baseTime + 2_000,
             endedAt: baseTime + 2_000,
-            terminalSummary: "Ownership review complete",
           },
         });
 
-        await firstRow.getByText("Subagent finished").waitFor();
-        await detailPanel.getByText("Completed").waitFor();
-        expect(await firstRow.textContent()).toContain("Ownership review complete");
+        await firstRow.getByText("Subagent cancelled").waitFor();
+        await detailPanel.getByText("Failed").waitFor();
+        await page.screenshot({
+          path: path.join(activityDir, "02-one-subagent-cancelled.png"),
+          fullPage: true,
+        });
+        expect(await firstRow.textContent()).not.toContain("Cross-checking requester ownership");
         expect(await firstRow.locator(".chat-diffstat__add").textContent()).toBe("+14");
         expect(await firstRow.locator(".chat-diffstat__del").textContent()).toBe("-3");
         expect(await secondRow.textContent()).toContain("Subagent working");
         expect(await secondRow.textContent()).toContain("Checking tool card rendering");
-        await page.screenshot({
-          path: path.join(activityDir, "02-one-subagent-finished.png"),
-          fullPage: true,
-        });
         await page.getByRole("button", { name: "Close Review" }).click();
         await detailPanel.waitFor({ state: "detached" });
       },
