@@ -101,53 +101,105 @@ export function isToolAllowedByPolicies(
 // can cover a witness only through a wildcard, never by a literal that happens
 // to spell the placeholder while missing the server's real tools.
 const NAMESPACE_WITNESS = "~";
+// Ways of picking one glob per allow layer; exotic policies beyond this fall closed.
+const MAX_WITNESS_COMBINATIONS = 64;
 
-/** In-namespace tool name an allow entry could match; undefined when it cannot reach the namespace. */
-function namespaceWitness(entry: string, namespace: string): string | undefined {
-  const wildcard = entry.indexOf("*");
-  if (wildcard < 0) {
+/** A glob split at its wildcards: literal head, inner literals, literal tail. */
+type GlobShape = { head: string; inner: string[]; tail: string };
+
+/** How an allow entry reaches the namespace: a concrete name as itself, a glob as its shape. */
+function namespaceReach(entry: string, namespace: string): string | GlobShape | undefined {
+  const parts = entry.split("*");
+  const head = parts[0] ?? "";
+  if (parts.length === 1) {
     return entry.length > namespace.length && entry.startsWith(namespace) ? entry : undefined;
   }
-  const head = entry.slice(0, wildcard);
-  const tail = entry.slice(wildcard + 1).replaceAll("*", NAMESPACE_WITNESS);
-  if (head.startsWith(namespace)) {
-    return `${head}${NAMESPACE_WITNESS}${tail}`;
+  if (!head.startsWith(namespace) && !namespace.startsWith(head)) {
+    return undefined;
   }
-  return namespace.startsWith(head) ? `${namespace}${NAMESPACE_WITNESS}${tail}` : undefined;
+  return {
+    head: head.length >= namespace.length ? head : namespace,
+    inner: parts.slice(1, -1),
+    tail: parts.at(-1) ?? "",
+  };
+}
+
+/**
+ * One in-namespace name per way of picking a glob from every glob layer whose
+ * heads nest and whose tails nest: the longest head, every inner literal in
+ * order, and the longest tail, joined by the placeholder, is matched by each
+ * chosen glob at once (`memos__read*` with `memos__*note` gives `memos__read~note`).
+ */
+function intersectGlobWitnesses(layers: GlobShape[][], namespace: string): string[] {
+  let combinations: GlobShape[] = [{ head: namespace, inner: [], tail: "" }];
+  for (const layer of layers) {
+    const next: GlobShape[] = [];
+    for (const combined of combinations) {
+      for (const shape of layer) {
+        const head = combined.head.length >= shape.head.length ? combined.head : shape.head;
+        const tail = combined.tail.length >= shape.tail.length ? combined.tail : shape.tail;
+        const nests =
+          head.startsWith(combined.head) &&
+          head.startsWith(shape.head) &&
+          tail.endsWith(combined.tail) &&
+          tail.endsWith(shape.tail);
+        if (nests) {
+          next.push({ head, inner: [...combined.inner, ...shape.inner], tail });
+        }
+      }
+    }
+    combinations = next.slice(0, MAX_WITNESS_COMBINATIONS);
+    if (combinations.length === 0) {
+      return [];
+    }
+  }
+  return combinations.map((shape) =>
+    [shape.head, ...shape.inner, shape.tail].join(NAMESPACE_WITNESS),
+  );
 }
 
 /**
  * Whether layered policies could still admit some tool inside a namespace prefix
  * (an MCP `server__`) whose tool names are unknown after a failed catalog load.
- * Every allow entry reaching the prefix stands in for a tool it could match, and
- * the real matcher judges those witnesses with deny precedence across all layers,
- * so `allow: ["memos__read*"]` plus `deny: ["memos__read*"]` hides the namespace
- * exactly as it hides the tools. Globs that intersect only through names neither
- * layer spells out yield no shared witness and hide the outage: the safe side.
+ * Allow entries reaching the prefix stand in for tools they could match: concrete
+ * names as themselves, globs through one witness per way of satisfying every
+ * glob layer at once. The real matcher then judges those witnesses with deny
+ * precedence across all layers, so `allow: ["memos__read*"]` plus
+ * `deny: ["memos__read*"]` hides the namespace exactly as it hides the tools.
  */
 export function policiesAdmitToolNamespace(
   prefix: string,
   policies: Array<SandboxToolPolicy | undefined>,
 ): boolean {
   const namespace = normalizeToolPolicyName(prefix);
-  const witnesses = new Set<string>();
+  const names = new Set<string>();
+  const globLayers: GlobShape[][] = [];
   for (const policy of policies) {
     const allow = expandToolGroups(policy?.allow);
     if (allow.length === 0) {
       continue;
     }
-    const reaching = allow.flatMap(
-      (entry) => namespaceWitness(normalizeToolPolicyName(entry), namespace) ?? [],
-    );
-    if (reaching.length === 0) {
+    const shapes: GlobShape[] = [];
+    let reached = false;
+    for (const entry of allow) {
+      const reach = namespaceReach(normalizeToolPolicyName(entry), namespace);
+      if (reach === undefined) {
+        continue;
+      }
+      reached = true;
+      if (typeof reach === "string") {
+        names.add(reach);
+      } else {
+        shapes.push(reach);
+      }
+    }
+    if (!reached) {
       return false;
     }
-    for (const witness of reaching) {
-      witnesses.add(witness);
+    if (shapes.length > 0) {
+      globLayers.push(shapes);
     }
   }
-  if (witnesses.size === 0) {
-    witnesses.add(`${namespace}${NAMESPACE_WITNESS}`);
-  }
-  return [...witnesses].some((name) => isToolAllowedByPolicies(name, policies));
+  const witnesses = [...names, ...intersectGlobWitnesses(globLayers, namespace)];
+  return witnesses.some((name) => isToolAllowedByPolicies(name, policies));
 }

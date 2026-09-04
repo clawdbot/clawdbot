@@ -442,6 +442,18 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: true,
     },
     {
+      label: "config and runtime allow globs that share a memos tool",
+      tools: { allow: ["memos__read*"] },
+      toolsAllow: ["memos__*note"],
+      visible: true,
+    },
+    {
+      label: "config and runtime allow globs that share no memos tool",
+      tools: { allow: ["memos__read*"] },
+      toolsAllow: ["memos__write*"],
+      visible: false,
+    },
+    {
       label: "an allow and a deny naming the same memos tool",
       tools: { allow: ["memos__read_note"], deny: ["memos__read_note"] },
       visible: false,
