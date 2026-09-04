@@ -471,7 +471,9 @@ export async function runAgentHarnessAttempt(
     }
     assertCurrent();
     // Promote approved input before the host binds annotation to its exact stored row.
-    await internalParams.userTurnTranscriptRecorder.persistApproved();
+    await internalParams.userTurnTranscriptRecorder.persistApproved({
+      cwd: internalParams.cwd ?? internalParams.workspaceDir,
+    });
     assertCurrent();
   }
   if (nativeSessionRuntime) {
