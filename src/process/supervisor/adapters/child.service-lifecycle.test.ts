@@ -163,11 +163,15 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     }
   });
 
-  it("bounds construction while secret delivery blocks and cleans the real command", async () => {
+  it("preserves construction cleanup uncertainty while the real command self-cleans", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const cwd = tempDirs.make("openclaw-service-secret-construction-");
     const pidPath = path.join(cwd, "command.pid");
+    const termPath = path.join(cwd, "command.term.pid");
     const command = `
+      process.on("SIGTERM", () => {
+        require("node:fs").writeFileSync(${JSON.stringify(termPath)}, String(process.pid));
+      });
       require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
       setInterval(() => {}, 1000);
     `;
@@ -176,6 +180,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const pendingRun = supervisor.spawn({
       runId,
+      scopeKey: runId,
       mode: "child",
       argv: [process.execPath, "-e", command],
       stdinMode: "pipe-closed",
@@ -204,13 +209,19 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
         reason: "overall-timeout",
         timedOut: true,
       });
+      await expect(supervisor.waitForScope(runId)).rejects.toThrow("cleanup identity lost");
+      await expect(run.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
+      await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+      // Observe the anchor's TERM before its unchanged grace; neither the timeout
+      // result nor the failed join may disable its independent group cleanup.
+      await waitForPidFile(termPath, 5_000, realDelay);
       await waitFor(() => !isAlive(startedPid));
     } finally {
       vi.useRealTimers();
       supervisor.cancel(runId);
       killPidIfAlive(commandPid);
       await pendingRun.catch(() => {});
-      await supervisor.shutdown();
+      await supervisor.shutdown().catch(() => {});
     }
   });
 

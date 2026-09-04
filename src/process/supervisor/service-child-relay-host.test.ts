@@ -111,7 +111,7 @@ async function createRelay(platform: "linux" | "win32") {
   return { adapter, cancellations, emit, completeRoot, close };
 }
 
-it("kills the spawned relay when abortSignal fires before ready", async () => {
+it("reports cleanup uncertainty when construction aborts before ready", async () => {
   platformMock = mockProcessPlatform("linux");
   const stub = createStubChild();
   stub.child.unref = vi.fn();
@@ -140,13 +140,13 @@ it("kills the spawned relay when abortSignal fires before ready", async () => {
   expect(stub.killMock).not.toHaveBeenCalled();
 
   abort.abort();
-  await expect(starting).rejects.toThrow(/construction aborted|cleanup identity lost/);
+  await expect(starting).rejects.toThrow("service child cleanup identity lost");
   expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
   control.destroy();
   stub.emitExit(null, "SIGKILL");
 });
 
-it("settles when construction aborts before deferred start delivery fails", async () => {
+it("reports cleanup loss when deferred start delivery fails after abort", async () => {
   platformMock = mockProcessPlatform("linux");
   const stub = createStubChild();
   stub.child.unref = vi.fn();
@@ -185,14 +185,63 @@ it("settles when construction aborts before deferred start delivery fails", asyn
   await nextTurn();
   expect(startCallbacks).toHaveLength(1);
   abort.abort();
-  await expect(starting).rejects.toThrow(/construction aborted|cleanup identity lost/);
-  expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
-
+  const rejected = expect(starting).rejects.toThrow("service child cleanup identity lost");
   startCallbacks[0]!(new Error("synthetic start delivery failed"));
+  await rejected;
+  expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
   await nextTurn();
   control.destroy();
   stub.emitExit(null, "SIGKILL");
 });
+
+it.each(["linux", "win32"] as const)(
+  "keeps rejected construction ownership failures visible to supervisor joins (%s)",
+  async (platform) => {
+    platformMock = mockProcessPlatform(platform);
+    const stub = createStubChild();
+    const control = new Duplex({
+      autoDestroy: false,
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    Object.defineProperty(stub.child, "stdio", {
+      value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control],
+      configurable: true,
+    });
+    mocks.spawn.mockReturnValue(stub.child);
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:rejected-construction";
+    const pending = supervisor.spawn({
+      runId: "rejected-construction",
+      mode: "anchored-shell",
+      command: "synthetic-command",
+      sessionId: "rejected-construction",
+      backendId: "test",
+      scopeKey,
+    });
+    await nextTurn();
+    supervisor.cancel("rejected-construction");
+    const run = await pending;
+    await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    const outcomes = Promise.allSettled([supervisor.waitForScope(scopeKey), supervisor.shutdown()]);
+    control.destroy();
+    stub.disconnectMock();
+    stub.emitExit(null, "SIGKILL");
+
+    for (const outcome of await outcomes) {
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({
+          message: expect.stringContaining("service child cleanup identity lost"),
+        }),
+      });
+    }
+    await expect(supervisor.waitForScope(scopeKey)).rejects.toThrow("cleanup identity lost");
+    await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+  },
+);
 
 it("refreshes the supervisor deadline from text-only Windows Job output", async () => {
   const { adapter, emit, completeRoot, close } = await createRelay("win32");
