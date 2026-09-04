@@ -35,7 +35,7 @@ metadata, publisher, and release version. **Verify and install** sends that exac
 reference and version to the connected Gateway. The review sheet is a metadata
 review; the Gateway owns the pre-download security check during installation.
 Official ClawHub publishers and packages skip the security-verdict fetch, as
-described in [ClawHub release trust](/clawhub/cli#release-trust).
+described in [ClawHub release trust](/cli/skills#release-trust).
 
 A ClawHub **Review** audit outcome allows installation and returns audit text in
 the result warning. The app displays that warning with the install result.

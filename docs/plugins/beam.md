@@ -107,13 +107,13 @@ use the bare id. A configured Control UI base path prefixes the route, for examp
 32-character Beam id also work. Update the Beam skill before updating the receiver
 so its response validator accepts named links.
 
-Uploading the same `beamId` updates the existing catalog row. A completed upload sets the row status to `completed`; earlier updates display as `live`.
+Uploading the same `beamId` updates the existing catalog row when its `updatedAt` is newer. Equal-timestamp uploads may refresh the same state or mark a live row completed, but cannot regress a completed row to live. Older uploads and equal-timestamp completion regressions still return the normal `200` success response, but OpenClaw ignores them. Only accepted updates refresh retention and uploader attribution.
 
 `sourceModel` is optional. Current automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
 
 ## Continue on the Team Gateway
 
-Select a Beam in the Control UI and write a message in its composer. On the first send, OpenClaw creates a normal session for the selected Team agent, copies the bounded sanitized Beam history into it, and sends your message there. The original Beam stays unchanged, and later source uploads do not alter the copied session.
+Select a Beam in the Control UI and write a message in its composer. On the first send, OpenClaw creates a normal session for the selected Team agent, copies the bounded sanitized history from the retained canonical Beam row into it, and sends your message there. Ignored stale uploads cannot change that continuation source. The original Beam stays unchanged, and later source uploads do not alter the copied session.
 
 OpenClaw uses `sourceModel` when that exact model is available to the Team agent. Otherwise it uses the agent's configured model. Each copied transcript item is marked as untrusted external content. The copied session also includes a notice that the old content is reference material rather than operator instructions, names the model choice, and explains that the session cannot access the source machine or its tools.
 
@@ -124,7 +124,7 @@ Continuation is a copy, not remote resume or two-way synchronization. Each opera
 Beam stores sanitized payloads in OpenClaw's shared SQLite-backed plugin state:
 
 - at most 500 sessions
-- seven-day retention refreshed by each update
+- seven-day retention refreshed by each accepted update
 - oldest-entry eviction when the catalog reaches its bound
 - server receipt time controls catalog ordering; clients cannot move themselves ahead with a forged timestamp
 

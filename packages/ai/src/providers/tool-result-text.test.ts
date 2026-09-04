@@ -65,6 +65,36 @@ describe("isImageWithMediaPayload", () => {
 });
 
 describe("extractToolResultText", () => {
+  it.each([
+    { blocks: ["A\ud800", "\udc00B"], expected: "A\nB" },
+    { blocks: ["😀\ud800x\udc00漢"], expected: "😀x漢" },
+    { blocks: ["\ud800", "\udc00"], expected: "" },
+    { blocks: ["  before\n", "after  "], expected: "  before\n\nafter  " },
+  ])("sanitizes separate text blocks before joining: $blocks", ({ blocks, expected }) => {
+    expect(extractToolResultText(blocks.map((text) => ({ type: "text", text })))).toBe(expected);
+  });
+
+  it("keeps structured fallback and inclusion after block sanitation", () => {
+    const structured = { type: "json", value: "😀漢" };
+    const expected = '{"type":"json","value":"😀漢"}';
+    expect(extractToolResultText([{ type: "text", text: "\ud800" }, structured])).toBe(expected);
+    expect(
+      extractToolResultText([{ type: "text", text: "head\ud800" }, structured], {
+        includeStructured: true,
+      }),
+    ).toBe(`head\n${expected}`);
+  });
+
+  it.each([
+    { text: "x".repeat(8_000), expected: "x".repeat(8_000) },
+    { text: `${"x".repeat(7_999)}😀`, expected: `${"x".repeat(7_999)}\n…(truncated)…` },
+    { text: `${"x".repeat(8_000)}😀`, expected: `${"x".repeat(8_000)}\n…(truncated)…` },
+  ])("preserves UTF-16 at the included-text cap: $#", ({ text, expected }) => {
+    const blocks = [{ type: "text", text }];
+    expect(extractToolResultText(blocks, { includeStructured: true })).toBe(expected);
+    expect(extractToolResultText(blocks)).toBe(text);
+  });
+
   it("keeps media-only blocks out of provider replay text", () => {
     const text = extractToolResultText([
       { type: "text", text: "summary" },

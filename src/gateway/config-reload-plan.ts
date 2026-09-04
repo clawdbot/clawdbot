@@ -27,7 +27,7 @@ export type GatewayReloadPlan = {
   restartGmailWatcher: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
-  reconcileSkillReviewJobs?: boolean;
+  reconcileSystemJobs?: boolean;
   reloadPlugins: boolean;
   restartChannels: Set<ChannelKind>;
   disposeMcpRuntimes: boolean;
@@ -45,7 +45,7 @@ export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartGmailWatcher &&
     !plan.restartCron &&
     !plan.restartHeartbeat &&
-    !plan.reconcileSkillReviewJobs &&
+    !plan.reconcileSystemJobs &&
     !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
     plan.restartChannels.size === 0 &&
@@ -70,7 +70,7 @@ type ReloadAction =
   | "restart-gmail-watcher"
   | "restart-cron"
   | "restart-heartbeat"
-  | "reconcile-skill-review-jobs"
+  | "reconcile-system-jobs"
   | "reload-plugins"
   | "dispose-mcp-runtimes"
   | `restart-channel-account:${ChannelId}`
@@ -118,11 +118,18 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "discovery.mdns.mode", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
-  {
-    prefix: "agents.defaults.heartbeat",
+  ...[
+    "agents.defaults.heartbeat",
+    "agents.defaults.models",
+    "agents.defaults.modelPolicy",
+    "agents.defaults.model",
+    "models",
+    "agent.heartbeat",
+  ].map((prefix): ReloadRule => ({
+    prefix,
     kind: "hot",
-    actions: ["restart-heartbeat"],
-  },
+    actions: ["restart-heartbeat", "reconcile-system-jobs"],
+  })),
   {
     prefix: "agents.defaults.sessionStore",
     kind: "hot",
@@ -130,36 +137,15 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agents.defaults", kind: "hot" },
   {
-    prefix: "agents.defaults.models",
-    kind: "hot",
-    actions: ["restart-heartbeat"],
-  },
-  {
-    prefix: "agents.defaults.modelPolicy",
-    kind: "hot",
-    actions: ["restart-heartbeat"],
-  },
-  {
-    prefix: "agents.defaults.model",
-    kind: "hot",
-    actions: ["restart-heartbeat"],
-  },
-  {
-    prefix: "models",
-    kind: "hot",
-    actions: ["restart-heartbeat"],
-  },
-  {
     prefix: "agents.entries",
     kind: "hot",
-    actions: ["restart-heartbeat", "refresh-hooks-policy"],
+    actions: ["restart-heartbeat", "reconcile-system-jobs", "refresh-hooks-policy"],
   },
   { prefix: "agents.ownership", kind: "hot", actions: ["refresh-hooks-policy"] },
-  { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   {
     prefix: "skills.workshop.autonomous.mode",
     kind: "hot",
-    actions: ["reconcile-skill-review-jobs"],
+    actions: ["reconcile-system-jobs"],
   },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   // The dedicated Apps listener and origin are created once during Gateway
@@ -443,7 +429,7 @@ export function buildGatewayReloadPlan(
     restartGmailWatcher: false,
     restartCron: false,
     restartHeartbeat: false,
-    reconcileSkillReviewJobs: false,
+    reconcileSystemJobs: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
@@ -503,8 +489,8 @@ export function buildGatewayReloadPlan(
       case "restart-heartbeat":
         plan.restartHeartbeat = true;
         break;
-      case "reconcile-skill-review-jobs":
-        plan.reconcileSkillReviewJobs = true;
+      case "reconcile-system-jobs":
+        plan.reconcileSystemJobs = true;
         break;
       case "reload-plugins":
         plan.reloadPlugins = true;

@@ -85,6 +85,12 @@ its proxy, not the development server: stop the server with `process kill`.
 
 When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/close. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
 
+A supervised command's timeout also covers startup, including blocked private-input
+delivery. The timeout result can return while cleanup continues. Scope retirement
+and Gateway shutdown wait for the cleanup owner separately; when that owner reports
+uncertainty, they report failure instead of treating the timeout as proof that the
+command has stopped.
+
 ## process tool
 
 Actions:

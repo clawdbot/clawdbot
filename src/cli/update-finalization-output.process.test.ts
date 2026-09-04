@@ -28,7 +28,8 @@ const scenarios = [
 ];
 
 describe.each(["repair", "finalize"])("update %s process output", (command) => {
-  it.each(scenarios)(
+  // Both spellings share the finalization action; one matrix covers its output modes.
+  it.each(command === "repair" ? scenarios : ["json"])(
     "%s preserves the output and exit contract without restarting",
     async (scenario) => {
       const root = tempDirs.make("openclaw-update-json-");

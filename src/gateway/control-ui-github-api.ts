@@ -3,6 +3,7 @@ import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/numb
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 import {
   assertSecretOwnerAvailable,
@@ -17,21 +18,32 @@ const GITHUB_JSON_MAX_BYTES = 256 * 1024;
 export const GITHUB_REQUEST_TIMEOUT_MS = 8_000;
 const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_API_MAX_REDIRECTS = 3;
+const GITHUB_QUOTA_CACHE_LIMIT = 200;
+const GITHUB_QUOTA_RETRY_MS = 60_000;
+
+// Normal Gateway callers share global fetch; injected transports own separate
+// API environments and release their cooldown state with that transport.
+const transportCooldowns = new WeakMap<typeof fetch, Map<string, ControlUiGitHubError>>();
 
 export class ControlUiGitHubError extends Error {
   private readonly retryAtMs?: number;
   readonly upstreamStatus: number;
+  readonly retryable: boolean;
 
   // Messages are authored here or by the metadata parser, never upstream bodies.
   constructor(
     readonly statusCode: number,
     message: string,
-    options: { retryAtMs?: number; upstreamStatus?: number } = {},
+    options: { retryAtMs?: number; upstreamStatus?: number; retryable?: boolean } = {},
   ) {
     super(message);
     this.name = "ControlUiGitHubError";
     this.upstreamStatus = options.upstreamStatus ?? statusCode;
     this.retryAtMs = options.retryAtMs;
+    this.retryable =
+      options.retryable ??
+      (statusCode === 429 ||
+        (options.upstreamStatus !== undefined && options.upstreamStatus >= 500));
   }
 
   get retryAfterMs(): number | undefined {
@@ -40,9 +52,11 @@ export class ControlUiGitHubError extends Error {
   }
 }
 
-// Keep no-response transport failures distinct from HTTP/protocol failures:
-// identity synchronization may reuse an exact verified cache only for the former.
-class ControlUiGitHubTransportError extends Error {}
+class ControlUiGitHubTransportError extends ControlUiGitHubError {
+  constructor(message: string) {
+    super(502, message, { retryable: true });
+  }
+}
 
 export function formatControlUiGitHubPreviewError(error: unknown): {
   message: string;
@@ -144,8 +158,33 @@ export function resolveGitHubApiCredentialScope(env: NodeJS.ProcessEnv = process
   const token = githubApiToken(env);
   return {
     token,
-    cacheScope: token ? createHash("sha256").update(token).digest("hex") : "anonymous",
+    cacheScope: githubApiCredentialCacheScope(token),
   };
+}
+
+export function githubApiCredentialCacheScope(token: string | undefined): string {
+  return token ? createHash("sha256").update(token).digest("hex") : "anonymous";
+}
+
+function githubApiResource(url: URL): string {
+  // GitHub separates code search, other REST searches, and non-search REST.
+  return url.pathname === "/search/code"
+    ? "code_search"
+    : url.pathname.startsWith("/search/")
+      ? "search"
+      : "core";
+}
+
+function activeGitHubCooldown(
+  cooldowns: Map<string, ControlUiGitHubError>,
+  key: string,
+): ControlUiGitHubError | undefined {
+  const error = cooldowns.get(key);
+  if (error && (error.retryAfterMs ?? 0) <= 0) {
+    cooldowns.delete(key);
+    return undefined;
+  }
+  return error;
 }
 
 function githubApiHeaders(token?: string): Record<string, string> {
@@ -182,12 +221,16 @@ export async function fetchGitHubApi(
   token?: string,
   beforeRedirect?: (url: URL) => Promise<void>,
   identity?: { revalidate: () => Promise<void>; assertSelected: () => void },
+  etag?: string,
 ): Promise<Response> {
   const initialUrl = safeGitHubApiUrl(rawUrl);
   if (!initialUrl) {
     throw new ControlUiGitHubError(502, "Invalid GitHub API URL");
   }
   let url: URL = initialUrl;
+  const credentialScope = githubApiCredentialCacheScope(token);
+  const cooldowns = transportCooldowns.get(fetchImpl) ?? new Map<string, ControlUiGitHubError>();
+  transportCooldowns.set(fetchImpl, cooldowns);
 
   const signal = AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
   for (let redirects = 0; ; redirects += 1) {
@@ -197,10 +240,20 @@ export async function fetchGitHubApi(
       await identity.revalidate();
       identity.assertSelected();
     }
+    const resource = githubApiResource(url);
+    const sharedCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:*`);
+    const resourceCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:${resource}`);
+    const cooldown =
+      (sharedCooldown?.retryAfterMs ?? 0) > (resourceCooldown?.retryAfterMs ?? 0)
+        ? sharedCooldown
+        : resourceCooldown;
+    if (cooldown) {
+      throw cooldown;
+    }
     let response: Response;
     try {
       response = await fetchImpl(url.href, {
-        headers: githubApiHeaders(token),
+        headers: { ...githubApiHeaders(token), ...(etag ? { "If-None-Match": etag } : {}) },
         redirect: "manual",
         signal,
       });
@@ -209,6 +262,23 @@ export async function fetchGitHubApi(
       throw new ControlUiGitHubTransportError(
         timedOut ? "GitHub request timed out" : "Could not reach GitHub",
       );
+    }
+    if (isGitHubRateLimitResponse(response)) {
+      const error = githubResponseError(response);
+      // Exhausted primary quota is resource-specific. Secondary limits can
+      // span REST resources, so a rate limit without that signal pauses all.
+      const resourceKey =
+        response.headers.get("x-ratelimit-remaining") === "0"
+          ? (response.headers.get("x-ratelimit-resource") ?? resource)
+          : "*";
+      const key = `${credentialScope}:${resourceKey}`;
+      const previous = activeGitHubCooldown(cooldowns, key);
+      const retained =
+        previous && (previous.retryAfterMs ?? 0) > (error.retryAfterMs ?? 0) ? previous : error;
+      cooldowns.set(key, retained);
+      pruneMapToMaxSize(cooldowns, GITHUB_QUOTA_CACHE_LIMIT);
+      await discardResponse(response);
+      throw retained;
     }
     if (!isGitHubApiRedirect(response.status)) {
       return response;
@@ -265,6 +335,34 @@ function githubResponseErrorStatus(response: Response): number {
   return 502;
 }
 
+function githubResponseError(response: Response): ControlUiGitHubError {
+  const status = githubResponseErrorStatus(response);
+  let retryAtMs: number | undefined;
+  if (status === 429) {
+    const now = Date.now();
+    const retrySeconds = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
+    // Reset headers describe primary quota even when a secondary limit rejects the request.
+    const reset =
+      response.headers.get("x-ratelimit-remaining") === "0"
+        ? parseStrictNonNegativeInteger(response.headers.get("x-ratelimit-reset"))
+        : undefined;
+    const proposed =
+      retrySeconds !== undefined
+        ? now + retrySeconds * 1_000
+        : reset !== undefined && reset <= Number.MAX_SAFE_INTEGER / 1_000
+          ? reset * 1_000
+          : undefined;
+    retryAtMs =
+      proposed !== undefined && Number.isSafeInteger(proposed) && proposed > now
+        ? proposed
+        : now + GITHUB_QUOTA_RETRY_MS;
+  }
+  return new ControlUiGitHubError(status, `GitHub request failed (HTTP ${response.status})`, {
+    upstreamStatus: response.status,
+    retryAtMs,
+  });
+}
+
 // Optional host auth raises quota and unlocks private-repo reads, but an
 // unusable credential must not disable public GitHub data that works anonymously.
 export async function withOptionalGitHubAuth<T>(
@@ -276,7 +374,20 @@ export async function withOptionalGitHubAuth<T>(
   } catch (error) {
     const status = error instanceof ControlUiGitHubError ? error.statusCode : 0;
     if (token && [401, 403, 429].includes(status)) {
-      return request(undefined);
+      try {
+        return await request(undefined);
+      } catch (anonymousError) {
+        if (
+          error instanceof ControlUiGitHubError &&
+          error.statusCode === 429 &&
+          anonymousError instanceof ControlUiGitHubError &&
+          anonymousError.statusCode === 429 &&
+          (error.retryAfterMs ?? Infinity) < (anonymousError.retryAfterMs ?? Infinity)
+        ) {
+          throw error;
+        }
+        throw anonymousError;
+      }
     }
     throw error;
   }
@@ -287,24 +398,18 @@ export async function readGitHubJsonResponse(
   maxBytes = GITHUB_JSON_MAX_BYTES,
 ): Promise<unknown> {
   if (!response.ok) {
-    const status = githubResponseErrorStatus(response);
-    let retryAtMs: number | undefined;
-    if (status === 429) {
-      const retrySeconds = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
-      const reset = parseStrictNonNegativeInteger(response.headers.get("x-ratelimit-reset"));
-      if (retrySeconds !== undefined) {
-        retryAtMs = Date.now() + retrySeconds * 1_000;
-      } else if (reset !== undefined && reset <= Number.MAX_SAFE_INTEGER / 1_000) {
-        retryAtMs = reset * 1_000;
-      }
-    }
     await discardResponse(response);
-    throw new ControlUiGitHubError(status, `GitHub request failed (HTTP ${response.status})`, {
-      upstreamStatus: response.status,
-      retryAtMs,
-    });
+    throw githubResponseError(response);
   }
-  const body = await readBoundedResponse(response, maxBytes);
+  let body: Buffer;
+  try {
+    body = await readBoundedResponse(response, maxBytes);
+  } catch (error) {
+    if (error instanceof ControlUiGitHubError) {
+      throw error;
+    }
+    throw new ControlUiGitHubError(502, "GitHub response could not be read");
+  }
   try {
     return JSON.parse(body.toString("utf8"));
   } catch {
@@ -317,8 +422,9 @@ export function fetchGitHubJson(
   rawUrl: string,
   fetchImpl: typeof fetch,
   token?: string,
+  maxBytes?: number,
 ): Promise<unknown> {
   return withOptionalGitHubAuth(token, async (requestToken) =>
-    readGitHubJsonResponse(await fetchGitHubApi(rawUrl, fetchImpl, requestToken)),
+    readGitHubJsonResponse(await fetchGitHubApi(rawUrl, fetchImpl, requestToken), maxBytes),
   );
 }

@@ -120,7 +120,7 @@ describe("subagent registry archive behavior", () => {
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
       loadAgentRuntimePluginRegistryHandle: vi.fn(),
       maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async (params) => {
-        params.completeBatch([params.settledEntry.runId]);
+        params.completeBatch([params.settledEntry]);
         return false;
       }),
       ...overrides,

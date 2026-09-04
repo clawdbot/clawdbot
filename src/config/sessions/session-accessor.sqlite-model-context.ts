@@ -32,32 +32,35 @@ import {
 } from "./transcript-tree.js";
 
 type ContextEntry = SessionTreeEntry & { seq: number };
+type ModelContextRequest = { entry: ContextEntry; omitCheckpoint: boolean };
 type TranscriptContextSnapshot = {
   header: TranscriptEvent;
   entries: ContextEntry[];
-  readEntry: (entry: ContextEntry, omitCheckpoint?: boolean) => SessionTreeEntry;
+  readEntry: (entry: ContextEntry) => SessionTreeEntry;
+  readModelEntries: (
+    requests: readonly ModelContextRequest[],
+  ) => Map<ContextEntry, SessionTreeEntry>;
 };
+
+const MODEL_CONTEXT_PAYLOAD_BATCH_SIZE = 400;
 
 /** Read a transient context without opening the writer lifecycle or copying native evidence. */
 export function readSessionTranscriptModelContext(
   scope: SessionTranscriptReadScope,
 ): TranscriptEvent[] {
-  const result = withTranscriptContextSnapshot(
-    scope,
-    "model-context",
-    ({ header, entries, readEntry }) => {
-      const payloads = new Map<ContextEntry, SessionTreeEntry>();
-      for (const { entry, context } of iterateSessionContextEntries(entries)) {
-        const omitCheckpoint =
-          context !== "current" &&
-          entry.type === "message" &&
-          entry.message.role === "assistant" &&
-          isCompactionReplayCheckpoint(entry.message.providerReplay);
-        payloads.set(entry, readEntry(entry, omitCheckpoint));
-      }
-      return [...(header ? [header] : []), ...entries.map((entry) => payloads.get(entry) ?? entry)];
-    },
-  );
+  const result = withTranscriptContextSnapshot(scope, ({ header, entries, readModelEntries }) => {
+    const requests: ModelContextRequest[] = [];
+    for (const { entry, context } of iterateSessionContextEntries(entries)) {
+      const omitCheckpoint =
+        context !== "current" &&
+        entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        isCompactionReplayCheckpoint(entry.message.providerReplay);
+      requests.push({ entry, omitCheckpoint });
+    }
+    const payloads = readModelEntries(requests);
+    return [...(header ? [header] : []), ...entries.map((entry) => payloads.get(entry) ?? entry)];
+  });
   return result.found ? result.value : [];
 }
 
@@ -66,25 +69,20 @@ export function readSessionTranscriptContextMessages<T>(
   scope: SessionTranscriptReadScope,
   read: (messages: Iterable<AgentMessage>, header: unknown) => T,
 ): T {
-  const result = withTranscriptContextSnapshot(
-    scope,
-    "transcript",
-    ({ header, entries, readEntry }) => {
-      const messages = iterateSessionContextMessages(entries, readEntry);
-      try {
-        return read(messages, header);
-      } finally {
-        // Retained iterators cannot read after the snapshot closes, including early rejection.
-        messages.return(undefined);
-      }
-    },
-  );
+  const result = withTranscriptContextSnapshot(scope, ({ header, entries, readEntry }) => {
+    const messages = iterateSessionContextMessages(entries, readEntry);
+    try {
+      return read(messages, header);
+    } finally {
+      // Retained iterators cannot read after the snapshot closes, including early rejection.
+      messages.return(undefined);
+    }
+  });
   return result.found ? result.value : read([], undefined);
 }
 
 function withTranscriptContextSnapshot<T>(
   scope: SessionTranscriptReadScope,
-  view: "model-context" | "transcript",
   read: (snapshot: TranscriptContextSnapshot) => T,
 ): { found: true; value: T } | { found: false } {
   const resolved = resolveSqliteTranscriptReadScope(scope);
@@ -136,20 +134,10 @@ function withTranscriptContextSnapshot<T>(
               return entry;
             },
           );
-          const readPayload = prepareSqliteQuerySync<
-            { seq: number; omitCheckpoint: number },
-            { event_json: string }
-          >(database.db, (parameter) =>
-            base
-              .select((eb) =>
-                view === "model-context"
-                  ? projectModelContextEventSql(
-                      eb.ref("event_json"),
-                      parameter((row) => row.omitCheckpoint),
-                    ).as("event_json")
-                  : eb.ref("event_json").as("event_json"),
-              )
-              .where(
+          const readPayload = prepareSqliteQuerySync<ContextEntry, { event_json: string }>(
+            database.db,
+            (parameter) =>
+              base.select("event_json").where(
                 "seq",
                 "=",
                 parameter((row) => row.seq),
@@ -158,14 +146,49 @@ function withTranscriptContextSnapshot<T>(
           return read({
             header: header ? JSON.parse(header.event_json) : undefined,
             entries,
-            readEntry: (entry, omitCheckpoint = false) => {
-              const row = readPayload({ seq: entry.seq, omitCheckpoint: omitCheckpoint ? 1 : 0 })
-                .rows[0];
+            readEntry: (entry) => {
+              const row = readPayload(entry).rows[0];
               return {
                 // SAFETY: The canonical payload is selected by its navigation row in this snapshot.
                 ...(JSON.parse(row!.event_json) as SessionTreeEntry),
                 parentId: entry.parentId,
               };
+            },
+            readModelEntries: (requests) => {
+              const payloads = new Map<ContextEntry, SessionTreeEntry>();
+              for (
+                let offset = 0;
+                offset < requests.length;
+                offset += MODEL_CONTEXT_PAYLOAD_BATCH_SIZE
+              ) {
+                const batch = requests.slice(offset, offset + MODEL_CONTEXT_PAYLOAD_BATCH_SIZE);
+                const bySeq = new Map(batch.map(({ entry }) => [entry.seq, entry]));
+                const omitted = batch
+                  .filter(({ omitCheckpoint }) => omitCheckpoint)
+                  .map(({ entry }) => entry.seq);
+                // Bound both IN lists while keeping payload selection inside the navigation snapshot.
+                // SQL removes obsolete replay/private fields before they enter JavaScript.
+                const query = base
+                  .select((eb) => [
+                    "seq",
+                    projectModelContextEventSql(
+                      eb.ref("event_json"),
+                      omitted.length > 0
+                        ? eb.case().when("seq", "in", omitted).then(1).else(0).end()
+                        : eb.val(0),
+                    ).as("event_json"),
+                  ])
+                  .where("seq", "in", [...bySeq.keys()]);
+                for (const row of iterateSqliteQuerySync(database.db, query)) {
+                  const entry = bySeq.get(row.seq)!;
+                  payloads.set(entry, {
+                    // SAFETY: This selected row uses the same event union as its navigation entry.
+                    ...(JSON.parse(row.event_json) as SessionTreeEntry),
+                    parentId: entry.parentId,
+                  });
+                }
+              }
+              return payloads;
             },
           });
         },

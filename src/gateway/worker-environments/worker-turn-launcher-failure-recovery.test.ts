@@ -20,6 +20,7 @@ import {
   WorkerRunnerUnavailableError,
   type WorkerTunnelHandle,
 } from "./tunnel-contract.js";
+import { success } from "./tunnel.test-support.js";
 import { failHandedOffTurn } from "./worker-turn-failure.js";
 import {
   ENVIRONMENT_ID,
@@ -58,7 +59,7 @@ describe("worker turn launcher failure recovery", () => {
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
+        runWorkspaceCommand: vi.fn(async () => success()),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),

@@ -72,7 +72,7 @@ describe("probeMediaFile", () => {
         "-protocol_whitelist",
         "fd",
         "-show_entries",
-        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic",
+        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic:stream_side_data=rotation",
         "-of",
         "json",
         "-fd",
@@ -83,20 +83,42 @@ describe("probeMediaFile", () => {
     );
   });
 
-  it("returns video duration and dimensions from the selected stream", async () => {
-    runFfprobe.mockResolvedValueOnce(
+  it.each([
+    { rotation: undefined, width: 720, height: 1280 },
+    { rotation: 0, width: 720, height: 1280 },
+    { rotation: 45, width: 720, height: 1280 },
+    { rotation: 90, width: 1280, height: 720 },
+    { rotation: -90, width: 1280, height: 720 },
+    { rotation: -180, width: 720, height: 1280 },
+  ])("returns display dimensions for selected stream rotation $rotation", async (testCase) => {
+    runFfprobe.mockResolvedValue(
       JSON.stringify({
         format: { duration: "10" },
-        streams: [{ codec_type: "video", duration: "3.2", width: 720, height: 1280 }],
+        streams: [
+          {
+            codec_type: "video",
+            duration: "3.2",
+            width: 720,
+            height: 1280,
+            side_data_list: [{ rotation: testCase.rotation }],
+          },
+        ],
       }),
     );
 
     await expect(probeMediaFile(clipPath, "video")).resolves.toEqual({
       durationMs: 3200,
+      width: testCase.width,
+      height: testCase.height,
+    });
+    await expect(probeVideoDimensions(Buffer.from("video"))).resolves.toEqual({
+      width: testCase.width,
+      height: testCase.height,
+    });
+    await expect(probePlaybackMediaFileDescriptor(17, "video")).resolves.toMatchObject({
       width: 720,
       height: 1280,
     });
-    expect(runFfprobe).toHaveBeenCalledOnce();
   });
 
   it("probes an inherited descriptor through stdin", async () => {
@@ -266,7 +288,7 @@ describe("probeVideoDimensions", () => {
         "-protocol_whitelist",
         "pipe",
         "-show_entries",
-        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic",
+        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic:stream_side_data=rotation",
         "-of",
         "json",
         "pipe:0",

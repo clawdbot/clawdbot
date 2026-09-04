@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Requester-agent handoff and direct delivery for subagent announcements.
  */
@@ -674,9 +675,14 @@ export async function sendSubagentAnnounceDirectly(params: {
     return {
       delivered: true,
       path: "direct",
-      ...(params.expectsCompletionMessage &&
-      !params.requesterIsSubagent &&
-      requesterVisibleFinalDelivered
+      // Synthetic wakes can commit their final to the requester transcript.
+      // A canceled partial payload or accepted handoff is not that receipt.
+      ...(!params.requesterIsSubagent &&
+      (requesterVisibleFinalDelivered ||
+        (!params.expectsCompletionMessage &&
+          asOptionalRecord(directAnnounceResponse)?.status === "ok" &&
+          hasVisibleNonSilentGatewayPayload &&
+          hasVisibleCompletionReply))
         ? { requesterVisibleFinalDelivered: true }
         : {}),
     };

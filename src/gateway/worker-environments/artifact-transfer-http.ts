@@ -140,9 +140,14 @@ export function createArtifactTransferHttpCallback(
             "content-length": String(file.bytes),
             "x-openclaw-content-sha256": file.sha256,
           });
-          await pipeline(file.handle.createReadStream({ autoClose: false }), checkAuthority, res, {
-            signal,
+          // An extra EOF read can outlive the client's Content-Length-complete response
+          // and let owner revocation destroy its reused keep-alive socket.
+          const stream = file.handle.createReadStream({
+            start: 0,
+            end: file.bytes - 1,
+            autoClose: false,
           });
+          await pipeline(stream, checkAuthority, res, { signal });
         } catch {
           if (!res.headersSent && !res.destroyed) {
             sendOpaqueNotFound(res);

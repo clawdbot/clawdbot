@@ -411,21 +411,29 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const agentRunTerminalOutcome = state.getAgentRunTerminalOutcome();
   state.commitInboundDedupeIfClaimed();
   const messageInjectionAborted = state.replyOperationRunState.messageInjectionAborted === true;
+  const questionFailure =
+    replyAdmission?.status === "skipped" &&
+    (replyAdmission.reason === "question-response-indeterminate" ||
+      replyAdmission.reason === "question-response-refused")
+      ? replyAdmission.reason
+      : undefined;
   const dispatchOutcome =
-    agentRunTerminalOutcome === "failed"
+    agentRunTerminalOutcome === "failed" || questionFailure
       ? "error"
       : queueCapRejected || messageInjectionAborted
         ? "skipped"
         : "completed";
-  const dispatchReason = queueCapRejected
-    ? "queue-cap"
-    : messageInjectionAborted
-      ? "reply_operation_aborted"
-      : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
-        ? "active_run_injected"
-        : channelTransformSuppressed
-          ? "channel_transform"
-          : state.bindingState.pluginFallbackReason;
+  const dispatchReason =
+    questionFailure ??
+    (queueCapRejected
+      ? "queue-cap"
+      : messageInjectionAborted
+        ? "reply_operation_aborted"
+        : replyAdmission?.status === "accepted" && replyAdmission.mode === "steer"
+          ? "active_run_injected"
+          : channelTransformSuppressed
+            ? "channel_transform"
+            : state.bindingState.pluginFallbackReason);
   state.recordAgentDispatchCompleted(
     dispatchOutcome,
     dispatchReason ? { reason: dispatchReason } : undefined,

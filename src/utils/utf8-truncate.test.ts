@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  createUtf8PrefixTruncator,
-  truncateUtf8Prefix,
-  truncateUtf8Suffix,
-} from "./utf8-truncate.js";
+import { truncateUtf8Prefix, truncateUtf8Suffix } from "./utf8-truncate.js";
 
 describe("UTF-8 byte truncation", () => {
   it.each([
@@ -36,14 +32,6 @@ describe("UTF-8 byte truncation", () => {
   it("returns an empty string for a non-positive limit", () => {
     expect(truncateUtf8Prefix("value", 0)).toBe("");
     expect(truncateUtf8Suffix("value", -1)).toBe("");
-    expect(createUtf8PrefixTruncator("value", -1)(-1)).toBe("");
-    expect(createUtf8PrefixTruncator("value", 0)(0)).toBe("");
-  });
-
-  it("keeps prepared prefix reads independent across limits", () => {
-    const value = "a🌍\ud800z";
-    const prefix = createUtf8PrefixTruncator(value, 9);
-    expect([0, 1, 4, 5, 8, 9, 1].map(prefix)).toEqual(["", "a", "a", "a🌍", "a🌍�", value, "a"]);
   });
 
   it.each([
@@ -59,7 +47,6 @@ describe("UTF-8 byte truncation", () => {
     "preserves conversion and fractional limits for $value at $maxBytes bytes",
     ({ value, maxBytes, prefix, suffix }) => {
       expect(truncateUtf8Prefix(value, maxBytes)).toBe(prefix);
-      expect(createUtf8PrefixTruncator(value, maxBytes)(maxBytes)).toBe(prefix);
       expect(truncateUtf8Suffix(value, maxBytes)).toBe(suffix);
     },
   );

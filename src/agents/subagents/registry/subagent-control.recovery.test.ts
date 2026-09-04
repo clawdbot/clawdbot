@@ -47,6 +47,7 @@ import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-r
 import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import {
   activateSubagentRegistry,
+  initSubagentRegistry,
   markSubagentRunTerminated,
   registerSubagentRun,
   replaceSubagentRunAfterSteerCore,
@@ -189,6 +190,52 @@ it.each(
     const ordinaryFollowup =
       scenario === "replacement retired" || scenario === "replacement released";
     let storePath = "";
+    let acceptedRunId: string | undefined;
+    const dispatchRecovery = vi.fn(
+      async (payload: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0]) => {
+        expect(payload.sessionKey).toBe(bKey);
+        const lease = sessionLifecycle.consumeSessionWorkAdmissionHandoff({
+          handoffId: String(payload.internalRuntimeHandoffId),
+          scope: storePath,
+          identities: [bKey, "b-session"],
+          onInterrupt: () => {},
+        });
+        expect(lease, "actual recovery admission consumed").toBeDefined();
+        try {
+          acceptedRunId = payload.idempotencyKey;
+          registerAgentRunContext(acceptedRunId, { sessionKey: bKey, sessionId: "b-session" });
+          return { runId: payload.idempotencyKey, status: "accepted" };
+        } finally {
+          lease?.release();
+        }
+      },
+    );
+    const recoveryRuntime: GatewayRecoveryRuntime = {
+      dispatchAgent: dispatchRecovery as GatewayRecoveryRuntime["dispatchAgent"],
+      waitForAgent: async () => await new Promise<never>(() => {}),
+      abortAgent: async () => {
+        throw new Error("unexpected recovery abort");
+      },
+      sendRecoveryNotice: async () => {
+        throw new Error("unexpected recovery notice");
+      },
+    };
+    const gatewayContext = {
+      recoveryRuntime,
+      resolveGatewayContext: () => gatewayContext as never,
+    };
+    // Real startup hydrates and activates before live rows exist. Consume its
+    // empty scheduled pass so it cannot race the later controlled recovery.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      initSubagentRegistry();
+      activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+      await vi.runOnlyPendingTimersAsync();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(dispatchRecovery).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
     for (const [runId, childSessionKey, requesterSessionKey, collect, queued] of [
       ["parent", parentKey, controllerSessionKey, false, false],
       ["a", aKey, owner, false, false],
@@ -280,7 +327,6 @@ it.each(
             expectedGeneration: parent.generation,
             expectedOwnerKey: controllerSessionKey,
           });
-    let acceptedRunId: string | undefined;
     const interruptedFresh = vi.fn();
     const abortFresh = vi.fn();
     const freshHandle = createEmbeddedRunHandle({ runId: "fresh-turn", abort: abortFresh });
@@ -300,36 +346,7 @@ it.each(
       expect(sessionLifecycle.isSessionWorkAdmissionActive(storePath, [aKey])).toBe(false);
       expect(a.killIntent).toBeUndefined();
       expect(b.killIntent).toBeUndefined();
-      const dispatchRecovery = vi.fn(
-        async (payload: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0]) => {
-          expect(payload.sessionKey).toBe(bKey);
-          const lease = sessionLifecycle.consumeSessionWorkAdmissionHandoff({
-            handoffId: String(payload.internalRuntimeHandoffId),
-            scope: storePath,
-            identities: [bKey, "b-session"],
-            onInterrupt: () => {},
-          });
-          expect(lease, "actual recovery admission consumed").toBeDefined();
-          try {
-            acceptedRunId = payload.idempotencyKey;
-            registerAgentRunContext(acceptedRunId, { sessionKey: bKey, sessionId: "b-session" });
-            return { runId: payload.idempotencyKey, status: "accepted" };
-          } finally {
-            lease?.release();
-          }
-        },
-      );
-      const recoveryRuntime: GatewayRecoveryRuntime = {
-        dispatchAgent: dispatchRecovery as GatewayRecoveryRuntime["dispatchAgent"],
-        waitForAgent: async () => await new Promise<never>(() => {}),
-        abortAgent: async () => {
-          throw new Error("unexpected recovery abort");
-        },
-        sendRecoveryNotice: async () => {
-          throw new Error("unexpected recovery notice");
-        },
-      };
-      activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+      activateSubagentRegistry(gatewayContext.resolveGatewayContext);
       await testing.sweepOnceForTests();
       expect(dispatchRecovery).toHaveBeenCalledOnce();
       const receipt = b.execution.restartRecovery!;

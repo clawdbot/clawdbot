@@ -145,7 +145,7 @@ export function renderFloatingUpdateCard(params: {
   canHoldUpdate?: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
-  onRefresh: () => void;
+  onRefresh: () => Promise<boolean>;
   onHoldUpdate?: () => Promise<boolean>;
   onReviewUpdate?: () => void;
   onNavigate?: (routeId: NavigationRouteId) => void;

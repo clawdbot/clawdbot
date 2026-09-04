@@ -599,11 +599,11 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         source,
         app,
       });
-      if (operationId !== this.launchOperationId || source !== this.source) {
+      if (operationId !== this.launchOperationId) {
         return;
       }
     } catch (error) {
-      if (operationId !== this.launchOperationId || source !== this.source) {
+      if (operationId !== this.launchOperationId) {
         return;
       }
       this.launchErrorText = formatUiError(error);

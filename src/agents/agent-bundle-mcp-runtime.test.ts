@@ -1807,94 +1807,19 @@ describe("session MCP runtime", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-refresh-diagnostic-"));
     const serverPath = path.join(tempDir, "refresh-diagnostic.mjs");
     const logPath = path.join(tempDir, "server.log");
-    await writeExecutable(
-      serverPath,
-      `#!/usr/bin/env node
-import fs from "node:fs/promises";
-
-const logPath = ${JSON.stringify(logPath)};
-let buffer = "";
-let listCount = 0;
-function log(line) {
-  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
-}
-function send(message) {
-  process.stdout.write(JSON.stringify(message) + "\\n");
-}
-function handle(message) {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  log("recv " + String(message.method ?? "unknown"));
-  if (message.method === "initialize") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-        capabilities: { tools: { listChanged: true } },
-        serverInfo: { name: "refresh-diagnostic", version: "1.0.0" },
-      },
+    const notificationReleasePath = path.join(tempDir, "notify.release");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: { listChanged: true } },
+      toolsByList: [
+        [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }],
+        [{ name: "ok_tool", inputSchema: [] }],
+      ],
+      notifyListChangedAfterFirstList: true,
+      notifyListChangedReleasePath: notificationReleasePath,
+      callToolResult: { content: [{ type: "text", text: "still connected" }] },
     });
-    return;
-  }
-  if (message.method === "notifications/initialized") {
-    return;
-  }
-  if (message.method === "tools/list") {
-    listCount += 1;
-    if (listCount === 1) {
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: {
-          tools: [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }],
-        },
-      });
-      setTimeout(() => {
-        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
-        log("sent tools/list_changed");
-      }, 10);
-      return;
-    }
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        tools: [{ name: "ok_tool", inputSchema: [] }],
-      },
-    });
-  }
-  if (message.method === "tools/call") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: { isError: false, content: [{ type: "text", text: "still connected" }] },
-    });
-  }
-}
-process.stdin.setEncoding("utf8");
-function shutdown() {
-  process.exit(0);
-}
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  while (true) {
-    const newline = buffer.indexOf("\\n");
-    if (newline < 0) {
-      return;
-    }
-    const line = buffer.slice(0, newline).replace(/\\r$/, "");
-    buffer = buffer.slice(newline + 1);
-    if (line.trim()) {
-      handle(JSON.parse(line));
-    }
-  }
-});
-process.stdin.on("end", shutdown);
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);`,
-    );
 
     const runtime = await makeStdioRuntime("session-refresh-diagnostic", "volatile", serverPath, {
       server: { requestTimeoutMs: 123_456 },
@@ -1904,7 +1829,8 @@ process.on("SIGINT", shutdown);`,
       const firstCatalog = await runtime.getCatalog();
       expect(firstCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
 
-      await waitForFileText(logPath, "sent tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await fs.writeFile(notificationReleasePath, "release", "utf8");
+      await waitForFileText(logPath, "notify tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       await waitForPredicate(
         () => runtime.peekCatalog() === null,
         "list_changed to invalidate the catalog",
