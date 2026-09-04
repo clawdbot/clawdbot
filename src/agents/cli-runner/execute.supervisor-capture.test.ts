@@ -12,6 +12,7 @@ import {
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
+  areDiagnosticsEnabledForProcess,
   onTrustedToolExecutionEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
@@ -184,6 +185,23 @@ beforeEach(() => {
   setActivePluginRegistry(registry);
 });
 
+// These cases flip process-global diagnostics state, and the lane runs with
+// `--isolate=false`, so every mutation is restored and the event queue drained
+// before the next file in this worker observes it.
+async function withDiagnosticsEnabled<T>(run: () => Promise<T>): Promise<T> {
+  const previouslyEnabled = areDiagnosticsEnabledForProcess();
+  setDiagnosticsEnabledForProcess(true);
+  startDiagnosticRunActivityTracking();
+  try {
+    return await run();
+  } finally {
+    await waitForDiagnosticEventsDrained();
+    resetDiagnosticRunActivityForTest();
+    resetDiagnosticEventsForTest();
+    setDiagnosticsEnabledForProcess(previouslyEnabled);
+  }
+}
+
 describe("executePreparedCliRun supervisor output capture", () => {
   it("binds Claude image prompts to the persisted local transcript turn", async () => {
     const entryId = "persisted-image-turn";
@@ -238,9 +256,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
   });
 
   it("publishes streamed stdout as run progress so a live turn is not reclaimed", async () => {
-    setDiagnosticsEnabledForProcess(true);
-    startDiagnosticRunActivityTracking();
-    try {
+    await withDiagnosticsEnabled(async () => {
       supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
         const input = args[0] as SupervisorSpawnInput;
         input.onStdout?.("streamed");
@@ -265,16 +281,11 @@ describe("executePreparedCliRun supervisor output capture", () => {
           sessionKey: context.params.sessionKey,
         }),
       ).toMatchObject({ lastProgressReason: "model_call:stream_progress" });
-    } finally {
-      resetDiagnosticRunActivityForTest();
-      setDiagnosticsEnabledForProcess(false);
-    }
+    });
   });
 
   it("publishes the quiet allowance for a non-Claude CLI backend too", async () => {
-    setDiagnosticsEnabledForProcess(true);
-    startDiagnosticRunActivityTracking();
-    try {
+    await withDiagnosticsEnabled(async () => {
       supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
         const input = args[0] as SupervisorSpawnInput;
         input.onStdout?.("done");
@@ -300,16 +311,11 @@ describe("executePreparedCliRun supervisor output capture", () => {
         sessionKey: context.params.sessionKey,
       });
       expect(snapshot.activeBackendLivenessTimeoutMs).toBeGreaterThan(0);
-    } finally {
-      resetDiagnosticRunActivityForTest();
-      setDiagnosticsEnabledForProcess(false);
-    }
+    });
   });
 
   it("does not refresh the progress clock from stdout while a parsed tool owns the turn", async () => {
-    setDiagnosticsEnabledForProcess(true);
-    startDiagnosticRunActivityTracking();
-    try {
+    await withDiagnosticsEnabled(async () => {
       const toolUse = `${JSON.stringify({
         type: "assistant",
         message: {
@@ -354,10 +360,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       await executePreparedCliRun(context);
 
       expect(progressReasonWhileToolOpen).toBe("tool:Bash:started");
-    } finally {
-      resetDiagnosticRunActivityForTest();
-      setDiagnosticsEnabledForProcess(false);
-    }
+    });
   });
 
   it("passes native compaction as an argument and requires backend acknowledgement", async () => {
