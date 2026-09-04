@@ -515,6 +515,7 @@ export async function resolveChannelIngressState(
     },
     mentionFacts: input.mentionFacts,
     routeFacts,
+    pairingStoreReadFailed: input.pairingStoreReadFailed === true,
     allowlists: {
       dm,
       pairingStore,

@@ -76,15 +76,16 @@ function shouldReadStore(params: {
 
 async function readStoreAllowFrom(
   params: ResolveChannelMessageIngressParams & { channelId: ChannelIngressChannelId },
-): Promise<Array<string | number>> {
+): Promise<{ entries: Array<string | number>; readFailed: boolean }> {
   if (
     !shouldReadStore({
       conversationKind: params.conversation.kind,
       dmPolicy: params.policy.dmPolicy,
     })
   ) {
-    return [];
+    return { entries: [], readFailed: false };
   }
+  let readFailed = false;
   const entries = params.readStoreAllowFrom
     ? await params
         .readStoreAllowFrom({
@@ -92,15 +93,21 @@ async function readStoreAllowFrom(
           accountId: params.accountId,
           dmPolicy: params.policy.dmPolicy,
         })
-        .catch(() => [])
+        .catch(() => {
+          readFailed = true;
+          return [];
+        })
     : params.useDefaultPairingStore
       ? await readChannelIngressStoreAllowFromForDmPolicy({
           provider: params.channelId as PairingChannel,
           accountId: params.accountId,
           dmPolicy: params.policy.dmPolicy,
+          onReadFailure: () => {
+            readFailed = true;
+          },
         })
       : [];
-  return [...(entries ?? [])];
+  return { entries: [...(entries ?? [])], readFailed };
 }
 
 function commandRequested(policy: ChannelIngressPolicyInput): boolean {
@@ -566,7 +573,10 @@ export async function resolveChannelMessageIngress(
   const adapter = createIdentityAdapter(params.identity);
   const subject = createIdentitySubject(params.identity, params.subject);
   const routeFacts = [...routeFactsFromDescriptors(params.route), ...(params.routeFacts ?? [])];
-  const storeAllowFrom = await readStoreAllowFrom({ ...params, channelId });
+  const { entries: storeAllowFrom, readFailed: pairingStoreReadFailed } = await readStoreAllowFrom({
+    ...params,
+    channelId,
+  });
   const rawAllowFrom = normalizeStringEntries(params.allowFrom ?? []);
   const rawStoreAllowFrom = normalizeStringEntries(storeAllowFrom);
   const rawGroupAllowFrom = normalizeStringEntries(params.groupAllowFrom ?? []);
@@ -632,6 +642,7 @@ export async function resolveChannelMessageIngress(
     routeFacts,
     mentionFacts: params.mentionFacts,
     event: params.event,
+    pairingStoreReadFailed,
     allowlists: {
       dm: rawAllowFrom,
       group: rawEffective.effectiveGroupAllowFrom,

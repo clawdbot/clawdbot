@@ -46,12 +46,23 @@ async function ensureDmComponentAuthorized(params: {
     allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
     cfg: ctx.cfg,
     token: ctx.token,
-    readStoreAllowFrom: async ({ accountId, dmPolicy: dmPolicyLocal }) =>
-      await readChannelIngressStoreAllowFromForDmPolicy({
+    readStoreAllowFrom: async ({ accountId, dmPolicy: dmPolicyLocal }) => {
+      let readFailed = false;
+      const entries = await readChannelIngressStoreAllowFromForDmPolicy({
         provider: "discord",
         accountId,
         dmPolicy: dmPolicyLocal,
-      }),
+        onReadFailure: () => {
+          readFailed = true;
+        },
+      });
+      // The helper swallows a read failure to []; rethrow so the caller sees a
+      // rejection instead of an indistinguishable, successfully-empty store.
+      if (readFailed) {
+        throw new Error("Discord pairing-store read failed");
+      }
+      return entries;
+    },
     eventKind: "button",
   });
   if (access.senderAccess.decision === "allow") {

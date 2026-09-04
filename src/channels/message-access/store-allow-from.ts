@@ -10,6 +10,8 @@ export async function readChannelIngressStoreAllowFromForDmPolicy(params: {
   dmPolicy?: string | null;
   shouldRead?: boolean | null;
   readStore?: (provider: PairingChannel, accountId: string) => Promise<string[]>;
+  /** Reports a swallowed read failure so a caller can distinguish it from a legitimately empty store. */
+  onReadFailure?: (error: unknown) => void;
 }): Promise<string[]> {
   if (
     params.shouldRead === false ||
@@ -26,5 +28,8 @@ export async function readChannelIngressStoreAllowFromForDmPolicy(params: {
       const { readChannelAllowFromStore } = await import("../../pairing/pairing-store.js");
       return await readChannelAllowFromStore(provider, process.env, accountId);
     });
-  return await readStore(params.provider, params.accountId).catch(() => []);
+  return await readStore(params.provider, params.accountId).catch((error: unknown) => {
+    params.onReadFailure?.(error);
+    return [];
+  });
 }
