@@ -76,7 +76,6 @@ async function probeBrowserAuth(gateway: QaGatewayChild, origin: string) {
     scopes: ["operator.read"],
     onHelloOk: () => result.reject(new Error("Browser accepted invalid credentials")),
     onConnectError: (error) => {
-      client.stop();
       result.resolve(error);
     },
   });
