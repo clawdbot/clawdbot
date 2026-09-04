@@ -114,6 +114,22 @@ describe("pre-commit Git path identity", () => {
     },
   );
 
+  it("treats recovered filenames as literal pathspecs even without the guard env", () => {
+    const dir = fixture();
+    const names = ["chosen[3].ts", ":(exclude)partial.ts"];
+    for (const name of names) {
+      stage(dir, name, "keep staged\n");
+      writeFileSync(path.join(dir, name), "unstaged only\n");
+    }
+    // Direct invocation: no guard process pins GIT_LITERAL_PATHSPECS for the script.
+    run(dir, "bash", ["scripts/pre-commit/format-staged.sh"]);
+    run(dir, "git", ["commit", "-qm", "literal proof"]);
+    for (const name of names) {
+      expect(run(dir, "git", ["show", `HEAD:${name}`])).toBe("keep staged");
+      expect(readFileSync(path.join(dir, name), "utf8")).toBe("unstaged only\n");
+    }
+  });
+
   it.each(
     ["--glob-pathspecs", "--icase-pathspecs"].flatMap((flag) =>
       ["only", "alternate"].map((index) => ({ flag, index })),

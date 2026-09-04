@@ -65,10 +65,12 @@ fi
 # Partial staging: a file whose working-tree bytes differ from its staged bytes carries
 # unstaged work that must never reach the index. Only fully staged files may be formatted
 # in place and restaged; partially staged files get index-only formatting below.
+# --literal-pathspecs: enumerated names re-enter Git as pathspecs; without it, bracket or
+# ":(...)" magic in a filename could select the wrong paths regardless of caller env.
 partial_files=()
 while IFS= read -r -d '' file; do
   partial_files+=("$file")
-done < <(git diff --name-only -z -- "${format_files[@]}")
+done < <(git --literal-pathspecs diff --name-only -z -- "${format_files[@]}")
 
 inplace_files=()
 if [ "${#partial_files[@]}" -eq 0 ]; then
@@ -94,7 +96,7 @@ fi
 
 if [ "${#inplace_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${inplace_files[@]}"
-  git add -- "${inplace_files[@]}"
+  git --literal-pathspecs add -- "${inplace_files[@]}"
 fi
 
 if [ "${#staged_only_files[@]}" -eq 0 ]; then
@@ -132,7 +134,7 @@ while IFS= read -r -d '' entry; do
   if [[ "$new_oid" != "$oid" ]]; then
     printf '%s %s\t%s\0' "$mode" "$new_oid" "$file" >> "$index_updates"
   fi
-done < <(git ls-files --stage -z -- "${staged_only_files[@]}")
+done < <(git --literal-pathspecs ls-files --stage -z -- "${staged_only_files[@]}")
 
 if [ -s "$index_updates" ]; then
   git update-index -z --index-info < "$index_updates"
