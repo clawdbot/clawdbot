@@ -9,7 +9,7 @@ async function readAskUserQuestionStatus(
   const result = await gatewayCall("question.list", { timeoutMs: ASK_USER_RPC_GRACE_MS }, {});
   const questions =
     result && typeof result === "object" && !Array.isArray(result)
-      ? (result as { questions?: unknown }).questions
+      ? (result as { questions?: unknown }).questions // SAFETY: the object guard permits reading the optional questions field.
       : undefined;
   const question = Array.isArray(questions)
     ? questions.find(
@@ -17,12 +17,12 @@ async function readAskUserQuestionStatus(
           candidate &&
           typeof candidate === "object" &&
           !Array.isArray(candidate) &&
-          (candidate as { id?: unknown }).id === questionId,
+          (candidate as { id?: unknown }).id === questionId, // SAFETY: the object guard permits reading the optional id field.
       )
     : undefined;
   const status =
     question && typeof question === "object" && !Array.isArray(question)
-      ? (question as { status?: unknown }).status
+      ? (question as { status?: unknown }).status // SAFETY: the object guard permits reading the optional status field.
       : undefined;
   return typeof status === "string" ? status : undefined;
 }
