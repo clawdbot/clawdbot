@@ -624,14 +624,17 @@ load failure keeps the previous handlers; events already running finish with
 their original handlers. Workspace changes reload directory hooks from the
 newly selected workspace. Reload does not replay `gateway:startup`.
 
-Under `gateway.controlUi`, the `environment`, `github`, `toolTitles`,
+Under `gateway.controlUi`, the `enabled`, `environment`, `github`, `toolTitles`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and
 `dangerouslyAllowHostHeaderOriginFallback` also hot-apply: pending handshakes
 recheck the new policy, and browser connections it no longer allows close.
-Control UI serving paths still require a Gateway restart.
+Disabling the Control UI stops serving dashboard pages and assets and cancels
+pending asset preparation. Existing Gateway connections and agent runs continue.
+Re-enabling prepares missing dashboard assets in the background; requests return
+`503` until they are ready. Control UI serving paths still require a Gateway restart.
 
 Node command policy updates connected nodes immediately. Disabling node-published
 tools or skills withdraws them; re-enabling restores the last publication within

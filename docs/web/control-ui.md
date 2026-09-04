@@ -12,6 +12,11 @@ The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
+`gateway.controlUi.enabled` hot-applies. Disable it to stop serving dashboard
+pages and assets while bots and existing Gateway connections keep running.
+Re-enable it to resume serving; missing assets are prepared in the background.
+Changing the serving base path or asset root still requires a Gateway restart.
+
 For unmatched HTTP paths, the app-shell fallback respects the request's `Accept` header. An explicit HTML rejection such as `text/html;q=0, */*` overrides the broader wildcard, so the request reaches the startup `503` or final `404` response. Headerless and wildcard-only requests retain the browser navigation fallback.
 
 It speaks **directly to the Gateway WebSocket** on the same port.
