@@ -344,14 +344,10 @@ export async function handleUserProfileAvatarHttpRequest(
     return true;
   }
   let uploadedAvatar: ReturnType<typeof getProfileAvatar>;
-  let hashes: string[];
+  let profile: ReturnType<typeof getUserProfileListItem> | undefined;
   try {
     uploadedAvatar = getProfileAvatar(profileId);
-    hashes = uploadedAvatar
-      ? []
-      : getUserProfileListItem(profileId)
-          .emails.slice(0, MAX_GRAVATAR_EMAIL_LOOKUPS)
-          .map(hashEmail);
+    profile = uploadedAvatar ? undefined : getUserProfileListItem(profileId);
   } catch (error) {
     if (error instanceof UserProfileNotFoundError) {
       sendJson(res, 404, { ok: false, error: { type: "not_found" } });
@@ -360,10 +356,12 @@ export async function handleUserProfileAvatarHttpRequest(
     sendJson(res, 500, { ok: false, error: { type: "profile_lookup_failed" } });
     return true;
   }
-  // The host account represents only the shared owner, never an authenticated person.
+  // Profile reads follow merges; a legacy owner tombstone must never borrow the host photo.
   const avatar =
     uploadedAvatar ??
-    (profileId === GATEWAY_OWNER_PROFILE_ID ? await resolveHostAccountAvatar() : null);
+    (profileId === GATEWAY_OWNER_PROFILE_ID && profile?.id === profileId && !profile.mergedInto
+      ? await resolveHostAccountAvatar()
+      : null);
   if (avatar) {
     sendAvatar(
       req,
@@ -383,6 +381,7 @@ export async function handleUserProfileAvatarHttpRequest(
   // Gravatar only once the earlier one is a definite miss. A single shared
   // deadline bounds the total wait, so an unreachable Gravatar cannot stall the
   // held connection by one timeout per linked email.
+  const hashes = profile?.emails.slice(0, MAX_GRAVATAR_EMAIL_LOOKUPS).map(hashEmail) ?? [];
   const deadline = AbortSignal.timeout(GRAVATAR_TOTAL_TIMEOUT_MS);
   let transientFailure = false;
   for (const hash of hashes) {
