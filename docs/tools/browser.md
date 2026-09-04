@@ -66,7 +66,9 @@ The default `browser` tool is a bundled plugin. Disable it to replace it with an
 
 Defaults need both `plugins.entries.browser.enabled` **and** `browser.enabled=true`. Disabling only the plugin removes the `openclaw browser` CLI, `browser.request` gateway method, agent tool, and control service as one unit; your `browser.*` config stays intact for a replacement.
 
-Profiles, launch settings, snapshot defaults, and tab cleanup hot-reload. Browser
+Profiles, launch settings, snapshot defaults, tab cleanup, and
+`browser.allowSystemProfileImport` hot-reload. Import permission changes apply to
+new imports; an import already in progress keeps its admission. Browser
 enablement, evaluation, SSRF policy, and extension relay settings require a Gateway
 restart. See [Config hot reload](/gateway/configuration#config-hot-reload).
 

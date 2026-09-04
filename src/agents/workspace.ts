@@ -322,7 +322,18 @@ export async function publishBootstrapFile(
   beforePersistentApply?: () => void,
 ): Promise<boolean> {
   const dir = await fs.realpath(path.dirname(filePath));
+  const targetPath = path.join(dir, path.basename(filePath));
+  // Existing entries, including dangling symlinks, need no staging writes.
+  // Preserve the exclusive-create no-op on read-only established workspaces.
+  const existing = await fs.lstat(targetPath).catch((error: unknown) => {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+  });
   beforePersistentApply?.();
+  if (existing) {
+    return false;
+  }
   let cleanupError: unknown;
   const staging = await tempFile({
     rootDir: dir,
@@ -339,7 +350,6 @@ export async function publishBootstrapFile(
     beforePersistentApply?.();
     let linked = false;
     try {
-      const targetPath = path.join(dir, path.basename(filePath));
       // No await may split these operations: safe readers reject the temporary
       // two-link inode, so publication must reach one link in the same turn.
       syncFs.linkSync(staging.path, targetPath);

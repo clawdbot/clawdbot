@@ -1446,6 +1446,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it.each([
     { name: "preparing", state: { kind: "preparing" } as const },
+    { name: "initially failed", state: { kind: "failed" } as const },
     {
       name: "already-ready bundled",
       state: { kind: "bundled", path: "/repo/dist/control-ui" } as const,
@@ -1457,15 +1458,15 @@ describe("startGatewayPostAttachRuntime", () => {
       const pluginStartup = new Promise<void>((resolve) => {
         finishPluginStartup = resolve;
       });
-      let buildSignal: AbortSignal | undefined;
+      const buildController = new AbortController();
+      const buildSignal = buildController.signal;
       const startControlUiBuild = vi.fn(
-        async (_isStopped: () => boolean, signal: AbortSignal) =>
+        async () =>
           await new Promise<void>((resolve) => {
-            buildSignal = signal;
-            signal.addEventListener("abort", () => resolve(), { once: true });
+            buildSignal.addEventListener("abort", () => resolve(), { once: true });
           }),
       );
-      const stopControlUiBuild = vi.fn(async () => {});
+      const stopControlUiBuild = vi.fn(async () => buildController.abort());
       const onGatewayLifetimeSidecars = vi.fn();
       const startGatewaySidecarsPending = vi.fn(async () => ({
         pluginServices: null,
@@ -1484,6 +1485,7 @@ describe("startGatewayPostAttachRuntime", () => {
           onGatewayLifetimeSidecars,
           controlUiRootLifecycle: {
             state,
+            setEnabled: vi.fn(),
             start: startControlUiBuild,
             stop: stopControlUiBuild,
           },

@@ -62,6 +62,12 @@ import {
   ensureOpenClawAgentSchema,
 } from "./openclaw-agent-db-schema.js";
 import {
+  clearOpenClawAgentDatabaseValidationCache,
+  getValidatedOpenClawAgentDatabaseOwner,
+  invalidateOpenClawAgentDatabaseValidation,
+  setValidatedOpenClawAgentDatabaseOwner,
+} from "./openclaw-agent-db-validation-cache.js";
+import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
@@ -132,7 +138,6 @@ type AgentDatabaseLifecycle = {
   generation: number;
   failures: Map<string, unknown>;
   leases: Map<string, { leaseId: string; env: NodeJS.ProcessEnv }>;
-  validatedPaths: Map<string, string>;
   terminal: ReturnType<typeof createSqliteTerminalOpenLatch>;
   unregisterExitClose: (() => void) | null;
 };
@@ -145,8 +150,6 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
     generation: 0,
     failures: new Map(),
     leases: new Map(),
-    // Doctor requires restart; successful owner/schema validation is process-stable.
-    validatedPaths: new Map(),
     terminal: createSqliteTerminalOpenLatch({ closeByPath: closeOpenClawAgentDatabaseByPath }),
     unregisterExitClose: null,
   }),
@@ -160,7 +163,7 @@ export function confirmOpenClawAgentDatabaseIntegrity(
   closeOpenClawAgentDatabaseByPath(resolvedPath);
   // Closing breaks process ownership of the pathname. A replacement must
   // revalidate and claim its schema before the path can become trusted again.
-  cache.validatedPaths.delete(resolvedPath);
+  invalidateOpenClawAgentDatabaseValidation(resolvedPath);
   return confirmSqliteFileIntegrity(resolvedPath, resolvedPath);
 }
 
@@ -173,7 +176,7 @@ export function recordOpenClawAgentDatabaseOpenFailure(
   const recorded = cache.terminal.record(pathname, error, generation);
   if (recorded) {
     // Quarantine revokes this process's trust because doctor may replace the file.
-    cache.validatedPaths.delete(path.resolve(pathname));
+    invalidateOpenClawAgentDatabaseValidation(pathname);
   }
   return recorded;
 }
@@ -349,13 +352,14 @@ export function openOpenClawAgentDatabase(
     openedDb = db;
     // Eviction churn must avoid migration/convergence and registry busy waits.
     // Version and owner can change while evicted, so their read-only gates run on every open.
-    let isValidatedReopen = cache.validatedPaths.get(pathname) === agentId;
+    let isValidatedReopen = getValidatedOpenClawAgentDatabaseOwner(pathname) === agentId;
     const walMaintenance = (() => {
       let maintenance: OpenClawAgentDatabase["walMaintenance"] | undefined;
       try {
         db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
         assertSupportedAgentSchemaVersion(db, pathname);
-        assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
+        const existingSchema = readExistingAgentSchemaMeta(db);
+        assertExistingAgentSchemaOwner(existingSchema, agentId, pathname);
         // Integrity is not process-stable: the file can be damaged while evicted.
         // This guard is read-only (no busy waits), so every physical open pays it.
         const requiresCurrentVersionConvergence = assertAgentDatabaseIntegrityBeforeMutation(
@@ -363,10 +367,10 @@ export function openOpenClawAgentDatabase(
           agentId,
           pathname,
         );
-        if (isValidatedReopen && requiresCurrentVersionConvergence) {
-          // Same-version replacement can preserve owner/version while dropping additive schema.
-          // Demote trust so the existing full path repairs atomically before exposure.
-          cache.validatedPaths.delete(pathname);
+        if (isValidatedReopen && (!existingSchema || requiresCurrentVersionConvergence)) {
+          // New files and same-version divergence cannot inherit an earlier validation.
+          // The existing full path initializes or converges them before exposure.
+          invalidateOpenClawAgentDatabaseValidation(pathname);
           isValidatedReopen = false;
         }
         assertCanonicalAgentPersistenceVersion(db, pathname);
@@ -388,7 +392,7 @@ export function openOpenClawAgentDatabase(
       } catch (err) {
         maintenance?.close();
         db.close();
-        cache.validatedPaths.delete(pathname);
+        invalidateOpenClawAgentDatabaseValidation(pathname);
         if (
           err instanceof Error &&
           (isSqliteSchemaVersionError(err) || isTerminalSqliteIntegrityError(err))
@@ -403,7 +407,7 @@ export function openOpenClawAgentDatabase(
     openedDatabase = database;
     if (!isValidatedReopen) {
       registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env });
-      cache.validatedPaths.set(pathname, agentId);
+      setValidatedOpenClawAgentDatabaseOwner(pathname, agentId);
     }
     cache.terminal.clear(pathname);
     // Safety net for processes that end without an orderly close: agent DBs have
@@ -427,7 +431,7 @@ export function openOpenClawAgentDatabase(
       }
     }
     if (openedDb?.isOpen) {
-      cache.validatedPaths.delete(pathname);
+      invalidateOpenClawAgentDatabaseValidation(pathname);
       const retainedDatabase =
         openedDatabase ??
         ({
@@ -723,7 +727,7 @@ export function disposeOpenClawAgentDatabaseByPath(
 ): boolean {
   const resolvedPath = path.resolve(pathname);
   // Disposal can be followed by file deletion or recreation, so revalidate next open.
-  cache.validatedPaths.delete(resolvedPath);
+  invalidateOpenClawAgentDatabaseValidation(resolvedPath);
   const matchingDatabases = [...cache.databases.values()].filter((candidate) =>
     isSameOpenClawAgentDatabasePath(candidate.path, resolvedPath),
   );
@@ -788,6 +792,6 @@ export function withAgentDatabaseMaintenanceLease<T>(
 /** Close cached agent handles and clear terminal failure latches for test isolation. */
 export function closeOpenClawAgentDatabasesForTest(): void {
   closeOpenClawAgentDatabases();
-  cache.validatedPaths.clear();
+  clearOpenClawAgentDatabaseValidationCache();
   cache.terminal.clearAll();
 }

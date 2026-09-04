@@ -67,8 +67,8 @@ it("marks only the closing Gateway's exact active admissions", async () => {
   }
 });
 
-it.each(["release", "rotation"] as const)(
-  "rejects a restart mark when %s invalidates its owner after planning",
+it.each(["release", "completed", "rotation"] as const)(
+  "does not commit a restart mark when %s invalidates its owner after planning",
   async (change) => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-commit-"));
     const storePath = path.join(stateDir, "sessions.json");
@@ -96,25 +96,40 @@ it.each(["release", "rotation"] as const)(
             ...params,
             update: async (entries) => {
               const prepared = await params.update(entries);
-              if (change === "release") {
-                admission?.release();
-              } else {
+              if (change === "rotation") {
                 rotateAgentEventLifecycleGeneration();
+              } else {
+                admission?.release();
+                if (change === "completed") {
+                  sessionAccessor.replaceSessionEntrySync(
+                    { storePath, sessionKey },
+                    { sessionId, status: "done", updatedAt: Date.now(), endedAt: 123 },
+                  );
+                }
               }
               return prepared;
             },
           }),
         );
       restoreSpy = () => spy.mockRestore();
-      await expect(
-        markRestartAbortedMainSessions({
-          cfg: { session: { store: storePath } },
-          stateDir,
-          activeRuns: [],
-          resolveGatewayContext,
-        }),
-      ).rejects.toThrow("Restart recovery owner changed before commit");
+      const marking = markRestartAbortedMainSessions({
+        cfg: { session: { store: storePath } },
+        stateDir,
+        activeRuns: [],
+        resolveGatewayContext,
+      });
+      if (change !== "rotation") {
+        await expect(marking).resolves.toEqual({ marked: 0, skipped: 1 });
+      } else {
+        await expect(marking).rejects.toMatchObject({ code: "ERR_STALE_GATEWAY_LIFECYCLE" });
+      }
       expect(loadSessionEntry({ storePath, sessionKey })?.abortedLastRun).toBeUndefined();
+      if (change === "completed") {
+        expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+          status: "done",
+          endedAt: 123,
+        });
+      }
     } finally {
       restoreSpy();
       admission?.release();
@@ -167,6 +182,77 @@ it("does not adopt an ambient Gateway when moving an unbound reply owner", async
     const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey] });
     operation.complete();
     await released;
+    closeOpenClawAgentDatabasesForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+it("keeps another active session recoverable when one owner releases after batch planning", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-batch-"));
+  const storePath = path.join(stateDir, "sessions.json");
+  const resolveGatewayContext = () => undefined;
+  const admissions: SessionWorkAdmissionLease[] = [];
+  const apply = sessionAccessor.applySessionEntryReplacements;
+  let restoreSpy = () => {};
+  try {
+    for (const name of ["finishing", "still-active"]) {
+      const sessionKey = `agent:main:${name}`;
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: name, status: "done", updatedAt: Date.now() },
+      );
+      admissions.push(
+        await beginSessionWorkAdmission({
+          scope: storePath,
+          identities: [sessionKey, name],
+          resolveGatewayContext,
+          assertAllowed: () => {},
+        }),
+      );
+    }
+    const spy = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockImplementationOnce((params) =>
+        apply({
+          ...params,
+          update: async (entries) => {
+            const prepared = await params.update(entries);
+            admissions[0]!.release();
+            return prepared;
+          },
+        }),
+      );
+    restoreSpy = () => spy.mockRestore();
+    let error: unknown;
+    let counts: { marked: number; skipped: number } | undefined;
+    try {
+      counts = await markRestartAbortedMainSessions({
+        cfg: { session: { store: storePath } },
+        stateDir,
+        activeRuns: [],
+        resolveGatewayContext,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    const stillActive = loadSessionEntry({ storePath, sessionKey: "agent:main:still-active" });
+    const observed = {
+      counts,
+      error: error instanceof Error ? error.message : error,
+      survivingAdmissionActive: admissions[1]!.isActive(),
+      survivingStatus: stillActive?.status,
+      survivingRestartMarker: stillActive?.abortedLastRun,
+    };
+    expect(observed).toEqual({
+      counts: { marked: 1, skipped: 1 },
+      error: undefined,
+      survivingAdmissionActive: true,
+      survivingStatus: "running",
+      survivingRestartMarker: true,
+    });
+  } finally {
+    restoreSpy();
+    admissions.forEach((admission) => admission.release());
     closeOpenClawAgentDatabasesForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   }

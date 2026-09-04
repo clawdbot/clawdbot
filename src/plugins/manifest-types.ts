@@ -359,6 +359,8 @@ export type PluginManifest = {
    * auth/catalog discovery. It should not import the full plugin runtime.
    */
   providerCatalogEntry?: string;
+  /** Lightweight capability descriptor collections; omitted families retain register() discovery. */
+  capabilityCatalogEntry?: string;
   /**
    * Cheap model-family ownership metadata used before plugin runtime loads.
    * Use this for shorthand model refs that omit an explicit provider prefix.

@@ -821,46 +821,64 @@ describe("createCopilotAgentHarness", () => {
     expect(session.disconnect).toHaveBeenCalledOnce();
   });
 
-  it("bounds client acquisition and releases a handle that arrives after timeout", async () => {
-    const client = createMockCopilotClient();
-    const lateHandle = { client, key: TEST_POOL_KEY };
-    const deferred = createDeferred<typeof lateHandle>();
-    const pool = makePoolMock();
-    pool.acquire.mockReturnValue(deferred.promise);
-    const harness = createCopilotAgentHarness({ pool });
-
-    await expect(
-      harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
-    ).rejects.toThrow("timed out after 5ms");
-    deferred.resolve(lateHandle);
-    await flushAsyncWork();
-    expect(pool.release).toHaveBeenCalledWith(lateHandle);
-  });
-
-  it("starts late-session disconnect even when abort wedges", async () => {
-    const lateSession = {
-      abort: vi.fn().mockReturnValue(new Promise<void>(() => {})),
-      disconnect: vi.fn().mockResolvedValue(undefined),
-      sendAndWait: vi.fn(),
-    };
-    const deferred = createDeferred<typeof lateSession>();
-    const client = createMockCopilotClient({
-      createSession: vi.fn().mockReturnValue(deferred.promise),
-      resumeSession: vi.fn(),
-    });
-    const pool = makePoolMock();
-    pool.acquire.mockResolvedValue({ client, key: TEST_POOL_KEY });
-    const harness = createCopilotAgentHarness({ pool });
-
-    await expect(
-      harness.runIsolatedCompletionV2?.({ ...ISOLATED_COMPLETION_PARAMS, timeoutMs: 5 }),
-    ).rejects.toThrow("timed out after 5ms");
-    deferred.resolve(lateSession);
-    await flushAsyncWork();
-    expect(lateSession.abort).toHaveBeenCalledOnce();
-    expect(lateSession.disconnect).toHaveBeenCalledOnce();
-    expect(pool.release).toHaveBeenCalledOnce();
-  });
+  it.each(["client acquisition", "session creation"] as const)(
+    "cleans up a late %s after its deadline expires",
+    async (stage) => {
+      const started = createDeferred<void>();
+      const released = createDeferred<void>();
+      const disconnected = createDeferred<void>();
+      const lateSession = {
+        abort: vi.fn().mockReturnValue(new Promise<void>(() => {})),
+        disconnect: vi.fn(async () => disconnected.resolve()),
+        sendAndWait: vi.fn(),
+      };
+      const sessionReady = createDeferred<typeof lateSession>();
+      const client = createMockCopilotClient({
+        createSession: vi.fn(() => {
+          started.resolve();
+          return sessionReady.promise;
+        }),
+      });
+      const lateHandle = { client, key: TEST_POOL_KEY };
+      const handleReady = createDeferred<typeof lateHandle>();
+      const pool = makePoolMock();
+      pool.acquire.mockImplementation(() => {
+        if (stage === "client acquisition") {
+          started.resolve();
+          return handleReady.promise;
+        }
+        return Promise.resolve(lateHandle);
+      });
+      pool.release.mockImplementation(async () => released.resolve());
+      const harness = createCopilotAgentHarness({ pool });
+      vi.useFakeTimers();
+      try {
+        const completion = harness.runIsolatedCompletionV2?.({
+          ...ISOLATED_COMPLETION_PARAMS,
+          timeoutMs: 5,
+        });
+        const rejected = expect(completion).rejects.toThrow("timed out after 5ms");
+        // Expire the deadline only once the resource factory owns the pending request.
+        await started.promise;
+        await vi.advanceTimersByTimeAsync(5);
+        await rejected;
+        handleReady.resolve(lateHandle);
+        sessionReady.resolve(lateSession);
+        await released.promise;
+        if (stage === "session creation") {
+          await disconnected.promise;
+          expect(lateSession.abort).toHaveBeenCalledOnce();
+          expect(lateSession.disconnect).toHaveBeenCalledOnce();
+        }
+        expect(pool.release).toHaveBeenCalledExactlyOnceWith(lateHandle);
+        expect(lateSession.sendAndWait).not.toHaveBeenCalled();
+      } finally {
+        handleReady.resolve(lateHandle);
+        sessionReady.resolve(lateSession);
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("does not let a wedged session disconnect delay a completed result", async () => {
     const disconnect = vi.fn().mockReturnValue(new Promise<void>(() => {}));

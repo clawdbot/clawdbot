@@ -515,12 +515,15 @@ extension DashboardWindowOwnershipTests {
 
     private func waitForDashboard(_ controller: DashboardWindowController, path: String) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
-        while ContinuousClock.now < deadline {
+        while true {
             if controller.canDeliverNativeCommands, !controller.webView.isLoading,
                controller.webView.url?.path == path
             {
                 return
             }
+            // MainActor may resume this observer after the deadline even when
+            // WebKit has finished. Check readiness before rejecting another wait.
+            guard ContinuousClock.now < deadline else { break }
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(controller.canDeliverNativeCommands)

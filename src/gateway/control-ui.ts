@@ -551,7 +551,8 @@ export async function handleControlUiAssistantMediaRequest(
     );
     res.setHeader("Cache-Control", "no-cache");
     const byteResponse = resolveByteResponse({
-      file: opened.stat,
+      // Allowed paths are mutable; matching size and mtime cannot prove unchanged bytes.
+      file: { size: opened.stat.size },
       method: req.method,
       request: req,
     });

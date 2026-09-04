@@ -101,7 +101,7 @@ export default definePluginEntry({
     api.registerTool(
       (context) =>
         guardWorkboardToolsForWorkspaceAccess(
-          createWorkboardTools({ api, context, store }),
+          createWorkboardTools({ context, store }),
           context,
           api.runtime.sandbox.resolveWorkspaceAuthority,
         ),
