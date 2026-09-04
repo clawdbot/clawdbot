@@ -974,13 +974,13 @@ extension SettingsProTab {
         }
     }
 
-    func sendDirectWatchSetup() async {
+    func sendDirectWatchSetup(includeVoice: Bool = false) async {
         guard !self.isSendingWatchDirectSetup else { return }
         self.isSendingWatchDirectSetup = true
         self.watchDirectSetupStatusText = String(localized: "Preparing one-time setup…")
         defer { self.isSendingWatchDirectSetup = false }
         do {
-            let result = try await self.appModel.sendDirectWatchSetup()
+            let result = try await self.appModel.sendDirectWatchSetup(includeVoice: includeVoice)
             self.watchDirectSetupStatusText = result.deliveredImmediately
                 ? String(localized: "Setup sent. Open OpenClaw on the watch to connect.")
                 : String(

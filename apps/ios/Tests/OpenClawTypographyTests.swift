@@ -613,6 +613,7 @@ struct OpenClawTypographyTests {
     private static func swiftSourcesForTypographyAudit() throws -> [URL] {
         let roots = [
             self.sourceURL(""),
+            self.iosRootURL().appendingPathComponent("WatchApp/Sources"),
             self.iosRootURL()
                 .deletingLastPathComponent()
                 .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI"),
@@ -638,7 +639,7 @@ struct OpenClawTypographyTests {
     }
 
     private static func unbrandedTextCallOffenders(in source: String, relativePath: String) -> [String] {
-        let fontTokens = ["OpenClawType", "OpenClawChatTypography", "typography."]
+        let fontTokens = ["OpenClawType", "OpenClawChatTypography", "WatchClawType", "typography."]
         let sourceBytes = Array(source.utf8)
         let code = self.maskedSwiftCode(source)
         let imageFontRanges = Set(self.directImageFontModifierRanges(in: code))

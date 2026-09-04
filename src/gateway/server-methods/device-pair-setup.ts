@@ -22,6 +22,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../../shared/device-bootstrap-profile.js";
 import { isLoopbackHost } from "../net.js";
 import { formatForLog } from "../ws-log.js";
@@ -93,7 +94,9 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
               bootstrapProfile:
                 params.joinUrl === true || params.bootstrapProfile === "node"
                   ? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
-                  : PAIRING_SETUP_BOOTSTRAP_PROFILE,
+                  : params.bootstrapProfile === "voice-node"
+                    ? VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
+                    : PAIRING_SETUP_BOOTSTRAP_PROFILE,
             }
           : {}),
         // Lets Tailscale serve/funnel URLs resolve, mirroring the `openclaw qr` CLI.

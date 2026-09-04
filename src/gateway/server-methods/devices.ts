@@ -31,6 +31,7 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import { retireDeviceTokenClients } from "../device-token-client-lifecycle.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
@@ -659,14 +660,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     if (entry.role === "node") {
       invalidateNodeWakeState(normalizedDeviceId);
     }
-    // Mark affected clients invalid *before* responding so any RPCs already
-    // pipelined into their WS socket buffer are rejected at the per-request
-    // dispatch check, closing the race between queueMicrotask-scheduled
-    // disconnect and inflight frames.
-    context.invalidateClientsForDevice?.(normalizedDeviceId, {
-      role: entry.role,
-      reason: "device-token-rotated",
-    });
+    retireDeviceTokenClients(context, normalizedDeviceId, [entry.role], "device-token-rotated");
     // Record the delivery decision on the wire: an absent token alone cannot tell a
     // client whether the rotation withheld the secret by policy or the response
     // predates this field, and the two need different operator-facing outcomes.
@@ -683,9 +677,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    queueMicrotask(() => {
-      context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
-    });
   },
   "device.token.revoke": async ({ params, respond, context, client }) => {
     if (
@@ -779,14 +770,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
       await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
     }
-    // Mark affected clients invalid *before* responding so any RPCs already
-    // pipelined into their WS socket buffer are rejected at the per-request
-    // dispatch check, closing the race between queueMicrotask-scheduled
-    // disconnect and inflight frames.
-    context.invalidateClientsForDevice?.(normalizedDeviceId, {
-      role: entry.role,
-      reason: "device-token-revoked",
-    });
+    retireDeviceTokenClients(context, normalizedDeviceId, [entry.role], "device-token-revoked");
     respond(
       true,
       {
@@ -796,9 +780,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    queueMicrotask(() => {
-      context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
-    });
   },
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

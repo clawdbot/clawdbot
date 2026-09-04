@@ -4699,6 +4699,26 @@ jobs:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
 
+      - &install_watch_rust_toolchain
+        name: Install Watch Rust toolchain
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+
+      - name: Test Watch RTC engine
+        if: matrix.phase == 'tests' && env.HISTORICAL_TARGET != 'true'
+        working-directory: apps/shared/OpenClawWatchRTC
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+            AWS_LC_SYS_NO_ASM=0 AWS_LC_SYS_CMAKE_BUILDER=0 \
+            cargo test --locked --lib -j 2 -- --test-threads=1
+
       - name: Install iOS Swift tooling
         run: |
           if [[ -x ./scripts/install-xcodegen.sh && -x ./scripts/install-swift-tools.sh ]]; then
@@ -4872,6 +4892,8 @@ jobs:
             -parallel-testing-enabled NO
             -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests
             -only-testing:OpenClawWatchTests/WatchSpeechPlaybackTests
+            -only-testing:OpenClawWatchTests/WatchRealtimeMediaTests
+            -only-testing:OpenClawWatchTests/WatchGatewayConfigurationTests
           )
           xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
           app_path="$(
@@ -4978,6 +5000,8 @@ jobs:
           "$swift_tools_dir/xcodegen" --version
           "$swift_tools_dir/swiftformat" --version
           "$swift_tools_dir/swiftlint" version
+
+      - *install_watch_rust_toolchain
 
       - name: Capture iOS device screenshot shard
         id: device_screenshots

@@ -17,9 +17,10 @@ OpenClaw iOS is the officially released iPhone app. It connects to an OpenClaw G
 ## Exact Xcode Manual Deploy Flow
 
 1. Prereqs:
-   - Xcode 26.x
+   - Xcode 26.x or newer with the iOS and watchOS SDKs
    - `pnpm`
    - `xcodegen`
+   - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
    - Apple Development signing set up in Xcode
 2. From repo root:
 
@@ -43,6 +44,34 @@ Generate without opening Xcode:
 pnpm ios:gen
 ```
 
+### Watch companion build requirements
+
+The normal `OpenClaw` iPhone scheme embeds the Watch app, so even an iPhone-only
+build compiles the native Watch WebRTC library. Install the official
+[rustup toolchain manager](https://rustup.rs/), then install the pinned compiler
+and standard-library sources:
+
+```bash
+rustup toolchain install nightly-2026-08-31 --profile minimal --component rust-src
+```
+
+`apps/shared/OpenClawWatchRTC/build.sh` uses that exact toolchain with
+`cargo --locked` and `-Z build-std`; it never installs a toolchain or changes the
+global default. Select Xcode through its command-line-tool setting or
+`DEVELOPER_DIR`. The Watch device and simulator slices were verified with the
+watchOS 27 SDK; the app's deployment target remains watchOS 11. See the
+[native Watch module README](../shared/OpenClawWatchRTC/README.md) for supported
+architectures, build output locations, and dependency notices.
+
+Run `OpenClawWatchTests` through the `OpenClawWatchApp` scheme for configuration,
+call lifecycle, and native codec coverage. These tests and signed simulator
+builds do not prove a real Watch microphone/speaker route, background audio,
+wrist-down behavior, Wi-Fi/cellular handoff, or multi-hour battery endurance.
+A native macOS provider roundtrip is interoperability evidence, not Watch
+hardware proof. Validate those behaviors separately through a physical Watch's
+normal **Enable Standalone Voice → Talk on Watch → Start** flow; see
+[Watch setup and limits](https://docs.openclaw.ai/platforms/ios#standalone-voice).
+
 ## App Store Release Flow
 
 Prereqs:
@@ -50,6 +79,7 @@ Prereqs:
 - Xcode 26.x
 - `pnpm`
 - `xcodegen`
+- The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
 - Ruby 3.4.10 and Bundler 2.6.9 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
 - Apple account signed into Xcode for the canonical OpenClaw team (`FWJYW4S8P8`)
 - Fastlane Apple Developer Portal session for the canonical OpenClaw team when creating bundle IDs or enabling services
@@ -300,6 +330,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 - Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
 - One Chat surface for text, realtime voice, dictation, and voice notes through the operator gateway session.
+- Two distinct Watch voice paths: iPhone-relayed **Talk to Claw**, and opt-in **Talk on Watch** with native UDP media and Gateway-owned agent/tool control. Physical-Watch voice and endurance validation remain separate from simulator coverage.
 - iOS node commands in foreground: camera snap/clip, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
 - Connected nodes publish CPU count and memory immediately and every 60 seconds through `node.host.stats`, supplying the Control UI Devices meters. iOS reports neither load averages nor disk capacity (Apple's required-reason API policy does not allow sending disk-space values off-device). Reporting stops when the node route disconnects or changes, and iOS suspension can pause updates.

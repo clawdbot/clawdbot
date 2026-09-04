@@ -17,6 +17,7 @@ private enum WatchTextValue {
 }
 
 struct WatchInboxView: View {
+    @Binding var navigationPath: [WatchDestination]
     var store: WatchInboxStore
     var directNode: WatchDirectNode
     var onAction: ((WatchPromptAction) -> Void)?
@@ -27,7 +28,7 @@ struct WatchInboxView: View {
     var onSendChatMessage: ((String, Bool) async -> String?)?
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: self.$navigationPath) {
             WatchControlSurfaceView(
                 store: self.store,
                 directNode: self.directNode,
@@ -38,6 +39,12 @@ struct WatchInboxView: View {
                 onAppCommand: self.onAppCommand,
                 onSendChatMessage: self.onSendChatMessage)
                 .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: WatchDestination.self) { destination in
+                    switch destination {
+                    case .standaloneVoice:
+                        WatchRealtimeCallView(directNode: self.directNode)
+                    }
+                }
         }
     }
 }
@@ -108,6 +115,13 @@ private struct WatchControlSurfaceView: View {
                     accessory: .verbatim(self.store.talkSummaryText))
             }
             .buttonStyle(.plain)
+
+            NavigationLink(value: WatchDestination.standaloneVoice) {
+                WatchPrimaryLabel(title: "Talk on Watch")
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens standalone voice without starting the microphone")
+            .accessibilityIdentifier("watch-standalone-voice")
 
             NavigationLink {
                 self.chatTimelineDestination
@@ -367,7 +381,8 @@ private struct WatchControlSurfaceView: View {
             WatchDetailText(
                 text: .verbatim(String(localized: """
                 Direct mode supports device info, status, and notifications. \
-                Chat, Talk, and approvals still use the iPhone.
+                Set up standalone voice on iPhone to use Talk on Watch. \
+                Chat and approvals still use the iPhone.
                 """)))
 
             if self.directNode.isConfigured {
@@ -876,38 +891,6 @@ private struct WatchCompactMetric: View {
                 .font(WatchClawType.label(size: 10, weight: .bold))
         }
         .lineLimit(1)
-    }
-}
-
-private struct WatchPrimaryLabel: View {
-    let title: LocalizedStringKey
-
-    var body: some View {
-        HStack(spacing: 7) {
-            WatchVoiceGlyph()
-            Text(self.title)
-                .font(WatchClawType.captionBold)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 7)
-        .background {
-            Capsule(style: .continuous)
-                .fill(WatchClawStyle.hotGradient)
-        }
-    }
-}
-
-private struct WatchVoiceGlyph: View {
-    var body: some View {
-        HStack(alignment: .center, spacing: 2) {
-            ForEach([7.0, 13.0, 18.0, 12.0, 8.0], id: \.self) { height in
-                Capsule(style: .continuous)
-                    .fill(.white.opacity(0.82))
-                    .frame(width: 2, height: height)
-            }
-        }
-        .frame(width: 20, height: 20)
     }
 }
 

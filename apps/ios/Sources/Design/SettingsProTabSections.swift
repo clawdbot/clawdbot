@@ -503,6 +503,22 @@ extension SettingsProTab {
                         || !self.appModel.hasOperatorAdminScope
                         || !watchStatus.appInstalled)
 
+                Button {
+                    Task { await self.sendDirectWatchSetup(includeVoice: true) }
+                } label: {
+                    Label {
+                        Text("Enable Standalone Voice")
+                            .font(OpenClawType.body)
+                    } icon: {
+                        Image(systemName: "waveform")
+                    }
+                }
+                .disabled(
+                    self.isSendingWatchDirectSetup
+                        || !self.appModel.isOperatorGatewayConnected
+                        || !self.appModel.hasOperatorAdminScope
+                        || !watchStatus.appInstalled)
+
                 if let statusText = self.watchDirectSetupStatusText {
                     Text(statusText)
                         .font(OpenClawType.caption)
@@ -513,6 +529,7 @@ extension SettingsProTab {
                 Text(
                     """
                     The watch receives a one-time pairing code and stores its own device token. \
+                    Standalone voice also grants read and Talk access, without admin access. \
                     A reachable secure Gateway URL is required away from the iPhone.
                     """)
                     .font(OpenClawType.footnote)

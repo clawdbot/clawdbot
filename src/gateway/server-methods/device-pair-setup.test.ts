@@ -235,21 +235,43 @@ describe("device.pair.setupCode", () => {
     expect(payload.setupCode).toBe("SETUP-CODE-XYZ");
   });
 
-  it("requests a node-only bootstrap profile for companion setup", async () => {
+  it.each([
+    { bootstrapProfile: "node", profile: { roles: ["node"], scopes: [] } },
+    {
+      bootstrapProfile: "limited",
+      profile: {
+        roles: ["node", "operator"],
+        scopes: [
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+      },
+    },
+    {
+      bootstrapProfile: "voice-node",
+      profile: {
+        roles: ["node", "operator"],
+        scopes: ["operator.read", "operator.talk"],
+        purpose: "voice-node",
+      },
+    },
+  ])("requests the exact $bootstrapProfile setup grant", async ({ bootstrapProfile, profile }) => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
 
-    const { options } = createOptions({ includeQr: false, bootstrapProfile: "node" });
+    const { options, respond } = createOptions({ includeQr: false, bootstrapProfile });
     await expectDefined(
       devicePairSetupHandlers["device.pair.setupCode"],
       'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
     )(options);
 
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
       expect.any(Object),
-      expect.objectContaining({
-        bootstrapProfile: { roles: ["node"], scopes: [] },
-      }),
+      expect.objectContaining({ bootstrapProfile: profile }),
     );
   });
 
@@ -293,32 +315,19 @@ describe("device.pair.setupCode", () => {
     });
   });
 
-  it("requests the limited mobile bootstrap profile when selected", async () => {
-    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
-    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
+  it.each(["limited", "voice-node"])(
+    "does not put a %s grant in a join URL",
+    async (bootstrapProfile) => {
+      const { options, respond } = createOptions({ joinUrl: true, bootstrapProfile });
+      await expectDefined(
+        devicePairSetupHandlers["device.pair.setupCode"],
+        'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
+      )(options);
 
-    const { options } = createOptions({ includeQr: false, bootstrapProfile: "limited" });
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
-
-    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        bootstrapProfile: {
-          roles: ["node", "operator"],
-          scopes: [
-            "operator.approvals",
-            "operator.questions",
-            "operator.read",
-            "operator.talk.secrets",
-            "operator.write",
-          ],
-        },
-      }),
-    );
-  });
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(mocks.resolvePairingSetupFromConfig).not.toHaveBeenCalled();
+    },
+  );
 
   it("omits an oversized QR but still returns the setup code", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
