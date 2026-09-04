@@ -1418,14 +1418,14 @@ describe("cloud worker disk-space notice", () => {
 });
 
 describe("chat conversation width", () => {
-  it("applies a configured width once to the centered transcript frame", () => {
+  it("writes configured width variables directly on the normal Chat surface", () => {
     const container = renderChatView({
-      chatMessageMaxWidth: "82%",
+      chatMessageMaxWidth: "960px",
       messages: [{ role: "assistant", content: "hello", timestamp: 1 }],
     });
     const chat = container.querySelector<HTMLElement>(".chat");
 
-    expect(chat?.style.getPropertyValue("--chat-thread-max-width")).toBe("82%");
+    expect(chat?.style.getPropertyValue("--chat-thread-max-width")).toBe("960px");
     expect(chat?.style.getPropertyValue("--chat-message-max-width")).toBe("100%");
   });
 });

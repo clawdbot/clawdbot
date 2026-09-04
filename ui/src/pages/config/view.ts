@@ -54,7 +54,7 @@ function renderAppearance(props: ConfigProps) {
         data-settings-chat-message-width
         type="text"
         spellcheck="false"
-        placeholder="48rem"
+        placeholder="min(1280px, 100%)"
         .value=${props.chatMessageMaxWidth ?? ""}
         @change=${(event: Event) => {
           const input = event.currentTarget as HTMLInputElement;

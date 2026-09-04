@@ -1925,7 +1925,7 @@ describe("config view", () => {
       "Using default: Claw",
       "Using default: 100%",
       "Using default: Enabled",
-      "Using default: 48rem",
+      "Using default: min(1280px, 100%)",
       "Using default: Enter",
       "Using default: OpenClaw viewer",
       "Using default: Disabled",

@@ -1733,15 +1733,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("inherits configured chat width for tool rows and composer without changing defaults", async () => {
+  it("keeps normal Chat lanes on a centered 1280px default frame and honors a direct override", async () => {
     const page = await openBrowserPage(1600, 900);
     const renderFixture = async (configured: boolean) => {
       const style = configured
-        ? 'style="--chat-thread-max-width: 82%; --chat-message-max-width: 100%"'
+        ? 'style="--chat-thread-max-width: 960px; --chat-message-max-width: 100%"'
         : "";
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <openclaw-chat-page ${style}>
-        <section class="card chat">
+        <section class="card chat" ${style}>
           <div class="chat-thread chat-thread--direct" role="log">
             <div class="chat-thread-inner">
               <div class="chat-group tool">
@@ -1768,7 +1767,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             <div class="agent-chat__input">Composer</div>
           </div>
         </section>
-        </openclaw-chat-page>
       </body></html>`);
       return await page.evaluate(() => {
         const rect = (selector: string) => {
@@ -1789,24 +1787,33 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
     try {
       const defaults = await renderFixture(false);
-      expect(defaults.thread.width).toBeCloseTo(768, 0);
-      expect(defaults.composer.width).toBeCloseTo(defaults.thread.width, 0);
-      expect(defaults.prs.width).toBeCloseTo(defaults.thread.width, 0);
-      expect(defaults.tool.width).toBeCloseTo(defaults.thread.width, 0);
-      expect(defaults.shell.width).toBeCloseTo(760, 0);
-      expect(defaults.activity.width).toBeCloseTo(760, 0);
-      expect(defaults.framedActivity.width).toBeCloseTo(defaults.activity.width, 0);
+      expect(defaults.thread.width).toBeCloseTo(1280, 0);
+      for (const key of [
+        "activity",
+        "composer",
+        "framedActivity",
+        "prs",
+        "shell",
+        "tool",
+      ] as const) {
+        expect(defaults[key].width).toBeCloseTo(defaults.thread.width, 0);
+        expect(defaults[key].center).toBeCloseTo(defaults.thread.center, 0);
+      }
 
       const configured = await renderFixture(true);
-      for (const key of ["activity", "framedActivity", "shell", "tool"] as const) {
+      expect(configured.thread.width).toBeCloseTo(960, 0);
+      for (const key of [
+        "activity",
+        "composer",
+        "framedActivity",
+        "prs",
+        "shell",
+        "tool",
+      ] as const) {
         expect(configured[key].width).toBeCloseTo(configured.thread.width, 0);
+        expect(configured[key].center).toBeCloseTo(configured.thread.center, 0);
       }
-      expect(configured.composer.width).toBeCloseTo(configured.prs.width, 0);
-      for (const rect of Object.values(configured)) {
-        expect(rect.center).toBeCloseTo(configured.thread.center, 0);
-      }
-      expect(configured.thread.width).toBeGreaterThan(defaults.thread.width);
-      expect(configured.composer.width).toBeGreaterThan(defaults.composer.width);
+      expect(configured.thread.width).toBeLessThan(defaults.thread.width);
     } finally {
       await closeBrowserPage(page);
     }
