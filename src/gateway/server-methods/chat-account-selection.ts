@@ -40,7 +40,9 @@ export function resolveChatAccountSelection(params: {
   // another person's provider identity or discovering a credential locator.
   const locator = parseUserModelAuthProfileId(authProfileId);
   const owner = locator ? resolveUserProfileId(locator.ownerProfileId) : undefined;
-  const displayName = owner ? getUserProfileDisplay(owner).displayName?.trim() : undefined;
+  const displayName = owner
+    ? getUserProfileDisplay(owner).displayName?.trim().toWellFormed()
+    : undefined;
   return {
     kind: "personal",
     label: displayName ? truncateUtf16Safe(`${displayName}'s account`, 256) : "Personal account",

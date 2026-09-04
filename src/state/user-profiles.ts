@@ -94,7 +94,7 @@ function normalizeEmail(email: string): string {
 }
 
 function normalizeInitialDisplayName(name: string | null | undefined): string | null {
-  const normalized = name?.trim();
+  const normalized = name?.trim().toWellFormed();
   return normalized ? truncateUtf16Safe(normalized, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
 }
 
@@ -253,7 +253,7 @@ function ensureProfileForEmailWithInitialName(
   const displayName =
     initialDisplayName ??
     truncateUtf16Safe(
-      normalizedEmail.split("@", 1)[0] || normalizedEmail,
+      (normalizedEmail.split("@", 1)[0] || normalizedEmail).toWellFormed(),
       MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
     );
   ensureUserProfilesSchema(options);

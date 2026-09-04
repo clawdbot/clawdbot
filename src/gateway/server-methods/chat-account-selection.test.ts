@@ -47,4 +47,18 @@ describe("resolveChatAccountSelection", () => {
 
     expect(selection.label).toBe(prefix);
   });
+
+  it("repairs a historically malformed personal owner label", () => {
+    const prefix = "x".repeat(255);
+    profileDisplay.displayName = `${prefix}\ud83e`;
+    const selection = resolveChatAccountSelection({
+      authStore: { version: 1, profiles: {} },
+      sessionEntry: {
+        authProfileOverride:
+          "personal:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222",
+      },
+    });
+
+    expect(selection.label).toBe(`${prefix}\ufffd`);
+  });
 });
