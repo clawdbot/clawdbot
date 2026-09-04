@@ -173,7 +173,7 @@ const results = [];
     scenario: "persisted cache: same GUID + same text (requireMessageIdTextMatch=true)",
     expected: "true",
     actual: String(hit),
-    pass: hit === true,
+    pass: hit,
   });
 }
 
@@ -191,7 +191,7 @@ const results = [];
     scenario: "persisted cache: same GUID + different text (requireMessageIdTextMatch=true)",
     expected: "false",
     actual: String(hit),
-    pass: hit === false,
+    pass: !hit,
   });
 }
 
