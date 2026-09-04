@@ -60,7 +60,7 @@ public actor GatewayChannelActor {
     /// that admitted it so a late failure cannot tear down a replacement socket.
     private var connectionGeneration: UInt64 = 0
     private var disconnectedConnectionGeneration: UInt64?
-    private var disconnectNotificationInProgress = false
+    private var disconnectError: Error?
     private var automaticReconnectRequested = false
     var connectWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var url: URL
@@ -257,12 +257,7 @@ public actor GatewayChannelActor {
                 code: 6,
                 userInfo: [NSLocalizedDescriptionKey: "gateway channel is shut down"])
         }
-        guard !self.disconnectNotificationInProgress else {
-            throw NSError(
-                domain: "Gateway",
-                code: 6,
-                userInfo: [NSLocalizedDescriptionKey: "gateway disconnect cleanup in progress"])
-        }
+        if let disconnectError { throw disconnectError }
         if self.connected, self.task?.state == .running {
             return
         }
@@ -323,11 +318,11 @@ public actor GatewayChannelActor {
 
     private func performConnectAttempt() async throws {
         guard self.shouldReconnect else { throw CancellationError() }
-        guard !self.disconnectNotificationInProgress else { throw CancellationError() }
+        if let disconnectError { throw disconnectError }
         try await self.waitForConnectFailureBackoff()
         try Task.checkCancellation()
         guard self.shouldReconnect else { throw CancellationError() }
-        guard !self.disconnectNotificationInProgress else { throw CancellationError() }
+        if let disconnectError { throw disconnectError }
         if self.connected {
             if self.task?.state == .running { return }
             let staleGeneration = self.connectionGeneration
@@ -1092,12 +1087,14 @@ extension GatewayChannelActor {
         let disconnectedTask = self.task
         self.task = nil
         disconnectedTask?.cancel(with: .goingAway, reason: nil)
-        self.disconnectNotificationInProgress = true
+        // Refuse reconnect until cleanup finishes, retaining the cause so callers
+        // can distinguish a retryable transport loss from an authoritative rejection.
+        self.disconnectError = error
         // Lifecycle callbacks may be awaiting an RPC on this same socket. Release
         // those continuations before the callback barrier, or disconnect cycles.
         self.failPending(error)
         await self.disconnectHandler?(reason, connectionGeneration)
-        self.disconnectNotificationInProgress = false
+        self.disconnectError = nil
 
         guard self.automaticReconnectRequested,
               self.shouldReconnect,

@@ -139,7 +139,7 @@ function logReceiptFinishError(
 function finishReceiptAfterCommit(
   state: CronServiceState,
   terminal: Parameters<typeof finishCronRunReceipt>[0],
-): void {
+): undefined {
   try {
     finishCronRunReceipt(terminal);
   } catch (error) {

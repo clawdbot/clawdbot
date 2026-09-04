@@ -12,10 +12,26 @@ import {
 } from "../agents/admitted-run-context.js";
 import type { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import {
+  addSession,
+  appendOutput,
+  deleteSession,
+  markBackgrounded,
+  markExited,
+  recordNotifyOnExitRemoval,
+} from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
+import { createProcessTool } from "../agents/bash-tools.process.js";
 import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
+import {
+  drainSystemEventEntries,
+  enqueueSystemEventWithReceipt,
+  peekSystemEventEntries,
+} from "../infra/system-events.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
@@ -31,7 +47,7 @@ type MockGatewayTool = {
   finalizeBeforeToolCallParams?: (...args: unknown[]) => unknown;
   execute: (...args: unknown[]) => Promise<{
     content: unknown[];
-    details?: Record<string, unknown>;
+    details?: unknown;
   }>;
 };
 
@@ -674,6 +690,152 @@ afterEach(async () => {
   server = undefined;
   for (const admission of activeAdmissions.splice(0)) {
     admission.close();
+  }
+});
+
+describe("MCP terminal process result delivery", () => {
+  const sessionKey = "agent:main:mcp-delivery";
+  const processId = "mcp-delivery-process";
+  let poll: MockGatewayTool["execute"];
+
+  beforeEach(() => {
+    const session = createProcessSessionFixture({ id: processId, backgrounded: true });
+    session.scopeKey = sessionKey;
+    session.sessionKey = sessionKey;
+    addSession(session);
+    appendOutput(session, "stdout", "completed output");
+    markExited(session, 0, null, "completed");
+    enqueueSystemEventWithReceipt("unrelated event", { sessionKey, contextKey: "other" });
+    recordNotifyOnExitRemoval(
+      session,
+      enqueueSystemEventWithReceipt("exec completed", { sessionKey, contextKey: processId })!,
+    );
+    const processTool = createProcessTool({ scopeKey: sessionKey });
+    poll = async () => processTool.execute("mcp-poll", { action: "poll", sessionId: processId });
+    mockScopedTools([makeMessageTool({ execute: poll })]);
+  });
+
+  afterEach(() => {
+    deleteSession(processId);
+    drainSystemEventEntries(sessionKey);
+    vi.restoreAllMocks();
+  });
+
+  it("acknowledges only the completed HTTP result and preserves unrelated events", async () => {
+    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below binds the response receiver.
+    const writeHead = ServerResponse.prototype.writeHead;
+    vi.spyOn(ServerResponse.prototype, "writeHead").mockImplementation(function (
+      this: ServerResponse,
+      ...args
+    ) {
+      expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
+        "unrelated event",
+        "exec completed",
+      ]);
+      return Reflect.apply(writeHead, this, args);
+    });
+    const { runtime } = await startLoopbackServerForTest();
+    const payload = await callMainSessionTool({ token: runtime.ownerToken });
+    expect(payload.result?.content?.[0]?.text).toContain("completed output");
+    expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
+      "unrelated event",
+    ]);
+  });
+
+  it("keeps the notification when response headers cannot be written", async () => {
+    vi.spyOn(ServerResponse.prototype, "writeHead").mockImplementationOnce(() => {
+      throw new Error("synthetic response write failure");
+    });
+    const { runtime } = await startLoopbackServerForTest();
+    const response = await sendMainSessionToolCall({ token: runtime.ownerToken });
+    expect(response.status).toBe(500);
+    expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
+      "unrelated event",
+      "exec completed",
+    ]);
+  });
+
+  it("keeps the notification when result serialization fails", async () => {
+    mockScopedTools([
+      makeMessageTool({
+        execute: async () => Object.assign(await poll(), { content: [1n] }),
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+    const payload = await callMainSessionTool({ token: runtime.ownerToken });
+    expect(payload.result?.isError).toBe(true);
+    expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
+      "unrelated event",
+      "exec completed",
+    ]);
+  });
+
+  it("keeps the notification when the response connection closes before its bytes finish", async () => {
+    vi.spyOn(ServerResponse.prototype, "end").mockImplementationOnce(
+      function (this: ServerResponse) {
+        this.destroy();
+        return this;
+      },
+    );
+    const { runtime } = await startLoopbackServerForTest();
+    await expect(sendMainSessionToolCall({ token: runtime.ownerToken })).rejects.toThrow();
+    expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
+      "unrelated event",
+      "exec completed",
+    ]);
+  });
+});
+
+it("acknowledges a real background child completion after its MCP HTTP poll", async () => {
+  const scopeKey = "agent:main:mcp-real-child";
+  const run = await runExecProcess({
+    command: "mcp-live-child",
+    workdir: process.cwd(),
+    env: {},
+    sandbox: {
+      containerName: "mcp-live-proof",
+      workspaceDir: process.cwd(),
+      containerWorkdir: process.cwd(),
+      async buildExecSpec() {
+        return {
+          argv: [
+            process.execPath,
+            "-e",
+            'setTimeout(() => process.stdout.write("MCP_REAL_CHILD"), 80)',
+          ],
+          env: {},
+          stdinMode: "pipe-closed",
+        };
+      },
+    },
+    usePty: false,
+    warnings: [],
+    maxOutput: 10_000,
+    pendingMaxOutput: 10_000,
+    notifyOnExit: true,
+    notifyOnExitEmptySuccess: true,
+    sessionKey: scopeKey,
+    scopeKey,
+    timeoutSec: 5,
+  });
+  markBackgrounded(run.session);
+  try {
+    await run.promise;
+    expect(peekSystemEventEntries(scopeKey)).toHaveLength(1);
+    const processTool = createProcessTool({ scopeKey });
+    mockScopedTools([
+      makeMessageTool({
+        execute: async () =>
+          processTool.execute("live-poll", { action: "poll", sessionId: run.session.id }),
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+    const payload = await callMainSessionTool({ token: runtime.ownerToken });
+    expect(payload.result?.content?.[0]?.text).toContain("MCP_REAL_CHILD");
+    expect(peekSystemEventEntries(scopeKey)).toEqual([]);
+  } finally {
+    deleteSession(run.session.id);
+    drainSystemEventEntries(scopeKey);
   }
 });
 

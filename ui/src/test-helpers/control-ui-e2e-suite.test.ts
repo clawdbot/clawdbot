@@ -64,9 +64,17 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
     newContext: async () => {
       if (${JSON.stringify(mode)} === "late-context") await new Promise(resolve => setTimeout(resolve, 40));
       state.arrived = true;
+      const rejectClosedPage = async () => { throw new Error("synthetic page closed"); };
+      const closedPage = {
+        evaluate: rejectClosedPage,
+        screenshot: rejectClosedPage,
+        isClosed: () => true,
+        url: () => "about:blank",
+      };
       return {
         setDefaultTimeout() {},
-        newPage: async () => ({}),
+        pages: () => [],
+        newPage: async () => closedPage,
         close: () => {
           state.closeCalls++;
           if (${JSON.stringify(mode)} === "close-failure") return Promise.reject(state.closeFault);

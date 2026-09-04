@@ -6,7 +6,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: shared-openclawkit-periphery-${{ github.event.pull_request.number || github.sha }}
+  # Admission precedes scope skips: isolate passive drafts before they can cancel useful work.
+  # Keep conversion events in the PR group as an intentional cancellation signal.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('shared-openclawkit-periphery-{0}', github.event.pull_request.number || github.sha) }}
   cancel-in-progress: true
 
 env:

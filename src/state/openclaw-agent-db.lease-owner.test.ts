@@ -6,6 +6,7 @@ import * as nodeSqlite from "../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
+  listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
   recordOpenClawAgentDatabaseOpenFailure,
   settleOpenClawAgentDatabaseWorkerClose,
@@ -37,6 +38,7 @@ function createOwner() {
 
 describe("agent database lease acquisition owner", () => {
   it("resets a recreated fixture root without retiring another root", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const owner = createOwner();
     const env = owner.env;
     const otherEnv = { OPENCLAW_STATE_DIR: owner.nextStateDir };
@@ -63,9 +65,11 @@ describe("agent database lease acquisition owner", () => {
       true,
     );
 
-    fs.rmSync(path.dirname(closed.path), { recursive: true, force: true });
-    const recreated = openOpenClawAgentDatabase({ agentId: closed.agentId, env });
-    expect(() => recreated.db.prepare("SELECT * FROM session_key_contract").all()).not.toThrow();
+    now.mockReturnValue(2_000);
+    openOpenClawAgentDatabase({ agentId: closed.agentId, env });
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env }).find((entry) => entry.path === closed.path),
+    ).toMatchObject({ lastSeenAt: 2_000 });
   });
 
   it.each([

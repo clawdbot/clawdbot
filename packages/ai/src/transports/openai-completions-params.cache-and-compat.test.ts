@@ -332,12 +332,12 @@ describe("openai completions params", () => {
   it("flattens pure text content arrays for string-only completions backends when opted in", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({
-        id: "google/gemma-4-E2B-it",
-        name: "Gemma 4 E2B",
-        provider: "inferrs",
-        baseUrl: "http://127.0.0.1:8080/v1",
+        id: "gemma4",
+        name: "Gemma 4",
+        provider: "llmman",
+        baseUrl: "http://127.0.0.1:17434/v1",
         reasoning: false,
-        contextWindow: 131072,
+        contextWindow: 65536,
         maxTokens: 4096,
         compat: {
           requiresStringContent: true,

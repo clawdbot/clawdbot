@@ -1,5 +1,6 @@
 {
   "id": "deepinfra",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "doctorContract": {
     "configRepair": true
   },

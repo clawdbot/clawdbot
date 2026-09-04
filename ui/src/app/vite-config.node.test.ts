@@ -482,6 +482,7 @@ describe("Control UI Vite config", () => {
     expect(source.configView).not.toBe(en.configView);
     expect(flat.get("activity.title")).toBe("Activity");
     expect(flat.get("memoryImport.title")).toBe("Import assistant memory");
+    expect(flat.get("login.failure.authRequired.title")).toBe("Auth required");
     expect(flat.get("sessionsView.runsOnDevice")).toBe("Runs on device");
     expect(flat.get("pluginConsent.widenedTitle")).toBe("What changed");
     expect(flat.get("configPage.themeImported")).toBe("Imported {name}.");

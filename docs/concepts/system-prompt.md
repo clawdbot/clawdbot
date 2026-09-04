@@ -45,7 +45,7 @@ The prompt is compact, with fixed sections:
 - **Assistant Output Directives**: compact attachment, voice-note, and reply-tag syntax.
 - **UI Presentation** (when presentation tools are available): compact widget, dashboard, and portal routing; verify the actual delivered surface.
 - **Collapsible Details** (when supported): teaches the model to keep optional depth in `<details>` disclosures while leaving the primary answer and required actions visible.
-- **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
+- **Runtime**: host, OS, node, model, repo root (when detected), and session identity (one line). Reasoning effort travels through provider controls instead of this prompt, so changing effort does not rewrite the cached instructions. Use `/status` to inspect the selected effort.
 - **Reasoning**: current visibility level plus the `/reasoning` toggle hint.
 
 Large stable content (including **Project Context**) stays above the internal prompt cache boundary. Volatile per-turn sections (**UI Presentation**, Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Runtime**) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.

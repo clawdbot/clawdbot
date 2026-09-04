@@ -393,7 +393,10 @@
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "!dist/plugin-sdk/model-catalog-pricing.d.ts",
-    "!dist/plugin-sdk/blob-runtime.d.ts"
+    "!dist/plugin-sdk/blob-runtime.d.ts",
+    "!dist/plugin-sdk/realtime-transcription-session.d.ts",
+    "!dist/plugin-sdk/speech-provider.d.ts",
+    "!dist/plugin-sdk/realtime-voice-provider.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -750,6 +753,9 @@
     },
     "./plugin-sdk/speech-core": {
       "default": "./dist/plugin-sdk/speech-core.js"
+    },
+    "./plugin-sdk/speech-provider": {
+      "default": "./dist/plugin-sdk/speech-provider.js"
     },
     "./plugin-sdk/speech-settings": {
       "types": "./dist/plugin-sdk/speech-settings.d.ts",
@@ -1199,6 +1205,9 @@
     "./plugin-sdk/realtime-transcription": {
       "default": "./dist/plugin-sdk/realtime-transcription.js"
     },
+    "./plugin-sdk/realtime-transcription-session": {
+      "default": "./dist/plugin-sdk/realtime-transcription-session.js"
+    },
     "./plugin-sdk/realtime-bootstrap-context": {
       "default": "./dist/plugin-sdk/realtime-bootstrap-context.js"
     },
@@ -1210,6 +1219,9 @@
     },
     "./plugin-sdk/realtime-voice": {
       "default": "./dist/plugin-sdk/realtime-voice.js"
+    },
+    "./plugin-sdk/realtime-voice-provider": {
+      "default": "./dist/plugin-sdk/realtime-voice-provider.js"
     },
     "./plugin-sdk/meeting-page-script-runtime": {
       "default": "./dist/plugin-sdk/meeting-page-script-runtime.js"

@@ -409,6 +409,8 @@ it.each([
       });
       const userText = "Keep this example\nMEDIA:./user.png";
       const result = await committer.commit({
+        // This suite isolates projection from the RPC-owned persistence authority.
+        assertCurrent: () => {},
         identity,
         request: {
           runEpoch: identity.ownerEpoch,

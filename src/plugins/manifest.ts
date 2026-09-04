@@ -215,6 +215,10 @@ export function loadPluginManifest(
     channels: normalizeTrimmedStringList(raw.channels),
     providers,
     providerCatalogEntry: normalizeOptionalString(raw.providerCatalogEntry),
+    capabilityCatalogEntry:
+      raw.capabilityCatalogEntry === undefined
+        ? undefined
+        : (normalizeOptionalString(raw.capabilityCatalogEntry) ?? ""),
     modelSupport: modelProviderNormalizers.normalizeManifestModelSupport(raw.modelSupport),
     modelCatalog: normalizeModelCatalog(raw.modelCatalog, {
       ownedProviders: new Set([...providers, ...cliBackends]),

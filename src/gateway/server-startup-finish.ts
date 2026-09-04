@@ -368,7 +368,7 @@ export async function finishGatewayStartup(params: {
       cfg,
       port,
       bindHost,
-      controlUiEnabled: runtime.controlUiEnabled,
+      controlUiEnabled: opts.controlUiEnabled ?? cfg.gateway?.controlUi?.enabled ?? true,
       tailscaleMode: runtime.tailscaleMode,
       resolvedAuth: resolveGatewayAuth({
         authConfig: cfg.gateway?.auth,
@@ -472,6 +472,9 @@ export async function finishGatewayStartup(params: {
       ]);
     },
     commitRuntimePolicy: (nextConfig) => {
+      controlUiRootLifecycle.setEnabled(
+        opts.controlUiEnabled ?? nextConfig.gateway?.controlUi?.enabled ?? true,
+      );
       const rateLimit = nextConfig.gateway?.auth?.rateLimit;
       authRateLimiter.updateConfig(rateLimit);
       browserAuthRateLimiter.updateConfig({ ...rateLimit, exemptLoopback: false });
