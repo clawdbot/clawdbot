@@ -73,18 +73,22 @@ function renderLaneItem(item: TaskLaneItem) {
       <span class="cron-task-lanes__item-time">
         ${formatRelativeTimestamp(item.startedAtMs, { fallback: "" })}
       </span>
-      ${item.outcome
-        ? html`<span class="cron-task-lanes__item-outcome">${item.outcome}</span>`
-        : nothing}
-      ${item.artifactUrl
-        ? html`<a
-            class="cron-task-lanes__item-artifact"
-            href=${item.artifactUrl}
-            target="_blank"
-            rel="noreferrer noopener"
-            >${t("cron.lanes.artifact")}</a
-          >`
-        : nothing}
+      ${
+        item.outcome
+          ? html`<span class="cron-task-lanes__item-outcome">${item.outcome}</span>`
+          : nothing
+      }
+      ${
+        item.artifactUrl
+          ? html`<a
+              class="cron-task-lanes__item-artifact"
+              href=${item.artifactUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              >${t("cron.lanes.artifact")}</a
+            >`
+          : nothing
+      }
     </div>
   `;
 }
@@ -120,13 +124,15 @@ export function renderTaskLanesPanel(props: TaskLanesSectionProps) {
   return html`
     <div class="cron-task-lanes">
       ${heading}
-      ${snapshot.diagnostics.length > 0
-        ? html`
-            <div class="cron-task-lanes__diagnostics">
-              ${snapshot.diagnostics.map(renderDiagnosticChip)}
-            </div>
-          `
-        : nothing}
+      ${
+        snapshot.diagnostics.length > 0
+          ? html`
+              <div class="cron-task-lanes__diagnostics">
+                ${snapshot.diagnostics.map(renderDiagnosticChip)}
+              </div>
+            `
+          : nothing
+      }
       <div class="cron-task-lanes__lanes">
         ${snapshot.lanes.map(
           (lane) => html`

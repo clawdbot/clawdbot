@@ -13,6 +13,7 @@ import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { runFailureLabel } from "../../lib/cron/completion-cause.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
   formatDurationCompact,
@@ -381,6 +382,17 @@ export function runStatusLabel(value: string): string {
   }
 }
 
+function runFailureLabelText(
+  entry: Parameters<typeof runFailureLabel>[0],
+  nowMs: number,
+): string | null {
+  const label = runFailureLabel(entry, nowMs);
+  if (!label) {
+    return null;
+  }
+  return t(`cron.runs.failureLabel.${label}`);
+}
+
 function runDeliveryLabel(value: string): string {
   switch (value) {
     case "delivered":
@@ -391,6 +403,26 @@ function runDeliveryLabel(value: string): string {
       return t("cron.runs.deliveryNotRequested");
     default:
       return t("cron.runs.deliveryUnknown");
+  }
+}
+
+/** Localized label for a recorded run origin. Missing values render nothing. */
+function runOriginLabel(trigger: string | undefined): string | null {
+  switch (trigger) {
+    case "scheduled":
+      return t("cron.runs.originScheduled");
+    case "manual":
+      return t("cron.runs.originManual");
+    case "trigger-script":
+      return t("cron.runs.originTriggerScript");
+    case "on-exit":
+      return t("cron.runs.originOnExit");
+    case "stream":
+      return t("cron.runs.originStream");
+    case undefined:
+      return null;
+    default:
+      return t("cron.runs.originLegacyUnknown");
   }
 }
 
@@ -411,6 +443,7 @@ function renderRun(
         }).href
       : null;
   const status = runStatusLabel(entry.status ?? "unknown");
+  const failure = runFailureLabelText(entry, Date.now());
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");
   const usage = entry.usage;
   const usageSummary =
@@ -424,6 +457,7 @@ function renderRun(
   const showErrorInMeta = Boolean(entry.error) && Boolean(entry.summary);
   const suppressionReason = formatUiExternalText(entry.deliverySuppressionReason);
   const facts = [
+    runOriginLabel(entry.trigger),
     delivery,
     suppressionReason
       ? t("cron.runEntry.deliverySuppression", { reason: suppressionReason })
@@ -440,6 +474,15 @@ function renderRun(
           <div class="cron-run-entry__title">
             ${entry.jobName ?? entry.jobId}
             <span class="muted"> · ${status}</span>
+            ${
+              failure
+                ? html`<span
+                    class="cron-run-entry__failure-pill"
+                    data-cause=${entry.completionCause ?? "derived"}
+                    >${failure}</span
+                  >`
+                : nothing
+            }
           </div>
           <div class="cron-run-entry__facts muted">${facts.join(" · ")}</div>
         </div>
