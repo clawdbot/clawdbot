@@ -416,9 +416,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               if (!activeUsageProviderIds.has(usageProvider)) {
                 return false;
               }
+              const credential = store.profiles[p.profileId];
               return (
                 providerWideUsageIds.has(usageProvider) ||
-                (p.type === "api_key" && !store.profiles[p.profileId]?.metadata?.authFlow)
+                (p.type === "api_key" &&
+                  credential?.type === "api_key" &&
+                  !credential.metadata?.authFlow)
               );
             })
             .map((p) => resolveUsageProviderId(p.provider, { credentialType: p.type }))
