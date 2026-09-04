@@ -246,6 +246,7 @@ export function prepareWorkspaceHookEntries(
   opts?: HookDiscoveryOptions & {
     previousSources?: HookSourceFact[];
     requireValidHook?: (entry: HookPolicyEntry) => boolean;
+    retainInvalidShadowing?: boolean;
   },
 ): { entries: HookEntry[]; sources: HookSourceFact[] } {
   const candidates = resolveHookDiscoveryRoots(workspaceDir, opts).flatMap((root) => {
@@ -281,8 +282,14 @@ export function prepareWorkspaceHookEntries(
     }
     return entries;
   });
+  // Best-effort inspection drops handlerless candidates before precedence so they
+  // cannot hide code a best-effort startup still loads. Callers describing a live
+  // Gateway opt in: its atomic reload keeps that shadowing source and then fails,
+  // leaving the shadowed hook unregistered.
   const resolved = resolveHookEntries(
-    opts?.requireValidHook ? candidates : candidates.filter(({ entry }) => entry?.hook.handlerPath),
+    opts?.requireValidHook || opts?.retainInvalidShadowing
+      ? candidates
+      : candidates.filter(({ entry }) => entry?.hook.handlerPath),
     {
       onCollisionIgnored: ({ name, kept, ignored }) => {
         log.warn(
@@ -341,9 +348,10 @@ export function resolveLoadableHookEntries(cfg: OpenClawConfig, workspaceDir: st
   if (!selection.configured) {
     return [];
   }
-  return loadWorkspaceHookEntries(workspaceDir, { config: cfg }).filter((entry) =>
-    isHookLoadable({ entry, config: cfg, names: selection.names }),
-  );
+  return prepareWorkspaceHookEntries(workspaceDir, {
+    config: cfg,
+    retainInvalidShadowing: true,
+  }).entries.filter((entry) => isHookLoadable({ entry, config: cfg, names: selection.names }));
 }
 
 function readRootFileUtf8(params: {
