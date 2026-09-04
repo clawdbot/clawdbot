@@ -1,9 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Memory Core plugin module implements dreaming behavior.
 import { resolveMemoryDreamingPluginConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
-  DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS as DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-  DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS as DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME as LEGACY_LIGHT_SLEEP_CRON_NAME,
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG as LEGACY_LIGHT_SLEEP_CRON_TAG,
   LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT as LEGACY_LIGHT_SLEEP_EVENT_TEXT,
@@ -93,27 +90,7 @@ type CronServiceLike = {
   }) => Promise<number>;
 };
 
-type ShortTermPromotionDreamingConfig = {
-  enabled: boolean;
-  cron: string;
-  timezone?: string;
-  limit: number;
-  minScore: number;
-  minRecallCount: number;
-  minUniqueQueries: number;
-  recencyHalfLifeDays?: number;
-  maxAgeDays?: number;
-  maxPromotedSnippetTokens?: number;
-  maxPriorEntryLossFraction: number;
-  verboseLogging: boolean;
-  storage?: {
-    mode: "inline" | "separate" | "both";
-    separateReports: boolean;
-  };
-  execution?: {
-    model?: string;
-  };
-};
+type ShortTermPromotionDreamingConfig = ReturnType<typeof resolveMemoryDeepDreamingConfig>;
 
 type ReconcileResult = {
   status: "unavailable" | "disabled" | "added" | "updated" | "noop";
@@ -150,8 +127,7 @@ function formatRepairSummary(repair: {
 }
 
 function resolveManagedCronDescription(config: ShortTermPromotionDreamingConfig): string {
-  const recencyHalfLifeDays =
-    config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
+  const recencyHalfLifeDays = config.recencyHalfLifeDays;
   return `${MANAGED_DREAMING_CRON_TAG} Promote weighted short-term recalls into MEMORY.md (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${config.maxAgeDays ?? "none"}).`;
 }
 
@@ -355,12 +331,9 @@ function isCronServiceLike(candidate: unknown): candidate is CronServiceLike {
   );
 }
 
-function resolveCronServiceFromCandidate(candidate: unknown): CronServiceLike | null {
-  return isCronServiceLike(candidate) ? candidate : null;
-}
-
-function resolveCronServiceFromGatewayContext(context: { getCron?: () => unknown } | undefined) {
-  return resolveCronServiceFromCandidate(context?.getCron?.());
+function resolveCronServiceFromGatewayContext(context: { getCron?: () => unknown }) {
+  const cron = context.getCron?.();
+  return isCronServiceLike(cron) ? cron : null;
 }
 
 function resolveDreamingTriggerSessionKeys(sessionKey?: string): string[] {
@@ -390,30 +363,6 @@ function hasPendingManagedDreamingCronEvent(sessionKey?: string): boolean {
         normalizeOptionalString(event.text) === DREAMING_SYSTEM_EVENT_TEXT,
     ),
   );
-}
-
-export function resolveShortTermPromotionDreamingConfig(params: {
-  pluginConfig?: Record<string, unknown>;
-  cfg?: OpenClawConfig;
-}): ShortTermPromotionDreamingConfig {
-  const resolved = resolveMemoryDeepDreamingConfig(params);
-  return {
-    enabled: resolved.enabled,
-    cron: resolved.cron,
-    ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
-    limit: resolved.limit,
-    minScore: resolved.minScore,
-    minRecallCount: resolved.minRecallCount,
-    minUniqueQueries: resolved.minUniqueQueries,
-    recencyHalfLifeDays: resolved.recencyHalfLifeDays,
-    ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
-    maxPromotedSnippetTokens:
-      resolved.maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-    maxPriorEntryLossFraction: resolved.maxPriorEntryLossFraction,
-    verboseLogging: resolved.verboseLogging,
-    storage: resolved.storage,
-    ...(resolved.execution.model ? { execution: { model: resolved.execution.model } } : {}),
-  };
 }
 
 async function reconcileShortTermDreamingCronJob(params: {
@@ -537,8 +486,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
     return { handled: true, reason: "memory-core: short-term dreaming disabled" };
   }
 
-  const recencyHalfLifeDays =
-    params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
+  const recencyHalfLifeDays = params.config.recencyHalfLifeDays;
   const fallbackWorkspaceDir = normalizeOptionalString(params.workspaceDir);
   // Each completion uses its workspace owner's model and credentials. The triggering
   // agent owns whatever the roster cannot attribute.
@@ -795,13 +743,8 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
 }
 
 export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void {
+  // Keep the getter live: cron may attach after startup or be replaced later.
   let resolveStartupCron: (() => CronServiceLike | null) | null = null;
-  // Hold a live reference to the gateway context so we can retry cron resolution at runtime.
-  // The startup capture may fail if the cron service isn't available yet (race condition in
-  // startGatewaySidecars — the startup event fires via setTimeout(250ms) before deps.cron is
-  // attached). By keeping the context, we can call getCron() again on later reconciliation
-  // attempts when the service is guaranteed to be ready.  Fixes #67362.
-  let gatewayContext: { getCron?: () => unknown } | null = null;
   let unavailableCronWarningEmitted = false;
   let lastRuntimeReconcileAtMs = 0;
   let lastRuntimeConfigKey: string | null = null;
@@ -833,9 +776,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }
   };
 
-  const hasCronManagementContext = (): boolean =>
-    Boolean(resolveStartupCron || gatewayContext?.getCron);
-
   const disposeStartupCronRetry = (): void => {
     disposed = true;
     gatewayLifecycleGeneration += 1;
@@ -848,7 +788,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       clearInterval(runtimeCronReconcileTimer);
       runtimeCronReconcileTimer = null;
     }
-    gatewayContext = null;
     resolveStartupCron = null;
   };
 
@@ -881,29 +820,14 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           resolveMemoryDreamingPluginConfig(api.config) ??
           api.pluginConfig)
         : resolveMemoryDreamingPluginConfig(startupCfg);
-    const config = resolveShortTermPromotionDreamingConfig({
+    const config = resolveMemoryDeepDreamingConfig({
       pluginConfig,
       cfg: startupCfg,
     });
     if (params.reason === "startup") {
       resolveStartupCron = params.startupCron ?? null;
     }
-    let cron = resolveStartupCron?.() ?? null;
-    // Runtime fallback: retry resolving the cron service from the gateway context.
-    // This handles the case where the cron service was not yet available during
-    // gateway_start (250ms deferred init race in startGatewaySidecars) but is
-    // available now.  Fixes #67362.
-    if (!cron && params.reason !== "startup" && gatewayContext) {
-      try {
-        cron = resolveCronServiceFromGatewayContext(gatewayContext);
-        if (cron) {
-          // Refresh the startup capture so subsequent calls resolve immediately.
-          resolveStartupCron = () => cron;
-        }
-      } catch {
-        // Ignore — fall through with cron = null
-      }
-    }
+    const cron = resolveStartupCron?.() ?? null;
     const configKey = runtimeConfigKey(config);
     if (!cron && config.enabled && !unavailableCronWarningEmitted) {
       // Avoid a noisy startup-path warning when the gateway has not exposed cron yet.
@@ -1091,8 +1015,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       startupDreamingCleanupTimer = null;
     }
     const generation = ++gatewayLifecycleGeneration;
-    // Store the gateway context for runtime cron resolution retries.
-    gatewayContext = ctx;
     try {
       await reconcileManagedDreamingCron({
         reason: "startup",
@@ -1140,7 +1062,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         const isManagedCronTrigger = ctx.trigger === "cron";
         const shouldHandleManagedDreaming =
           hasManagedDreamingToken && (isManagedHeartbeatTrigger || isManagedCronTrigger);
-        if (!shouldHandleManagedDreaming && !hasCronManagementContext()) {
+        if (!shouldHandleManagedDreaming && !resolveStartupCron) {
           return undefined;
         }
         const config = await reconcileManagedDreamingCron({
