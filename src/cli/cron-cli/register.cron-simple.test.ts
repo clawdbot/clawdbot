@@ -272,6 +272,59 @@ describe("cron show pagination guard (regression for #83856)", () => {
   });
 });
 
+describe("cron runs job id forms (regression for #138437)", () => {
+  beforeEach(() => {
+    callGatewayFromCli.mockReset();
+    callGatewayFromCli.mockResolvedValue({ runs: [] });
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as never);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function runCronRuns(argv: string[]): Promise<void> {
+    const cron = new Command();
+    cron.exitOverride();
+    registerCronSimpleCommands(cron);
+    await cron.parseAsync(argv, { from: "user" });
+  }
+
+  it("accepts the job id positionally like its siblings", async () => {
+    await runCronRuns(["runs", "job-9"]);
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.anything(),
+      expect.objectContaining({ id: "job-9", limit: 50 }),
+    );
+  });
+
+  it("keeps --id working as an alias", async () => {
+    await runCronRuns(["runs", "--id", "job-9"]);
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.anything(),
+      expect.objectContaining({ id: "job-9" }),
+    );
+  });
+
+  it("rejects a conflicting positional and --id pair", async () => {
+    await expect(runCronRuns(["runs", "job-1", "--id", "job-2"])).rejects.toThrow("exit 1");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Conflicting job ids"),
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  });
+
+  it("requires an id from one of the two forms", async () => {
+    await expect(runCronRuns(["runs"])).rejects.toThrow("exit 1");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("Missing job id"));
+  });
+});
+
 describe("cron disable hint", () => {
   beforeEach(() => {
     callGatewayFromCli.mockReset();

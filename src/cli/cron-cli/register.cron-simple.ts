@@ -195,16 +195,24 @@ export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
     createCronOutputCommand(cron, "runs")
       .description("Show automation run history")
-      .requiredOption("--id <id>", "Job id")
+      .argument("[id]", "Job id")
+      .option("--id <id>", "Job id (alias for the positional argument)")
       .option("--run-id <runId>", "Filter by cron run id")
       .option("--limit <n>", "Max entries (default 50)", "50")
-      .action(async (opts) => {
+      .action(async (idArg, opts) => {
         try {
           const limit = parseStrictPositiveInteger(opts.limit ?? "50");
           if (limit === undefined) {
             throw new Error("Invalid --limit (must be a positive integer).");
           }
-          const id = String(opts.id);
+          if (idArg !== undefined && opts.id !== undefined && String(idArg) !== String(opts.id)) {
+            throw new Error(`Conflicting job ids: positional "${idArg}" and --id "${opts.id}".`);
+          }
+          const resolved = opts.id ?? idArg;
+          if (resolved === undefined) {
+            throw new Error("Missing job id: pass it positionally or via --id.");
+          }
+          const id = String(resolved);
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
             throw new Error("--run-id must not be blank");
           }
