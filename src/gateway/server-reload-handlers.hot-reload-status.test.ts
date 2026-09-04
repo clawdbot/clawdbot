@@ -100,7 +100,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
           reconcileExitWatchers: vi.fn(async () => {}),
           reconcileStreamWatchers: vi.fn(async () => {}),
           stopStreamWatchers: vi.fn(async () => {}),
-          reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+          reconcileSystemJobs: vi.fn(async () => "converged" as const),
         } as never,
       }),
       setState: vi.fn(),
@@ -132,7 +132,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       prepareTerminalConfig: vi.fn(),
       reconcileRuntimePolicy: vi.fn(),
-      commitTerminalConfig: vi.fn(),
+      commitRuntimePolicy: vi.fn(),
       acceptTerminalConfig: vi.fn(),
       clients: [],
     });

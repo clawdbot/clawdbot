@@ -73,45 +73,58 @@ extension GatewayConnection {
         let nextWakeAtMs: Int?
     }
 
-    func cronStatus() async throws -> CronSchedulerStatus {
-        try await self.requestDecoded(method: .cronStatus)
+    func cronStatus(ifCurrentServerLease lease: ServerLease) async throws -> CronSchedulerStatus {
+        let data = try await self.request(
+            method: Method.cronStatus.rawValue, params: nil, ifCurrentServerLease: lease)
+        return try JSONDecoder().decode(CronSchedulerStatus.self, from: data)
     }
 
-    func cronList(includeDisabled: Bool = true) async throws -> [CronJob] {
-        let data = try await requestRaw(
-            method: .cronList,
-            params: ["includeDisabled": AnyCodable(includeDisabled)])
+    func cronList(includeDisabled: Bool = true, ifCurrentServerLease lease: ServerLease) async throws -> [CronJob] {
+        let data = try await self.request(
+            method: Method.cronList.rawValue,
+            params: ["includeDisabled": AnyCodable(includeDisabled)],
+            ifCurrentServerLease: lease)
         return try Self.decodeCronListResponse(data)
     }
 
-    func cronRuns(jobId: String, limit: Int = 200) async throws -> [CronRunLogEntry] {
-        let data = try await requestRaw(
-            method: .cronRuns,
-            params: ["id": AnyCodable(jobId), "limit": AnyCodable(limit)])
+    func cronRuns(
+        jobId: String,
+        limit: Int = 200,
+        ifCurrentServerLease lease: ServerLease) async throws -> [CronRunLogEntry]
+    {
+        let data = try await self.request(
+            method: Method.cronRuns.rawValue,
+            params: ["id": AnyCodable(jobId), "limit": AnyCodable(limit)],
+            ifCurrentServerLease: lease)
         return try Self.decodeCronRunsResponse(data)
     }
 
-    func cronRun(jobId: String, force: Bool = true) async throws {
-        try await self.requestVoid(
-            method: .cronRun,
+    func cronRun(jobId: String, force: Bool = true, ifCurrentRoute route: Route) async throws {
+        _ = try await self.request(
+            method: Method.cronRun.rawValue,
             params: [
                 "id": AnyCodable(jobId),
                 "mode": AnyCodable(force ? "force" : "due"),
             ],
-            timeoutMs: 20000)
+            timeoutMs: 20000,
+            ifCurrentRoute: route)
     }
 
-    func cronRemove(jobId: String) async throws {
-        try await self.requestVoid(method: .cronRemove, params: ["id": AnyCodable(jobId)])
+    func cronRemove(jobId: String, ifCurrentRoute route: Route) async throws {
+        _ = try await self.request(
+            method: Method.cronRemove.rawValue,
+            params: ["id": AnyCodable(jobId)],
+            ifCurrentRoute: route)
     }
 
-    func cronUpdate(jobId: String, patch: [String: AnyCodable]) async throws {
-        try await self.requestVoid(
-            method: .cronUpdate,
-            params: ["id": AnyCodable(jobId), "patch": AnyCodable(patch)])
+    func cronUpdate(jobId: String, patch: [String: AnyCodable], ifCurrentRoute route: Route) async throws {
+        _ = try await self.request(
+            method: Method.cronUpdate.rawValue,
+            params: ["id": AnyCodable(jobId), "patch": AnyCodable(patch)],
+            ifCurrentRoute: route)
     }
 
-    func cronAdd(payload: [String: AnyCodable]) async throws {
-        try await self.requestVoid(method: .cronAdd, params: payload)
+    func cronAdd(payload: [String: AnyCodable], ifCurrentRoute route: Route) async throws {
+        _ = try await self.request(method: Method.cronAdd.rawValue, params: payload, ifCurrentRoute: route)
     }
 }

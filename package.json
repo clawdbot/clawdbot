@@ -2176,7 +2176,7 @@
     "jsdom": "29.1.1",
     "lit": "3.3.3",
     "lit-analyzer": "2.0.3",
-    "markdown-it": "15.0.0",
+    "markdown-it": "15.0.1",
     "markdown-it-anchor": "9.2.1",
     "marked": "18.0.11",
     "minipass": "7.1.3",

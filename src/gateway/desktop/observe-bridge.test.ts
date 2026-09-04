@@ -2,9 +2,13 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { Duplex } from "node:stream";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
 import {
   DESKTOP_OBSERVE_PATH,
   handleDesktopObserveUpgrade,
@@ -13,11 +17,30 @@ import {
 import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 
 const cleanup: Array<() => Promise<void>> = [];
+const logPaths = createSuiteLogPathTracker("desktop-observer-diagnostics-");
+const logCaptures: ReturnType<typeof createDiagnosticLogRecordCapture>[] = [];
+
+beforeAll(async () => logPaths.setup());
+beforeEach(() =>
+  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logPaths.nextPath() }),
+);
+afterAll(async () => logPaths.cleanup());
 
 afterEach(async () => {
-  vi.restoreAllMocks();
-  await Promise.all(cleanup.splice(0).map((run) => run()));
-  vi.useRealTimers();
+  try {
+    vi.restoreAllMocks();
+    await Promise.all(cleanup.splice(0).map((run) => run()));
+    await flushLogger();
+    for (const capture of logCaptures) {
+      await capture.flush();
+    }
+  } finally {
+    for (const capture of logCaptures.splice(0)) {
+      capture.cleanup();
+    }
+    resetLogger();
+    vi.useRealTimers();
+  }
 });
 
 describe("worker desktop observer tokens", () => {
@@ -37,7 +60,8 @@ describe("worker desktop observer tokens", () => {
 async function createProxyHarness(
   params: {
     control?: boolean;
-    getBufferedAmount?: () => number;
+    getBufferedAmount?: (ws: WebSocket) => number;
+    stream?: Duplex;
     preauth?: RfbPreauthDescriptor;
   } = {},
 ) {
@@ -52,6 +76,7 @@ async function createProxyHarness(
   });
   cleanup.push(async () => {
     desktopPeer?.destroy();
+    params.stream?.destroy();
     await new Promise<void>((resolveClose) => {
       server.close(() => resolveClose());
     });
@@ -73,7 +98,7 @@ async function createProxyHarness(
   httpServer.on("upgrade", (req, socket, head) => {
     handleDesktopObserveUpgrade(req, socket, head, {
       registry: {
-        claimStream: () => undefined,
+        claimStream: () => params.stream,
         attachObserver: (_environmentId, observer) => {
           closeObserver.mockImplementation((code: number, reason: string) => {
             observer.close(code, reason);
@@ -81,7 +106,7 @@ async function createProxyHarness(
           return { release };
         },
       },
-      ...(params.getBufferedAmount ? { getBufferedAmount: () => params.getBufferedAmount!() } : {}),
+      ...(params.getBufferedAmount ? { getBufferedAmount: params.getBufferedAmount } : {}),
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -96,7 +121,9 @@ async function createProxyHarness(
     sourceKey: "worker:pump",
     ownerEpoch: 2,
     control: params.control ?? false,
-    attachment: { kind: "unix-socket", socketPath: localSocketPath },
+    attachment: params.stream
+      ? { kind: "stream", streamId: "synthetic-stream" }
+      : { kind: "unix-socket", socketPath: localSocketPath },
     ...(params.preauth ? { preauth: params.preauth } : {}),
   });
   const ws = new WebSocket(
@@ -109,14 +136,14 @@ async function createProxyHarness(
   });
   return {
     closeObserver,
-    desktopPeer: await peerConnected.promise,
+    desktopPeer: params.stream ?? (await peerConnected.promise),
     observerUrl: ws.url,
     release,
     ws,
   };
 }
 
-function readSocketBytes(socket: net.Socket, byteLength: number): Promise<Buffer> {
+function readSocketBytes(socket: Duplex, byteLength: number): Promise<Buffer> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     let received = 0;
@@ -148,6 +175,8 @@ async function expectUnauthorizedObserver(url: string): Promise<void> {
 
 describe.runIf(process.platform !== "win32")("worker desktop observer proxy", () => {
   it("keeps an idle observer alive without adding bytes to RFB and retires on owner close", async () => {
+    const logCapture = createDiagnosticLogRecordCapture();
+    logCaptures.push(logCapture);
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const harness = await createProxyHarness({ control: true });
     const pings: Buffer[] = [];
@@ -166,6 +195,20 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     });
     harness.closeObserver(1012, "desktop tunnel closed");
     await expect(closed).resolves.toBe(1012);
+    await expect
+      .poll(async () => {
+        await logCapture.flush();
+        return logCapture.records.filter((record) => record.message === "desktop observer closed");
+      })
+      .toHaveLength(1);
+    expect(logCapture.records[0]?.attributes).toMatchObject({
+      sourceKey: "worker:pump",
+      ownerEpoch: 2,
+      trigger: "owner-close",
+      cleanupCode: 1012,
+      closeCode: 1012,
+    });
+    expect(JSON.stringify(logCapture.records)).not.toContain(harness.observerUrl);
     expect(harness.release).toHaveBeenCalledOnce();
     vi.advanceTimersByTime(25_000);
     expect(pings).toHaveLength(2);
@@ -206,6 +249,8 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
   });
 
   it("drops view-only input while forwarding framebuffer requests", async () => {
+    const logCapture = createDiagnosticLogRecordCapture();
+    logCaptures.push(logCapture);
     const harness = await createProxyHarness();
     const fromDesktop = new Promise<Buffer>((resolve) => {
       harness.ws.once("message", (data) => resolve(Buffer.from(data as Buffer)));
@@ -228,6 +273,17 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     });
     harness.desktopPeer.destroy();
     await closed;
+    await expect
+      .poll(async () => {
+        await logCapture.flush();
+        return logCapture.records.filter((record) => record.message === "desktop observer closed");
+      })
+      .toHaveLength(1);
+    expect(logCapture.records[0]?.attributes).toMatchObject({
+      trigger: "stream-close",
+      cleanupCode: 1000,
+      closeCode: 1000,
+    });
     expect(harness.release).toHaveBeenCalledOnce();
   });
 
@@ -255,14 +311,119 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
   });
 
   it("propagates websocket close to the unix socket", async () => {
+    const logCapture = createDiagnosticLogRecordCapture();
+    logCaptures.push(logCapture);
     const harness = await createProxyHarness();
     const closed = new Promise<void>((resolve) => {
       harness.desktopPeer.once("close", resolve);
     });
-    harness.ws.close();
+    const token = new URL(harness.observerUrl).searchParams.get("token");
+    harness.ws.close(1001, `browser left\n${token}`);
     await closed;
+    await logCapture.flush();
+    expect(logCapture.records).toHaveLength(1);
+    expect(logCapture.records[0]?.attributes).toMatchObject({
+      trigger: "browser-close",
+      cleanupCode: 1000,
+      closeCode: 1001,
+    });
+    expect(logCapture.records[0]?.attributes?.closeReason).toBeUndefined();
+    const serialized = JSON.stringify(logCapture.records);
+    expect(serialized).not.toContain("browser left");
+    expect(serialized).not.toContain(token);
+    expect(serialized).not.toContain(harness.observerUrl);
     expect(harness.release).toHaveBeenCalledOnce();
   });
+
+  it("expires unused credential-bearing tokens without a later token operation", async () => {
+    const harness = await createProxyHarness();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const minted = mintDesktopObserverToken({
+      sourceKey: "worker:unused",
+      ownerEpoch: 1,
+      control: false,
+      attachment: { kind: "unix-socket", socketPath: "/tmp/unused-desktop.sock" },
+      preauth: {
+        auth: "vnc-password",
+        credentials: { password: "synthetic-memory-only-password" },
+      },
+    });
+
+    vi.advanceTimersByTime(60_000);
+    // Wall-clock expiry still lies ahead; only the timer could have retired this token.
+    expect(minted.expiresAtMs).toBeGreaterThan(Date.now());
+    const observerUrl = new URL(harness.observerUrl);
+    observerUrl.searchParams.set("token", minted.token);
+    await expectUnauthorizedObserver(observerUrl.toString());
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([false, true])(
+    "bounds browser writes, resumes on drain, and closes a blocked desktop (control: %s)",
+    async (control) => {
+      const received: Buffer[] = [];
+      let blocked = true;
+      let releaseWrite: (() => void) | undefined;
+      let gatewaySocket: WebSocket | undefined;
+      const stream = new Duplex({
+        writableHighWaterMark: 1,
+        read() {},
+        write(chunk, _encoding, callback) {
+          received.push(Buffer.from(chunk));
+          if (blocked) {
+            releaseWrite = callback;
+          } else {
+            callback();
+          }
+        },
+      });
+      const harness = await createProxyHarness({
+        control,
+        stream,
+        getBufferedAmount: (ws) => {
+          gatewaySocket = ws;
+          return ws.bufferedAmount;
+        },
+      });
+      const pulse = new Promise<void>((resolve) => {
+        harness.ws.once("message", () => resolve());
+      });
+      stream.push(Buffer.from("synthetic-server-pulse"));
+      await pulse;
+      const handshake = Buffer.concat([Buffer.from("RFB 003.008\n"), Buffer.from([1, 1])]);
+      harness.ws.send(handshake);
+      await expect.poll(() => releaseWrite).toBeDefined();
+      expect(gatewaySocket?.isPaused).toBe(true);
+      expect(stream.writableLength).toBe(handshake.length);
+
+      const keyEvent = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
+      const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+      harness.ws.send(Buffer.concat([keyEvent, framebufferRequest]));
+      blocked = false;
+      releaseWrite?.();
+      releaseWrite = undefined;
+      const expected = Buffer.concat([
+        handshake,
+        ...(control ? [keyEvent] : []),
+        framebufferRequest,
+      ]);
+      await expect.poll(() => Buffer.concat(received)).toEqual(expected);
+      await expect.poll(() => gatewaySocket?.isPaused).toBe(false);
+
+      blocked = true;
+      harness.ws.send(framebufferRequest);
+      await expect.poll(() => releaseWrite).toBeDefined();
+      expect(gatewaySocket?.isPaused).toBe(true);
+      const closed = new Promise<number>((resolve) => {
+        harness.ws.once("close", resolve);
+      });
+      harness.closeObserver(1012, "desktop tunnel closed");
+      await expect(closed).resolves.toBe(1012);
+      expect(stream.destroyed).toBe(true);
+      expect(stream.listenerCount("drain")).toBe(0);
+      expect(harness.release).toHaveBeenCalledOnce();
+    },
+  );
 
   it("pauses and resumes unix-socket reads around websocket backpressure", async () => {
     let bufferedAmount = 5 * 1024 * 1024;

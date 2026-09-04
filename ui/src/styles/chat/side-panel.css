@@ -1,22 +1,23 @@
-/* One chat-side panel owns all lateral tools. Tabs change content without
-   changing the panel geometry, so resize and focus survive tab switches. */
-.side-panel {
-  position: relative;
-  flex: 0 0 auto;
-  border-inline-start: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
-  background: var(--bg);
+/* Keep live panel roots in one DOM owner. Grid placement changes their role
+   without reconnecting iframe documents, terminals, or browser sessions. */
+.side-panel,
+.side-panel__body {
+  display: contents;
 }
 
-:root[data-theme-mode="dark"] .side-panel {
-  --rail-header-background: var(--bg-accent);
-  background: var(--bg-accent);
-}
-
-.side-panel--bottom {
-  width: 100%;
+.side-panel__main-title {
+  display: flex;
   min-width: 0;
-  border-block-start: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
-  border-inline-start: 0;
+  align-items: center;
+  gap: 7px;
+  padding-left: var(--rail-header-padding-start);
+  color: var(--text);
+  font-size: var(--rail-header-title-size);
+}
+
+.side-panel__main-title svg {
+  width: 16px;
+  height: 16px;
 }
 
 .side-panel__header {
@@ -330,18 +331,29 @@
   gap: var(--rail-header-action-gap);
 }
 
-.side-panel__action-group--close {
+.side-panel__action-group + .side-panel__action-group--close {
   padding-left: 5px;
   border-left: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
 }
 
-.side-panel__body,
 .side-panel__panel {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex: 1 1 0;
   overflow: hidden;
+  background: var(--bg);
+}
+
+.side-panel__empty-body {
+  display: flex;
+  grid-area: side;
+  min-height: 0;
+}
+
+.sidebar-region:not(.sidebar-region--open) .side-panel__empty-body,
+.sidebar-region--expanded .side-panel__empty-body {
+  display: none;
 }
 
 .side-panel__panel[hidden] {
@@ -425,7 +437,7 @@
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--muted);
-  font: 500 calc(10px * var(--control-ui-text-scale)) / 1 var(--mono);
+  font: 500 calc(10px * var(--control-ui-text-scale)) / 1 var(--font-shortcut);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -441,19 +453,6 @@
   text-align: center;
 }
 
-.side-panel-empty__title {
-  margin-top: 14px;
-  color: var(--text);
-  font-size: var(--control-ui-text-md);
-  font-weight: 500;
-  line-height: 1.25;
-}
-
-.side-panel-empty--selector .side-panel-empty__title {
-  margin-top: 0;
-  font-size: var(--control-ui-text-md);
-}
-
 .side-panel-empty--selector {
   transform: translateY(-18px);
 }
@@ -461,7 +460,7 @@
 .side-panel-empty__types {
   display: grid;
   width: min(100%, 320px);
-  margin-top: 16px;
+  margin-top: 0;
   gap: 6px;
 }
 
@@ -484,15 +483,4 @@
 .side-panel-empty__type:hover,
 .side-panel-empty__type:focus-visible {
   background: var(--bg-hover);
-}
-
-.sidebar-region--expanded .side-panel {
-  flex: 1 1 0;
-}
-
-.side-panel--narrow {
-  grid-column: 1;
-  grid-row: 2;
-  width: 100% !important;
-  min-width: 0;
 }

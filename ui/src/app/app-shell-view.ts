@@ -106,7 +106,7 @@ export interface ShellViewHost {
   openApprovals(): void;
   openNewSession(agentId: string, target?: NewSessionTarget): void;
   openPalette(): void;
-  refreshControlUi(): void;
+  refreshControlUi: () => Promise<boolean>;
   replaceChatWithCurrentSession(): boolean;
   requestUpdate(): void;
   resizeNavigation(splitRatio: number): void;
@@ -190,6 +190,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const storedOutboxes = host.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost);
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
+  const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
   // The install keeps running after `update.run` answers, so the reconciliation
   // — not the request — decides how long the update surfaces stay busy.
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
@@ -207,12 +208,13 @@ export function renderApplicationShell(host: ShellViewHost) {
   // Session routes have an offline outbox, New Session keeps a local draft, and
   // Appearance persists local preference intent for replay. Their server actions
   // are independently gated; other pages cannot submit useful disconnected work.
+  const reloadRequired = gatewaySnapshot.phase === "reload-required";
   const pageActionsBlocked =
-    gatewaySnapshot.phase === "reload-required" ||
-    (!gatewayConnected &&
-      !sessionRoute &&
-      activeRoute !== "new-session" &&
-      activeRoute !== "appearance");
+    !reloadRequired &&
+    !gatewayConnected &&
+    !sessionRoute &&
+    activeRoute !== "new-session" &&
+    activeRoute !== "appearance";
   // Plugin tabs share one route; the search picks the active item.
   const activePluginRef =
     activeRoute === "plugin"
@@ -363,8 +365,8 @@ export function renderApplicationShell(host: ShellViewHost) {
         canUpdate,
         canHoldUpdate,
         onUpdate: () => void context.overlays.runUpdate(),
-        refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
-        onRefresh: () => host.refreshControlUi(),
+        refreshRequired: navigationSurfaceHidden ? false : controlUiRefreshRequired,
+        onRefresh: host.refreshControlUi,
         onHoldUpdate: () => context.overlays.holdUpdate(),
         onReviewUpdate: () => host.navigate("updates"),
         searchQuery: host.settingsSearchQuery,
@@ -575,7 +577,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ?inert=${pageActionsBlocked || (mobileNavLayout && navDrawerOpen)}
       >
         ${
-          pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
+          pageActionsBlocked
             ? html`<div class="connection-action-block" role="status" aria-live="polite">
                 <span class="connection-action-block__icon" aria-hidden="true"
                   >${icons.globeOff}</span
@@ -594,7 +596,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           navigationSurfaceHidden,
           mobileNavLayout,
           onboarding,
-          compact: mergedChatChrome,
+          compact: mergedChatChrome && !controlUiRefreshRequired,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,
           heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
@@ -604,16 +606,16 @@ export function renderApplicationShell(host: ShellViewHost) {
           canUpdate,
           canHoldUpdate,
           onUpdate: () => void context.overlays.runUpdate(),
-          refreshRequired: overlaySnapshot.controlUiRefreshRequired,
-          onRefresh: () => host.refreshControlUi(),
+          refreshRequired: controlUiRefreshRequired,
+          onRefresh: host.refreshControlUi,
           onHoldUpdate: () => context.overlays.holdUpdate(),
           onReviewUpdate: () => host.navigate("updates"),
           onNavigate: (routeId) => host.navigate(routeId),
           onOpenApprovals: () => host.openApprovals(),
         })}
         <openclaw-router-outlet
-          ?inert=${pageActionsBlocked}
-          aria-disabled=${pageActionsBlocked ? "true" : nothing}
+          ?inert=${pageActionsBlocked || reloadRequired}
+          aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
           .onNotFound=${() => host.replaceChatWithCurrentSession()}

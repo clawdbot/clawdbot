@@ -241,7 +241,7 @@ export type ManagedGatewayConfigReloaderParams = Omit<
     phase: "committed" | "restart",
   ) => Promise<void> | void;
   assertRuntimeSecurityConfig?: (config: OpenClawConfig, env?: NodeJS.ProcessEnv) => void;
-  commitTerminalConfig: (nextConfig: OpenClawConfig) => void;
+  commitRuntimePolicy: (nextConfig: OpenClawConfig) => void;
   acceptTerminalConfig: (options: { retireRejectedRestart: boolean }) => void;
 };
 

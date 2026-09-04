@@ -14,7 +14,7 @@ import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 // Region close collapses the detail slot but leaves sidebarContent set, so
 // "task content exists" is not "panel visible"; consumers (panel render, rail
 // open-row highlight) must gate on the layout, not the content.
-export function detailSlotOpen(layout: SidebarLayout): boolean {
+function detailSlotOpen(layout: SidebarLayout): boolean {
   return layout.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"));
 }
 

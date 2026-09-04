@@ -162,7 +162,7 @@ export class ShellChromeOwner {
     this.navDrawerSwipe.disconnect();
   }
 
-  toggleNavigationSurface(trigger?: HTMLElement): void {
+  readonly toggleNavigationSurface = (trigger?: HTMLElement): void => {
     const host = this.host;
     const context = host.context;
     // Desktop settings takeover has no app nav; its mobile drawer still owns navigation.
@@ -206,7 +206,7 @@ export class ShellChromeOwner {
         this.restoreFocusTo(host.querySelector<HTMLElement>(".shell-chrome-controls__nav-toggle"));
       });
     }
-  }
+  };
 
   /** Native Mac chrome hides in-page toggles, so restoration falls back to content. */
   restoreFocusTo = (target: HTMLElement | null | undefined): void =>
@@ -216,7 +216,7 @@ export class ShellChromeOwner {
         : this.host.querySelector<HTMLElement>(".content"),
     );
 
-  closeNavDrawer(options: { restoreFocus?: boolean } = {}): void {
+  readonly closeNavDrawer = (options: { restoreFocus?: boolean } = {}): void => {
     const host = this.host;
     if (host.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
@@ -229,9 +229,9 @@ export class ShellChromeOwner {
     if (options.restoreFocus) {
       requestAnimationFrame(() => this.restoreFocusTo(trigger));
     }
-  }
+  };
 
-  resizeNavigation(splitRatio: number): void {
+  readonly resizeNavigation = (splitRatio: number): void => {
     const host = this.host;
     const shell = host.querySelector<HTMLElement>(".shell");
     const context = host.context;
@@ -242,7 +242,7 @@ export class ShellChromeOwner {
       Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, splitRatio * shell.clientWidth)),
     );
     context.navigation.update({ navWidth });
-  }
+  };
 
   readonly handleNativeToggleSidebar = (): void => this.toggleNavigationSurface();
   readonly handleNativeOpenSearch = (): void => this.openPalette();
@@ -522,7 +522,6 @@ export class ShellChromeOwner {
   readonly openPalette = (): void =>
     this.handleCommandPaletteOpen(new CustomEvent(COMMAND_PALETTE_OPEN_EVENT), this.openPalette);
 
-  readonly refreshControlUi = (): void => globalThis.location.reload();
   readonly handleShellNavDrawerToggle = (event: Event): void => {
     this.toggleNavigationSurface(shellNavDrawerTriggerFromEvent(event));
   };
@@ -566,7 +565,7 @@ export class ShellChromeOwner {
     return elements[eventType];
   }
 
-  restorePendingLazyAction(): void {
+  readonly restorePendingLazyAction = (): void => {
     const event = this.pendingLazyAction;
     if (!event || this.host.lazyCustomElements.visibleState) {
       return;
@@ -583,7 +582,7 @@ export class ShellChromeOwner {
     if (this.dispatchLazyShellEvent(event) && !this.host.lazyCustomElements.visibleState) {
       this.clearPendingLazyAction(event);
     }
-  }
+  };
 
   private requestLazyElement(
     element: OptionalCustomElement,
@@ -659,7 +658,7 @@ export class ShellChromeOwner {
   readonly handleCommandPaletteTarget = (event: Event): void =>
     applyCommandPaletteTargetEvent(this.host, event);
 
-  nativeNavCollapsed(): boolean {
+  readonly nativeNavCollapsed = (): boolean => {
     const host = this.host;
     const mobileNavLayout = isMobileNavLayout();
     return (
@@ -670,5 +669,5 @@ export class ShellChromeOwner {
         !host.desktopNavigationExpanded &&
         (host.context?.navigation.snapshot.navCollapsed ?? false))
     );
-  }
+  };
 }

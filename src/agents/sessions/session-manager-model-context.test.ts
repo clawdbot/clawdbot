@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
+  replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
@@ -11,7 +13,50 @@ import { waitForSessionTranscriptProjection } from "../../config/sessions/sessio
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
-import { SessionManager } from "./session-manager.js";
+import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
+
+it("acquires a long sparse context with bounded queries and preserved message order", async () => {
+  await withOpenClawTestState({ label: "model-context-batch" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "batched-context",
+      sessionKey: "agent:main:batched-context",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const messages = Array.from({ length: 1_200 }, (_, index) => ({
+      type: "message",
+      id: `message-${index}`,
+      parentId: index === 0 ? null : `message-${index - 1}`,
+      timestamp: new Date(index).toISOString(),
+      message: {
+        role: "user",
+        content: `message ${index}`,
+        timestamp: index,
+        excludeFromContext: index % 17 === 0,
+      },
+    }));
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId, cwd: "/synthetic" },
+      ...messages,
+    ]);
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+    const prototype = Object.getPrototypeOf(database.db.prepare("SELECT 1")) as StatementSync;
+    const spy = vi.spyOn(prototype, "iterate");
+    try {
+      const context = SessionManager.openModelContext(scope).buildSessionContext();
+      expect(context.messages.map((message) => "content" in message && message.content)).toEqual(
+        messages
+          .filter((entry) => !entry.message.excludeFromContext)
+          .map((entry) => entry.message.content),
+      );
+      // Protect acquisition cost independently of the exact chunk size or query implementation.
+      expect(spy.mock.calls.length).toBeLessThan(20);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
 
 it.each(["whole", "reset", "compaction", "reset-compaction", "leaf", "opaque"])(
   "acquires detached %s context without native payloads or changing stored evidence",

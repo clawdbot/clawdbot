@@ -20,7 +20,11 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
-import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+  getSharedGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -191,10 +195,10 @@ const mocks = vi.hoisted(() => ({
   runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
   maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
     async (wakeParams: {
-      settledEntry: { runId: string };
-      completeBatch(runIds: readonly string[]): void;
+      settledEntry: SubagentRunRecord;
+      completeBatch(batch: readonly SubagentRunRecord[]): void;
     }) => {
-      wakeParams.completeBatch([wakeParams.settledEntry.runId]);
+      wakeParams.completeBatch([wakeParams.settledEntry]);
       return false;
     },
   ),
@@ -501,7 +505,7 @@ describe("subagent registry seam flow", () => {
     mocks.maybeWakeRequesterAfterAllChildrenSettled
       .mockReset()
       .mockImplementation(async (params) => {
-        params.completeBatch([params.settledEntry.runId]);
+        params.completeBatch([params.settledEntry]);
         return false;
       });
     vi.useFakeTimers();
@@ -1317,6 +1321,117 @@ describe("subagent registry seam flow", () => {
     expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledOnce();
   });
 
+  it("replays a terminal task projection after registry restore", async () => {
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    try {
+      const startedAt = Date.now() - 2_000;
+      const endedAt = Date.now() - 1_000;
+      const runId = "run-restored-task-projection";
+      const childSessionKey = "agent:main:subagent:restored-task-projection";
+      mocks.loadSessionStore.mockReturnValue(
+        createSessionStore({ lifecycleRevision: "revision-child" }, childSessionKey),
+      );
+      expect(
+        createRunningTaskRun(
+          makeRunningTaskParams({
+            runId,
+            childSessionKey,
+            task: "restore terminal task projection",
+            startedAt,
+          }),
+        ),
+      ).not.toBeNull();
+      mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+        runs: Map<string, SubagentRunRecord>;
+      }) => {
+        params.runs.set(
+          runId,
+          createSubagentRunRecord({
+            runId,
+            childSessionKey,
+            task: "restore terminal task projection",
+            cleanup: "keep",
+            createdAt: startedAt,
+            startedAt,
+            endedAt,
+            endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+            outcome: { status: "ok" },
+            completion: { required: false, resultText: "restored result" },
+            cleanupCompletedAt: endedAt,
+          }),
+        );
+        return 1;
+      }) as never);
+
+      hydrateAndActivateRegistry();
+
+      await waitForFast(() =>
+        expect(findTaskByRunIdForStatus(runId)).toMatchObject({
+          status: "succeeded",
+          endedAt,
+          progressSummary: "restored result",
+        }),
+      );
+    } finally {
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+    }
+  });
+
+  it("keeps a steer-restart task writable after registry restore", () => {
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    try {
+      const startedAt = Date.now() - 2_000;
+      const endedAt = Date.now() - 1_000;
+      const runId = "run-restored-steer-restart";
+      const childSessionKey = "agent:main:subagent:restored-steer-restart";
+      mocks.loadSessionStore.mockReturnValue(
+        createSessionStore({ lifecycleRevision: "revision-child" }, childSessionKey),
+      );
+      expect(
+        createRunningTaskRun(
+          makeRunningTaskParams({
+            runId,
+            childSessionKey,
+            task: "preserve successor task ownership",
+            startedAt,
+          }),
+        ),
+      ).not.toBeNull();
+      mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+        runs: Map<string, SubagentRunRecord>;
+      }) => {
+        const restored = createSubagentRunRecord({
+          runId,
+          childSessionKey,
+          task: "preserve successor task ownership",
+          cleanup: "keep",
+          createdAt: startedAt,
+          startedAt,
+          endedAt,
+          endedReason: SUBAGENT_ENDED_REASON_KILLED,
+          outcome: { status: "error", error: "replaced after steer" },
+          completion: { required: false, resultText: null, capturedAt: endedAt },
+          cleanupCompletedAt: endedAt,
+        });
+        restored.suppressAnnounceReason = "steer-restart";
+        params.runs.set(runId, restored);
+        return 1;
+      }) as never);
+
+      hydrateAndActivateRegistry();
+
+      const task = findTaskByRunIdForStatus(runId);
+      expect(task).toMatchObject({ status: "running" });
+      expect(task).not.toHaveProperty("endedAt");
+    } finally {
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+    }
+  });
+
   it("does not double-run reentrant registry restore calls", () => {
     mocks.restoreSubagentRunsFromDisk.mockImplementation(() => {
       mod.initSubagentRegistry();
@@ -1328,42 +1443,108 @@ describe("subagent registry seam flow", () => {
     expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledOnce();
   });
 
-  it("replays a past-due requester-settle obligation during registry restore", async () => {
+  it.each([
+    "before activation",
+    "after activation",
+    "after Gateway closure",
+    "partial restore",
+    "without instance binding",
+    "without activation",
+  ])("replays a past-due requester-settle obligation restored %s", async (restoreTiming) => {
     const endedAt = Date.now() - 1_000;
+    const lateRestore = !["before activation", "without activation"].includes(restoreTiming);
+    const runIds =
+      restoreTiming === "partial restore"
+        ? ["run-settle-restore", "run-settle-sibling"]
+        : ["run-settle-restore"];
+    const restored = runIds.map((runId) =>
+      createSubagentRunRecord({
+        runId,
+        childSessionKey: `agent:main:subagent:${runId}`,
+        task: "restore requester settle wake",
+        cleanup: "delete",
+        expectsCompletionMessage: true,
+        createdAt: endedAt - 1_000,
+        startedAt: endedAt - 900,
+        endedAt,
+        cleanupCompletedAt: endedAt,
+        completion: { required: true, resultText: "persisted findings" },
+        delivery: { status: "delivered" },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          nextAttemptAt: endedAt,
+          batchRunIds: runIds,
+          retireAfterSettle: true,
+        },
+      }),
+    );
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
-      runs: Map<string, unknown>;
+      runs: Map<string, SubagentRunRecord>;
     }) => {
-      params.runs.set(
-        "run-settle-restore",
-        createSubagentRunRecord({
-          runId: "run-settle-restore",
-          childSessionKey: "agent:main:subagent:settle-restore",
-          task: "restore requester settle wake",
-          cleanup: "delete",
-          expectsCompletionMessage: true,
-          createdAt: endedAt - 1_000,
-          startedAt: endedAt - 900,
-          endedAt,
-          cleanupCompletedAt: endedAt,
-          completion: { required: true, resultText: "persisted findings" },
-          delivery: { status: "delivered" },
-          requesterSettleWake: {
-            status: "pending",
-            attemptCount: 1,
-            nextAttemptAt: endedAt,
-            batchRunIds: ["run-settle-restore"],
-            retireAfterSettle: true,
-          },
-        }),
-      );
-      return 1;
+      let inserted = 0;
+      for (const entry of restored) {
+        if (!params.runs.has(entry.runId)) {
+          params.runs.set(entry.runId, entry);
+          inserted += 1;
+        }
+      }
+      return inserted;
     }) as never);
-
-    hydrateAndActivateRegistry();
-
+    if (lateRestore) {
+      mocks.restoreSubagentRunsFromDisk.mockImplementationOnce(((params: {
+        runs: Map<string, SubagentRunRecord>;
+      }) => {
+        if (restoreTiming === "partial restore") {
+          params.runs.set(restored[0]!.runId, restored[0]!);
+        }
+        throw new Error("transient sqlite read failure");
+      }) as never);
+    }
+    let wakeGateway: unknown;
+    mocks.maybeWakeRequesterAfterAllChildrenSettled.mockImplementation(async (params) => {
+      wakeGateway = getSharedGatewayContextResolver(restored)?.()?.recoveryRuntime;
+      params.completeBatch(restored);
+      return false;
+    });
+    let gatewayOpen = true;
+    const instanceContext = { recoveryRuntime } as never;
+    const resolveInstance = () => (gatewayOpen ? instanceContext : undefined);
+    const resolveGatewayContext = () =>
+      (restoreTiming === "without instance binding"
+        ? { recoveryRuntime }
+        : { resolveGatewayContext: resolveInstance }) as never;
+    mod.initSubagentRegistry();
+    if (restoreTiming === "without activation") {
+      mod.resumeSubagentRun(restored[0]!.runId);
+    } else {
+      mod.activateSubagentRegistry(resolveGatewayContext);
+      mod.activateSubagentRegistry(resolveGatewayContext);
+    }
+    if (lateRestore) {
+      expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
+      if (restoreTiming === "partial restore") {
+        await mod.testing.runSweeperTickForTests();
+        expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
+      }
+      gatewayOpen = restoreTiming !== "after Gateway closure";
+      await vi.advanceTimersByTimeAsync(1_000);
+      if (!gatewayOpen || restoreTiming === "without instance binding") {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
+        expect(getGatewayContextResolver(restored[0]!)).toBeUndefined();
+        expect(restored[0]!.requesterSettleWake?.attemptCount).toBe(1);
+        activateRegistry();
+      }
+    }
     await waitForFast(() => {
       expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(1);
     });
+    expect(wakeGateway).toBe(restoreTiming === "without activation" ? undefined : recoveryRuntime);
+    for (const entry of restored) {
+      expect(getGatewayContextResolver(entry)).toBe(getGatewayContextResolver(restored[0]!));
+      expect(mod.getSubagentRunByRunId(entry.runId)).toBeUndefined();
+    }
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -1,6 +1,7 @@
 /** Tests node-host runner startup, connection configuration, and lifecycle. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
@@ -320,26 +321,15 @@ describe("runNodeHost", () => {
     ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
     ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ])("closes MCP clients before exiting on terminal reconnect pause %s", async (detailCode) => {
-    let resolveReadiness:
-      | ((value: { ready: false; aborted: false; elapsedMs: number }) => void)
-      | undefined;
-    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveReadiness = resolve;
-      }),
-    );
-    let resolveMcpClose: (() => void) | undefined;
-    mocks.closeMcpManager.mockImplementationOnce(
-      () =>
-        new Promise<undefined>((resolve) => {
-          resolveMcpClose = () => resolve(undefined);
-        }),
-    );
+    const readiness = createDeferred<{ ready: false; aborted: false; elapsedMs: number }>();
+    const mcpClose = createDeferred<undefined>();
+    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(readiness.promise);
+    mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
     const stopped = expect(running).rejects.toThrow("event loop readiness timeout");
-    await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
-    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     try {
+      await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
       lastCapturedOptions()?.onReconnectPaused?.({
         code: 1008,
         reason: "connect failed",
@@ -351,15 +341,20 @@ describe("runNodeHost", () => {
       expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalled();
       expect(exit).not.toHaveBeenCalled();
 
-      resolveMcpClose?.();
+      mcpClose.resolve(undefined);
       await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
 
-      resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
+      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
       await stopped;
     } finally {
-      resolveMcpClose?.();
-      resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
-      exit.mockRestore();
+      mcpClose.resolve(undefined);
+      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
+      try {
+        // Shutdown owns the exit callback; keep it intercepted until the run settles.
+        await stopped;
+      } finally {
+        exit.mockRestore();
+      }
     }
   });
 

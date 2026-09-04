@@ -625,3 +625,5 @@ root `marketplaces` key.
 - [Building plugins](/plugins/building-plugins)
 - [CLI reference](/cli)
 - [ClawHub](/clawhub)
+- [ClawHub CLI](/clawhub/cli) - standalone registry commands
+- [ClawHub publishing](/clawhub/publishing) - owners, scopes, and release review

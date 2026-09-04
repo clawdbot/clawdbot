@@ -40,6 +40,17 @@ function getBuildAllStep(label: string) {
   return step;
 }
 
+function buildMemoryLimit(cgroupGiB: number) {
+  // A cgroup-only fixture still reads Linux MemAvailable. Pin the host facts so
+  // concurrent CI work cannot change the admission this scenario exercises.
+  return {
+    platform: "linux",
+    availableMemoryBytes: 16 * 1024 ** 3,
+    procMemTotalBytes: 16 * 1024 ** 3,
+    cgroupMemoryLimitBytes: cgroupGiB * 1024 ** 3,
+  };
+}
+
 function withBuildCacheFixture(
   run: (fixture: {
     rootDir: string;
@@ -434,7 +445,7 @@ describe("resolveBuildAllSteps", () => {
       const result = await runBuildAllSteps(profile, {
         env: {},
         logger,
-        memoryLimit: { cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(4),
         resolveCacheState,
         restoreCache,
         finalizeCache,
@@ -467,7 +478,7 @@ describe("resolveBuildAllSteps", () => {
         env: {},
         finalizeCache: vi.fn(() => true),
         logger: { error: vi.fn(), warn: vi.fn() },
-        memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(5),
         now: () => 0,
         resolveCacheState(step) {
           executionOrder.push(`cache:${step.label}`);
@@ -520,7 +531,7 @@ describe("resolveBuildAllSteps", () => {
       const cacheDisabledRunner = vi.fn(() => ({ status: 0 }));
       await runBuildAllSteps("ciArtifacts", {
         env: { OPENCLAW_BUILD_CACHE: "0" },
-        memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(5),
         finalizeCache: vi.fn(() => true),
         logger: { error: vi.fn(), warn: vi.fn() },
         now: () => 0,
@@ -549,18 +560,17 @@ describe("resolveBuildAllSteps", () => {
     "skips heap admission for partial profile %s",
     async (profile) => {
       const partialEnv = { MARKER: "unchanged", NODE_OPTIONS: "--max-old-space-size=256" };
-      expect(
-        resolveBuildAllTsdownPlan(profile, partialEnv, {
-          cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
-        }),
-      ).toEqual({ env: partialEnv, heapShortfall: null });
+      expect(resolveBuildAllTsdownPlan(profile, partialEnv, buildMemoryLimit(4))).toEqual({
+        env: partialEnv,
+        heapShortfall: null,
+      });
       const runStep = vi.fn<
         (invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number }
       >(() => ({ status: 0 }));
       const result = await runBuildAllSteps(profile, {
         env: partialEnv,
         logger: { error: vi.fn(), warn: vi.fn() },
-        memoryLimit: { cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
+        memoryLimit: buildMemoryLimit(4),
         resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
         runStep,
       });
@@ -609,12 +619,7 @@ describe("resolveBuildAllSteps", () => {
       const result = await runBuildAllSteps("ciArtifacts", {
         env,
         logger,
-        memoryLimit: {
-          platform: "linux",
-          availableMemoryBytes: 16 * 1024 ** 3,
-          procMemTotalBytes: 16 * 1024 ** 3,
-          cgroupMemoryLimitBytes: cgroupGiB * 1024 ** 3,
-        },
+        memoryLimit: buildMemoryLimit(cgroupGiB),
         resolveCacheState: () => ({ cacheable: true, fresh: false, reason: "missing-inputs" }),
         finalizeCache: vi.fn(() => true),
         runStep(invocation) {
@@ -967,7 +972,7 @@ describe("resolveBuildAllSteps", () => {
           cacheEnabled: false,
           env,
           logger: { error: vi.fn(), warn: vi.fn() },
-          memoryLimit: { cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 },
+          memoryLimit: buildMemoryLimit(5),
           now: () => 0,
           resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
           runStep(invocation) {

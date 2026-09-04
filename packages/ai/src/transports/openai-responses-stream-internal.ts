@@ -217,7 +217,12 @@ export async function processResponsesStream<TApi extends Api>(
         }
       }
     }
-    terminal.emitToolCallCompletion(identity, finalOutputIndex, streamingToolCall, validated);
+    terminal.emitToolCallCompletion(identity, finalOutputIndex, streamingToolCall, {
+      ...validated,
+      ...(options?.asyncToolExecution && isRecord(item) && item.async === true
+        ? { async: true as const }
+        : {}),
+    });
   };
   const prepareTerminalToolCalls = (items: ResponseOutputItem[]) => {
     const prepared = new Map<number, () => void>();

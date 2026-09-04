@@ -5,7 +5,7 @@ import {
   loadPatternListFromEnv,
   narrowIncludePatternsForCli,
 } from "./vitest.pattern-file.ts";
-import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { preserveIndependentVitestProject, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 
 const mediaTranscriptRealGatewayTest =
@@ -14,11 +14,14 @@ const sessionHostCommandStateRealGatewayTest =
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts";
 const openClawDelegationRealGatewayTest =
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts";
+const automationManagementRealGatewayTest =
+  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
 const uiE2eIncludePatterns = [
   "ui/src/**/*.e2e.test.ts",
   mediaTranscriptRealGatewayTest,
   sessionHostCommandStateRealGatewayTest,
   openClawDelegationRealGatewayTest,
+  automationManagementRealGatewayTest,
 ];
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
@@ -31,6 +34,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
   mediaTranscriptRealGatewayTest,
   openClawDelegationRealGatewayTest,
+  automationManagementRealGatewayTest,
 ];
 
 // These files own their server instead of leasing the global production bundle.
@@ -137,6 +141,7 @@ export function createUiE2eVitestConfig(
       include,
       maxWorkers: Math.min(2, baseTest.maxWorkers),
       // ui-e2e-projects-contract-v1: frozen-target preflight may select these projects.
+      // Each project already composes the complete shared config and must not inherit it again.
       projects: [
         {
           ...base,
@@ -184,7 +189,7 @@ export function createUiE2eVitestConfig(
             name: "ui-e2e-serial-standalone",
           },
         },
-      ],
+      ].map(preserveIndependentVitestProject),
       // Refit needs native file totals; verbose still reports cases to the output watchdog.
       reporters: [...baseTest.reporters, "default"],
       sequence: { ...baseSequence, sequencer: UiE2eSequencer },

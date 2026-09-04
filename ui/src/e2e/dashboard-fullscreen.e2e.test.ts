@@ -10,6 +10,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -449,7 +450,7 @@ suite.define(() => {
     }
   });
 
-  it("expands and collapses the dashboard side panel", async () => {
+  it("makes dashboard main and restores chat after focus", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         sessionKey,
@@ -463,11 +464,13 @@ suite.define(() => {
       await page.locator(".board-session-surface").waitFor();
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await page.locator(".chat-thread").waitFor();
-      await page.getByRole("button", { name: "Expand side panel" }).click();
+      await focusChatSidePanel(page);
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
-      await page.getByRole("button", { name: "Collapse", exact: true }).click();
+      await page.getByRole("button", { name: "Restore split", exact: true }).click();
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+      await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
+      await page.locator('[data-panel-slot="dashboard"][data-region="main"]').waitFor();
     });
   });
 

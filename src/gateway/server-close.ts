@@ -698,6 +698,7 @@ export function createGatewayCloseHandler(
       socket: { close: (code: number, reason: string) => void };
     }>;
     configReloader: { stop: () => Promise<void> };
+    finishRequestEntries?: () => Promise<void>;
     wss?: WebSocketServer;
     httpServer?: HttpServer;
     httpServers?: HttpServer[];
@@ -1010,6 +1011,9 @@ export function createGatewayCloseHandler(
           }
         });
       }
+      // Node cleanup replies remain admissible until sockets close. Join their
+      // uncancellable preparation before releasing the remaining process state.
+      await params.finishRequestEntries?.();
       clearSessionTypingState();
       const transportServers =
         params.httpServers && params.httpServers.length > 0
@@ -1051,6 +1055,7 @@ export function createGatewayCloseHandler(
         warnings,
       });
     } finally {
+      await params.finishRequestEntries?.();
       await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
       // Channel and plugin teardown still resolve account credentials. Keep the
       // active snapshot until every teardown owner is done, then always scrub it.

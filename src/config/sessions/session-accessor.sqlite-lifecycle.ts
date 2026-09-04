@@ -138,6 +138,12 @@ export async function cleanupSessionLifecycleArtifactsCore(
       nowMs: params.nowMs ?? Date.now(),
     });
   });
+  if (cleanupPlan.entries.length === 0 && cleanupPlan.deletePlans.length === 0) {
+    // Startup probes need no reclamation Worker, but previously committed archives
+    // still need their publication retry even when this pass has no deletions.
+    await publishSessionStateArchives(resolved, []);
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
   const committed = await withSqliteSessionDeletions(
     resolved,
     cleanupPlan.entries.flatMap(({ expectedEntry: entry, sessionKey }) =>
@@ -154,7 +160,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
             materializedPlans,
           });
           const reclaimed = await runSqliteSessionReclamation({
-            beforeInProcessMutation: assertCurrent,
+            assertCommitAllowed: assertCurrent,
             forceInProcess: hasPreparedNativeSessionDeletion(),
             plan,
           });
@@ -469,7 +475,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               sessionId,
             });
             const reclaimed = await runSqliteSessionReclamation({
-              beforeInProcessMutation: () => {
+              assertCommitAllowed: () => {
                 params.commitGuard?.();
                 assertCurrent();
               },
@@ -519,7 +525,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             preparedTargetSnapshot: prepared.targetSnapshot,
           });
           const reclaimed = await runSqliteSessionReclamation({
-            beforeInProcessMutation: () => {
+            assertCommitAllowed: () => {
               params.commitGuard?.();
               assertCurrent();
             },

@@ -6,7 +6,6 @@ import type { MediaFact } from "../../media/media-facts.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
-import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
@@ -22,6 +21,7 @@ import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
+import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -138,14 +138,10 @@ function buildChatSendMessageContext(params: {
     InputProvenance: params.systemInputProvenance,
     SessionKey: params.sessionKey,
     AgentId: params.agentId,
-    Provider: INTERNAL_MESSAGE_CHANNEL,
-    Surface: INTERNAL_MESSAGE_CHANNEL,
-    OriginatingChannel: originatingChannel,
     OriginatingTo: originatingTo,
     ExplicitDeliverRoute: explicitDeliverRoute,
     AccountId: accountId,
     MessageThreadId: messageThreadId,
-    ChatType: "direct",
     ...(commandSource ? { CommandSource: commandSource } : {}),
     CommandAuthorized: !params.suppressCommandInterpretation,
     CommandTurn: commandSource
@@ -164,16 +160,7 @@ function buildChatSendMessageContext(params: {
     ...(params.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
     MessageSid: params.clientRunId,
     SessionCreation: { ...creation, ...(sandbox ? { sandbox } : {}) },
-    ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
-    ...(!isOperatorUiClient(params.clientInfo)
-      ? {
-          SenderId: params.clientInfo?.id,
-          SenderName: params.clientInfo?.displayName,
-          SenderUsername: params.clientInfo?.displayName,
-        }
-      : {}),
-    GatewayClientScopes: params.client?.connect?.scopes ?? [],
-    GatewayClientCaps: params.client?.connect?.caps ?? [],
+    ...resolveChatSendCallerContext(params.client, params.clientInfo, originatingChannel),
     GatewayRunToolBindings: params.toolBindings,
   };
   if (params.mediaPathOffloadPaths.length > 0) {

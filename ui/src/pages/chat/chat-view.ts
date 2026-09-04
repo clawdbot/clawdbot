@@ -172,7 +172,7 @@ export function renderChat(props: ChatProps) {
       streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
       queue,
       pendingInputs: pendingInputs?.page.items,
-      runActive: Boolean(props.canAbort),
+      runActive: props.runActive === true,
       runWorking,
       startupLabel: chatStartupStatusLabel(props.startupStatus, placementStartup),
       questionPrompts: props.gatewayQuestionPrompts,

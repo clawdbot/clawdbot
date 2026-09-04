@@ -45,6 +45,10 @@ async function withPreflightPluginFixture(
   fixturePluginId = "preflight-fixture",
 ) {
   await withTempHome(async (home) => {
+    // Scope real discovery to the synthetic plugins owned by this fixture.
+    const bundledRoot = path.join(home, "bundled");
+    await fs.mkdir(bundledRoot, { recursive: true });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
     const workspaces = Object.fromEntries(
       workspaceNames.map((name) => [name, path.join(home, name)]),
     );

@@ -200,10 +200,12 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         body: input.body,
       });
       const database = openOpenClawStateDatabase().db;
-      const existing = readGitHubPublicationRequest(database, {
-        sessionId,
-        idempotencyKey: input.idempotencyKey,
-      });
+      const readRequest = () =>
+        readGitHubPublicationRequest(database, {
+          sessionId,
+          idempotencyKey: input.idempotencyKey,
+        });
+      const existing = readRequest();
       if (existing) {
         if (existing.request_digest !== requestDigest || !sameWorktree(existing, worktree)) {
           throw new Error("GitHub publication idempotency key was reused.");
@@ -224,13 +226,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           ? undefined
           : {
               idempotencyKey: input.idempotencyKey,
-              hasRequest: () =>
-                Boolean(
-                  readGitHubPublicationRequest(database, {
-                    sessionId,
-                    idempotencyKey: input.idempotencyKey,
-                  }),
-                ),
+              hasRequest: () => Boolean(readRequest()),
             },
       );
       const insertSessionRequest = (snapshot?: {

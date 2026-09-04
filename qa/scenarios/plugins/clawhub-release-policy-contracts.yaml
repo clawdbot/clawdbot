@@ -18,7 +18,7 @@ scenario:
     - A committed source change without a version bump fails the ClawHub release check.
     - The same source change passes after the package version and compatibility metadata are bumped and committed.
   docsRefs:
-    - docs/clawhub/publishing.md
+    - docs/plugins/building-plugins.md
     - docs/plugins/community.md
     - docs/help/testing-updates-plugins.md
   codeRefs:

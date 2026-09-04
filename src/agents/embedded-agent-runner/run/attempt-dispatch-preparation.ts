@@ -56,15 +56,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     provider,
     modelId,
   } = input;
-  const codeModeRecovery = terminalRetryState.codeModeRecovery;
-  const params =
-    codeModeRecovery.kind === "resume"
-      ? {
-          ...runInput.runParams,
-          codeModeOverride: false,
-          forceCodeModeTools: false,
-        }
-      : runInput.runParams;
+  const params = runInput.runParams;
   const {
     workspaceResolution,
     workspaceDir,
@@ -234,7 +226,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   });
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,
-    codeModeRecovery: codeModeRecovery.kind === "idle" ? undefined : codeModeRecovery,
     permissionChange: input.permissionChange,
     runStartedAtMs: runInput.startedAtMs,
     transcriptOwnership: params.sessionManager

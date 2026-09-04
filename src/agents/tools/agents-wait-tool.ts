@@ -5,9 +5,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
-import { onSubagentRegistryPersisted } from "../subagents/registry/subagent-registry-state.js";
+import {
+  onSubagentRegistryPersisted,
+  SUBAGENT_RUNS_READ_CACHE_TTL_MS,
+} from "../subagents/registry/subagent-registry-state.js";
 import { getSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { markCollectorReaderTool } from "../subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import { describeAgentsWaitTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
@@ -224,7 +228,7 @@ async function waitForCollector(params: {
       throw createAbortError("agents_wait aborted.");
     }
     // Recovery can replace a registry row while preserving its stable swarm id.
-    // Re-resolve ownership and completion on every poll instead of retaining old objects.
+    // Re-resolve ownership and completion on every wake instead of retaining old objects.
     const state = readWaitState(
       params.ids,
       params.currentSessionKeys,
@@ -237,6 +241,7 @@ async function waitForCollector(params: {
     await new Promise<void>((resolve, reject) => {
       const finish = (error?: Error) => {
         clearTimeout(timer);
+        unsubscribe();
         params.signal?.removeEventListener("abort", onAbort);
         if (error) {
           reject(error);
@@ -245,7 +250,13 @@ async function waitForCollector(params: {
         resolve();
       };
       const onAbort = () => finish(createAbortError("agents_wait aborted."));
-      const timer = setTimeout(finish, Math.min(25, Math.max(0, deadline - performance.now())));
+      // Local writes wake immediately; polling still observes other processes at
+      // the registry's persisted-read cache cadence.
+      const timer = setTimeout(
+        finish,
+        Math.min(SUBAGENT_RUNS_READ_CACHE_TTL_MS, Math.max(0, deadline - performance.now())),
+      );
+      const unsubscribe = onSubagentRegistryPersisted(() => finish());
       params.signal?.addEventListener("abort", onAbort, { once: true });
       // Abort can race listener registration; never turn that cancellation into a successful poll.
       if (params.signal?.aborted) {
@@ -262,7 +273,7 @@ export function createAgentsWaitTool(opts: {
   config?: OpenClawConfig;
 }): AnyAgentTool {
   const swarm = resolveSwarmConfig(opts.config, opts.agentId);
-  return {
+  return markCollectorReaderTool({
     label: "Wait for Agents",
     name: "agents_wait",
     displaySummary: "Wait for collector children.",
@@ -301,5 +312,5 @@ export function createAgentsWaitTool(opts: {
         Boolean(result.errors?.length);
       return jsonResult(noAuthorizedTargets ? { ...result, success: false } : result);
     },
-  };
+  });
 }

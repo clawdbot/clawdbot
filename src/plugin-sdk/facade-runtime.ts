@@ -144,6 +144,10 @@ function loadFacadeActivationCheckRuntimeFromCandidates(
   return undefined;
 }
 
+function throwFacadeActivationCheckRuntimeUnavailable(): never {
+  throw new Error("Unable to load facade activation check runtime");
+}
+
 function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {
   let facadeActivationCheckRuntimeModule = getFacadeActivationCheckRuntimeModule();
   if (facadeActivationCheckRuntimeModule) {
@@ -163,7 +167,7 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
     setFacadeActivationCheckRuntimeModule(facadeActivationCheckRuntimeModule);
     return facadeActivationCheckRuntimeModule;
   }
-  throw new Error("Unable to load facade activation check runtime");
+  return throwFacadeActivationCheckRuntimeUnavailable();
 }
 
 // Async twin of loadFacadeActivationCheckRuntime for async call sites: dynamic
@@ -234,6 +238,19 @@ export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends obje
   env?: NodeJS.ProcessEnv;
 }): T {
   loadFacadeActivationCheckRuntime().resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
+    buildFacadeActivationCheckParams(params),
+  );
+  return loadBundledPluginPublicSurfaceModuleSync<T>(params);
+}
+
+/** Load activation asynchronously; allowed public artifacts still use the synchronous loader. */
+export async function loadActivatedBundledPluginPublicSurfaceModule<T extends object>(
+  params: BundledPluginPublicSurfaceParams,
+): Promise<T> {
+  const runtime = await loadFacadeActivationCheckRuntimeAsync().catch(
+    throwFacadeActivationCheckRuntimeUnavailable,
+  );
+  runtime.resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
     buildFacadeActivationCheckParams(params),
   );
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);

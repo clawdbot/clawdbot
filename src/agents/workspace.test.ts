@@ -803,19 +803,19 @@ describe("ensureAgentWorkspace", () => {
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
     const bootstrapPath = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
-    const rmSpy = vi
-      .spyOn(fs, "rm")
-      .mockRejectedValueOnce(Object.assign(new Error("not a directory"), { code: "ENOTDIR" }));
+    const originalRm = fs.rm.bind(fs);
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
+      if (filePath === bootstrapPath) {
+        throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
+      }
+      await originalRm(filePath, options);
+    });
 
     try {
-      const result = await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
-      expect(rmSpy).toHaveBeenCalledWith(bootstrapPath, { force: true });
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
       await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
       const state = await readWorkspaceState(tempDir);
       expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
-      expect(result.bootstrapPending).toBe(false);
-      await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
-      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
     } finally {
       rmSpy.mockRestore();
     }

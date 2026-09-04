@@ -9,6 +9,10 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import {
+  buildOpenAIQuicksilverBackgroundContext,
+  OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS,
+} from "./realtime-quicksilver-instructions.js";
+import {
   isOpenAIGptLiveModel,
   resolveOpenAIQuicksilverVoice,
   type OpenAIGptLiveVoice,
@@ -60,7 +64,7 @@ type OpenAIQuicksilverSession = {
   model: string;
   instructions: string;
   audio: { output: { voice: OpenAIGptLiveVoice } };
-  delegation: { type: "client" };
+  delegation: { type: "client"; ack_filler?: false };
   initial_items?: Array<{
     type: "message";
     role: "user" | "assistant";
@@ -146,27 +150,45 @@ class OpenAIQuicksilverCallError extends Error {
 
 export function buildOpenAIQuicksilverSession(params: {
   model: string;
+  hostControlsInput?: boolean;
   instructions?: string;
   voice?: string;
   initialItems?: readonly OpenAIQuicksilverInitialItem[];
 }): OpenAIQuicksilverSession {
-  const initialItems = boundOpenAIQuicksilverContextItems(params.initialItems ?? []).map(
-    (item) => ({
-      type: "message" as const,
-      role: item.role,
-      content: [
-        {
-          type: item.role === "assistant" ? ("output_text" as const) : ("input_text" as const),
-          text: item.text,
-        },
-      ],
-    }),
-  );
+  const history = boundOpenAIQuicksilverContextItems(params.initialItems ?? []);
+  const instructions = [
+    params.instructions?.trim(),
+    params.hostControlsInput ? OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  // Negotiated host-controlled calls receive shared history as background, not
+  // as the new call's own speech. Explicit legacy conversation seeds stay native.
+  const initialItems = (params.hostControlsInput ? [] : history).map((item) => ({
+    type: "message" as const,
+    role: item.role,
+    content: [
+      {
+        type: item.role === "assistant" ? ("output_text" as const) : ("input_text" as const),
+        text: item.text,
+      },
+    ],
+  }));
   return {
     model: params.model,
-    instructions: params.instructions?.trim() ?? "",
+    instructions:
+      instructions +
+      (params.hostControlsInput
+        ? buildOpenAIQuicksilverBackgroundContext(
+            history,
+            OPENAI_QUICKSILVER_CONTEXT_MAX_UTF8_BYTES,
+          )
+        : ""),
     audio: { output: { voice: resolveOpenAIQuicksilverVoice(params.voice) } },
-    delegation: { type: "client" },
+    // Set at call creation: an attached sideband cannot change existing-call configuration.
+    delegation: params.hostControlsInput
+      ? { type: "client", ack_filler: false }
+      : { type: "client" },
     ...(initialItems && initialItems.length > 0 ? { initial_items: initialItems } : {}),
   };
 }
@@ -404,15 +426,16 @@ function describeOpenAIQuicksilverCallError(
   return `GPT-Live call creation failed (${status})${detail ? `: ${detail}` : ""}`;
 }
 
-export async function createOpenAIQuicksilverCall(params: {
-  auth: OpenAIQuicksilverAuth;
-  sdp: string;
-  session: OpenAIQuicksilverSession | (Record<string, unknown> & { model: string });
-  requestIds: OpenAIQuicksilverRequestIds;
-  signal?: AbortSignal;
-  fetchImpl?: typeof fetch;
-  gaSideband?: boolean;
-}): Promise<
+export async function createOpenAIQuicksilverCall(
+  params: {
+    auth: OpenAIQuicksilverAuth;
+    sdp: string;
+    session: OpenAIQuicksilverSession | (Record<string, unknown> & { model: string });
+    requestIds: OpenAIQuicksilverRequestIds;
+    signal?: AbortSignal;
+    fetchImpl?: typeof fetch;
+  } & ({ gaSideband: true; onCallAllocated: (callId: string) => void } | { gaSideband?: false }),
+): Promise<
   | {
       kind: "gpt-live";
       status: number;
@@ -483,6 +506,17 @@ export async function createOpenAIQuicksilverCall(params: {
       response.status,
     );
   }
+  let gaCallId: string | undefined;
+  if (params.gaSideband) {
+    try {
+      gaCallId = parseOpenAIRealtimeCallLocation(response.headers.get("Location"));
+      // The successful headers allocate a remote resource even if SDP reading fails.
+      params.onCallAllocated(gaCallId);
+    } catch (error) {
+      await response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
+  }
   const answerSdp = await readProviderTextResponse(
     response,
     `${isGptLive ? "GPT-Live" : "OpenAI Realtime"} SDP answer`,
@@ -494,14 +528,13 @@ export async function createOpenAIQuicksilverCall(params: {
       response.status,
     );
   }
-  if (params.gaSideband) {
-    const callId = parseOpenAIRealtimeCallLocation(response.headers.get("Location"));
+  if (gaCallId) {
     return {
       kind: "ga-sideband",
       status: response.status,
       answerSdp,
-      callId,
-      sidebandUrl: buildOpenAIRealtimeSidebandUrl(callId),
+      callId: gaCallId,
+      sidebandUrl: buildOpenAIRealtimeSidebandUrl(gaCallId),
     };
   }
   if (!isGptLive) {
@@ -543,10 +576,10 @@ export async function hangupOpenAIRealtimeCall(params: {
     headers,
     signal: params.signal,
   });
+  await response.body?.cancel().catch(() => undefined);
   if (!response.ok && response.status !== 404) {
     throw new Error(`OpenAI Realtime call hangup failed (${response.status})`);
   }
-  await response.body?.cancel().catch(() => undefined);
 }
 
 function readQuicksilverErrorMessage(value: unknown): string {

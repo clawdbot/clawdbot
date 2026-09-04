@@ -128,8 +128,6 @@ export type MessagesConfig = {
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
-  /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
-  suppressToolErrors?: boolean;
 };
 
 export type NativeCommandsSetting = boolean | "auto";

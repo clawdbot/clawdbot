@@ -45,11 +45,11 @@ import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-confi
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
-import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
 import {
   resolveConfigWideDoctorPluginMetadataSnapshot,
   type DoctorPluginMetadataSnapshotState,
 } from "./shared/plugin-metadata-snapshot-scope.js";
+import { removeStalePluginRuntimeSymlinks } from "./shared/plugin-runtime-symlinks.js";
 import { repairStaleAgentModelRefs } from "./shared/stale-agent-model-ref-repair.js";
 import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.js";
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
@@ -334,7 +334,7 @@ export async function runDoctorRepairSequence(params: {
   appendRepairNotes(await migrateLegacySkillWorkshopProposals({ config: state.candidate, env }));
   appendRepairNotes(migrateLegacyTailscaleProfileIdentities({ env }));
   appendRepairNotes(repairMergedGatewayOwnerProfile({ env, shouldRepair: true }));
-  appendRepairNotes(await cleanupLegacyPluginDependencyState({ env }));
+  appendRepairNotes(await removeStalePluginRuntimeSymlinks());
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },

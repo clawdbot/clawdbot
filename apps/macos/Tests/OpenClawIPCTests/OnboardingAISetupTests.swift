@@ -794,14 +794,6 @@ private enum AISetupAccessibilityError: Error {
     case missingGetter(String)
 }
 
-/// SwiftPM starts background-only, which AppKit does not permit to own windows.
-/// Initialize a window-capable test process once; never toggle policy across AX awaits.
-@MainActor
-private let aiSetupAccessibilityApplication: Void = {
-    #expect(NSApplication.shared.setActivationPolicy(.accessory))
-    NSApplication.shared.finishLaunching()
-}()
-
 @MainActor
 private func inspectAISetupAccessibility(_ root: NSView) async throws
 -> (labels: [String], actions: [String: Bool]) {
@@ -854,36 +846,39 @@ private func inspectAISetupSheet(
     _ model: OnboardingAISetupModel,
     colorScheme: ColorScheme = .light) async -> (labels: [String], actions: [String: Bool], size: NSSize)
 {
-    _ = aiSetupAccessibilityApplication
-    var appeared = false
-    let hosting = NSHostingView(rootView: OnboardingAISetupSheet(model: model)
-        .environment(\.colorScheme, colorScheme)
-        .onAppear { appeared = true })
-    hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
-    // Keep the sheet mounted through the AX request and detach it before closing.
-    let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
-    window.isReleasedWhenClosed = false
-    window.contentView = hosting
-    defer {
-        window.orderOut(nil)
-        window.contentView = nil
-        window.close()
+    // Self-process AX enumerates all windows; keep this fixture isolated through teardown.
+    await TestIsolation.withIsolatedState {
+        _ = AppKitTestSupport.application
+        var appeared = false
+        let hosting = NSHostingView(rootView: OnboardingAISetupSheet(model: model)
+            .environment(\.colorScheme, colorScheme)
+            .onAppear { appeared = true })
+        hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
+        // Keep the sheet mounted through the AX request and detach it before closing.
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+        }
+        window.orderFront(nil)
+        hosting.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        hosting.layoutSubtreeIfNeeded()
+        #expect(appeared)
+        let snapshot: (labels: [String], actions: [String: Bool])
+        do {
+            snapshot = try await inspectAISetupAccessibility(hosting)
+        } catch {
+            // Record the failure without skipping callers' gated wizard-task cleanup.
+            Issue.record(error)
+            snapshot = ([], [:])
+        }
+        #expect(snapshot.actions["Cancel"] != nil)
+        return (snapshot.labels, snapshot.actions, hosting.fittingSize)
     }
-    window.orderFront(nil)
-    hosting.layoutSubtreeIfNeeded()
-    window.displayIfNeeded()
-    hosting.layoutSubtreeIfNeeded()
-    #expect(appeared)
-    let snapshot: (labels: [String], actions: [String: Bool])
-    do {
-        snapshot = try await inspectAISetupAccessibility(hosting)
-    } catch {
-        // Record the failure without skipping callers' gated wizard-task cleanup.
-        Issue.record(error)
-        snapshot = ([], [:])
-    }
-    #expect(snapshot.actions["Cancel"] != nil)
-    return (snapshot.labels, snapshot.actions, hosting.fittingSize)
 }
 
 @Suite(.serialized)

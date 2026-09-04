@@ -16,11 +16,11 @@ import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
+import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
-import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
   createCliLiveSessionCapability,
@@ -282,38 +282,44 @@ function createPluginUserInputHandler(params: {
       return cancelUserInput("OpenClaw cancelled an invalid operator input request.");
     }
 
+    const questionAuthority = params.context.bindQuestionAnswerAuthority?.(assertActive);
+    const assertQuestionActive = () => {
+      assertActive();
+      questionAuthority?.assertActive();
+    };
     params.onPendingInput(1);
     try {
-      const result = await runStructuredInput({
-        input: compileStructuredInputQuestions({
-          questions: request.questions.map((question) => ({
-            ...question,
-            isSecret: false,
-          })),
-          intro: request.intro?.trim() || "Agent needs input:",
+      const result = await withAgentQuestionAnswerAuthority(questionAuthority, () =>
+        runStructuredInput({
+          input: compileStructuredInputQuestions({
+            questions: request.questions.map((question) => ({
+              ...question,
+              isSecret: false,
+            })),
+            intro: request.intro?.trim() || "Agent needs input:",
+          }),
+          sessionKey: run.sessionKey ?? run.sessionId,
+          agentId: run.agentId,
+          runId: run.runId,
+          timeoutMs: run.timeoutMs,
+          delivery: {
+            onBlockReply: run.onBlockReply,
+            onPartialReply: run.onPartialReply,
+          },
+          signal,
+          isActive: () => {
+            try {
+              assertQuestionActive();
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          questionId: request.toolCallId ? (batch) => `${request.toolCallId}:${batch}` : undefined,
         }),
-        sessionKey: run.sessionKey ?? run.sessionId,
-        agentId: run.agentId,
-        runId: run.runId,
-        timeoutMs: run.timeoutMs,
-        gatewayCall: callGatewayTool,
-        delivery: {
-          onBlockReply: run.onBlockReply,
-          onPartialReply: run.onPartialReply,
-        },
-        signal,
-        isActive: () => {
-          try {
-            assertActive();
-            return true;
-          } catch {
-            return false;
-          }
-        },
-        questionId: request.toolCallId ? (batch) => `${request.toolCallId}:${batch}` : undefined,
-      });
+      );
       try {
-        assertActive();
+        assertQuestionActive();
       } catch {
         return cancelUserInput(
           "OpenClaw cancelled operator input: the admitted run closed before the answer was committed.",

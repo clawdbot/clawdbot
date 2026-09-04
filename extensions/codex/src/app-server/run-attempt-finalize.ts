@@ -40,8 +40,7 @@ import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import {
-  createCodexUsageLimitPromptError,
-  isCodexUsageLimitPromptError,
+  CodexUsageLimitPromptError,
   markCodexAuthProfileBlockedFromRateLimits,
   refreshCodexUsageLimitPromptError,
 } from "./usage-limit-error.js";
@@ -220,9 +219,9 @@ export async function finalizeCodexAttempt(
       authProfileId: startupAuthProfileId,
       rateLimits: refreshedUsageLimitPromptError.rateLimitsForProfile,
     });
-    finalPromptError = createCodexUsageLimitPromptError(refreshedUsageLimitPromptError.message);
+    finalPromptError = new CodexUsageLimitPromptError(refreshedUsageLimitPromptError.message);
   } else if (
-    isCodexUsageLimitPromptError(finalPromptError) &&
+    finalPromptError instanceof CodexUsageLimitPromptError &&
     state.rateLimitsRevisionBeforeLastTurnStart !== undefined &&
     readCodexRateLimitsRevision(resourceState.client) > state.rateLimitsRevisionBeforeLastTurnStart
   ) {

@@ -3,6 +3,7 @@ import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contrac
 import {
   createReplyToFanout,
   defineChannelMessageAdapter,
+  type ChannelMessageSendTextContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
@@ -16,8 +17,16 @@ function toIrcMessageResult({ target, ...result }: SendIrcResult) {
   };
 }
 
-async function sendIrcMessage(...args: Parameters<typeof sendMessageIrc>) {
-  return toIrcMessageResult(await sendMessageIrc(...args));
+async function sendIrcMessage(ctx: ChannelMessageSendTextContext, text = ctx.text) {
+  return toIrcMessageResult(
+    await sendMessageIrc(ctx.to, text, {
+      cfg: ctx.cfg as CoreConfig,
+      accountId: ctx.accountId ?? undefined,
+      replyTo: ctx.replyToId ?? undefined,
+      abortSignal: ctx.signal,
+      onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    }),
+  );
 }
 
 export const sendFormattedIrcText: NonNullable<
@@ -80,17 +89,8 @@ export const ircMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
-    text: async ({ cfg, to, text, accountId, replyToId }) =>
-      await sendIrcMessage(to, text, {
-        cfg: cfg as CoreConfig,
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-      }),
-    media: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
-      await sendIrcMessage(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
-        cfg: cfg as CoreConfig,
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-      }),
+    text: sendIrcMessage,
+    media: (ctx) =>
+      sendIrcMessage(ctx, ctx.mediaUrl ? `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}` : ctx.text),
   },
 });

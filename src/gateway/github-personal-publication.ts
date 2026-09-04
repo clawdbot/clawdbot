@@ -262,10 +262,12 @@ export function createPersonalGitHubPublicationCoordinator(
       }
       const selected = input.selection;
       action.assertCurrent();
-      const existing = readPersonalGitHubPublication(action.owner, {
-        sessionId: action.sessionId,
-        idempotencyKey: input.idempotencyKey,
-      });
+      const readRequest = () =>
+        readPersonalGitHubPublication(action.owner, {
+          sessionId: action.sessionId,
+          idempotencyKey: input.idempotencyKey,
+        });
+      const existing = readRequest();
       if (existing) {
         if (
           existing.connection_generation !== selected.generation ||
@@ -283,13 +285,7 @@ export function createPersonalGitHubPublicationCoordinator(
       }
       const bound = bindSelection(action, selected, {
         idempotencyKey: input.idempotencyKey,
-        hasRequest: () =>
-          Boolean(
-            readPersonalGitHubPublication(action.owner, {
-              sessionId: action.sessionId,
-              idempotencyKey: input.idempotencyKey,
-            }),
-          ),
+        hasRequest: () => Boolean(readRequest()),
       });
       return await withWorkspace(action, async (assertWorkspace) => {
         const assertCurrent = () => {

@@ -22,7 +22,7 @@ const saveIndicator = () => ({
 
 const inactiveRefresh = {
   refreshRequired: false,
-  onRefresh: () => undefined,
+  onRefresh: async () => false,
 };
 
 beforeEach(async () => {

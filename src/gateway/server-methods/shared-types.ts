@@ -401,6 +401,11 @@ export type GatewayRequestContext = GatewayKernelContext &
     /** Live instance routing only; never authorization or wire state. */
     resolveGatewayContext?: GatewayContextResolver;
     hostLifecycle?: import("../server-public.js").GatewayHostLifecycle;
+    /** Entry-only access; the kernel owns closure. Absent in embedded-only contexts. */
+    requestEntryLifetime?: Pick<
+      import("../server-request-entry.js").GatewayRequestEntryLifetime,
+      "enter" | "signal"
+    >;
   };
 
 /** Full dispatch context for raw request frames before params are normalized. */

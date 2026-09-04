@@ -208,7 +208,7 @@ describe("createGatewayKernel", () => {
       await preparationStarted.promise;
 
       const closeFirstStop = vi.fn(async () => {});
-      kernel.kernel.swapBonjourStop(closeFirstStop);
+      kernel.kernel.swapDiscovery({ update: async () => {}, stop: closeFirstStop });
       vi.spyOn(kernel.runtimeState.configReloader, "stop").mockReturnValue(
         configReloaderStop.promise,
       );
@@ -236,7 +236,7 @@ describe("createGatewayKernel", () => {
       updateCheckStopped.resolve();
       await closing;
       expect(closeFirstStop).toHaveBeenCalledOnce();
-      expect(kernel.runtimeState.bonjourStop).toBeNull();
+      expect(kernel.runtimeState.discovery).toBeNull();
     } finally {
       nativePreparation.resolve();
       configReloaderStop.resolve();

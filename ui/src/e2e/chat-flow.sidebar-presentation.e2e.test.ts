@@ -14,6 +14,7 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 suite.define(() => {
   it("keeps a running subtitle and row height stable when its session is opened", async () => {
@@ -208,7 +209,7 @@ suite.define(() => {
         });
       }
       await gateway.setSessionsListResponse(completed);
-      const listCount = (await gateway.getRequests("sessions.list")).length;
+      const listCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.emitGatewayEvent("session.message", {
         activeRunIds: [],
         hasActiveRun: false,
@@ -224,7 +225,7 @@ suite.define(() => {
         status: "done",
       });
       await row.getByText("Repair landed cleanly").waitFor();
-      await expectRequestCountStable(gateway, "sessions.list", listCount);
+      await expectRequestCountStable(gateway, "sessions.list", listCount, 500, rosterMatch);
       expect(await row.textContent()).not.toContain("[[");
       if (captureUiProofEnabled) {
         await page.screenshot({
@@ -235,7 +236,7 @@ suite.define(() => {
           ),
         });
       }
-      const listRequests = await gateway.getRequests("sessions.list");
+      const listRequests = await gateway.getRequests("sessions.list", rosterMatch);
       expect(listRequests.at(-1)?.params).toMatchObject({ includeLastMessage: true });
     } finally {
       await suite.closeBrowserContext(context);

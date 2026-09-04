@@ -276,6 +276,13 @@ without Code Mode controls and with the restart-safe tool restriction.
 Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot the registry is restored and
 interrupted subagent sessions are resumed with their original task context.
+
+A completed child may still owe its requester a final follow-up. If that
+follow-up is waiting to retry or is interrupted by restart, the saved
+obligation survives and resumes after startup. Restart admission rejection
+does not consume an attempt, and cancellation of an admitted attempt does
+not exhaust the obligation. Existing delivery retry limits still apply.
+
 Two safety valves apply:
 
 - Runs interrupted more than 2 hours ago are finalized instead of resumed, so

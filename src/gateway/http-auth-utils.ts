@@ -21,7 +21,6 @@ import {
 import {
   authorizeControlUiReadHttpGatewayConnect,
   authorizeHttpGatewayConnect,
-  authorizeUserProfileAvatarHttpGatewayConnect,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
@@ -597,16 +596,6 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
   operatorScopes: string[];
 } | null> {
   return await authorizeScopedGatewayHttpRequestWithOrReply(params, authorizeHttpGatewayConnect);
-}
-
-/** Authorize the read-only avatar route without broadening ordinary HTTP auth. */
-export async function authorizeScopedUserProfileAvatarHttpRequestOrReply(
-  params: Parameters<typeof authorizeScopedGatewayHttpRequestOrReply>[0],
-): ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply> {
-  return await authorizeScopedGatewayHttpRequestWithOrReply(
-    params,
-    authorizeUserProfileAvatarHttpGatewayConnect,
-  );
 }
 
 async function authorizeScopedGatewayHttpRequestWithOrReply(

@@ -1,5 +1,6 @@
 // Exercises slower TUI PTY paths against real local and Gateway backends.
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -569,6 +570,11 @@ async function startLocalModeTui(
       tempDir: string;
       stateDir: string;
     }) => Promise<OpenClawConfig> | OpenClawConfig;
+    prepareEnv?: (params: {
+      env: NodeJS.ProcessEnv;
+      tempDir: string;
+      stateDir: string;
+    }) => Promise<NodeJS.ProcessEnv> | NodeJS.ProcessEnv;
   } = {},
 ) {
   const replyText = opts.replyText ?? "LOCAL_PTY_RESPONSE";
@@ -580,7 +586,7 @@ async function startLocalModeTui(
   const xdgDataHome = path.join(tempDir, "xdg-data");
   const xdgCacheHome = path.join(tempDir, "xdg-cache");
   const configPath = path.join(tempDir, "openclaw.json");
-  const env: NodeJS.ProcessEnv = {
+  let env: NodeJS.ProcessEnv = {
     HOME: homeDir,
     OPENCLAW_HOME: homeDir,
     OPENCLAW_CONFIG_PATH: configPath,
@@ -613,6 +619,7 @@ async function startLocalModeTui(
         tempDir,
         stateDir,
       })) ?? config;
+    env = (await opts.prepareEnv?.({ env, tempDir, stateDir })) ?? env;
     await Promise.all([
       mkdir(workspaceDir, { recursive: true }),
       mkdir(homeDir, { recursive: true }),
@@ -1427,6 +1434,122 @@ describe("TUI PTY real backends", () => {
         expect(isProcessAlive(descendantPid)).toBe(false);
       } finally {
         killPidIfAlive(descendantPid);
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reports a flooded local-shell control pipe and reclaims its command group",
+    async ({ onTestFinished }) => {
+      let rolePidPath = "";
+      const trackedPids: number[] = [];
+      const fixture = await startLocalModeTui(onTestFinished, {
+        prepareEnv: async ({ env, tempDir }) => {
+          const preloadPath = path.join(tempDir, "control-flood.cjs");
+          rolePidPath = path.join(tempDir, "control-flood-pids.txt");
+          await writeFile(
+            preloadPath,
+            `
+              const fs = require("node:fs");
+              const { Socket } = require("node:net");
+              const role = /service-child-(relay|group-anchor)\\.[cm]?[jt]s$/.exec(process.argv[1] || "")?.[1];
+              if (role) {
+                fs.appendFileSync(process.env.OPENCLAW_CONTROL_PROBE_PATH, role + " " + process.pid + "\\n");
+              }
+              const originalWrite = Socket.prototype.write;
+              let flooded = false;
+              Socket.prototype.write = function (chunk, ...args) {
+                const text = String(chunk);
+                if (
+                  !flooded &&
+                  role === "group-anchor" &&
+                  text.includes('"type":"ready"')
+                ) {
+                  flooded = true;
+                  const ready = JSON.parse(text);
+                  fs.appendFileSync(
+                    process.env.OPENCLAW_CONTROL_PROBE_PATH,
+                    "root " + ready.commandPid + "\\n",
+                  );
+                  const accepted = originalWrite.call(this, chunk, ...args);
+                  setTimeout(() => originalWrite.call(this, "é".repeat(131_073) + "\\n"), 500);
+                  return accepted;
+                }
+                return originalWrite.call(this, chunk, ...args);
+              };
+            `,
+            "utf8",
+          );
+          return {
+            ...env,
+            NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${preloadPath}`.trim(),
+            OPENCLAW_CONTROL_PROBE_PATH: rolePidPath,
+          };
+        },
+      });
+      const commandPath = path.join(fixture.stateDir, "control-flood-command.cjs");
+      const commandPidPath = path.join(fixture.stateDir, "control-flood-command-pids.txt");
+      try {
+        await writeFile(
+          commandPath,
+          `
+            const fs = require("node:fs");
+            const { spawn } = require("node:child_process");
+            const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+              stdio: "ignore",
+            });
+            fs.writeFileSync(
+              ${JSON.stringify(commandPidPath)},
+              "command " + process.pid + "\\ndescendant " + descendant.pid + "\\n",
+            );
+            setInterval(() => {}, 1000);
+          `,
+          "utf8",
+        );
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write(
+          `!${JSON.stringify(process.execPath)} ${JSON.stringify(commandPath)}\r`,
+        );
+        await fixture.run.waitForOutput("Allow local shell commands for this session?");
+        await fixture.run.write("\u001b[B\r", { delay: false });
+        await fixture.run.waitForOutput("local shell: enabled for this session");
+        const pidEntries = await waitFor({
+          timeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+          read: () => {
+            if (!existsSync(rolePidPath) || !existsSync(commandPidPath)) {
+              return null;
+            }
+            const entries = new Map<string, number>();
+            for (const line of `${readFileSync(rolePidPath, "utf8")}${readFileSync(commandPidPath, "utf8")}`
+              .trim()
+              .split("\n")) {
+              const match = /^(relay|group-anchor|root|command|descendant) (\d+)$/u.exec(line);
+              if (!match?.[1] || !match[2]) {
+                throw new Error(`unexpected control-flood PID line: ${JSON.stringify(line)}`);
+              }
+              entries.set(match[1], Number.parseInt(match[2], 10));
+            }
+            return entries.size === 5 ? entries : null;
+          },
+          onTimeout: () => new Error("local shell did not report its complete process group"),
+        });
+        trackedPids.push(...pidEntries.values());
+        await fixture.run.waitForOutput(
+          "[local] error: service child cleanup identity lost: control pipe pending line exceeded cap",
+          LOCAL_EXIT_TIMEOUT_MS,
+        );
+        await waitFor({
+          timeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+          read: () => (trackedPids.every((pid) => !isProcessAlive(pid)) ? true : null),
+          onTimeout: () => new Error("local shell control-pipe failure left its group alive"),
+        });
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        trackedPids.forEach(killPidIfAlive);
         await fixture.cleanup();
       }
     },

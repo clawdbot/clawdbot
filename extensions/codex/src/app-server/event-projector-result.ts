@@ -24,6 +24,7 @@ import type { CodexTurn } from "./protocol.js";
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  sourceReplyDelivered?: true;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
@@ -212,6 +213,7 @@ export function buildCodexAttemptResult(
     didSendViaMessagingTool: input.toolTelemetry.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool:
       input.toolTelemetry.didDeliverSourceReplyViaMessageTool === true,
+    sourceReplyDelivered: input.toolTelemetry.sourceReplyDelivered,
     messagingToolSentTexts: input.toolTelemetry.messagingToolSentTexts,
     messagingToolSentMediaUrls: input.toolTelemetry.messagingToolSentMediaUrls,
     messagingToolSentTargets: input.toolTelemetry.messagingToolSentTargets,

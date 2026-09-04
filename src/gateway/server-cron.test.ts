@@ -522,7 +522,7 @@ describe("buildGatewayCronService", () => {
       const state = loadCronService(autoConfig);
 
       try {
-        await expect(state.reconcileHeartbeatJobs(autoConfig)).resolves.toBe("converged");
+        await expect(state.reconcileSystemJobs(autoConfig)).resolves.toBe("converged");
         const inventoryStarted = createDeferred();
         const releaseInventory = createDeferred();
         const listJobs = state.cron.list.bind(state.cron);
@@ -538,9 +538,9 @@ describe("buildGatewayCronService", () => {
         const addJob = vi.spyOn(state.cron, "add");
         const removeJob = vi.spyOn(state.cron, "remove");
 
-        const disable = state.reconcileHeartbeatJobs(offConfig);
+        const disable = state.reconcileSystemJobs(offConfig);
         await inventoryStarted.promise;
-        const reenable = state.reconcileHeartbeatJobs(autoConfig);
+        const reenable = state.reconcileSystemJobs(autoConfig);
         releaseInventory.resolve();
 
         await expect(disable).resolves.toBe("superseded");
@@ -555,6 +555,35 @@ describe("buildGatewayCronService", () => {
       }
     },
   );
+
+  it("converges Workshop after a heartbeat inventory failure and cancels its retry on stop", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const cfg = {
+      ...createCronConfig("server-cron-monitor-partial-failure"),
+      skills: { workshop: { autonomous: { mode: "auto" } } },
+    } satisfies OpenClawConfig;
+    const state = loadCronService(cfg);
+    const listJobs = state.cron.list.bind(state.cron);
+    const inventory = vi
+      .spyOn(state.cron, "list")
+      .mockRejectedValueOnce(new Error("inventory failed"));
+
+    try {
+      await expect(state.reconcileSystemJobs(cfg)).resolves.toBe("retry-scheduled");
+      expect(await listJobs({ includeDisabled: true })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ enabled: true, payload: { kind: "skillCollectionReview" } }),
+        ]),
+      );
+      state.cron.stop();
+      const callsBeforeStop = inventory.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(inventory).toHaveBeenCalledTimes(callsBeforeStop);
+    } finally {
+      state.cron.stop();
+      vi.useRealTimers();
+    }
+  });
 
   it.each(["update", "updateWithPrecondition"] as const)(
     "forwards authority options through the %s lifecycle wrapper",

@@ -340,7 +340,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: Gateway caller ownership for standalone browser routing.
       // +1: canonical temporal context renderer for plugin-owned agent harnesses.
       // +1: canonical user-turn operational metadata restoration for native harnesses.
-      4371,
+      // +2: read-only debug proxy capture reader factory and contract.
+      // +2: owner-selected channel groups and their authored config path for safe recovery hints.
+      // +1: canonical conversation-to-session binding read for native channel controls.
+      // +1: final callable-tool availability projection for native harnesses.
+      4377,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -455,7 +459,11 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: Gateway caller ownership for standalone browser routing.
       // +1: canonical temporal context renderer for plugin-owned agent harnesses.
       // +1: canonical user-turn operational metadata restoration for native harnesses.
-      2605,
+      // +1: read-only debug proxy capture reader factory.
+      // +2: owner-selected channel groups and their authored config path for safe recovery hints.
+      // +1: canonical conversation-to-session binding read for native channel controls.
+      // +1: final callable-tool availability projection for native harnesses.
+      2610,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

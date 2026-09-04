@@ -1,6 +1,11 @@
 // Memory Core plugin module implements manager status state behavior.
+import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemoryProviderStatus,
+  MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "openclaw/plugin-sdk/sqlite-runtime";
 
 type StatusProvider = {
   id: string;
@@ -13,6 +18,31 @@ type StatusAggregateRow = {
   c: number;
   bytes: number | null;
 };
+
+/** Read only for explicit diagnostics: retained cache payloads can be large even when disabled. */
+export function collectMemoryStorageStatus(
+  db: DatabaseSync,
+  databasePath: string,
+): NonNullable<MemoryProviderStatus["storage"]> {
+  const query = getNodeSqliteKysely<{ memory_embedding_cache: { embedding: string } }>(db)
+    .selectFrom("memory_embedding_cache")
+    .select((eb) => [
+      eb.fn.countAll<number>().as("entries"),
+      eb.fn
+        .coalesce(eb.fn.sum<number>(eb.fn<number>("octet_length", ["embedding"])), eb.val(0))
+        .as("bytes"),
+    ]);
+  const cache = executeSqliteQuerySync(db, query).rows[0]!;
+  const pageSize = Number(db.prepare("PRAGMA page_size").get()?.page_size);
+  const freePages = Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count);
+  return {
+    databaseBytes: fs.statSync(databasePath, { throwIfNoEntry: false })?.size ?? 0,
+    walBytes: fs.statSync(`${databasePath}-wal`, { throwIfNoEntry: false })?.size ?? 0,
+    reusableBytes: freePages * pageSize,
+    embeddingCacheBytes: cache.bytes,
+    embeddingCacheEntries: cache.entries,
+  };
+}
 
 export function resolveStatusProviderInfo(params: {
   provider: StatusProvider | null;

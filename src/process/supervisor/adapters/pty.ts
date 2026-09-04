@@ -8,7 +8,7 @@ import {
   resolvePtyTerminalName,
   setPtyTerminalName,
 } from "../../pty-terminal-name.js";
-import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
+import type { ManagedRunStdin, ProcessAdapterConstruction, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
@@ -16,17 +16,17 @@ declare const WORKER_DEPLOY_BUILD: boolean;
 
 type PtyAdapter = SpawnProcessAdapter;
 
-export async function createPtyAdapter(params: {
-  assertCurrent?: () => void;
-  shell: string;
-  args: string[];
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  cols?: number;
-  rows?: number;
-  name?: string;
-  abortSignal?: AbortSignal;
-}): Promise<PtyAdapter> {
+export async function createPtyAdapter(
+  params: ProcessAdapterConstruction & {
+    shell: string;
+    args: string[];
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    cols?: number;
+    rows?: number;
+    name?: string;
+  },
+): Promise<PtyAdapter> {
   // Worker deploys are portable JavaScript artifacts; exec falls back to the child adapter
   // instead of binding the Gateway host's native PTY binary into the bundle.
   if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
@@ -61,6 +61,9 @@ export async function createPtyAdapter(params: {
     cols: params.cols ?? 120,
     rows: params.rows ?? 30,
   });
+  const cleanup = createDeferredCore();
+  void cleanup.promise.catch(() => {});
+  params.onSpawnCleanup?.(cleanup.promise);
   let dataListener: IDisposable | null = null;
   let exitListener: IDisposable | null = null;
   const completion = createDeferredCore<{
@@ -96,12 +99,14 @@ export async function createPtyAdapter(params: {
     // Some PTY hosts fail to emit onExit after kill; use a delayed fallback
     // so callers can still unblock without marking termination immediately.
     forceKillWaitFallbackTimer = setTimeout(() => {
+      cleanup.reject(new Error("PTY cleanup could not be confirmed before the kill deadline"));
       settleWait({ code: null, signal });
     }, FORCE_KILL_WAIT_FALLBACK_MS);
     forceKillWaitFallbackTimer.unref();
   };
 
   exitListener = pty.onExit((event) => {
+    cleanup.resolve();
     const signal = event.signal && event.signal !== 0 ? event.signal : null;
     settleWait({ code: event.exitCode ?? null, signal });
   });

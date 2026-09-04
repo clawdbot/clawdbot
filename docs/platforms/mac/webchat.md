@@ -89,6 +89,36 @@ Native approval cards and dialogs apply only to the Gateway connection that
 requested them. Changing Primary does not transfer a pending approval to the
 new Gateway.
 
+The native Channels and Config settings follow Primary. Changing Primary clears
+the previous Gateway's channel status, login QR, and unsaved config draft, then
+loads the new Gateway's settings. A temporary reconnect to the same Primary
+keeps its WhatsApp login session and config draft. If the connection fails, these
+panes show the Gateway error and keep **Refresh** or **Reload** available.
+Connection attempts show progress, and retries retain the last failure until
+the Gateway connects or Primary changes.
+Opening or revisiting these panes while settings load waits for the current
+Gateway's shared read. Background refreshes preserve unsaved edits; **Reload**
+replaces them with the Gateway's current values.
+
+### Cron jobs when switching Gateways
+
+By default, **Settings → Cron Jobs** links to the Dashboard. Enable
+**Settings → Debug → Show native settings panes** to use the native pane, which
+shows the Primary Gateway's jobs and run history.
+Run, enable, edit, delete, and transcript actions stay with the Gateway that
+supplied the displayed job. After changing Primary, reopen the job from the new
+list before acting on it. A socket reconnect to the same Gateway keeps an open
+editor usable and reloads the selected job before refreshing its history.
+
+While jobs load, the pane shows a loading indicator and disables **Refresh**.
+A failed load shows the Gateway error and enables **Refresh** to try again.
+“No cron jobs yet” appears only after the Gateway returns an empty list.
+
+You can draft a **New Job** while offline. Saving can reconnect or start that
+Gateway, but changing Primary while the editor is open does not move the draft
+to the new Gateway. The app reports the change so you can reopen the editor for
+the intended Gateway.
+
 ## Quick Chat bar
 
 Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to open a floating composer for the main session. Change the global shortcut with the recorder in **Settings → General → Quick Chat shortcut**.

@@ -27,18 +27,56 @@ Status and list are read-only. Setting a voice requires the message-channel owne
 Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live WebRTC sessions delegate on a Gateway-owned sideband, and the Gateway binds each delegation to the browser or Gateway-relay Talk session that owns it. Backend WebSocket bridges use the normal relay consult path. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering queues into the active embedded run; rejected steering returns a reason such as `no_active_run`, `not_streaming`, or `compacting`. A newer GPT-Live spoken task also supersedes the running delegation.
 
 Thin audio clients can request `gateway-control-v1` in
-`talk.client.create.capabilities`. OpenAI GA Realtime supports this mode only
-with a Platform API key. Success returns `clientControl: { owner: "gateway" }`,
-a 60-second single-use `clientSecret`, and the relative offer URL
-`/plugins/openai/realtime/calls`. The client posts an audio-only SDP offer to
-that Gateway route and opens no provider data channel. The Gateway attaches the
-official OpenAI server sideband and owns tools, transcripts, steering,
-cancellation, and call cleanup while media continues directly between the
-client and OpenAI. OAuth-only setups fail visibly instead of falling back to
-client-owned control. Existing browser clients omit this capability and keep
-their current ephemeral-token and WebRTC data-channel flow.
+`talk.client.create.capabilities`. OpenAI GA Realtime requires a Platform API
+key for this mode. Native GPT-Live uses its existing ChatGPT OAuth or Platform
+authentication; requesting Gateway control does not switch the selected model
+or authentication route.
+
+Success returns `clientControl: { owner: "gateway" }`, a 60-second single-use
+`clientSecret`, and the relative offer URL `/plugins/openai/realtime/calls`.
+The client posts an audio-only SDP offer and opens no provider data channel.
+The Gateway attaches the provider's server sideband and owns tools or native
+agent delegation, transcripts, steering, cancellation, and call cleanup while
+media continues directly between the client and OpenAI. Negotiated sessions
+share a two-session limit per client connection, including pending offers.
+Unsupported combinations, including GA with OAuth only, fail visibly instead
+of falling back to client-owned control. Existing browser clients omit this
+capability and keep their data channel and client transcript reporting.
+
+In Gateway-controlled native calls and native Gateway relays, the provider's
+delegation starts each host action. Final speech transcripts are saved to history;
+they neither trigger actions nor repeat a delegation's action. Status keeps the
+current task running, cancellation stops it, and redirects or follow-ups target
+that call's active work. When the call has no active task, status and cancellation
+return a spoken no-active-run response, even if another call on the same connection
+and agent session has work in progress. Ordinary requests such as “Check the
+weather” still start tasks while idle. Genuine new tasks retain the native
+delegation replacement behavior.
+
+These calls disable provider-generated delegation acknowledgments at creation.
+OpenClaw sends one neutral receipt when it launches a real task; status and
+cancellation requests wait for the host result instead, without waiting for final
+speech transcription. A full control queue produces a spoken refusal; retry after
+the pending controls finish. A task receipt is not confirmation that a model or
+tool has started, and submitting a spoken result is not proof of audible delivery.
+
+Closing a native transport fences new delegations and late provider delivery;
+already accepted agent work retains its own cancellation lifetime. Spoken run
+cancellation is separate from ending the audio connection. Gateway-controlled
+native sessions acknowledge cancellation without speaking the canceled task's
+partial answer, empty-result fallback, or failed-task retry prompt. Timeouts
+remain failures rather than being silently treated as cancellations.
 
 Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
+
+Gateway-controlled native WebRTC calls receive shared-session history as quoted
+historical background in their instructions, not as the new call's own user or
+assistant messages. This background can include prior calls and backing-agent
+answers; it does not establish the current call's live task state. It retains
+the newest history within 16 entries, 800 characters per entry, and 8,000 UTF-8
+bytes including labels and quoting. This changes neither saved transcripts nor
+chat display. Native calls without negotiated host input control and direct
+WebSocket conversation seeds keep their existing representation.
 
 Generated agent-consult prompts are internal input, not spoken user turns. New
 consult records are hidden from chat and excluded from later model context, while
@@ -47,10 +85,15 @@ Raw archives and [session exports](/tools/slash-commands) remain lossless. Exist
 consult records without the exclusion flag are not rewritten and remain eligible
 for model context.
 
-Stored Chat history shows the spoken answer without a second copy of the
-successful consult answer. The internal answer remains in the raw transcript and
-model context. Tool activity, progress, errors, and interrupted replies retain
-their existing visibility.
+Chat-backed Talk stores the spoken answer without a second copy of the
+successful consult answer in visible history; the internal answer remains in the
+raw transcript and model context. Tool activity, progress, errors, and interrupted
+replies retain their existing visibility.
+
+Direct provider-owned consultations keep their own final answer visible in Chat.
+Accepted work can outlive a closed or replaced audio connection, so a spoken
+replacement is not guaranteed. If speech also arrives, both records may be visible;
+OpenClaw preserves the answer rather than guessing that the spoken text replaces it.
 
 OpenAI GA browser Talk keeps provider conversation order even when an assistant
 reply finishes before the user's transcription or item announcements arrive out
@@ -105,6 +148,9 @@ selects that agent. Otherwise, Talk uses `talk.agentId`, then the configured sys
 agent or an unambiguous default agent. Without an owner in a multi-agent Gateway,
 set `talk.agentId` or send an agent-prefixed key.
 
+`talk.catalog` also requires an unambiguous Talk owner and checks it before
+discovering providers, so missing ownership returns its setup error promptly.
+
 Omitting `sessionKey` selects the same owned main session as a bare `main` key;
 both enforce sharing, incognito, and operator-role restrictions. Main aliases
 honor `session.scope` and the configured [main session](/concepts/main-session) key. A shared fixed store retains
@@ -115,7 +161,40 @@ startup, creation fails rather than switching sessions; retry the request.
 Client tool calls, Gateway-owned provider consultations, and steering retain the prepared agent,
 canonical session key, and store. Agent replies stay in the same session as voice
 transcripts, including under global scope, while the original key continues to
-identify the voice call.
+identify the voice call. Provider-attached controls and `talk.session.steer` select
+only work bound to that logical voice call. Reusing `voiceSessionId` to replace a
+browser transport preserves control of its accepted work. The legacy
+`talk.client.steer` RPC remains session-scoped: it selects owned work by
+`sessionKey`, not by a voice call ID.
+
+Native steering uses the current caller's tool policy and session permissions. The
+host captures the actual backend attempt's authority after policy preparation and
+checks that exact owner again before delivering a control. Changed caller authority, tool
+allowlists, permission modes, or closed/replaced attempts can produce
+`tool_authority_mismatch`; a run ID or copied fingerprint does not authorize steering.
+Direct voice input does not acquire trace or client-tool capabilities. Chat-backed
+Talk keeps the authenticated caller's normal chat authority, including its reviewer
+and client capabilities, but disables task suggestions because Talk cannot accept
+them. Status and cancellation do not require a tool-policy projection. Controls
+capture their target before queue or transcript waits; they never move to a task
+that starts later. A control received before backend registration returns a visible
+no-active-run response rather than waiting for an unrelated future task.
+
+When a source-bound native control is routed to a pending question, its answer
+or image-triggered cancellation is checked again immediately before Gateway
+dispatch, after registration, input persistence, and connection preparation.
+Closing or reassigning the source before that check rejects the stale input
+without cancelling the independent backing question or run; a later valid
+answer can still use the same question. An answer already consumed by the
+question remains accepted if the source closes while its response returns.
+Delayed confirmation uses the question's existing deadline. If confirmation is
+lost entirely, Talk reports that it could not confirm the input and does not send
+it again as steering; check the conversation before retrying.
+This applies to controls routed through pending-question input, not universal
+interception of spoken answers by every voice provider.
+
+Managed-room handoffs do not yet supply current-speaker tool authority. Room
+attachment alone cannot authorize steering; status and cancellation remain available.
 
 Keep the original `sessionKey` for client transcript, tool-call, and close requests.
 `talk.client.close` requires both that exact key and the returned `voiceSessionId`;
@@ -264,10 +343,10 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 }
 ```
 
-OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Set `talk.realtime.model` to
-`gpt-live-1-codex`; `gpt-live-1`
-and `gpt-live-1-mini` are not valid on this route. Browser and Gateway-relay
-WebRTC prefer a ChatGPT OAuth subscription profile and fall back to Platform
+OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Select a
+supported native model in **Settings → Talk**; the provider catalog supplies
+the available model IDs. Browser and Gateway-relay WebRTC prefer a ChatGPT
+OAuth subscription profile and fall back to Platform
 API-key auth. OAuth creates the WebRTC call through the Codex backend using
 JSON `sdp` and `session`; Platform keys use multipart call creation at
 `https://api.openai.com/v1/live`. Both use a Gateway-owned public API sideband.

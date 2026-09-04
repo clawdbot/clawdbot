@@ -206,7 +206,7 @@ export function renderChatModelAccountControl(params: {
           `,
         )}
       </wa-dropdown>
-      <span class="chat-model-account__hint">${params.hint ?? t("chat.modelAccounts.hint")}</span>
+      ${params.hint ? html`<span class="chat-model-account__hint">${params.hint}</span>` : nothing}
       ${
         currentInventory.error
           ? html`<span class="chat-model-account__error" role="alert"

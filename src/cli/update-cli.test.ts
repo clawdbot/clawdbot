@@ -941,7 +941,7 @@ describe("update-cli", () => {
       "i",
       "-g",
       `--allow-scripts=${allowScriptsIdentity}`,
-      ...(staged ? ["--prefix", expect.stringContaining(".openclaw-update-stage-")] : []),
+      ...(staged ? ["--prefix", expect.stringContaining(".openclaw.update-stage-")] : []),
       installSpec,
       "--no-fund",
       "--no-audit",
@@ -6284,7 +6284,7 @@ describe("update-cli", () => {
     expect(
       (await fs.readdir(nodeModules)).filter((entry) =>
         [
-          ".openclaw-update-stage-",
+          ".openclaw.update-stage-",
           ".openclaw.package-backup-",
           ".openclaw-package-backup-",
           ".openclaw.shim-backup-",

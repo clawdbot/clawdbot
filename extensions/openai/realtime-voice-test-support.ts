@@ -2,6 +2,7 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -108,6 +109,7 @@ type InternalRealtimeVoiceProviderApi = {
     providerConfig: Record<string, unknown>;
     agentId?: string;
     model?: string;
+    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
   }) => {
     handlesAgentConsult?: boolean;
     supportsToolCalls?: boolean;

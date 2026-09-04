@@ -56,6 +56,23 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
   return requests;
 }
 
+/** Dispatched by a pane whenever its authoritative transcript starts or stops loading. */
+export const CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT = "openclaw-chat-transcript-loading-changed";
+
+function isChatHistoryLoading(load: ChatHistoryLoadState): boolean {
+  return load.phase === "pending-connection" || load.phase === "in-flight";
+}
+
+/** Records the transcript load phase and reports loading edges to the pane. */
+export function setChatHistoryLoad(state: ChatState, load: ChatHistoryLoadState): void {
+  const requests = chatHistoryRequests(state);
+  const wasLoading = isChatHistoryLoading(requests.historyLoad);
+  requests.historyLoad = load;
+  if (wasLoading !== isChatHistoryLoading(load)) {
+    state.transcriptLoadingChanged?.();
+  }
+}
+
 export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState {
   const requests = chatHistoryRequests(state);
   const load = requests.historyLoad;
@@ -70,6 +87,8 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
       ? load.key === `${state.sessionKey}\u0000${requestAgentId ?? ""}`
       : load.sessionKey === state.sessionKey && load.requestAgentId === requestAgentId;
   if (!current) {
+    // Lazy repair of a load left behind by a session switch; the switch's own
+    // load reports its edge, so this stays a silent write (readers see idle).
     requests.historyLoad = { phase: "idle" };
     state.chatLoading = false;
   } else if (
@@ -150,7 +169,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
-  requests.historyLoad = { phase: "idle" };
+  setChatHistoryLoad(state, { phase: "idle" });
   state.chatLoading = false;
   const scope = readChatSessionProjectionScope(state, { agentId });
   // Destructive operations keep the public session key, so only an explicit

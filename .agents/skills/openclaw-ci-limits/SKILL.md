@@ -244,7 +244,7 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   existing 90-file envelope budget with native Vitest sharding; retain complete
   config discovery, exclusions and process isolation. Count every appended
   plugin row, including the five added QA/provider rows, in the burst envelope.
-- Plugin fallback groups retain separate child processes, including process-bounded
+- Precise and fallback plugin groups retain separate child processes, including process-bounded
   configs. Compatible envelopes, including repeated configs, run one at a time
   within 240 predicted seconds without a pair-count limit; expanded serial compact
   jobs use 210. Runtime preparation stays separate. Each original envelope retains

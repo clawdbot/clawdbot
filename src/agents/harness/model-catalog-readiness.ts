@@ -17,7 +17,7 @@ import type { AgentHarnessModelCatalogParams } from "./types.js";
 export function createAgentHarnessCatalogEvaluator(
   params: AgentHarnessModelCatalogParams & {
     preferredProfileId?: string;
-    lockedProfileId?: string;
+    pinnedProfileId?: string;
     pluginRegistry?: PluginRegistry;
     isCurrent?: () => boolean;
     observationConfig?: AgentHarnessModelCatalogParams["config"];
@@ -47,7 +47,7 @@ export function createAgentHarnessCatalogEvaluator(
     // or request override. Those keep the existing prepared-route evaluator.
     if (
       params.preferredProfileId ||
-      params.lockedProfileId ||
+      params.pinnedProfileId ||
       (host.selectedAuthMode && (host.evidence !== "runtime" || entry.nativeRuntime !== runtime)) ||
       configured?.api ||
       configured?.baseUrl ||

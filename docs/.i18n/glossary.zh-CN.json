@@ -64,6 +64,10 @@
     "target": "ClawHub"
   },
   {
+    "source": "ClawHub CLI",
+    "target": "ClawHub CLI"
+  },
+  {
     "source": "Claws",
     "target": "Claws"
   },

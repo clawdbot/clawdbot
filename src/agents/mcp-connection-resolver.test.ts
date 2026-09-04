@@ -338,7 +338,7 @@ describe("mcp connection resolver helpers", () => {
           reconcileExitWatchers: async () => {},
           reconcileStreamWatchers: async () => {},
           stopStreamWatchers: async () => {},
-          reconcileHeartbeatJobs: async () => "converged" as const,
+          reconcileSystemJobs: async () => "converged" as const,
         },
       };
       const reloadLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };

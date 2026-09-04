@@ -301,7 +301,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps Phosphor menu modifier glyphs on the system UI stack", async () => {
+  it("keeps Phosphor shortcut modifier glyphs on the system UI stack", async () => {
     const { page } = await openThemedChat("phosphor", "dark");
     await page.goto(`${suite.server.baseUrl}chat`);
     const identity = page.locator(".sidebar-identity-card");
@@ -327,15 +327,38 @@ suite.define(() => {
       formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, applePlatform),
     );
 
+    await page.keyboard.press("Escape");
+    await page.locator(".chat-side-panel-toggle").click();
+    const panelSelector = page.locator(".side-panel-empty--selector");
+    const panelShortcuts = panelSelector.locator(".side-panel-type-option__shortcut");
+    await expect
+      .poll(() => panelShortcuts.allTextContents())
+      .toEqual([
+        formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, applePlatform),
+        formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat, applePlatform),
+      ]);
+    await expect
+      .poll(() =>
+        panelShortcuts.evaluateAll((elements) =>
+          elements.map((element) => {
+            return getComputedStyle(element).fontFamily;
+          }),
+        ),
+      )
+      .toEqual([expect.stringMatching(/^system-ui,/u), expect.stringMatching(/^system-ui,/u)]);
+
     if (captureUiProof) {
       await mkdir(path.join(suite.artifactDir, "theme-typography"), { recursive: true });
-      await page.screenshot({
+      await panelSelector.screenshot({
         path: path.join(
           path.join(suite.artifactDir, "theme-typography"),
-          "phosphor-settings-shortcut.png",
+          "phosphor-panel-shortcuts.png",
         ),
       });
     }
+
+    await page.keyboard.press("ControlOrMeta+Shift+S");
+    await page.locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
 
     const modelShortcutFont = await page.evaluate(() => {
       const action = document.createElement("span");

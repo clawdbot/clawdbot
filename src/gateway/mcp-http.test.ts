@@ -104,9 +104,10 @@ const loadNodeExecAvailabilityMock = vi.hoisted(() =>
 
 const logWarnMock = vi.hoisted(() => vi.fn<(message: string) => void>());
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { mainKey: "main" } })));
 
 vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
+  getRuntimeConfig: getRuntimeConfigMock,
 }));
 
 vi.mock("../logger.js", async () => {
@@ -651,6 +652,7 @@ function makeMcpToolCacheParams(overrides: Partial<McpToolCacheParams> = {}): Mc
 }
 
 beforeEach(() => {
+  getRuntimeConfigMock.mockReset().mockImplementation(() => ({ session: { mainKey: "main" } }));
   loadNodeExecAvailabilityMock
     .mockReset()
     .mockResolvedValue({ cacheKey: "eligible", isAvailable: () => true });
@@ -1253,6 +1255,7 @@ describe("mcp loopback server", () => {
       runId: "run-bound",
       modelProvider: "anthropic",
       modelId: "claude-opus-4-7",
+      modelHasVision: true,
       messageProvider: "discord",
       clientCaps: ["tool-events"],
       currentChannelId: "discord:bound",
@@ -1264,6 +1267,7 @@ describe("mcp loopback server", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sourceReplyOnly: true,
       toolsAllow: ["message"],
+      nativeCronCreatorToolAllowlist: ["read", "write", "edit", "apply_patch", "exec", "process"],
       // The delegation gate lives in resolveGatewayScopedTools, so dropping
       // this field at the HTTP mapping silently disables it for CLI backends.
       delegationCapability: "report_only",
@@ -1298,13 +1302,17 @@ describe("mcp loopback server", () => {
       runtimeOwnerToken: runtime.ownerToken,
       admittedRunContext,
     });
-    expect(
-      activateMcpLoopbackClientGrantCapture({
-        token: grant.token,
-        runtimeOwnerToken: runtime.ownerToken,
-        captureKey: "capture-bound",
-      }),
-    ).toBe(true);
+    const capture = activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: runtime.ownerToken,
+      captureKey: "capture-bound",
+    });
+    if (!capture) {
+      throw new Error("expected an active native capture");
+    }
+    expect(capture.captureNativeToolAuthority(boundContext.nativeCronCreatorToolAllowlist)).toBe(
+      true,
+    );
 
     const sendWithCapture = async (captureKey?: string, method: "list" | "call" = "list") =>
       await sendRaw({
@@ -1369,6 +1377,71 @@ describe("mcp loopback server", () => {
     });
   });
 
+  it("allows native discovery but denies calls until the current turn observes its tools", async () => {
+    getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "main" } });
+    const execute = vi.fn(async (nativeTools: readonly string[] | null | undefined) => ({
+      content: [{ type: "text", text: JSON.stringify(nativeTools) }],
+    }));
+    resolveGatewayScopedToolsMock.mockImplementation(() => {
+      const { nativeCronCreatorToolAllowlist } = getScopedToolsCall(
+        resolveGatewayScopedToolsMock.mock.calls.length - 1,
+      );
+      return {
+        agentId: "main",
+        tools: [makeMessageTool({ execute: () => execute(nativeCronCreatorToolAllowlist) })],
+      };
+    });
+    const { runtime } = await startLoopbackServerForTest();
+    const grant = mintMcpLoopbackClientGrant({
+      context: {
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        nativeCronCreatorToolAllowlist: ["read", "exec"],
+      },
+      runtimeOwnerToken: runtime.ownerToken,
+      admittedRunContext: await activeAdmission("run-native-discovery"),
+    });
+    const capture = activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: runtime.ownerToken,
+      captureKey: "capture-native-discovery",
+    });
+    const requestScope = {
+      token: grant.token,
+      headers: { "x-openclaw-cli-capture-key": "capture-native-discovery" },
+    };
+
+    expectMcpToolNames(await readOkMcpPayload(await sendLoopbackToolsList(requestScope)), [
+      "message",
+    ]);
+    const response = await sendLoopbackToolCall({ ...requestScope, name: "message" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      error: { code: -32000, message: expect.stringMatching(/retry|wait|initializ/i) },
+    });
+    expect(execute).not.toHaveBeenCalled();
+    if (!capture) {
+      throw new Error("expected an active native capture");
+    }
+    expect(capture.captureNativeToolAuthority(["read"])).toBe(true);
+    expectMcpResultText(
+      await readOkMcpPayload(await sendLoopbackToolCall({ ...requestScope, name: "message" })),
+      '["read"]',
+    );
+    expect(capture.captureNativeToolAuthority([])).toBe(true);
+    expectMcpResultText(
+      await readOkMcpPayload(await sendLoopbackToolCall({ ...requestScope, name: "message" })),
+      "[]",
+    );
+    expect(capture.captureNativeToolAuthority(null)).toBe(true);
+    expect(
+      await (await sendLoopbackToolCall({ ...requestScope, name: "message" })).json(),
+    ).toMatchObject({
+      error: { code: -32000 },
+    });
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps prepared auth stores isolated between CLI grants", async () => {
     const { runtime } = await startLoopbackServerForTest();
     const firstStore: AuthProfileStore = {
@@ -1399,7 +1472,7 @@ describe("mcp loopback server", () => {
           runtimeOwnerToken: runtime.ownerToken,
           captureKey,
         }),
-      ).toBe(true);
+      ).toBeTruthy();
       expect(
         (
           await sendLoopbackToolsList({
@@ -1480,7 +1553,7 @@ describe("mcp loopback server", () => {
         runtimeOwnerToken: runtime.ownerToken,
         captureKey,
       }),
-    ).toBe(true);
+    ).toBeTruthy();
 
     const responsePromise = sendLoopbackToolCall({
       token: grant.token,
@@ -1576,7 +1649,7 @@ describe("mcp loopback server", () => {
           runtimeOwnerToken: runtime.ownerToken,
           captureKey,
         }),
-      ).toBe(true);
+      ).toBeTruthy();
 
       let changed = false;
       const responsePromise = new Promise<{ status: number | undefined }>((resolve, reject) => {
@@ -1608,7 +1681,7 @@ describe("mcp loopback server", () => {
                   token: grant.token,
                   runtimeOwnerToken: runtime.ownerToken,
                   captureKey,
-                });
+                }) !== false;
           req.end(mcpToolsListBody());
         });
       });

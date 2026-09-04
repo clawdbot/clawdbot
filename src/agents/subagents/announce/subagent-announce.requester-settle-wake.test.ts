@@ -117,11 +117,13 @@ function listedRequesterRuns(): SubagentRunRecord[] {
   return registryRuntimeMock.listSubagentRunsForRequester(REQUESTER) as SubagentRunRecord[];
 }
 
-function transitionBatch(runIds: readonly string[], state: RequesterSettleWakeBatchState): void {
-  transitionBatchSpy(runIds, state);
-  const selected = new Set(runIds);
-  for (const entry of listedRequesterRuns()) {
-    if (selected.has(entry.runId) && entry.requesterSettleWake) {
+function transitionBatch(
+  batch: readonly SubagentRunRecord[],
+  state: RequesterSettleWakeBatchState,
+): void {
+  transitionBatchSpy(batch.map((entry) => entry.runId).toSorted(), state);
+  for (const entry of batch) {
+    if (entry.requesterSettleWake) {
       entry.requesterSettleWake = {
         ...state,
         ...(entry.requesterSettleWake.retireAfterSettle ? { retireAfterSettle: true } : {}),
@@ -131,10 +133,11 @@ function transitionBatch(runIds: readonly string[], state: RequesterSettleWakeBa
 }
 
 function completeBatch(
-  runIds: readonly string[],
+  batch: readonly SubagentRunRecord[],
   rearmGeneration?: number,
   outcome?: SubagentAnnounceDeliveryResult,
 ): void {
+  const runIds = batch.map((entry) => entry.runId).toSorted();
   if (outcome) {
     completeBatchSpy(runIds, rearmGeneration, outcome);
   } else if (rearmGeneration === undefined) {
@@ -142,12 +145,8 @@ function completeBatch(
   } else {
     completeBatchSpy(runIds, rearmGeneration);
   }
-  const selected = new Set(runIds);
-  for (const entry of listedRequesterRuns()) {
-    if (
-      selected.has(entry.runId) &&
-      entry.requesterSettleWake?.rearmGeneration === rearmGeneration
-    ) {
+  for (const entry of batch) {
+    if (entry.requesterSettleWake?.rearmGeneration === rearmGeneration) {
       entry.requesterSettleWake = undefined;
     }
   }
@@ -158,7 +157,9 @@ function wakeParams(
 ) {
   return {
     requesterSessionKey: REQUESTER,
-    settledEntry: makeSettledChild({ runId: "run-b" }),
+    settledEntry:
+      listedRequesterRuns().find((entry) => entry.runId === "run-b") ??
+      makeSettledChild({ runId: "run-b" }),
     transitionBatch,
     completeBatch,
     ...overrides,
@@ -270,7 +271,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       makeSettledChild({ runId: "run-d" }),
     ]);
     await maybeWakeRequesterAfterAllChildrenSettled(
-      wakeParams({ settledEntry: makeSettledChild({ runId: "run-d" }) }),
+      wakeParams({ settledEntry: listedRequesterRuns().find((entry) => entry.runId === "run-d")! }),
     );
 
     const keys = deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey);
@@ -806,8 +807,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   it("replays an ambiguous transport failure with the same idempotency key", async () => {
     const firstChild = makeSettledChild({ runId: "run-a" });
     const secondChild = makeSettledChild({ runId: "run-b" });
-    const children = [firstChild, secondChild];
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([firstChild, secondChild]);
     deliverSpy.mockRejectedValueOnce(new Error("connection lost after admission"));
 
     vi.useFakeTimers();
@@ -841,8 +841,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   it("defers a retry when the requester spawned another active descendant", async () => {
     const firstChild = makeSettledChild({ runId: "run-a" });
     const secondChild = makeSettledChild({ runId: "run-b" });
-    const children = [firstChild, secondChild];
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([firstChild, secondChild]);
     registryRuntimeMock.hasDescendantRunAwaitingSettle
       .mockReturnValueOnce(false)
       .mockReturnValueOnce(false)

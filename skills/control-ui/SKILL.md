@@ -1,6 +1,7 @@
 ---
 name: control-ui
 description: "Operate and troubleshoot the OpenClaw Control UI: navigate connected clients, organize sessions, build session dashboards, and handle direct or Tailscale-hosted Gateways."
+user-invocable: true
 ---
 
 # Control UI
@@ -12,8 +13,8 @@ to inspect or interact with rendered pixels.
 
 - A sidebar item is a **session**, not a dashboard page.
 - Each session owns one board. The board contains tabs and widgets.
-- Pinning a session keeps it in the sidebar. Showing its Dashboard face makes it
-  appear under `/dashboards`.
+- Pinning a session keeps it in the sidebar. Sessions with a stored board appear
+  in the `/dashboards` gallery.
 - `screen` changes connected Control UI layout and navigation. It does not read
   the page or take screenshots.
 - `sessions_list` finds sessions. `sessions` renames, groups, pins, or archives
@@ -31,7 +32,7 @@ typed tool exists.
 2. Read current state before changing it:
    - use `sessions_list` to resolve the session;
    - use `dashboard` with `action: "read"` for the current session;
-   - inspect existing tabs, stable widget names, owners, sizes, and dock state.
+   - inspect existing tabs, stable widget names, owners, sizes, and panel layout.
 3. If the task targets another session's board, move the work into that session.
    Dashboard tools intentionally operate on the current session.
 
@@ -43,7 +44,7 @@ restructuring a board.
 
 Use `screen` for deterministic client commands:
 
-- `navigate` to open a Control UI route;
+- `navigate` to open a session by `sessionKey`;
 - `sidebar_show` / `sidebar_hide` for the session sidebar;
 - `split_right` / `split_down`, `focus`, and `close_pane` for panes;
 - `terminal_show` / `terminal_hide` and `browser_show` / `browser_hide` for
@@ -70,13 +71,17 @@ Control UI tab when possible.
      `pluginKind`.
 4. Use a stable `name` when calling `show_widget`. Reusing the same name with
    new `widget_code` updates the widget in place.
-5. Arrange with `widget_move`, `widget_resize`, tab reordering, and
-   `set_chat_dock`. Prefer size presets and board order over pixel placement.
+5. Arrange with `widget_move`, `widget_resize`, and tab reordering. Prefer size
+   presets and board order over pixel placement.
 6. Pin the current session with `sessions patch` when it should stay prominent.
-7. Call `dashboard focus_tab` to show the intended tab. A connected Control UI
-   switches to Dashboard and persists that session's preferred face. If no UI
-   is connected, the command returns unavailable; have the user open the
-   session, select Dashboard once, and retry.
+7. Call `dashboard focus_tab` to show the intended tab in the dashboard side
+   panel. If no Control UI is connected, the command returns unavailable; have
+   the user open the session and retry.
+8. Choose the presentation after focusing the tab. `set_presentation` with
+   `presentation: "expanded"` expands the dashboard; `"split"` shows it beside
+   chat in the current panel layout. The human can use
+   **Expand side panel** for a full-width dashboard, **Collapse** to bring chat
+   back, or close the panel for chat alone.
 
 Never create a fake top-level page for a dashboard. For a dedicated dashboard,
 use a dedicated session, pin that session, and build its board from inside it.
@@ -97,10 +102,10 @@ use a dedicated session, pin that session, and build its board from inside it.
 Use two layers of proof:
 
 1. **State:** `dashboard read` shows the expected tabs, widgets, names, owners,
-   order, sizes, and dock state; `sessions_list` shows the expected session
+   order, and sizes; `sessions_list` shows the expected session
    metadata.
 2. **Rendered UI:** open the actual Control UI, confirm the correct session and
-   Dashboard face, then inspect or screenshot the widget frame. Exercise any
+   dashboard panel, then inspect or screenshot the widget frame. Exercise any
    important controls.
 
 An HTTP 200 for the shell or widget route is transport proof, not visual proof.

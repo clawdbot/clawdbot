@@ -134,7 +134,10 @@ const {
         return undefined;
       },
     ),
-    createAudioResourceMock: vi.fn() as Mock,
+    createAudioResourceMock: vi.fn(() => ({
+      playbackDuration: 0,
+      read: vi.fn(() => null),
+    })) as Mock,
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn() as Mock,
       off: vi.fn() as Mock,

@@ -1,3 +1,5 @@
+import { channel } from "node:diagnostics_channel";
+import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +11,7 @@ import {
 import {
   cleanupSessionLifecycleArtifactsCore,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
@@ -50,6 +53,92 @@ describe("SQLite lifecycle cleanup reclamation", () => {
   afterEach(() => {
     archiveMaterializationHook.afterMaterialize = undefined;
     closeOpenClawAgentDatabasesForTest();
+  });
+
+  it("does not start a worker when startup cleanup has nothing to reclaim", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:current";
+    const entry = { sessionId: "current-session", updatedAt: now };
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+
+    let workersStarted = 0;
+    const workerChannel = channel("worker_threads");
+    const onWorker = () => {
+      workersStarted += 1;
+    };
+    workerChannel.subscribe(onWorker);
+    try {
+      await expect(
+        cleanupSessionLifecycleArtifactsCore({
+          storePath,
+          sessionKeySegmentPrefix: "cleanup-reclamation-",
+          transcriptContentMarker: "cleanup-reclamation-marker",
+          orphanTranscriptMinAgeMs: 300_000,
+          nowMs: now,
+        }),
+      ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+    } finally {
+      workerChannel.unsubscribe(onWorker);
+    }
+    expect(workersStarted).toBe(0);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(entry);
+  });
+
+  it("reclaims orphan-only history and republishes pending archives on an empty pass", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:current";
+    const sessionId = "orphaned-history";
+    const scope = { sessionKey, storePath };
+    await replaceSessionEntry(scope, { sessionId, updatedAt: now - 600_000 });
+    await replaceTranscriptEvents({ ...scope, sessionId }, [
+      {
+        type: "metadata",
+        runId: "cleanup-reclamation-marker-orphan",
+        timestamp: new Date(now - 600_000).toISOString(),
+      },
+    ]);
+    const current = { sessionId: "current-session", updatedAt: now };
+    await replaceSessionEntry(scope, current);
+    const cleanup = () =>
+      cleanupSessionLifecycleArtifactsCore({
+        storePath,
+        sessionKeySegmentPrefix: "cleanup-reclamation-",
+        transcriptContentMarker: "cleanup-reclamation-marker",
+        orphanTranscriptMinAgeMs: 300_000,
+        nowMs: now,
+      });
+
+    await expect(cleanup()).resolves.toEqual({
+      removedEntries: 0,
+      archivedTranscriptArtifacts: 1,
+    });
+    expect(loadSessionEntry(scope)).toMatchObject(current);
+    await expect(loadTranscriptEvents({ ...scope, sessionId })).resolves.toEqual([]);
+    const database = openDatabase(storePath);
+    const archive = database.db
+      .prepare("SELECT archive_name FROM session_transcript_archives WHERE session_id = ?")
+      .get(sessionId);
+    if (typeof archive?.archive_name !== "string") {
+      throw new Error("expected published orphan archive");
+    }
+    const archivePath = path.join(path.dirname(storePath), archive.archive_name);
+    const bytes = fs.readFileSync(archivePath);
+    fs.rmSync(archivePath);
+    database.db
+      .prepare("UPDATE session_transcript_archives SET published_at = NULL WHERE session_id = ?")
+      .run(sessionId);
+
+    await expect(cleanup()).resolves.toEqual({
+      removedEntries: 0,
+      archivedTranscriptArtifacts: 0,
+    });
+    expect(fs.readFileSync(archivePath)).toEqual(bytes);
+    expect(
+      database.db
+        .prepare("SELECT published_at FROM session_transcript_archives WHERE session_id = ?")
+        .get(sessionId),
+    ).toEqual({ published_at: expect.any(Number) });
+    expect(loadSessionEntry(scope)).toMatchObject(current);
   });
 
   it("keeps the event loop responsive while committing a large transcript", async () => {

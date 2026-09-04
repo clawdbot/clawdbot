@@ -9,6 +9,7 @@ import {
   formatValidationErrors,
   validateRequestFrame,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import {
   createChildDiagnosticTraceContext,
   parseDiagnosticTraceparent,
@@ -16,6 +17,7 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { classifyGatewayStaleInstall } from "../../stale-install.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import {
@@ -95,16 +97,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     }
     const req = parsed;
     logWs("in", "req", { connId, id: req.id, method: req.method });
-    for (;;) {
-      const barrier = deviceCredentialMutationBarrier;
-      if (!barrier) {
-        break;
-      }
-      await barrier.catch(() => undefined);
-      if (isClosed()) {
-        return;
-      }
-    }
+    const context = buildRequestContext();
     const hasCurrentClientAuthority = () => {
       if (closeInvalidatedClient(client, req.method)) {
         return false;
@@ -127,9 +120,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       }
       return true;
     };
-    if (!hasCurrentClientAuthority()) {
-      return;
-    }
     const respond = (
       ok: boolean,
       payload?: unknown,
@@ -192,7 +182,6 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       }
     };
 
-    const context = buildRequestContext();
     const agentRuntimeIdentity = client.internal?.agentRuntimeIdentity;
     const hasCurrentRuntimeAuthority = () => {
       if (
@@ -216,11 +205,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       }
     };
     const policyResponse = registerGatewayPolicyResponse(req.method, client, respondWithAuthority);
-    if (!hasCurrentRuntimeAuthority()) {
-      return;
-    }
 
     const executeRequest = async () => {
+      let entry: GatewayRequestEntry | undefined;
+      // Capture the predecessor before this request publishes its own mutation tail.
+      // Later frames wait on that tail, preserving credential mutation order.
+      const credentialMutationBarrier = deviceCredentialMutationBarrier;
       // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
       // without their requester there is no safe recipient for a late answer.
       const cancelOnDisconnect =
@@ -234,7 +224,33 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         client.socket.once("close", cancelRequest);
       }
       try {
+        entry = context.requestEntryLifetime?.enter({ req, client, context });
+        if (credentialMutationBarrier) {
+          await racePromiseWithAbortSignal(
+            credentialMutationBarrier,
+            context.requestEntryLifetime?.signal,
+          ).catch(() => undefined);
+          // Refuse within the preparation lease; closing neither cancels nor joins
+          // the mutating handler, and must observe this response before entry settles.
+          if (context.requestEntryLifetime?.signal.aborted) {
+            respondWithAuthority(
+              false,
+              undefined,
+              errorShape(ErrorCodes.UNAVAILABLE, "gateway closing before request dispatch", {
+                retryable: true,
+              }),
+            );
+            return;
+          }
+          if (isClosed()) {
+            return;
+          }
+        }
+        if (!hasCurrentClientAuthority() || !hasCurrentRuntimeAuthority()) {
+          return;
+        }
         const { handleGatewayRequest } = await loadGatewayServerMethods();
+        entry?.assertOpen();
         // Node completion traffic retains its native yielding and existing close-drain
         // deadline. Operator requests share bounded starts without serializing completion.
         if (client.connect.role === "operator") {
@@ -251,6 +267,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           }
           await start;
         }
+        entry?.assertOpen();
         // Waiting never grants authority. Ordinary requests may outlive their socket;
         // only request-owned cancellation and current authority fence their start.
         if (
@@ -269,6 +286,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             extraHandlers,
             methodRegistry: getMethodRegistry?.(),
             context,
+            requestEntry: entry,
             ...(requestController ? { signal: requestController.signal } : {}),
           }),
         );
@@ -283,6 +301,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         );
       } finally {
         policyResponse?.finish();
+        entry?.release();
         if (requestController) {
           client.socket.off("close", cancelRequest);
         }

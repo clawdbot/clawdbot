@@ -39,15 +39,58 @@ import {
   type SlackStreamSession,
 } from "../../streaming.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
+import { registerSlackSessionRun } from "../session-run-targets.js";
 import { resolveSlackBotLoopProtection } from "./dispatch-helpers.js";
 import { createSlackProgressRuntime } from "./dispatch-progress.js";
-import { createSlackDispatchSetup } from "./dispatch-setup.js";
+import { createSlackDispatchSetup, type SlackDispatchSetup } from "./dispatch-setup.js";
 import { createSlackStreamingDeliveryRuntime } from "./dispatch-streaming.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const setup = await createSlackDispatchSetup(prepared);
+  const beginSessionRun = () =>
+    registerSlackSessionRun(
+      prepared.ctx,
+      {
+        channelId: prepared.message.channel,
+        // First-mode roots publish in a thread even without a status target.
+        threadTs: setup.streamThreadHint,
+        eventScope: prepared.eventScope,
+      },
+      {
+        ...prepared.route,
+        sessionKey: prepared.ctxPayload.SessionKey ?? prepared.route.sessionKey,
+      },
+    );
+  const upstreamLifecycle = prepared.turnAdoptionLifecycle;
+  let releaseDeferred: (() => void) | undefined;
+  const turnAdoptionLifecycle = upstreamLifecycle && {
+    ...upstreamLifecycle,
+    onDeferred: () => {
+      const accepted = upstreamLifecycle.onDeferred?.();
+      if (accepted !== false) {
+        releaseDeferred ??= beginSessionRun();
+      }
+      return accepted;
+    },
+    onSettled: () => {
+      releaseDeferred?.();
+      upstreamLifecycle.onSettled?.();
+    },
+  };
+  const release = beginSessionRun();
+  await dispatchSlackMessageWithSetup(setup, beginSessionRun, turnAdoptionLifecycle).finally(
+    release,
+  );
+}
+
+async function dispatchSlackMessageWithSetup(
+  setup: SlackDispatchSetup,
+  beginSessionRun: () => () => void,
+  turnAdoptionLifecycle: PreparedSlackMessage["turnAdoptionLifecycle"],
+) {
+  const { prepared } = setup;
   const {
     account,
     cfg,
@@ -161,6 +204,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     return payload;
   };
 
+  let compactFinalDeliveryStarted = false;
+  const clearCompactProgress = async () => {
+    try {
+      // clear also deletes this run's previews displaced by human replies.
+      await draftStream?.clear();
+    } catch (err) {
+      logVerbose(`slack: progress preview cleanup failed (${formatSlackError(err)})`);
+    }
+  };
   const deliverSlackPayload = async (
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
@@ -171,6 +223,26 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         return;
       }
       progress.progressDraft.markFinalReplyStarted();
+      if (!progress.useDraftProgressCard) {
+        compactFinalDeliveryStarted = true;
+        // Compact progress is temporary. Stop its edits before posting a new
+        // final reply, and keep it visible until Slack confirms that send.
+        await draftStream?.discardPending();
+        const supplement = getReplyPayloadTtsSupplement(payload);
+        await delivery.deliverNormally({
+          payload:
+            supplement && !supplement.visibleTextAlreadyDelivered && !payload.text?.trim()
+              ? { ...payload, text: supplement.spokenText }
+              : payload,
+          kind: info.kind,
+          forcedThreadTs: delivery.usedReplyThreadTs,
+        });
+        if (delivery.observedFinalReplyDelivery) {
+          progress.progressDraft.markFinalReplyDelivered();
+          await clearCompactProgress();
+        }
+        return;
+      }
       if (progress.useDraftProgressCard) {
         await delivery.deliverNormally({
           payload,
@@ -414,9 +486,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       history: prepared.turn.history,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
       replyOptions: {
-        ...(prepared.turnAdoptionLifecycle
-          ? { turnAdoptionLifecycle: prepared.turnAdoptionLifecycle }
-          : {}),
+        // Followups can outlive this dispatch and retain their own source address.
+        queuedDeliveryCorrelations: [{ begin: beginSessionRun }],
+        ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
         skillFilter: prepared.channelConfig?.skills,
         sourceReplyDeliveryMode,
         // Room events are observe-style turns; Slack status indicators imply an
@@ -613,6 +685,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     observedReplyDelivery: delivery.observedReplyDelivery,
     fallbackDelivered: streamFallbackDelivered,
   });
+
+  if (
+    progress.isProgressMode &&
+    !progress.useNativeProgressStreaming &&
+    !progress.useDraftProgressCard &&
+    !compactFinalDeliveryStarted &&
+    !dispatchError &&
+    !agentRunFailed &&
+    anyReplyDelivered
+  ) {
+    // A message-tool reply can complete the turn without an automatic final.
+    // Keep its preview during the work, then remove it once delivery is settled.
+    await clearCompactProgress();
+  }
 
   if (pendingFailureNotice && anyReplyDelivered) {
     recordSlackThreadFailureNotice(pendingFailureNotice);

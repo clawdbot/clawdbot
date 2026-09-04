@@ -8,6 +8,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -50,6 +51,25 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
 ]);
+
+// Failed owned cleanup stops replay even for frozen errors crossing bundled chunks.
+// Keep the fact weakly keyed to the original error, never inferred from display text.
+const modelFallbackStops = resolveGlobalSingleton(
+  Symbol.for("openclaw.modelFallbackStops"),
+  () => new WeakSet<Error>(),
+);
+
+export function recordModelFallbackStop(error: Error): void {
+  modelFallbackStops.add(error);
+}
+
+export function hasModelFallbackStop(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, resolveNestedErrors).some(
+    (candidate) =>
+      (candidate instanceof Error && modelFallbackStops.has(candidate)) ||
+      (isFailoverError(candidate) && isCliTerminalStopCode(candidate.code)),
+  );
+}
 
 function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
   const errors = candidate.errors;
@@ -739,7 +759,7 @@ export function resolveModelFallbackError(
   }
   // Recorded terminal stops prohibit replay regardless of provider policy.
   // Keep the wrapper identity before coercion can discard the terminal fact.
-  if (findCliTerminalStopError(err)) {
+  if (hasModelFallbackStop(err)) {
     return { kind: "terminal", error: err };
   }
   if (isAgentHarnessPreflightError(err)) {

@@ -10,14 +10,16 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
+import {
+  createOpenAIRealtimeClientSecret,
+  resolveOpenAIChatGptSubscriptionAuth,
+} from "./realtime-provider-shared.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
 import {
   createOpenAIQuicksilverBrowserSessionBroker,
   OPENAI_QUICKSILVER_CAPABILITIES,
-  resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
 import {
   isOpenAIGptLiveModel,
@@ -97,6 +99,7 @@ type OpenAIInternalRealtimeVoiceProviderApi = {
     providerConfig: RealtimeVoiceProviderConfig;
     agentId?: string;
     model?: string;
+    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
   }) => OpenAIInternalRealtimeVoiceCapabilities;
   isGatewayRelayConfigured?: (ctx: {
     cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
@@ -232,6 +235,8 @@ async function createOpenAIRealtimeBrowserSession(
         ...req,
         model,
         voice,
+        clientControl: { owner: "gateway" },
+        gatewayControl,
         gaSession: sessionConfig,
         gaSideband: {
           createBridge: ({ apiKey, callId, onTerminal }) => {
@@ -261,12 +266,24 @@ async function createOpenAIRealtimeBrowserSession(
               onReady: gatewayControl.onReady,
               onError: gatewayControl.onError,
               onClose: (reason) => {
-                gatewayControl.onClose?.(reason);
-                onTerminal();
+                try {
+                  gatewayControl.onClose?.(reason);
+                } finally {
+                  onTerminal();
+                }
               },
               logger,
             });
-            gatewayControl.bindBridge(bridge);
+            if (gatewayControl.bindControl) {
+              gatewayControl.bindControl({
+                submitToolResult: bridge.submitToolResult.bind(bridge),
+                sendUserMessage: bridge.sendUserMessage.bind(bridge),
+              });
+            } else {
+              // v2026.8.1 hosts expose only bindBridge. Remove this fallback when the
+              // minimum supported host includes bindControl; native negotiation never uses it.
+              gatewayControl.bindBridge(bridge);
+            }
             return bridge;
           },
         },
@@ -460,12 +477,22 @@ export function buildOpenAIRealtimeVoiceProvider(options?: {
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }))
       );
     },
-    resolveBrowserSessionCapabilities: ({ cfg, providerConfig, agentId, model }) => {
+    resolveBrowserSessionCapabilities: ({ cfg, providerConfig, agentId, model, clientControl }) => {
       const config = normalizeProviderConfig(providerConfig);
-      if (isSupportedOpenAIGptLiveModel(model ?? config.model)) {
+      const effectiveModel = model ?? config.model;
+      if (isSupportedOpenAIGptLiveModel(effectiveModel)) {
+        // Older hosts do not prepare this control claim, even when they own native delegations.
+        const supportsGatewayControl =
+          clientControl?.owner === "gateway" &&
+          internalApi.isBrowserSessionConfigured({
+            cfg,
+            providerConfig: { ...providerConfig, model: effectiveModel },
+            agentId,
+          });
         return {
           ...OPENAI_REALTIME_CAPABILITIES,
           ...OPENAI_QUICKSILVER_CAPABILITIES,
+          ...(supportsGatewayControl ? { supportsGatewayControl: true } : {}),
         };
       }
       return {

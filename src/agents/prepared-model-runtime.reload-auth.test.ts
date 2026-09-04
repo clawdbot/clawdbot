@@ -60,7 +60,7 @@ describe("prepared model runtime reload auth adoption", () => {
       catalogMode: "static",
     });
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
-    mocks.createPreparedModelCatalogWorkerInput.mockClear();
+    mocks.createPreparedModelCatalogWorker.mockClear();
     expect((await prepareModelRuntimeSnapshot(input)).modelCatalog.entries).toEqual([]);
 
     mocks.mutationListener?.({
@@ -74,7 +74,7 @@ describe("prepared model runtime reload auth adoption", () => {
       modelCatalog: { entries: [] },
     });
     expect(
-      mocks.createPreparedModelCatalogWorkerInput.mock.calls.at(-1)?.[0].agentFacts.providerIds,
+      mocks.createPreparedModelCatalogWorker.mock.calls.at(-1)?.[0].agentFacts.providerIds,
     ).toContain("custom");
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
@@ -147,7 +147,7 @@ describe("prepared model runtime reload auth adoption", () => {
       catalogMode: "static",
     });
     mocks.runPreparedModelCatalogWorker.mockClear();
-    mocks.createPreparedModelCatalogWorkerInput.mockClear();
+    mocks.createPreparedModelCatalogWorker.mockClear();
     mocks.mutationListener?.({
       agentDir: input.agentDir,
       affectsInheritedStores: false,
@@ -157,7 +157,7 @@ describe("prepared model runtime reload auth adoption", () => {
     await prepareModelRuntimeSnapshot(input);
     expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
     expect(
-      mocks.createPreparedModelCatalogWorkerInput.mock.calls.at(-1)?.[0].agentFacts.providerIds,
+      mocks.createPreparedModelCatalogWorker.mock.calls.at(-1)?.[0].agentFacts.providerIds,
     ).toEqual([]);
   });
 

@@ -1009,6 +1009,8 @@ More help: [Channel troubleshooting](/channels/troubleshooting).
 
 Primary reference: [Configuration reference - Telegram](/gateway/config-channels#telegram).
 
+`openclaw doctor --fix` removes retired tuning settings (`timeoutSeconds`, `mediaGroupFlushMs`, `pollingStallThresholdMs`, `retry`, and `errorCooldownMs`) from their former configuration scopes. Account names and sender-specific tool-policy keys are preserved, even when they match a retired setting name.
+
 <Accordion title="High-signal Telegram fields">
 
 - startup/auth: `enabled`, `botToken`, `tokenFile` (must be a regular file; symlinks are rejected), `accounts.*`

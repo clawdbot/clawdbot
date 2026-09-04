@@ -22,7 +22,7 @@ import {
   completeSessionDelivery,
   enqueueSessionDelivery,
 } from "../infra/session-delivery-queue-storage.js";
-import { readImageProbeFromHeader } from "../media/image-ops.js";
+import { readImageProbeFromHeader, resizeToJpeg } from "../media/image-ops.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -1941,18 +1941,51 @@ describe("createManagedOutgoingImageBlocks", () => {
     ).rejects.toThrow(/0MB limit|32 bytes|byte limit/i);
   });
 
-  it("adds a warning block when an image is resized to fit limits", async () => {
-    const blocks = await createManagedOutgoingImageBlocks({
-      sessionKey: "agent:main:main",
-      mediaUrls: [await createPngDataUrl(200, 120)],
-      stateDir,
-      limits: { maxWidth: 64, maxHeight: 64, maxPixels: 4096 },
-    });
+  it.each([
+    { orientation: undefined, dimensions: "200×120" },
+    { orientation: 5, dimensions: "120×200" },
+    { orientation: 6, dimensions: "120×200" },
+    { orientation: 7, dimensions: "120×200" },
+    { orientation: 8, dimensions: "120×200" },
+  ])(
+    "reports display dimensions in resize warnings for orientation $orientation",
+    async ({ orientation, dimensions }) => {
+      let mediaUrl = await createPngDataUrl(200, 120);
+      if (orientation !== undefined) {
+        const jpeg = await resizeToJpeg({
+          buffer: createSolidPngBuffer(200, 120, { r: 24, g: 64, b: 128 }),
+          maxSide: 200,
+          quality: 80,
+        });
+        // EXIF IFD0 contains one SHORT orientation tag; pixel axes remain 200×120.
+        const exif = Buffer.from(
+          "ffe1002245786966000049492a0008000000010012010300010000000100000000000000",
+          "hex",
+        );
+        exif.writeUInt16LE(orientation, 28);
+        const rotated = Buffer.concat([jpeg.subarray(0, 2), exif, jpeg.subarray(2)]);
+        expect(readImageProbeFromHeader(rotated)).toMatchObject({
+          width: 200,
+          height: 120,
+          orientation,
+        });
+        mediaUrl = `data:image/jpeg;base64,${rotated.toString("base64")}`;
+      }
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [mediaUrl],
+        stateDir,
+        limits: { maxWidth: 64, maxHeight: 64, maxPixels: 4096 },
+      });
 
-    expect(blocks).toHaveLength(2);
-    expect(blocks[0]?.type).toBe("image");
-    expect(requireBlock(blocks, 1).type).toBe("text");
-  });
+      expect(blocks).toHaveLength(2);
+      expect(blocks[0]?.type).toBe("image");
+      expect(requireBlock(blocks, 1)).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(`resized from ${dimensions} to `),
+      });
+    },
+  );
 
   it("updates generated image filenames to the actual format after resizing", async () => {
     const blocks = await createManagedOutgoingImageBlocks({

@@ -671,6 +671,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
   it.each([
     { name: "missing", capabilityRunId: undefined },
     { name: "wrong-run", capabilityRunId: "other-run" },
+    { name: "remote-management", capabilityRunId: "same-run" },
   ])(
     "does not bind $name local-operator authority at Codex tool construction",
     async (testCase) => {
@@ -683,9 +684,13 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       params.trigger = "user";
       params.senderIsOwner = false;
       if (testCase.capabilityRunId) {
-        params.cronCreatorAuthorityCapability = createCronAuthorityCapabilityFixture(
-          testCase.capabilityRunId,
+        const capability = createCronAuthorityCapabilityFixture(
+          testCase.name === "remote-management" ? params.runId : testCase.capabilityRunId,
         );
+        params.cronCreatorAuthorityCapability =
+          testCase.name === "remote-management"
+            ? { ...capability, callerOrigin: { kind: "unknown" }, controlUiAdmin: true }
+            : capability;
       }
 
       const harness = createStartedThreadHarness();

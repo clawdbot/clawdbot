@@ -61,7 +61,8 @@ async function createRealSession(
     },
     {},
   );
-  let getStderr = () => "";
+  // Capture before connect starts the subprocess so failed handshakes retain stderr.
+  const getStderr = drainStderr(transport);
   const session: ChromeMcpSession = {
     client,
     transport,
@@ -75,7 +76,6 @@ async function createRealSession(
         (async () => {
           await client.connect(transport);
           await refreshChromeMcpCleanupProcess(requireSession());
-          getStderr = drainStderr(transport);
           const tools = await client.listTools();
           if (!tools.tools.some((tool) => tool.name === "list_pages")) {
             throw new Error("Chrome MCP server did not expose the expected navigation tools.");

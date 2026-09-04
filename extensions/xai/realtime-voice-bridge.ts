@@ -471,7 +471,6 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
         ? (event as { type: string }).type
         : "unknown";
-    this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
     const payload = JSON.stringify(event);
     captureWsEvent({
       url: this.connectionUrl,
@@ -482,6 +481,8 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       meta: { provider: "xai", capability: "realtime-voice" },
     });
     ws.send(payload);
+    // Observers report a sent frame, so nested control cannot overtake it.
+    this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
   }
 
   private canSubmitInput(): boolean {

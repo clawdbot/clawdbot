@@ -129,6 +129,7 @@ export async function executeCliProcess(params: {
             ? params.events.emitCliCommentaryText
             : undefined,
         onSessionId: params.observeForkSuccessor,
+        onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,
         onUsage: params.diagnostics?.observeUsage,
       })

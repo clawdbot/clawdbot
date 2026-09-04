@@ -154,7 +154,7 @@ struct PairingGatewayOwnershipTests {
             let socket = try #require(fixture.session.latestTask())
             fixture.nextListGate.setValue(gate)
             try await self.waitUntil("receive handler") { socket.hasPendingReceiveHandler() }
-            socket.emitReceiveSuccessOnce(.string(
+            socket.emitReceiveSuccess(.string(
                 #"""
                 {"type":"event","event":"node.pair.requested",
                  "payload":\#(PairingGatewayFixture.pendingRequest()),"seq":1}
@@ -162,7 +162,7 @@ struct PairingGatewayOwnershipTests {
             try await self.waitUntil("held list reply") { gate.isWaiting.value }
             fixture.pending.setValue(false)
             try await self.waitUntil("receive handler") { socket.hasPendingReceiveHandler() }
-            socket.emitReceiveSuccessOnce(.string(
+            socket.emitReceiveSuccess(.string(
                 #"""
                 {"type":"event","event":"node.pair.resolved",
                  "payload":{"requestId":"same-request","decision":"rejected","ts":1800000000001},"seq":2}
@@ -199,7 +199,7 @@ struct PairingGatewayOwnershipTests {
                 let socket = try #require(fixture.session.latestTask())
                 fixture.pending.setValue(false)
                 try await self.waitUntil("receive handler") { socket.hasPendingReceiveHandler() }
-                socket.emitReceiveSuccessOnce(.string(
+                socket.emitReceiveSuccess(.string(
                     #"""
                     {"type":"event","event":"\#(kind.rawValue).pair.resolved",
                      "payload":{"requestId":"same-request","decision":"rejected","ts":1800000000001},"seq":1}

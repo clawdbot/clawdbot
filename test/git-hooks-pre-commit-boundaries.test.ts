@@ -1,9 +1,19 @@
-import { copyFileSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   commitArgs,
   createContentGuardFixture,
+  installFormattingRecorder,
+  installPreCommitFixture,
+  readFormatterLog,
   literals,
   rulePath,
   ruleSetting,
@@ -301,5 +311,142 @@ kill -TERM "$PPID"
       payload.trim(),
     );
     expect(run(dir, "git", ["show", "HEAD:payload.ts"])).toBe("clean");
+  });
+});
+
+function createOperationFixture(linked: boolean, revert = false): { dir: string; primary: string } {
+  const primary = createContentGuardFixture(tempDirs);
+  const commit = (name: string, content: string) => {
+    stage(primary, name, content);
+    run(primary, "git", ["commit", "-qm", "operation fixture"]);
+  };
+  commit("changed.ts", "export const value = 0;\n");
+  run(primary, "git", ["checkout", "-qb", "side"]);
+  commit("changed.ts", "export const value = 1;\n");
+  commit("next.txt", "next step\n");
+  run(primary, "git", ["checkout", "-q", "main"]);
+  if (revert) {
+    run(primary, "git", ["merge", "--ff-only", "side"]);
+  }
+  commit("changed.ts", "export const value = 2;\n");
+  let dir = primary;
+  if (linked) {
+    dir = path.join(primary, "linked");
+    run(primary, "git", ["worktree", "add", "-qb", "linked", dir, "HEAD"]);
+    installPreCommitFixture(dir);
+  }
+  return { dir, primary };
+}
+
+describe.each([false, true])("Git operation state (linked=%s)", (linked) => {
+  it.each([
+    { operation: "merge", args: ["merge", "--no-commit", "side"], state: "MERGE_HEAD" },
+    {
+      operation: "rebase merge",
+      args: ["rebase", "--merge", "side"],
+      state: "rebase-merge/git-rebase-todo",
+    },
+    {
+      operation: "rebase apply",
+      args: ["rebase", "--apply", "side"],
+      state: "rebase-apply/next",
+    },
+    { operation: "cherry-pick", args: ["cherry-pick", "side~1"], state: "CHERRY_PICK_HEAD" },
+    { operation: "revert", args: ["revert", "--no-edit", "side~1"], state: "REVERT_HEAD" },
+    {
+      operation: "cherry-pick sequencer-only",
+      args: ["cherry-pick", "side~1", "side"],
+      state: "sequencer/todo",
+    },
+    {
+      operation: "revert sequencer-only",
+      args: ["revert", "--no-edit", "side~1", "side"],
+      state: "sequencer/todo",
+    },
+  ])("preserves operation staging during $operation", ({ operation, args, state }) => {
+    const { dir, primary } = createOperationFixture(linked, operation.startsWith("revert"));
+    expect(runFailure(dir, "git", args).status).toBe(1);
+    expect(run(dir, "git", ["ls-files", "--unmerged"])).not.toBe("");
+    const metadata = path.resolve(dir, run(dir, "git", ["rev-parse", "--git-path", state]));
+    if (linked) {
+      expect(existsSync(path.join(primary, ".git", state))).toBe(false);
+    }
+    if (state === "sequencer/todo") {
+      stage(dir, "changed.ts", "export const value = 3;\n");
+      // A real resolution commit clears the per-step ref while later steps remain queued.
+      run(dir, "git", commitArgs);
+      for (const ref of ["CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD"]) {
+        expect(
+          existsSync(path.resolve(dir, run(dir, "git", ["rev-parse", "--git-path", ref]))),
+        ).toBe(false);
+      }
+    }
+    const before = readFileSync(metadata);
+    const staged = "export const value=4;\n";
+    const unstaged = `${staged}// unstaged edit\n`;
+    stage(dir, "changed.ts", staged);
+    const stagedOid = run(dir, "git", ["rev-parse", ":changed.ts"]);
+    writeFileSync(path.join(dir, "changed.ts"), unstaged);
+    const log = installFormattingRecorder(
+      dir,
+      "printf '// formatted\\n' >> changed.ts\nprintf formatted",
+    );
+
+    expect(run(dir, "bash", ["git-hooks/pre-commit"])).toBe("");
+    expect(readFormatterLog(log)).toEqual([]);
+    expect(run(dir, "git", ["rev-parse", ":changed.ts"])).toBe(stagedOid);
+    expect(readFileSync(path.join(dir, "changed.ts"), "utf8")).toBe(unstaged);
+    expect(readFileSync(metadata)).toEqual(before);
+
+    stage(dir, "changed.ts", literals[1]);
+    expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
+      "Blocked staged content",
+    );
+    stage(dir, "changed.ts", staged);
+    writeFileSync(path.join(dir, "changed.ts"), unstaged);
+    run(dir, "git", commitArgs);
+    expect(readFormatterLog(log)).toEqual([]);
+    expect(run(dir, "git", ["rev-parse", "HEAD:changed.ts"])).toBe(stagedOid);
+    expect(readFileSync(path.join(dir, "changed.ts"), "utf8")).toBe(unstaged);
+  });
+
+  it("formats and restages with an orphan REBASE_HEAD", () => {
+    const { dir, primary } = createOperationFixture(linked);
+    if (linked) {
+      // Another worktree's real rebase must not suppress this worktree's ordinary commit.
+      expect(runFailure(primary, "git", ["rebase", "--merge", "side"]).status).toBe(1);
+    }
+    const head = run(dir, "git", ["rev-parse", "HEAD"]);
+    // Reproduce the observed orphan state without claiming how it was left behind.
+    run(dir, "git", ["update-ref", "REBASE_HEAD", head]);
+    for (const state of [
+      "MERGE_HEAD",
+      "CHERRY_PICK_HEAD",
+      "REVERT_HEAD",
+      "rebase-merge",
+      "rebase-apply",
+      "sequencer",
+    ]) {
+      expect(
+        existsSync(path.resolve(dir, run(dir, "git", ["rev-parse", "--git-path", state]))),
+      ).toBe(false);
+    }
+    expect(runFailure(dir, "git", ["rebase", "--continue"]).stderr).toContain(
+      "no rebase in progress",
+    );
+    const working = "export const value=5;\n";
+    stage(dir, "changed.ts", working);
+    const log = installFormattingRecorder(
+      dir,
+      "printf '// formatted\\n' >> changed.ts\nprintf formatted",
+    );
+    expect(run(dir, "bash", ["git-hooks/pre-commit"])).toBe("formatted");
+    expect(readFormatterLog(log)).toEqual([
+      "oxfmt --write --no-error-on-unmatched-pattern changed.ts",
+    ]);
+    expect(readFileSync(path.join(dir, "changed.ts"), "utf8")).toBe(`${working}// formatted\n`);
+    expect(run(dir, "git", ["show", ":changed.ts"])).toBe(`${working}// formatted`);
+    expect(run(dir, "git", ["diff", "--", "changed.ts"])).toBe("");
+    expect(run(dir, "git", ["rev-parse", "REBASE_HEAD"])).toBe(head);
   });
 });

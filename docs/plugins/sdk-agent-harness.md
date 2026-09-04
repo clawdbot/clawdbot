@@ -139,6 +139,11 @@ rotation remains available. Authored settings on that tuple and explicit per-run
 parameters must be supported by the pinned runtime, not silently dropped or
 redirected through another runtime.
 
+Core binds steering and pending-question authority to the final prepared model
+route, using the reply's original caller-policy snapshot for both its fingerprint
+and incoming-message projection. Native ownership or model-selection hooks do not
+replace that snapshot or authorize a different caller.
+
 Core carries optional `expectedSessionRuntimeOwnership` into the attempt, including
 `modelRef` for host-auth bindings. This is a nonauthorizing comparison, not a binding,
 credential, or retained capability. Revalidate during preflight, under the binding
@@ -457,6 +462,52 @@ The Codex plugin enforces the minimum app-server version documented in
 blocks older, malformed, or unversioned servers. Admission permits startup to
 continue; it does not prove later runtime or capability operations will succeed.
 
+### Guarded active-run injection
+
+Backends that accept source-bound controls advertise `messageInjectionV2` on
+their active-run handle. The capability is contextually typed by
+`setActiveEmbeddedRun` from `openclaw/plugin-sdk/agent-harness-runtime`; its type
+can also be derived from that function's handle parameter. It requires
+`version: 2`, `isAvailable()`, and
+`queueMessage(text, options, assertCurrent, authorityKind)`.
+The required third argument is a host-owned assertion for that individual
+injection, not a run ID, fingerprint, or diagnostic identity. The required
+`authorityKind` is `"run"` for ordinary input or `"source-bound"` for input
+whose source lifetime also constrains dispatch. Both retain the backing-run
+check; a source-bound input must never be relabeled as ordinary input.
+
+Invoke `assertCurrent()` alongside the backend's own live-run check after
+awaited preparation and immediately before queue mutation or provider dispatch.
+The host normalizes false or throwing source authority into rejection and keeps
+that injection revoked even if the source later appears current again. Plugins
+invoke the supplied assertion; they do not reconstruct its authority. Batched
+backends retain and revalidate each item's assertion, including before retries;
+omit revoked items without cancelling independently accepted work or poisoning
+later authorized controls.
+
+Optional V2 `claimPendingUserInputAnswer(text, options, assertCurrent, authorityKind)`
+and `cancelPendingUserInput(resolvedBy, assertCurrent, authorityKind)` methods
+require the same assertion and authority kind. Carry it through question registration and persistence to the final
+claim or cancellation boundary. Do not implement V2 by checking only before
+calling an SDK method that itself awaits before dispatch. If the sink cannot
+enforce the assertion, leave V2 unsupported.
+
+The V1 `messageInjection`, queue options, `queueAgentHarnessMessage`, and
+`setActiveEmbeddedRun` signatures shipped in v2026.8.1 remain source-compatible.
+Unscoped V1 injection retains its existing behavior. Source-bound controls
+require V2 and reject visibly before queue or I/O when only V1 is available;
+they never fall back to an unchecked V1 callback. Existing deprecation windows
+are unchanged.
+
+Copilot remains V1-only: `@github/copilot-sdk` 1.0.11 awaits trace-context and
+JSON-RPC writer preparation after `send` entry without a final-dispatch guard.
+Scoped steering therefore fails before its queue, question claim, or provider
+I/O; ordinary unscoped injection is unchanged. Check status, cancel the run, or
+start a new explicit request instead. Update the runtime when guarded injection
+is supported. Once upstream supplies a final-dispatch assertion, migrate
+Copilot to V2 and remove this internal V1 reliance; do not add an unchecked
+fallback or shorten the shipped API's deprecation window.
+
 ### Tool-result middleware
 
 Bundled plugins and explicitly enabled installed plugins with matching
@@ -476,6 +527,11 @@ Legacy bundled plugins can still use
 middleware, but new result transforms should use the runtime-neutral API. The
 embedded-runner-only `api.registerEmbeddedExtensionFactory(...)` hook has been
 removed; embedded tool-result transforms must use runtime-neutral middleware.
+
+Retain `details.messageDelivery.sourceReplyDelivered` from the host message tool
+before middleware transforms its result, and carry it into the attempt result.
+This confirms a final external source reply and does not depend on destination
+arguments or transcript mirrors.
 
 ### Terminal outcome classification
 
@@ -554,6 +610,83 @@ their protocol envelope and must pass the exact turn signal and active-owner
 check; `run(...)` returns an answered, declined, cancelled, or unsupported
 outcome for the adapter to translate.
 
+Pass the original prepared attempt, including its exact `hostCapabilities`
+object, as `delivery` when using the native question helpers. Core captures the
+question creator's prepared caller policy and lifetime before any steering handle
+is published. Copies of the capability object do not carry that binding. Built-in
+tools capture their creation scope; CLI native questions retain the original
+caller policy before tool-cap translation. The answering turn's model choice or
+queued operation never replaces the question creator's authority.
+
+Plain-text channel answers use this creator binding even when the runtime cannot
+accept ordinary steering. Missing, closed, or mismatched creator authority produces
+a visible refusal, not a new agent turn. The incoming source and creator must
+both remain current through the final answer dispatch. Gateway-launched CLI MCP
+tools use the same original caller snapshot, bound to their exact live grant.
+Standalone attach grants have no prepared run snapshot; their questions retain
+structured question controls but do not accept ordinary channel text.
+
+Omit `gatewayCall` in `runAgentHarnessGatewayQuestion(...)` or
+`agentHarnessStructuredInput.run(...)` to use the core-owned Gateway transport.
+It carries each input's source and backing-run assertion through registration,
+persistence, connection preparation, and hello, then checks synchronously
+immediately before the resolve request is sent. A refused input releases only
+its own reservation: the question remains pending and its prompt and later
+valid input remain usable. Persistence and a local reservation are not an
+answered transition. Closure after dispatch does not make an accepted answer
+replayable. Plain-text submissions carry a fresh, bounded `resolutionId` on
+`question.resolve`; the question owner records it only when that submission commits.
+Host waiters request `includeResolutionId: true` on `question.waitAnswer` and use
+that receipt to recover a lost response using the question waiter's existing
+deadline, not a separate shorter timer. Another actor's answer, even identical
+text, does not establish consumption of this input. A definitive resolve rejection
+releases the input immediately; a cancelled or expired waiter proves non-consumption.
+
+If the receipt is missing, rejected, or still pending when the waiter settles,
+the host records the input as unconfirmed and non-replayable rather than sending
+it through ordinary steering again. This is routing ownership, not proof that the
+answer committed. Channel replies, Gateway chat, Talk, and the TUI surface the
+uncertainty without starting another turn or cancelling independently accepted
+backing work. Notice delivery or source adoption failure does not release the
+input for replay. Backing-run abort, timeout, and error cleanup retain independent
+authority.
+
+Custom transports must preserve these request and response fields for lost-response
+recovery. A legacy receipt-less response remains unconfirmed; it does not prove
+that another submission answered the question. `resolutionId` is an opaque
+1–128-character correlation value, not permission
+to resolve a question or reuse closed-source authority. Ordinary waiters omit
+`includeResolutionId` (default `false`) and receive the existing response shape;
+question records, lookup results, and broadcast events never gain the receipt.
+The receipt is transient question-lifecycle state, not a durable record or migration.
+
+The shipped `AgentHarnessQuestionGatewayCall` function type is unchanged.
+Legacy function overrides remain valid for ordinary, unscoped input, including
+run-lifetime checks. Source-bound input with only a legacy callback fails before
+input persistence or resolution I/O. Function arity or the presence of a callback
+does not establish guarded transport support.
+
+A custom guarded transport instead supplies an explicit object:
+
+```typescript
+type QuestionDispatcher = Exclude<
+  Parameters<typeof agentHarnessStructuredInput.run>[0]["gatewayCall"],
+  AgentHarnessQuestionGatewayCall | undefined
+>;
+```
+
+That object has `version: 2` and `call(request)`. The request contains `method`,
+`options` (`timeoutMs?`), `params?`, `signal?`, and a required `authority`:
+`{ kind: "unscoped" }` or `{ kind: "source-bound", assertCurrent }`.
+The source-bound variant requires a synchronous assertion. Invoke it after all
+awaited preparation and immediately before every dispatch or retry, without an
+intervening await. Never substitute an observer or an after-response check.
+When delegating to `callGatewayTool`, forward the protected assertion in its
+existing extra bag as
+`dispatchAuthority: { version: 2, kind: "source-bound", assertCurrent }`.
+The same bag accepts `kind: "run"` for run-only assertions. These are local code
+contracts, not Gateway wire fields, operator settings, or new SDK exports.
+
 Each prepared attempt also receives a versioned `params.hostCapabilities`
 object. Use `bindToolSurface(...)` before exposing plugin-built OpenClaw tools,
 and use its policy and approval operations for native actions. A native action
@@ -604,6 +737,27 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+After the last policy filter, schema quarantine, and native registration
+intersection, call `finalizeAgentToolAvailability(tools, options?)` from
+`openclaw/plugin-sdk/agent-harness-runtime` before snapshotting tool definitions.
+It returns a new array containing the same tool objects and updates only
+host-owned dependent affordances, such as collector spawning when its native
+result reader is callable. It does not add tools, change profiles, replace
+executors, or rebind authorization and approval wrappers.
+
+Pass `options.toolExecutionAllow` when a run retains schemas for tools it cannot
+execute. Omission uses the supplied tool set; an empty list permits no execution.
+The optional synchronous `options.onPrepared(tool)` observer identifies definitions
+whose owner participated, so a harness can refresh their cached schemas and
+prompt text without changing unrelated definitions. Reapply finalization after
+later filtering, and keep the existing attempt-lifecycle guards on every tool.
+Finalization does not update declarations already registered in a native runtime.
+Preserve native-owned catalog bytes and fingerprints; current executor guards
+still reject unavailable modes. New host-owned declarations use the harness's
+existing catalog-registration lifecycle.
+OpenClaw Code Mode's joined `agents.run()` path retains internal waiting; this
+helper does not make raw collector calls available without a native result reader.
 
 ### Paired-device execution
 

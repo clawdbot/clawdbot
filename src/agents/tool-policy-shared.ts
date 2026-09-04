@@ -81,8 +81,8 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
 
   const allowed = new Set<string>();
   for (const toolName of allowedToolNames) {
-    const normalizedToolName = normalizeToolPolicyName(toolName);
     const foldedToolName = normalizeLowercaseStringOrEmpty(toolName);
+    const normalizedToolName = TOOL_NAME_ALIASES[foldedToolName] ?? foldedToolName;
     if (normalizedToolName) {
       allowed.add(normalizedToolName);
     }
@@ -97,7 +97,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
     }
   }
 
-  const resolvedPrefix = normalizeToolPolicyName(normalizedPrefix);
+  const resolvedPrefix = TOOL_NAME_ALIASES[normalizedPrefix] ?? normalizedPrefix;
   if (resolvedPrefix !== normalizedPrefix) {
     for (const toolName of allowed) {
       if (toolName.startsWith(resolvedPrefix)) {

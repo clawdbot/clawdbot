@@ -295,6 +295,7 @@ function resolveSourceWorkerExecArgv(): string[] {
 
 function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
   expectedMessageType: "done" | "published" | "reclaimed";
+  onCommitRequest?: () => void;
   transferList?: ArrayBuffer[];
   workerData: object;
 }): Promise<Result[]> {
@@ -317,14 +318,20 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
     let results: Result[] | undefined;
     let workerError: Error | undefined;
     worker.on("message", (message: { results: Result[]; type: string }) => {
-      if (message.type === params.expectedMessageType) {
+      if (message.type === "commit-request") {
+        try {
+          params.onCommitRequest?.();
+        } catch (error) {
+          workerError = toStringifiedError(error);
+        }
+      } else if (message.type === params.expectedMessageType) {
         (results ??= []).push(...message.results);
       }
     });
     worker.once("error", (error) => {
       // An uncaught Worker error is followed by exit. Wait for that event so
       // callers never race the Worker's SQLite/file handles on Windows.
-      workerError = toStringifiedError(error);
+      workerError ??= toStringifiedError(error);
     });
     worker.once("exit", (code) => {
       worker.removeAllListeners();
@@ -352,6 +359,7 @@ const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
 export function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
   expectedMessageType: "done" | "published" | "reclaimed";
+  onCommitRequest?: () => void;
   transferList?: ArrayBuffer[];
   workerData: object;
 }): Promise<Result[]> {

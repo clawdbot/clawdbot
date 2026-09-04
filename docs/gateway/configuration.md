@@ -593,9 +593,11 @@ back to OpenClaw.
 | Gateway push            | `gateway.push.apns.relay`                                                                                                                                                    | No (next push)                         |
 | Gateway terminal        | `gateway.terminal`                                                                                                                                                           | No                                     |
 | Gateway credentials     | `gateway.auth.token`, `gateway.auth.password`, with the same effective auth mode                                                                                             | No (old shared-auth clients reconnect) |
+| Gateway auth limits     | `gateway.auth.rateLimit`                                                                                                                                                     | No (retains limiter state)             |
+| Discovery visibility    | `discovery.mdns.mode`                                                                                                                                                        | No (replaces discovery advertisements) |
 | Browser defaults        | `browser.profiles`, `browser.defaultProfile`, `browser.headless`, `browser.executablePath`, `browser.attachOnly`, `browser.cdpUrl`, `browser.noSandbox`, `browser.extraArgs` | No                                     |
 | Gateway server          | Other `gateway.*` settings (port, bind, auth mode, roles, tailscale, TLS)                                                                                                    | **Yes**                                |
-| Infrastructure          | `discovery`, other `browser` settings, `plugins.load`, `plugins.installs`                                                                                                    | **Yes**                                |
+| Infrastructure          | Other `discovery` and `browser` settings, `plugins.load`, `plugins.installs`                                                                                                 | **Yes**                                |
 
 Changes to `channels.defaults` and `channels.modelByChannel` restart loaded
 channel runtimes to refresh their shared policy. Manually stopped accounts stay
@@ -634,6 +636,18 @@ Browser default-profile changes apply on the next request. Launch-setting
 changes replace affected managed browser processes when next used; externally
 attached browsers stay running. Browser enablement, evaluation, SSRF policy,
 extension relay, and tab cleanup remain restart-owned.
+
+Authentication rate-limit changes retain recorded failures, earned lockout
+deadlines, and pending loopback delays. New limits and loopback exemptions apply
+to subsequent attempts; tightening the attempt limit can lock a client based on
+its retained failures. Removing `gateway.auth.rateLimit` restores the defaults.
+Browser-origin and node-reapproval budgets remain nonexempt.
+
+Discovery mode changes replace the current advertisements without interrupting
+Gateway connections. Switching from `full` to `minimal` removes extra TXT hints
+from LAN advertisements and any configured wide-area DNS-SD zone. `off` stops
+LAN advertisements while configured wide-area discovery remains enabled. The
+Bonjour plugin must already be enabled, and environment overrides still apply.
 
 Token and password rotation hot-applies only when the effective auth mode stays
 the same. Existing clients using the old shared credential must reconnect with

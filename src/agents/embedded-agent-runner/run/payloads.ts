@@ -143,7 +143,6 @@ export function buildEmbeddedRunPayloads(params: {
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
-  suppressToolErrorWarnings?: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTargets?: MessagingToolSend[];
@@ -365,15 +364,13 @@ export function buildEmbeddedRunPayloads(params: {
   }
   if (params.lastToolError) {
     // A restart intentionally aborts the active tool while the Gateway takes over.
-    // Keep that lifecycle status independent from tool-error suppression.
+    // Report the lifecycle status instead of a tool failure.
     const isRestartStatus = params.runStopReason === "restart";
     const warningText = isRestartStatus
       ? "Gateway restarting…"
       : buildFailureWarning({
           lastToolError: params.lastToolError,
           hasUserFacingReply,
-          suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
-          suppressToolErrorWarnings: params.suppressToolErrorWarnings,
           verboseLevel: params.verboseLevel,
           useMarkdown,
         });

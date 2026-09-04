@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseScreenSnapshotPayload } from "../../cli/nodes-screen.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   ComputerActParams,
@@ -13,6 +12,7 @@ import type {
 import {
   COMPUTER_CONTRACT_MISMATCH,
   parseComputerActResult,
+  parseScreenSnapshotResult,
 } from "../../plugins/computer-use-contract.js";
 import {
   type EligibleNodeMessages,
@@ -463,7 +463,7 @@ export class ComputerToolSession {
         commandParams,
         signal,
       });
-      const parsed = parseScreenSnapshotPayload(payload);
+      const parsed = parseScreenSnapshotResult(payload);
       if (!parsed.displayFrameId) {
         throw new Error(
           "screen.snapshot response missing displayFrameId; update the node app before computer use",

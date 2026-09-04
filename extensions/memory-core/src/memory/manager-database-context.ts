@@ -1,6 +1,7 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import { closeMemoryDatabase } from "./manager-db.js";
 
 export class MemoryIndexDatabase {
   readonly vector: {
@@ -60,10 +61,21 @@ export abstract class MemoryManagerDatabaseContext {
     return reindexDatabase.exit(run);
   }
 
-  protected withReindexDatabase<T>(
+  protected async withReindexDatabase<T>(
     database: MemoryIndexDatabase,
     run: () => Promise<T>,
   ): Promise<T> {
-    return reindexDatabase.run({ manager: this, database }, run);
+    try {
+      const result = await reindexDatabase.run({ manager: this, database }, run);
+      // Publication attaches the finished file only after its writer closes.
+      closeMemoryDatabase(database.db);
+      return result;
+    } finally {
+      if (database.db.isOpen) {
+        try {
+          closeMemoryDatabase(database.db);
+        } catch {}
+      }
+    }
   }
 }

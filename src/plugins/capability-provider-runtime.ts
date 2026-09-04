@@ -10,6 +10,7 @@ import {
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
+import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import {
@@ -84,6 +85,7 @@ function resolveCapabilityPluginIds(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "plugins">;
 }): CapabilityPluginResolution {
   const snapshot = loadCapabilityManifestSnapshot(params);
+  let normalizedConfig: NormalizedPluginsConfig | undefined;
   const availableContractPlugins = snapshot.plugins.filter(
     (plugin) =>
       hasManifestContractValue({
@@ -95,6 +97,8 @@ function resolveCapabilityPluginIds(params: {
         snapshot,
         plugin,
         config: params.cfg,
+        normalizedConfig:
+          params.cfg?.plugins && (normalizedConfig ??= normalizePluginsConfig(params.cfg.plugins)),
         // Legacy TTS remains available when the operator disables plugins globally.
         allowRestrictiveAllowlistBypass:
           params.key === "speechProviders" && params.cfg?.plugins?.enabled === false,
@@ -410,6 +414,7 @@ function filterPolicyAllowedCapabilityProviders<K extends CapabilityProviderRegi
   if (!params.cfg?.plugins) {
     return params.entries;
   }
+  let normalizedConfig: NormalizedPluginsConfig | undefined;
   const origins = new Map(
     (params.registry?.plugins ?? []).map((plugin) => [plugin.id, plugin.origin]),
   );
@@ -420,6 +425,7 @@ function filterPolicyAllowedCapabilityProviders<K extends CapabilityProviderRegi
     return isManifestPluginOwnerAllowedByControlPlanePolicy({
       plugin: { id: entry.pluginId, origin },
       config: params.cfg,
+      normalizedConfig: (normalizedConfig ??= normalizePluginsConfig(params.cfg?.plugins)),
       allowRestrictiveAllowlistBypass:
         params.key === "speechProviders" && params.cfg?.plugins?.enabled === false,
       allowBundledProviderCompat: isBundledProviderCompatContract(params.key),

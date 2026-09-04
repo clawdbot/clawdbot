@@ -14,7 +14,6 @@ import {
   UI_APPEARANCE_PREFERENCE_KEYS,
   validateTalkCatalogParams,
   validateTalkConfigParams,
-  validateTalkModeParams,
   validateTalkSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope.js";
@@ -245,6 +244,8 @@ function buildTalkTtsConfig(
 }
 
 function buildTalkCatalog(config: OpenClawConfig) {
+  // Reject ambiguous ownership before provider discovery loads unrelated plugins.
+  const realtimeAgentId = resolveTalkSessionAgentId(config);
   const talkResolved = resolveActiveTalkProviderConfig(config.talk);
   const activeSpeechProvider = canonicalizeSpeechProviderId(talkResolved?.provider, config);
   const transcriptionConfig = buildTalkTranscriptionConfig(config);
@@ -266,7 +267,6 @@ function buildTalkCatalog(config: OpenClawConfig) {
   // Mirror talk.client.create's resolution inputs (agent scope + top-level model
   // override) so catalog readiness matches what session creation will actually do;
   // diverging here previously reported GPT-Live over OAuth as unconfigured.
-  const realtimeAgentId = resolveTalkSessionAgentId(config);
   const realtimeModelOverride = realtimeConfig.model
     ? { providerConfigOverrides: { model: realtimeConfig.model } }
     : {};
@@ -749,7 +749,7 @@ function stripUnresolvedSecretApiKeyFromRecord(
   return rest;
 }
 
-/** Gateway request handlers for Talk config, catalog, mode, sessions, and speech. */
+/** Gateway request handlers for Talk config, catalog, sessions, and speech. */
 export const talkHandlers: GatewayRequestHandlers = {
   ...talkSessionHandlers,
   ...talkClientHandlers,
@@ -923,26 +923,6 @@ export const talkHandlers: GatewayRequestHandlers = {
     } catch (err) {
       respond(false, undefined, talkSpeakError("synthesis_failed", formatForLog(err)));
     }
-  },
-  "talk.mode": async ({ params, respond, context, client, isWebchatConnect }) => {
-    if (client && isWebchatConnect(client.connect) && !(await context.hasConnectedTalkNode())) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "talk disabled: no connected Talk-capable nodes"),
-      );
-      return;
-    }
-    if (!assertValidParams(params, validateTalkModeParams, "talk.mode", respond)) {
-      return;
-    }
-    const payload = {
-      enabled: (params as { enabled: boolean }).enabled,
-      phase: (params as { phase?: string }).phase ?? null,
-      ts: Date.now(),
-    };
-    context.broadcast("talk.mode", payload, { dropIfSlow: true });
-    respond(true, payload, undefined);
   },
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
