@@ -158,6 +158,19 @@ describe("downloadInboundMedia", () => {
     expect(downloadMediaMessage.mock.calls[0]?.[1]).toBe("stream");
   });
 
+  it("preserves the store's fractional limit error for the message owner", async () => {
+    const limitError = Object.assign(new Error("Media exceeds 256KB limit"), { code: "too-large" });
+    saveMediaStream.mockRejectedValueOnce(limitError);
+
+    await expect(
+      downloadInboundMedia(
+        { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
+        mockSock as never,
+        0.25 * 1024 * 1024,
+      ),
+    ).rejects.toBe(limitError);
+  });
+
   it("propagates transport download failures to the message owner", async () => {
     downloadMediaMessage.mockRejectedValueOnce(new Error("expired media reference"));
 

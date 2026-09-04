@@ -310,15 +310,16 @@ struct StatusMenuHeaderView: View {
 
     private func loadBrowserEnabled() async {
         let config = await ConfigStore.load()
-        let browser = config["browser"] as? [String: Any]
+        guard config.isCurrent else { return }
+        let browser = config.root["browser"] as? [String: Any]
         self.browserEnabled = browser?["enabled"] as? Bool ?? true
     }
 
     private func saveBrowserEnabled(_ enabled: Bool) async {
         var config = await ConfigStore.load()
-        var browser = config["browser"] as? [String: Any] ?? [:]
+        var browser = config.root["browser"] as? [String: Any] ?? [:]
         browser["enabled"] = enabled
-        config["browser"] = browser
+        config.root["browser"] = browser
         do {
             try await ConfigStore.save(config)
         } catch {

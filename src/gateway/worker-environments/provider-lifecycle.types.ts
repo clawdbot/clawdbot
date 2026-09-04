@@ -20,6 +20,12 @@ import type {
 } from "./store.js";
 import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 
+export type WorkerEnvironmentAbandonment = {
+  sessionId: string;
+  ownerEpoch: number;
+  authorize?: () => void;
+};
+
 export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;

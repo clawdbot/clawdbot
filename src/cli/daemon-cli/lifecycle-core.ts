@@ -39,7 +39,7 @@ import {
   emitDaemonAlreadyRunning,
   emitDaemonScheduledRestart,
 } from "./response.js";
-import { filterContainerGenericHints } from "./shared.js";
+import { filterContainerGenericHints, resolveDaemonInstallBlockMessage } from "./shared.js";
 
 type DaemonLifecycleOptions = {
   json?: boolean;
@@ -637,15 +637,13 @@ export async function runServiceRestart(params: {
       const configToken = await resolveGatewayTokenForDriftCheck({ cfg, env: driftEnv });
       const driftIssue = checkTokenDrift({ serviceToken, configToken });
       if (driftIssue) {
-        const warning = driftIssue.detail
-          ? `${driftIssue.message} ${driftIssue.detail}`
-          : driftIssue.message;
+        const recovery =
+          resolveDaemonInstallBlockMessage("gateway") ??
+          `Run \`${formatCliCommand("openclaw gateway install --force")}\` to refresh the service token source.`;
+        const warning = `${driftIssue.message} ${recovery}`;
         warnings.push(warning);
         if (!json) {
-          defaultRuntime.log(`\n⚠️  ${driftIssue.message}`);
-          if (driftIssue.detail) {
-            defaultRuntime.log(`   ${driftIssue.detail}\n`);
-          }
+          defaultRuntime.log(`\n⚠️  ${warning}\n`);
         }
       }
     } catch (err) {

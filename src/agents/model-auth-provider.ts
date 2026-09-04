@@ -33,7 +33,7 @@ import {
   resolveManagedSecretRefRuntimeProviderAuth,
 } from "./model-auth-runtime-config.js";
 import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
+import { prepareSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
@@ -81,6 +81,7 @@ export function resolveScopedAuthProfileStore(params: {
   preferredProfile?: string;
 }): AuthProfileStore {
   return ensureAuthProfileStore(params.agentDir, {
+    profileId: params.profileId,
     externalCli: externalCliDiscoveryForProviderAuth(params),
   });
 }
@@ -625,10 +626,11 @@ export async function resolveApiKeyForProviderCore(params: {
     return deferredAuthProfileResult;
   }
 
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
+  const syntheticLocalAuth = await prepareSyntheticLocalProviderAuth({
     cfg,
     provider,
     modelApi: params.modelApi,
+    workspaceDir: params.workspaceDir,
     secretSentinels: params.secretSentinels,
     allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
   });

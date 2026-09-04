@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
 import {
   emitDiagnosticEvent,
   emitTrustedSkillUsedDiagnosticEvent,
@@ -39,6 +40,8 @@ describe("skill curator usage tracking", () => {
     const database = openOpenClawStateDatabase({ env: testState.env });
     const skillFile = testState.path("skills", "daily-brief", "SKILL.md");
     const unregister = registerSkillUsageTracking({ env: testState.env });
+    expect(hasInternalDiagnosticEventInterest("skill.used")).toBe(true);
+    expect(hasInternalDiagnosticEventInterest("gateway.rpc")).toBe(false);
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const event = {
       type: "skill.used",
@@ -111,6 +114,7 @@ describe("skill curator usage tracking", () => {
     });
 
     unregister();
+    expect(hasInternalDiagnosticEventInterest("skill.used")).toBe(false);
     emitTrustedSkillUsedDiagnosticEvent(event, { skillUsage: { skillFile } });
     await waitForDiagnosticEventsDrained();
     expect(

@@ -22,6 +22,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   dispatchCronDeliveryMock,
+  isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
   callGatewayMock,
@@ -33,10 +34,12 @@ import {
   removeCronRunContinuationSessionIfIdleMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronSessionMock,
+  resolveAllowedModelRefMock,
   resolveCronDeliveryPlanMock,
   resolveCronPayloadOutcomeMock,
   resolveDeliveryTargetMock,
   runEmbeddedAgentMock,
+  runCliAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -215,6 +218,128 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       } finally {
         createLease.mockRestore();
       }
+    },
+  );
+
+  it.each(["base", "continuation", "aborted clear", "interrupted clear"] as const)(
+    "seals only accepted CLI continuity at %s settlement",
+    async (failurePoint) => {
+      const accessor = await vi.importActual<
+        typeof import("../../config/sessions/session-accessor.js")
+      >("../../config/sessions/session-accessor.js");
+      const dir = tempDirs.make("openclaw-cron-binding-settlement-");
+      const target = {
+        agentId: "main",
+        sessionId: `binding-${failurePoint}`,
+        sessionKey: "agent:main:cron:binding-settlement",
+        storePath: path.join(dir, "openclaw-agent.sqlite"),
+      };
+      const previousBinding = { sessionId: "previous-native", authProfileId: "anthropic:cli" };
+      const nextBinding = { ...previousBinding, sessionId: "next-native" };
+      const clearing = failurePoint === "aborted clear" || failurePoint === "interrupted clear";
+      await accessor.replaceSessionEntry(target, {
+        sessionId: target.sessionId,
+        lifecycleRevision: "binding-revision",
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": previousBinding },
+      });
+      await accessor.appendTranscriptMessage(target, {
+        message: { role: "user", content: "Synthetic cron continuity prompt" },
+      });
+      const initialSessionEntry = accessor.loadSessionEntry(target);
+      if (!initialSessionEntry) {
+        throw new Error("Expected the persisted CLI parent before admission");
+      }
+      resolveCronSessionMock.mockReturnValue(
+        makeCronSession({
+          storePath: target.storePath,
+          store: { [target.sessionKey]: { ...initialSessionEntry } },
+          initialSessionEntry,
+          isNewSession: false,
+          lifecycleRevision: "binding-revision",
+          sessionEntry: { ...initialSessionEntry },
+        }),
+      );
+      loadSessionEntryMock.mockImplementation(() => accessor.loadSessionEntry(target));
+      isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
+      resolveAllowedModelRefMock.mockReturnValue({
+        ref: { provider: "claude-cli", model: "claude-sonnet-4-6" },
+      });
+      const controller = new AbortController();
+      let interrupted = false;
+      const interrupt = () => {
+        interrupted = true;
+        controller.abort(new Error("Synthetic binding commit interruption"));
+      };
+      runCliAgentMock.mockImplementationOnce(async () => {
+        if (failurePoint === "aborted clear") {
+          interrupt();
+        }
+        return {
+          payloads: [{ text: "Synthetic cron answer" }],
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: clearing
+              ? { sessionId: "", clearCliSessionBinding: true }
+              : { sessionId: nextBinding.sessionId, cliSessionBinding: nextBinding },
+          },
+        };
+      });
+      const patchWithAbort: typeof accessor.patchSessionEntryCore = (scope, update, options) => {
+        const assertCommitAllowed = options?.assertCommitAllowed;
+        return accessor.patchSessionEntryCore(scope, update, {
+          ...options,
+          ...(assertCommitAllowed
+            ? {
+                assertCommitAllowed: () => {
+                  const isBase = scope.sessionKey === target.sessionKey;
+                  if ((failurePoint !== "continuation") === isBase) {
+                    interrupt();
+                  }
+                  assertCommitAllowed();
+                },
+              }
+            : {}),
+        });
+      };
+      patchSessionEntryMock.mockImplementation(patchWithAbort);
+
+      const result = await runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          agentId: "main",
+          // The scheduler's cron key enables the hidden exact-run continuation.
+          sessionKey: "cron:binding-settlement",
+          job: makeIsolatedAgentJobFixture({
+            sessionTarget: `session:${target.sessionKey}`,
+            delivery: { mode: "none" },
+            payload: {
+              kind: "agentTurn",
+              message: "Synthetic cron continuity prompt",
+              model: "claude-cli/claude-sonnet-4-6",
+            },
+          }),
+          abortSignal: controller.signal,
+        }),
+      );
+
+      expect(interrupted).toBe(true);
+      expect(result.status).toBe("error");
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      const acceptedBinding = clearing
+        ? undefined
+        : failurePoint === "base"
+          ? previousBinding
+          : nextBinding;
+      expect(accessor.loadSessionEntry(target)?.cliSessionBindings?.["claude-cli"]).toEqual(
+        acceptedBinding,
+      );
+      const continuation = accessor.loadSessionEntry({
+        ...target,
+        sessionKey: `${target.sessionKey}:run:${target.sessionId}`,
+      });
+      expect(continuation?.cronRunContinuation?.phase).toBe("ready");
+      expect(continuation?.cliSessionBindings?.["claude-cli"]).toEqual(acceptedBinding);
     },
   );
 

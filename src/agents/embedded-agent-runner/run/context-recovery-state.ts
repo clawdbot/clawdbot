@@ -1,7 +1,12 @@
+import {
+  restoreEmbeddedRunTimeoutAbandonment,
+  type EmbeddedRunTimeoutRecoveryMarker,
+} from "../runs.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 import type { EmbeddedContextAccountingEvent } from "./internal-params.js";
 
 export function createEmbeddedRunContextRecoveryState() {
+  let timeoutRecoveryMarker: EmbeddedRunTimeoutRecoveryMarker | undefined;
   const state = {
     autoCompactionCount: 0,
     lastCompactionTokensAfter: undefined as number | undefined,
@@ -20,6 +25,14 @@ export function createEmbeddedRunContextRecoveryState() {
         state.autoCompactionCount += 1;
         state.lastCompactionTokensAfter = tokens;
       }
+    },
+    retainTimeoutRecoveryMarker(marker: EmbeddedRunTimeoutRecoveryMarker) {
+      timeoutRecoveryMarker = marker;
+    },
+    restoreTimeoutRecoveryAbandonment() {
+      const marker = timeoutRecoveryMarker;
+      timeoutRecoveryMarker = undefined;
+      return marker ? restoreEmbeddedRunTimeoutAbandonment(marker) : false;
     },
   };
   return state;

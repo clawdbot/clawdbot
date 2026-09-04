@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -6,6 +7,48 @@ import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 describe("cli json stdout contract", () => {
   it.each([
+    ["memory", "status", "--json"],
+    ["nodes", "canvas", "snapshot", "--json"],
+  ])("reports invalid config before discovering plugin command %s", async (...args) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "openclaw.json");
+        const stateDir = path.join(tempHome, "state");
+        await fs.writeFile(configPath, JSON.stringify({ gateway: { port: "invalid-port" } }));
+
+        const result = runBuiltCli(
+          tempHome,
+          args,
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: stateDir,
+          },
+          { inheritEnvironment: false },
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: { type: "cli_error", message: expect.stringContaining("Invalid config at") },
+        });
+        expect(result.stdout).toContain("gateway.port");
+        expect(result.stderr).toContain("openclaw doctor");
+        await expect(
+          fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      },
+      { prefix: "openclaw-plugin-invalid-config-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "node identity",
+      args: ["node", "identity", "--json"],
+      overrides: {},
+      error: "no node device identity found",
+    },
     {
       name: "routed config get",
       args: ["config", "get", "gateway.port", "--json"],
@@ -38,24 +81,58 @@ describe("cli json stdout contract", () => {
       async (tempHome) => {
         const stateDir = path.join(tempHome, "read-only-state");
         const configPath = path.join(tempHome, "read-only-openclaw.json");
-        await fs.writeFile(
-          configPath,
-          `${JSON.stringify({ gateway: { mode: "local", port: 18789 } })}\n`,
-          "utf8",
+        const config = `${JSON.stringify({
+          gateway: {
+            mode: "local",
+            port: 18789,
+            auth: { mode: "token", token: randomBytes(32).toString("hex") },
+          },
+          plugins: { enabled: false },
+          browser: { enabled: false },
+          discovery: { mdns: { mode: "off" } },
+          logging: { file: path.join(stateDir, "openclaw.log") },
+        })}\n`;
+        await fs.writeFile(configPath, config, "utf8");
+        const configBefore = await fs.stat(configPath);
+        const tmpDir = path.join(tempHome, "tmp");
+        await fs.mkdir(tmpDir);
+
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            OPENCLAW_HOME: tempHome,
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_TEST_FAST: undefined,
+            TMPDIR: tmpDir,
+            TMP: tmpDir,
+            TEMP: tmpDir,
+            PATH: path.dirname(process.execPath),
+            ...testCase.overrides,
+          },
+          { inheritEnvironment: false },
         );
 
-        const result = runBuiltCli(tempHome, testCase.args, {
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_STATE_DIR: stateDir,
-          ...testCase.overrides,
-        });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(() => JSON.parse(result.stdout)).not.toThrow();
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe("error" in testCase ? 1 : 0);
+        if ("error" in testCase) {
+          expect(result.stderr).toContain(testCase.error);
+          expect(result.stdout).toBe("");
+        } else {
+          expect(() => JSON.parse(result.stdout)).not.toThrow();
+        }
         await expect(
           fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
         ).rejects.toMatchObject({
           code: "ENOENT",
+        });
+        expect((await fs.readFile(configPath, "utf8")) === config).toBe(true);
+        expect(await fs.stat(configPath)).toMatchObject({
+          ino: configBefore.ino,
+          mode: configBefore.mode,
+          mtimeMs: configBefore.mtimeMs,
+          ctimeMs: configBefore.ctimeMs,
         });
       },
       { prefix: "openclaw-read-only-config-e2e-" },

@@ -44,6 +44,8 @@ describe("catalog-backed provider endpoint classification", () => {
     ["https://api.cerebras.ai/v1", "cerebras-native"],
     ["https://llm.chutes.ai/v1", "chutes-native"],
     ["https://api.meta.ai/v1", "meta-native"],
+    ["https://opencode.ai/zen/v1", "opencode-native"],
+    ["https://opencode.ai/zen/go/v1", "opencode-go-native"],
   ])("classifies %s as %s without an installed plugin manifest", (baseUrl, endpointClass) => {
     expect(resolveProviderEndpoint(baseUrl).endpointClass).toBe(endpointClass);
   });
@@ -100,6 +102,7 @@ describe("catalog-backed provider endpoint classification", () => {
 
   it("keeps unknown hosts classified as custom", () => {
     expect(resolveProviderEndpoint("https://proxy.example.com/v1").endpointClass).toBe("custom");
+    expect(resolveProviderEndpoint("https://opencode.ai/api").endpointClass).toBe("custom");
   });
 
   it("keeps removed and unsupported catalog endpoints custom", () => {

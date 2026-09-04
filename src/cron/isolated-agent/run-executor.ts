@@ -7,6 +7,11 @@ import {
 } from "../../agents/admitted-run-context.js";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeToolsAllow } from "../../agents/cli-runner/tool-policy.js";
+import { settleCliSessionResult } from "../../agents/cli-session-store.js";
+import {
+  applyCliSessionBindingResult,
+  assertCliSessionBindingResultCommitAllowed,
+} from "../../agents/cli-session.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { createContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import {
@@ -17,6 +22,7 @@ import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelFallbackClassifiedResult } from "../../agents/model-fallback-attempt.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
@@ -77,6 +83,7 @@ import {
   type CronLiveSelection,
   type MutableCronSession,
   type PersistCronSessionEntry,
+  type CronRunContinuationSession,
   setCronSessionAgentHarnessId,
   setCronSessionRuntimeModel,
   syncCronSessionLiveSelection,
@@ -287,7 +294,7 @@ type CronRunExecutionParams = {
   cronSession: MutableCronSession;
   commandBody: string;
   persistSessionEntry: PersistCronSessionEntry;
-  persistRunContinuationSession?: () => Promise<void>;
+  persistRunContinuationSession?: CronRunContinuationSession["sync"];
   setRunContinuationCliExecutionProvider?: (provider?: string) => Promise<void>;
   abortSignal?: AbortSignal;
   abortReason: () => string;
@@ -463,6 +470,23 @@ function createCronPromptExecutor(
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
     }
+    let candidateClassification:
+      | {
+          result: CronPromptRunResult;
+          value: ReturnType<typeof classifyEmbeddedAgentRunResultForModelFallback>;
+        }
+      | undefined;
+    const classifyResult = (candidate: ModelFallbackClassifiedResult<CronPromptRunResult>) => {
+      if (!candidateClassification || candidateClassification.result !== candidate.result) {
+        const classification = classifyEmbeddedAgentRunResultForModelFallback(candidate);
+        // Preserve the pre-release decision unless finalization replaces the result.
+        candidateClassification = {
+          result: candidate.result,
+          value: classification && currentAttemptCommittedMedia() ? undefined : classification,
+        };
+      }
+      return candidateClassification.value;
+    };
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
@@ -499,17 +523,11 @@ function createCronPromptExecutor(
         });
       },
       fallbacksOverride: cronFallbacksOverride,
-      classifyResult: ({ provider, model, result }) => {
-        const classification = classifyEmbeddedAgentRunResultForModelFallback({
-          provider,
-          model,
-          result,
-        });
-        return classification && currentAttemptCommittedMedia() ? undefined : classification;
-      },
+      classifyResult,
       canFallbackAfterError: () => !currentAttemptCommittedMedia(),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
+        candidateClassification = undefined;
         // Default native and direct CLI candidates skip harness preparation.
         params.lifecycle.beginAttempt();
         const isFallback = candidateStarted;
@@ -632,13 +650,6 @@ function createCronPromptExecutor(
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
         if (cliExecution) {
-          const cliSessionBinding = params.cronSession.isNewSession
-            ? undefined
-            : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
-          const guardedCliSessionBinding =
-            cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
-              ? cliSessionBinding
-              : undefined;
           // Cron intentionally reuses its durable session id as the run id; turn
           // claims stay unique via per-claim ids and the worker gate handles this
           // via credential rotation (see worker-environments/service.ts fences).
@@ -649,8 +660,15 @@ function createCronPromptExecutor(
               agentId: params.agentId,
               runId,
             },
-            async () =>
-              await runCliAgent({
+            async (assertSettlementCurrent) => {
+              const cliSessionBinding = params.cronSession.isNewSession
+                ? undefined
+                : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
+              const guardedCliSessionBinding =
+                cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
+                  ? cliSessionBinding
+                  : undefined;
+              const candidateResult = await runCliAgent({
                 preparedRunAdmission,
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
@@ -714,7 +732,38 @@ function createCronPromptExecutor(
                 suppressNextUserMessagePersistence:
                   userTurnTranscriptRecorder.hasPersisted() ||
                   userTurnTranscriptRecorder.isBlocked(),
-              }),
+              });
+              const classification = classifyResult({
+                provider: providerOverride,
+                model: modelOverride,
+                result: candidateResult,
+              });
+              // Cleanup can seal this run after rejection. Publish the candidate
+              // to the live entry only once the base persistence owner accepts it.
+              const settledEntry = { ...params.cronSession.sessionEntry };
+              if (
+                (candidateResult.meta.agentMeta?.clearCliSessionBinding === true ||
+                  (!params.abortSignal?.aborted && !classification)) &&
+                applyCliSessionBindingResult(
+                  settledEntry,
+                  executionProvider,
+                  candidateResult.meta.agentMeta,
+                )
+              ) {
+                const assertCommitAllowed = () =>
+                  assertCliSessionBindingResultCommitAllowed(
+                    candidateResult.meta.agentMeta,
+                    assertSettlementCurrent,
+                    params.abortSignal,
+                  );
+                return await settleCliSessionResult(candidateResult, async () => {
+                  await params.persistSessionEntry(assertCommitAllowed, settledEntry);
+                  await params.persistRunContinuationSession?.(assertCommitAllowed);
+                });
+              }
+              return candidateResult;
+            },
+            { abortSignal: params.abortSignal, trigger: "cron" },
           );
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

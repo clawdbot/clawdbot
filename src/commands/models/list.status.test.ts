@@ -288,7 +288,7 @@ vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs: mocks.resolveRuntimeSyntheticAuthProviderRefs,
 }));
 vi.mock("../../plugins/provider-runtime.js", () => ({
-  resolveProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
+  prepareProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
 }));
 vi.mock("../../agents/harness/runtime-plugin.js", () => ({
   resolveAgentHarnessOwnerPluginIds: mocks.resolveAgentHarnessOwnerPluginIds,

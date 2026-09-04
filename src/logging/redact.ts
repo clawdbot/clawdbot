@@ -1210,15 +1210,14 @@ function redactStructuredSecretValue(
       return value;
     }
     seen.add(value);
-    const out: Record<string, unknown> = {};
-    for (const [nestedKey, nestedValue] of Object.entries(value)) {
-      out[nestedKey] = redactStructuredSecretValue(nestedKey, nestedValue, seen, options, [
-        ...path,
-        nestedKey,
-      ]);
+    const entries = Object.entries(value);
+    for (const entry of entries) {
+      const [name, child] = entry;
+      entry[1] = redactStructuredSecretValue(name, child, seen, options, [...path, name]);
     }
     seen.delete(value);
-    return out;
+    // Define own data properties so JSON field names cannot change the output prototype.
+    return Object.fromEntries(entries);
   }
   return value;
 }

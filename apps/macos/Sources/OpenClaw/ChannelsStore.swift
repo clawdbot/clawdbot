@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import OpenClawProtocol
+import OSLog
 
 struct ChannelsStatusSnapshot: Codable {
     struct WhatsAppSelf: Codable {
@@ -277,29 +278,53 @@ final class ChannelsStore {
         }
     }
 
-    var lastError: String?
+    // Keep cold errors on their selected revision through retries, until a Source is acquired.
+    private var failure: (revision: UInt64?, source: Source?, message: String)?
+    var lastError: String? {
+        get {
+            guard let failure, failure.revision == self.gateway.selectedEndpointRevision,
+                  failure.source.map(self.owns) != false else { return nil }
+            return failure.message
+        }
+        set {
+            self.failure = newValue.map { (self.gateway.selectedEndpointRevision, self.source, $0) }
+        }
+    }
+
     var lastSuccess: Date?
     var isRefreshing = false
 
     var whatsappLoginMessage: String?
     var whatsappLoginQrDataUrl: String?
+    var whatsappLoginSessionKey: String?
     var whatsappLoginConnected: Bool?
     var whatsappBusy = false
     var telegramBusy = false
 
     var configStatus: String?
     var isSavingConfig = false
-    var configSchemaLoading = false
+    var configSchemaTask: Task<Void, Never>?
+    var configSchemaLoading: Bool {
+        self.configSchemaTask != nil
+    }
+
     var configSchema: ConfigSchemaNode?
     var configLookupRoot: ConfigSchemaLookupNode?
     var configLookupCache: [String: ConfigSchemaLookupNode] = [:]
-    var configLookupLoadingPaths: Set<String> = []
+    // Root recovery must retain another path's failure until that path is retried.
+    var configLookupErrors: [String: String] = [:]
+    var configLookupTasks: [String: Task<Void, Never>] = [:]
+    var configLookupLoadingPaths: Set<String> {
+        Set(self.configLookupTasks.keys)
+    }
+
     var configUiHints: [String: ConfigUiHint] = [:]
     var configSchemaSourceKey: String?
-    var configSchemaLoadingSourceKey: String?
-    var configSchemaReloadPending = false
-    var configLoading = false
-    var configLoadingSourceKey: String?
+    var configTask: Task<Void, Never>?
+    var configLoading: Bool {
+        self.configTask != nil
+    }
+
     /// Coalesced re-load request while a config fetch is in flight: `refresh`
     /// refetches without overwriting a dirty local draft; `force` overwrites it.
     enum ConfigReloadRequest { case none, refresh, force }
@@ -309,6 +334,131 @@ final class ChannelsStore {
 
     let interval: TimeInterval = 45
     let isPreview: Bool
+    let gateway: GatewayConnection
+    var source: Source?
+    var configDocument: ConfigStore.Document?
+    let logger = Logger(subsystem: "ai.openclaw", category: "channels-settings")
+
+    /// Settings and QR sessions survive socket reconnects. A retired selection
+    /// must never publish into the replacement Source's state.
+    @MainActor
+    final class Source: Equatable {
+        nonisolated static func == (lhs: Source, rhs: Source) -> Bool {
+            lhs === rhs
+        }
+
+        let lease: GatewayConnection.ServerLease
+        let gateway: GatewayConnection
+
+        init(lease: GatewayConnection.ServerLease, gateway: GatewayConnection) {
+            self.lease = lease
+            self.gateway = gateway
+        }
+
+        var isCurrent: Bool {
+            self.gateway.serverLeaseMatchesCurrentRoute(self.lease)
+        }
+
+        var cacheKey: String {
+            String(describing: ObjectIdentifier(self))
+        }
+    }
+
+    func owns(_ source: Source) -> Bool {
+        self.source === source && source.isCurrent
+    }
+
+    @MainActor
+    private final class SourceAcquisition {
+        let revision: UInt64?
+        var task: Task<Source?, Never>?
+
+        init(revision: UInt64?) {
+            self.revision = revision
+        }
+    }
+
+    private var sourceAcquisition: SourceAcquisition?
+    var isAcquiringSource: Bool {
+        guard self.source.map(self.owns) != true, let acquisition = self.sourceAcquisition else { return false }
+        return acquisition.revision == self.gateway.selectedEndpointRevision
+    }
+
+    func resolveSource(_ expected: Source? = nil) async -> Source? {
+        if let expected {
+            guard self.owns(expected) else {
+                self.logger.info("channel work discarded after the Primary Gateway changed")
+                return nil
+            }
+            return expected
+        }
+        if let source = self.source, self.owns(source) { return source }
+        if let acquisition = self.sourceAcquisition, self.isAcquiringSource {
+            return await acquisition.task?.value
+        }
+        self.clearSource()
+        let acquisition = SourceAcquisition(revision: self.gateway.selectedEndpointRevision)
+        self.sourceAcquisition = acquisition
+        // The selection owns the shared attempt; cancelling one pane must not
+        // discard another caller's acquisition or its pending state.
+        acquisition.task = Task { await self.acquireSource(acquisition) }
+        return await acquisition.task?.value
+    }
+
+    private func acquireSource(_ acquisition: SourceAcquisition) async -> Source? {
+        defer { if self.sourceAcquisition === acquisition { self.sourceAcquisition = nil } }
+        do {
+            let lease = try await self.gateway.acquireServerLease()
+            guard self.sourceAcquisition === acquisition,
+                  acquisition.revision == self.gateway.selectedEndpointRevision
+            else {
+                self.logger.info("channel work discarded while the Primary Gateway changed")
+                return nil
+            }
+            return self.adoptSource(lease)
+        } catch {
+            guard self.sourceAcquisition === acquisition,
+                  acquisition.revision == self.gateway.selectedEndpointRevision,
+                  self.source == nil else { return nil }
+            self.logger.error("channel Gateway unavailable: \(error.localizedDescription, privacy: .public)")
+            self.failure = (acquisition.revision, nil, error.localizedDescription)
+            return nil
+        }
+    }
+
+    @discardableResult
+    func adoptSource(_ lease: GatewayConnection.ServerLease) -> Source? {
+        if let source = self.source, self.owns(source) { return source }
+        let source = Source(lease: lease, gateway: self.gateway)
+        guard source.isCurrent else { return nil }
+        self.source = source
+        self.failure = nil
+        return source
+    }
+
+    func clearSource() {
+        if self.source != nil { self.logger.info("channel state retired after the Primary Gateway changed") }
+        self.sourceAcquisition?.task?.cancel()
+        self.sourceAcquisition = nil
+        self.source = nil
+        self.snapshot = nil
+        self.lastSuccess = nil
+        self.isRefreshing = false
+        self.whatsappLoginMessage = nil
+        self.whatsappLoginQrDataUrl = nil
+        self.whatsappLoginSessionKey = nil
+        self.whatsappLoginConnected = nil
+        self.whatsappBusy = false
+        self.telegramBusy = false
+        self.configStatus = nil
+        self.isSavingConfig = false
+        self.resetConfigSchemaCacheIfSourceChanged("")
+        self.resetConfigCacheIfSourceChanged("")
+        self.configSourceKey = nil
+        self.configSchemaSourceKey = nil
+        self.configDocument = nil
+    }
+
     var startCount = 0
     var pollTask: Task<Void, Never>?
     var gatewayPushTask: Task<Void, Never>?
@@ -373,6 +523,9 @@ final class ChannelsStore {
     func applyWhatsAppLoginWaitResult(_ result: WhatsAppLoginWaitResult) {
         self.whatsappLoginMessage = result.message
         self.whatsappLoginConnected = result.connected
+        if result.connected {
+            self.whatsappLoginSessionKey = nil
+        }
         if let qrDataUrl = result.qrDataUrl {
             self.whatsappLoginQrDataUrl = qrDataUrl
         } else if result.connected {
@@ -380,7 +533,8 @@ final class ChannelsStore {
         }
     }
 
-    init(isPreview: Bool = ProcessInfo.processInfo.isPreview) {
+    init(isPreview: Bool = ProcessInfo.processInfo.isPreview, gateway: GatewayConnection = .shared) {
+        self.gateway = gateway
         self.isPreview = isPreview
     }
 }

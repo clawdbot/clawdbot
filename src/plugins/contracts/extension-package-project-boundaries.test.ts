@@ -25,7 +25,9 @@ const XAI_OMITTED_BOUNDARY_PATHS = {
     "../.artifacts/extension-package-boundary/plugins/matrix/test-api.d.ts",
   ],
   "@openclaw/discord/api.js": ["../.artifacts/extension-package-boundary/plugins/discord/api.d.ts"],
-  "@openclaw/slack/api.js": ["../.artifacts/extension-package-boundary/plugins/slack/api.d.ts"],
+  "@openclaw/slack/test-api.js": [
+    "../.artifacts/extension-package-boundary/plugins/slack/test-api.d.ts",
+  ],
   "@openclaw/telegram/api.js": [
     "../.artifacts/extension-package-boundary/plugins/telegram/api.d.ts",
   ],

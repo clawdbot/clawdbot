@@ -22,12 +22,12 @@ import {
   clearHistoryCursor,
 } from "./chat-history-snapshot.ts";
 import {
-  chatHistoryRequests,
   beginHistoryRequest,
   ownsHistoryRequest,
   acceptsHistoryResult,
   resetChatHistoryProjection,
   setChatError,
+  setChatHistoryLoad,
 } from "./chat-history-state.ts";
 import {
   materializeVisibleAssistantStreamMessages,
@@ -417,7 +417,7 @@ export async function hydrateChatHistory(
       state.chatThinkingLevel = null;
       state.chatVerboseLevel = null;
     }
-    chatHistoryRequests(state).historyLoad = {
+    setChatHistoryLoad(state, {
       phase: "failed",
       sessionKey,
       requestAgentId,
@@ -426,7 +426,7 @@ export async function hydrateChatHistory(
         ? formatMissingOperatorReadScopeMessage("existing chat history")
         : formatUiError(err),
       retryable: err instanceof GatewayRequestError && err.retryable,
-    };
+    });
     state.requestUpdate?.();
   } finally {
     if (ownsHistoryRequest(state, ownership)) {

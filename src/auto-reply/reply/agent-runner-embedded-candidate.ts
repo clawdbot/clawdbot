@@ -15,6 +15,7 @@ import {
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
 import { logVerbose } from "../../globals.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -30,7 +31,6 @@ import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import {
   bindSourceReplyDeliveryRuntime,
   readSourceReplyDeliveryRuntime,
@@ -147,8 +147,6 @@ export async function runEmbeddedFallbackCandidate(
       resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
-  const toolAuthorityRoute = { provider: embeddedRunProvider, model: params.model };
-  turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   try {
     // Profiler milestone. Exposes pre-dispatch delay without normal-path logging.
     params.timing.logMilestoneIfSlow({
@@ -180,7 +178,7 @@ export async function runEmbeddedFallbackCandidate(
         contextWindow: turn.getActiveSessionEntry()?.contextWindow,
         lane: params.runLane,
         provider: embeddedRunProvider,
-        agentHarnessId: embeddedRunHarnessOverride,
+        agentHarnessId: resolveSessionPinnedHarnessId(turn.getActiveSessionEntry()),
         agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
         agentHarnessRuntimePreparationHint:
           agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
@@ -219,13 +217,10 @@ export async function runEmbeddedFallbackCandidate(
           return !channel || isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
         })(),
         toolProgressDetail: turn.toolProgressDetail,
-        suppressToolErrorWarnings: turn.opts?.suppressToolErrorWarnings,
         toolsAllow: turn.opts?.toolsAllow,
         disableTools: turn.opts?.disableTools,
-        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
-          turn.followupRun,
-          toolAuthorityRoute,
-        ),
+        // Marks reply-owned policy; final attempt preparation binds its concrete route.
+        toolAuthorityFingerprint: turn.replyOperation?.toolAuthorityFingerprint,
         enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,

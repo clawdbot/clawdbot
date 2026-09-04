@@ -1,5 +1,6 @@
 import { createContext } from "@lit/context";
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
@@ -19,6 +20,7 @@ import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
 import type { UiPreferences } from "./settings.ts";
+import type { SidebarAttentionStore } from "./sidebar-attention-store.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
@@ -75,12 +77,14 @@ export type ApplicationChatAttachmentHandoff = {
       attachments: readonly ChatAttachment[];
       fallbacks: Readonly<Record<string, ChatComposerMemoryFallback>>;
       message?: string;
+      mentions?: readonly HumanMention[];
     },
   ): void;
   consume(handoff: ChatAttachmentHandoffKey): {
     attachments: ChatAttachment[];
     fallbacks: Record<string, ChatComposerMemoryFallback>;
     message?: string;
+    mentions?: readonly HumanMention[];
   } | null;
   retireScope(scopeKey: string, beforeRevision: number): void;
   clearPane(paneId: string): void;
@@ -100,6 +104,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly channels: ChannelCapability;
   readonly config: ApplicationConfigCapability;
   readonly scopeUpgrade: ScopeUpgradeCapability;
+  readonly sidebarAttention: SidebarAttentionStore;
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
   readonly placementStartup: ApplicationPlacementStartup;
@@ -120,7 +125,8 @@ export type ApplicationContext<TRouteId extends string = string> = {
   ) => Promise<void>;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly revalidate: (routeId?: TRouteId) => Promise<void>;
-  readonly preload: (routeId: TRouteId, options?: ApplicationNavigationOptions) => Promise<void>;
+  /** Warms a named route; dynamic locations load as part of navigation. */
+  readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 
 export const applicationContext =

@@ -117,6 +117,7 @@ function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: numb
 }
 
 export class TelegramUserbotDriver {
+  private activeChatId: number | undefined;
   private closing = false;
   private commandId = 0;
   private readonly pending = new Map<
@@ -211,6 +212,12 @@ export class TelegramUserbotDriver {
       return;
     }
     if (message.type === "ready") {
+      const chatId = message.chatId;
+      if (typeof chatId !== "number" || !Number.isInteger(chatId) || chatId === 0) {
+        this.fail(new Error("Telegram userbot emitted an invalid ready chat id."));
+        return;
+      }
+      this.activeChatId = chatId;
       this.readyResolve();
       return;
     }
@@ -269,6 +276,13 @@ export class TelegramUserbotDriver {
     if (this.terminalError) {
       throw this.terminalError;
     }
+  }
+
+  get chatId(): number {
+    if (this.activeChatId === undefined) {
+      throw new Error("Telegram userbot chat id is unavailable before readiness.");
+    }
+    return this.activeChatId;
   }
 
   async send(params: { replyToMessageId?: number; text: string }): Promise<TelegramUserbotUpdate> {

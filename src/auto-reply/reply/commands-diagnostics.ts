@@ -319,8 +319,10 @@ async function requestGatewayDiagnosticsExportApproval(
       cwd: params.workspaceDir,
       agentId,
       sessionKey: params.sessionKey,
-      mainKey: params.cfg.session?.mainKey,
-      sessionScope: params.cfg.session?.scope,
+      eventRouting: {
+        mainKey: params.cfg.session?.mainKey,
+        sessionScope: params.cfg.session?.scope,
+      },
       ...resolveCommandExecApprovalRoute({
         commandParams: params,
         privateApprovalTarget: options.privateApprovalTarget,

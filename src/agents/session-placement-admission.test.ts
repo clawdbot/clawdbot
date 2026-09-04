@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { enqueueCommandInLane, resetCommandLane } from "../process/command-queue.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 const settleRequesterAfterSessionSpawns = vi.hoisted(() => vi.fn(() => true));
 vi.mock("./subagents/registry/subagent-registry.js", () => ({
@@ -6,6 +9,7 @@ vi.mock("./subagents/registry/subagent-registry.js", () => ({
 }));
 
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
 import {
   captureSessionPlacementCompactionSuccessorAssertion,
   installSessionPlacementAdmissionProvider,
@@ -106,6 +110,145 @@ describe("local turn placement admission", () => {
     timeoutMs: 1_000,
     runId: "run-1",
   };
+
+  it.each(["local CLI", "embedded"])(
+    "queues a CLI follow-up until the active %s session turn releases its placement",
+    async (runtime) => {
+      const activeTurn = createDeferredCore();
+      const turnStarted = createDeferredCore();
+      const events: string[] = [];
+      let active = false;
+      const execute: SessionPlacementAdmissionProvider["executeLocalTurn"] = async (
+        claim,
+        task,
+      ) => {
+        if (active) {
+          throw new Error("session already has an active turn claim");
+        }
+        active = true;
+        events.push(`claim:${claim.runId}`);
+        try {
+          return await task();
+        } finally {
+          active = false;
+          events.push(`release:${claim.runId}`);
+        }
+      };
+      uninstallProvider = installSessionPlacementAdmissionProvider({
+        assertCompactionSuccessorAllowed,
+        executeLocalTurn: execute,
+        executeTurn: async (claim, _params, task) => execute(claim, task),
+      });
+      const claim = { sessionId: "busy-session", sessionKey: "agent:main:busy", runId: "parent" };
+      const parentTask = async () => {
+        turnStarted.resolve();
+        await activeTurn.promise;
+        return { payloads: [{ text: "parent done" }], meta: { durationMs: 1 } };
+      };
+      const parent =
+        runtime === "local CLI"
+          ? withLocalSessionPlacementTurnSettlement(claim, parentTask)
+          : enqueueCommandInLane("session:agent:main:busy", () =>
+              withSessionPlacementTurnAdmission(claim, turnParams, parentTask),
+            );
+      await turnStarted.promise;
+      const followup = withLocalSessionPlacementTurnSettlement(
+        { ...claim, runId: "completion" },
+        async () => ({ payloads: [{ text: "completion visible" }], meta: { durationMs: 1 } }),
+      );
+      const result = followup.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        activeTurn.resolve();
+        await parent;
+        expect(await result).toEqual({
+          value: {
+            payloads: [{ text: "completion visible" }],
+            meta: { durationMs: 1 },
+          },
+        });
+        expect(events).toEqual([
+          "claim:parent",
+          "release:parent",
+          "claim:completion",
+          "release:completion",
+        ]);
+      } finally {
+        activeTurn.resolve();
+        await Promise.allSettled([parent, followup]);
+      }
+    },
+  );
+
+  it.each([
+    ["queued", "cancelled"],
+    ["queued", "provider replaced"],
+    ["queued", "lifecycle retired"],
+    ["placement", "cancelled"],
+    ["placement", "provider replaced"],
+    ["placement", "lifecycle retired"],
+  ] as const)("does not execute a %s CLI turn after it is %s", async (stage, change) => {
+    const gate = createDeferredCore();
+    const started = createDeferredCore();
+    const abort = new AbortController();
+    const task = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    let claims = 0;
+    const provider: SessionPlacementAdmissionProvider = {
+      assertCompactionSuccessorAllowed,
+      executeLocalTurn: async (_claim, runLocal) => {
+        claims += 1;
+        if (stage === "placement") {
+          started.resolve();
+          await gate.promise;
+        }
+        return runLocal();
+      },
+      executeTurn: async (_claim, _params, runLocal) => runLocal(),
+    };
+    uninstallProvider = installSessionPlacementAdmissionProvider(provider);
+    const blocker =
+      stage === "queued"
+        ? enqueueCommandInLane("session:agent:main:fenced", async () => {
+            started.resolve();
+            await gate.promise;
+          })
+        : undefined;
+    if (blocker) {
+      await started.promise;
+    }
+    const run = withLocalSessionPlacementTurnSettlement(
+      { sessionId: "fenced", sessionKey: "agent:main:fenced", runId: "fenced-run" },
+      task,
+      { abortSignal: abort.signal },
+    );
+    const result = run.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    if (stage === "placement") {
+      await started.promise;
+    }
+    if (change === "cancelled") {
+      abort.abort(new Error("cancelled before admission"));
+    } else if (change === "provider replaced") {
+      uninstallProvider = installSessionPlacementAdmissionProvider({ ...provider });
+    } else {
+      rotateAgentEventLifecycleGeneration();
+    }
+    try {
+      gate.resolve();
+      expect(await result).toMatchObject({
+        name: change === "cancelled" ? "Error" : "AbortError",
+      });
+      expect(task).not.toHaveBeenCalled();
+      expect(claims).toBe(stage === "queued" ? 0 : 1);
+    } finally {
+      gate.resolve();
+      await Promise.allSettled([blocker, run]);
+    }
+  });
 
   it("delegates the final turn decision to the installed provider", async () => {
     const events: string[] = [];
@@ -317,4 +460,45 @@ describe("local turn placement admission", () => {
 
     expect(events).toEqual(["claim", "turn", "release", "settle"]);
   });
+
+  it.each(["settled", "reset"] as const)(
+    "closes a standalone CLI settlement assertion after its lane task is %s",
+    async (ending) => {
+      const sessionId = `standalone-${ending}`;
+      const started = createDeferredCore();
+      const release = createDeferredCore();
+      let retained: (() => void) | undefined;
+      const running = withLocalSessionPlacementTurnSettlement(
+        { sessionId, runId: sessionId },
+        async (assertCurrent) => {
+          retained = assertCurrent;
+          assertCurrent();
+          started.resolve();
+          await release.promise;
+          return { meta: { durationMs: 1 } };
+        },
+      );
+      await started.promise;
+      try {
+        if (ending === "reset") {
+          expect(resetCommandLane(resolveSessionLane(sessionId))).toBe(1);
+          await withLocalSessionPlacementTurnSettlement(
+            { sessionId, runId: `${sessionId}-replacement` },
+            async (assertCurrent) => {
+              assertCurrent();
+              return { meta: { durationMs: 1 } };
+            },
+          );
+        } else {
+          release.resolve();
+          await running;
+        }
+        expect(retained).toBeDefined();
+        expect(() => retained?.()).toThrow("settlement is closed");
+      } finally {
+        release.resolve();
+        await running;
+      }
+    },
+  );
 });

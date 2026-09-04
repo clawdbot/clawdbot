@@ -795,13 +795,16 @@ What to check if attach does not work:
   Chrome is installed locally for default auto-connect profiles, but it cannot
   enable browser-side remote debugging for you
 
+For startup failures, check the `browser/chrome-mcp` logs for a bounded, redacted
+tail of subprocess stderr when available.
+
 Agent use:
 
 - Use `profile="user"` when you need the user's logged-in browser state.
 - If you use a custom existing-session profile, pass that explicit profile name.
 - Only choose this mode when the user is at the computer to approve the attach
   prompt.
-- The Gateway or node host can spawn `npx -y chrome-devtools-mcp@1.8.0 --autoConnect`.
+- The Gateway or node host can spawn `npx -y --audit=false chrome-devtools-mcp@1.8.0 --autoConnect`.
 
 Notes:
 
@@ -827,7 +830,7 @@ Notes:
 ### Custom Chrome MCP launch
 
 Override the spawned Chrome DevTools MCP server per profile when the default
-`npx -y chrome-devtools-mcp@1.8.0` flow is not what you want (offline hosts,
+`npx -y --audit=false chrome-devtools-mcp@1.8.0` flow is not what you want (offline hosts,
 different versions, vendored binaries). OpenClaw pins the default server to the
 version validated with its endpoint-policy parser. Custom executables and versions
 are operator-managed and must preserve Chrome MCP's connection-argument semantics.
@@ -838,7 +841,8 @@ are operator-managed and must preserve Chrome MCP's connection-argument semantic
 | `mcpArgs`    | Extra arguments passed unchanged to `mcpCommand`. Connection options override the generated endpoint or auto-connect arguments. |
 
 Using `mcpArgs` does not replace the package prefix: when `mcpCommand` is `npx`,
-OpenClaw still prepends `-y chrome-devtools-mcp@1.8.0`.
+OpenClaw still prepends `-y --audit=false chrome-devtools-mcp@1.8.0`. The optional npm
+install audit is disabled so registry audit availability does not delay browser startup.
 
 When `mcpArgs` does not set a connection option, OpenClaw forwards a configured
 `cdpUrl` to Chrome MCP instead of generating `--autoConnect`:

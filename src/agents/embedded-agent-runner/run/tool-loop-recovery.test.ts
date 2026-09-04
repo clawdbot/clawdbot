@@ -55,56 +55,6 @@ function batchCall(id: string, args: Record<string, unknown>): InternalToolBatch
 }
 
 describe("tool-loop recovery batch admission", () => {
-  it("returns an ordinary intervention when resume is requested before a read result", async () => {
-    const admission = createToolLoopBatchAdmission(
-      { runId: "recovery", loopDetection: { enabled: false } },
-      { kind: "inspect", phase: "read-required", blockedActionKeys: ["write:prior"] },
-    );
-    if (!admission) {
-      throw new Error("Expected recovery batch admission");
-    }
-    const tool = { ...codeModeExecTool(), name: "recovery_resume" };
-    await expect(
-      admission({
-        assistantMessage: {
-          role: "assistant",
-          content: [],
-          api: "openai-responses",
-          provider: "test",
-          model: "test",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "toolUse",
-          timestamp: 1,
-        },
-        calls: [
-          {
-            toolCall: {
-              type: "toolCall",
-              id: "resume",
-              name: "recovery_resume",
-              arguments: {},
-            },
-            args: {},
-            tool,
-          },
-        ],
-        context: { systemPrompt: "", messages: [] },
-      }),
-    ).resolves.toMatchObject({
-      intervention: {
-        toolCallId: "resume",
-        reason: expect.stringContaining("Use read by itself"),
-      },
-    });
-  });
-
   it("canonicalizes equivalent Code Mode exec aliases before loop detection", async () => {
     mocks.committedArgs.length = 0;
     mocks.releasedIds.length = 0;

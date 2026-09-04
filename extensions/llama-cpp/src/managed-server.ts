@@ -135,7 +135,11 @@ async function resolveHuggingFaceArtifact(
       if (!response.ok) {
         throw new Error(`Cannot resolve ${source}: HTTP ${response.status}`);
       }
-      const ggufFile = asOptionalRecord(asOptionalRecord(await response.json())?.ggufFile);
+      const ggufFile = asOptionalRecord(
+        asOptionalRecord(
+          await readProviderJsonResponse(response, "llama.cpp Hugging Face manifest"),
+        )?.ggufFile,
+      );
       file = typeof ggufFile?.rfilename === "string" ? ggufFile.rfilename : undefined;
       expectedSize = typeof ggufFile?.size === "number" ? ggufFile.size : undefined;
       if (!file) {
@@ -147,27 +151,35 @@ async function resolveHuggingFaceArtifact(
   }
   const encodedFile = file.split("/").map(encodeURIComponent).join("/");
   const url = `https://huggingface.co/${encodeURIComponent(parsed.user)}/${encodeURIComponent(parsed.repository)}/resolve/${encodeURIComponent(parsed.revision)}/${encodedFile}?download=true`;
-  const treeUrl = `https://huggingface.co/api/models/${encodeURIComponent(parsed.user)}/${encodeURIComponent(parsed.repository)}/tree/${encodeURIComponent(parsed.revision)}?recursive=true&expand=true`;
-  const { response: treeResponse, release: releaseTree } = await fetchWithSsrFGuard({
-    url: treeUrl,
+  const fileInfoUrl = `https://huggingface.co/api/models/${encodeURIComponent(parsed.user)}/${encodeURIComponent(parsed.repository)}/paths-info/${encodeURIComponent(parsed.revision)}`;
+  const { response: fileInfoResponse, release: releaseFileInfo } = await fetchWithSsrFGuard({
+    url: fileInfoUrl,
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json", "user-agent": "llama-cpp" },
+      body: JSON.stringify({ paths: [file], expand: false }),
+    },
     signal,
     requireHttps: true,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(treeUrl),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(fileInfoUrl),
     auditContext: "llama-cpp-model-resolve",
   });
-  let tree: unknown;
+  let fileInfo: unknown;
   try {
-    if (!treeResponse.ok) {
+    if (!fileInfoResponse.ok) {
       throw new Error(
-        `Cannot read Hugging Face integrity metadata for ${source}: HTTP ${treeResponse.status}`,
+        `Cannot read Hugging Face integrity metadata for ${source}: HTTP ${fileInfoResponse.status}`,
       );
     }
-    tree = await treeResponse.json();
+    fileInfo = await readProviderJsonResponse(
+      fileInfoResponse,
+      "llama.cpp Hugging Face file metadata",
+    );
   } finally {
-    await releaseTree();
+    await releaseFileInfo();
   }
-  const fileRow = Array.isArray(tree)
-    ? tree.map((entry) => asOptionalRecord(entry)).find((entry) => entry?.path === file)
+  const fileRow = Array.isArray(fileInfo)
+    ? fileInfo.map((entry) => asOptionalRecord(entry)).find((entry) => entry?.path === file)
     : undefined;
   const lfs = asOptionalRecord(fileRow?.lfs);
   const expectedSha256 =

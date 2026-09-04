@@ -63,6 +63,7 @@ describe("Telegram userbot driver runtime", () => {
         updates.push(update);
       },
     });
+    expect(driver.chatId).toBe(-1001);
     try {
       await expect(driver.send({ text })).resolves.toMatchObject({
         messageId: 11,

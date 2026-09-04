@@ -577,8 +577,14 @@ export async function enrichModelCatalogPricing(options: {
           pricing: candidates.map((key) => source.catalog.get(key)).find(Boolean),
         };
       });
+      // Flat third-party estimates cannot replace a declared context-price schedule.
+      // Native feeds remain authoritative, including removal of old tiers or prices.
       const chosen = matches.find(
-        ({ source, pricing }) => source.authoritative || (pricing && hasKnownPricing(pricing)),
+        ({ source, pricing }) =>
+          source.authoritative ||
+          (pricing &&
+            hasKnownPricing(pricing) &&
+            (!model.cost?.tieredPricing?.length || pricing.tieredPricing?.length)),
       );
       if (chosen?.pricing) {
         model.cost = chosen.pricing;

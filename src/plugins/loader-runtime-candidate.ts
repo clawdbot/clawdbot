@@ -55,6 +55,7 @@ import {
   resolveCanonicalDistRuntimeSource,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
+import { prefersBuiltPluginArtifacts } from "./plugin-runtime-artifact-selection.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
 import {
   clearActiveDegradedPlugin,
@@ -224,13 +225,18 @@ export function loadRuntimePluginCandidate(params: {
     return;
   }
 
+  const preferBuiltPluginArtifacts = prefersBuiltPluginArtifacts(
+    context.artifactPreference,
+    candidate.origin,
+  );
   const runtimeCandidateEntry = resolvePluginRuntimeArtifact({
     pluginId,
     entryKind: "runtime",
     source: candidate.source,
     rootDir: pluginRoot,
     origin: candidate.origin,
-    preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
+    preferBuiltPluginArtifacts,
+    sourcePreferred: manifestRecord.sourcePreferred,
     packageManifest: candidate.packageManifest,
     registry,
   });
@@ -241,7 +247,8 @@ export function loadRuntimePluginCandidate(params: {
         source: manifestRecord.setupSource,
         rootDir: pluginRoot,
         origin: candidate.origin,
-        preferBuiltPluginArtifacts: context.preferBuiltPluginArtifacts,
+        preferBuiltPluginArtifacts,
+        sourcePreferred: manifestRecord.sourcePreferred,
         packageManifest: candidate.packageManifest,
         registry,
       })

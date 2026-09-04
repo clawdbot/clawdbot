@@ -14,7 +14,6 @@ import {
   type PersonActivityRouting,
 } from "../../components/person-activity-link.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
-import { listAssignableSessionOwners } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -36,9 +35,9 @@ import {
   canSplitSessionView,
 } from "../../lib/sessions/session-menu-navigation.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
-import { renderBoardViewSwitch } from "./board-session-surface.ts";
 import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
@@ -49,7 +48,6 @@ import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
-  HeaderMenuStatusAction,
 } from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
@@ -63,8 +61,15 @@ import {
 } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
-import { hasAbortableSessionRun } from "./run-lifecycle.ts";
-import type { SidebarLayout } from "./sidebar-layout.ts";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
+import {
+  promoteSidebarPanel,
+  setSidebarDock,
+  sidebarActivePanel,
+  sidebarDock,
+  sidebarMainPanel,
+  type SidebarLayout,
+} from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
@@ -93,21 +98,69 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     };
   }
 
-  private compactHeaderStatusActions(): HeaderMenuStatusAction[] {
-    if (!this.narrow || !this.context.overlays.snapshot.controlUiRefreshRequired) {
-      return [];
+  private renderPanelLayoutActions(layout: SidebarLayout | undefined) {
+    if (!layout?.open || layout.expanded) {
+      return nothing;
     }
-    return [
-      {
-        id: "refresh",
-        label: `${t("chat.sidebar.serverUpdatedTitle")} · ${t(
-          "chat.sidebar.serverUpdatedRefresh",
-        )}`,
-        icon: icons.refresh,
-        tone: "info",
-        onActivate: () => globalThis.location.reload(),
-      },
-    ];
+    const side = sidebarActivePanel(layout);
+    const definitions = sidebarPanelDefinitions();
+    const mainSlot = sidebarMainPanel(layout)?.slot ?? "conversation";
+    const swapLabel = t("chat.sidePanel.swap", {
+      main: definitions.find((definition) => definition.slot === mainSlot)!.label,
+      side: side ? definitions.find((definition) => definition.slot === side.slot)!.label : "",
+    });
+    return html`${
+      side
+        ? html`<openclaw-tooltip .content=${swapLabel}>
+            <button
+              class="btn btn--ghost btn--icon chat-icon-btn chat-panel-swap"
+              type="button"
+              aria-label=${swapLabel}
+              @click=${() => this.state?.updateSidebarLayout(promoteSidebarPanel(layout, side.id))}
+            >
+              ${icons.arrowLeftRight}
+            </button>
+          </openclaw-tooltip>`
+        : nothing
+    }
+    ${
+      this.narrow
+        ? nothing
+        : html`<wa-dropdown
+            class="chat-panel-layout-menu"
+            placement="bottom-end"
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              const dock = event.detail.item.value;
+              if (dock === "left" || dock === "right" || dock === "bottom") {
+                this.state?.updateSidebarLayout(setSidebarDock(layout, dock));
+              }
+            }}
+          >
+            <button
+              slot="trigger"
+              class="btn btn--ghost btn--icon chat-icon-btn"
+              type="button"
+              aria-label=${t("chat.sidePanel.layout")}
+              title=${t("chat.sidePanel.layout")}
+            >
+              ${icons.columns2}
+            </button>
+            ${(
+              [
+                ["left", "dockLeft", icons.panelLeftOpen],
+                ["right", "dockRight", icons.panelRightOpen],
+                ["bottom", "dockBottom", icons.panelBottomOpen],
+              ] as const
+            ).map(
+              ([dock, label, icon]) => html`<wa-dropdown-item
+                value=${dock}
+                type="checkbox"
+                ?checked=${sidebarDock(layout) === dock}
+                ><span slot="icon">${icon}</span>${t(`chat.sidePanel.${label}`)}</wa-dropdown-item
+              >`,
+            )}
+          </wa-dropdown>`
+    }`;
   }
 
   protected renderPaneHeader(
@@ -120,8 +173,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
     sidebarLayout?: SidebarLayout,
   ) {
-    const board = this.resolveBoardView();
-    const canChangeBoardDock = board.hasBoard && board.provider.canMutate;
     const workspace = resolveSessionWorkspace({
       session: row,
       agentWorkspace: row?.worktree ? undefined : agentWorkspace,
@@ -148,8 +199,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const branchSwitchWorking = this.state
       ? this.state.chatSending ||
         isChatRunWorking({
-          canAbort: hasAbortableSessionRun(this.state),
-          onAbort: () => undefined,
+          runActive: hasDirectSessionRun(this.state),
           queue: this.state.chatQueue,
           runStatus: this.state.chatRunStatus,
           sessionKey: this.state.sessionKey,
@@ -192,30 +242,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       sharingReadAccess.allowed || sharingVisibilityAccess.allowed
         ? undefined
         : sharingReadAccess.reason;
-    const sharing =
-      sharingMethodsSupported && row
-        ? {
-            session: row,
-            state: this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key)),
-            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
-            membersAvailable: sharingReadAccess.allowed,
-            openDisabledReason: sharingOpenDisabledReason,
-            visibilityDisabledReason: sharingVisibilityAccess.allowed
-              ? undefined
-              : sharingVisibilityAccess.reason,
-            memberAddDisabledReason: sharingMemberAddAccess.allowed
-              ? undefined
-              : sharingMemberAddAccess.reason,
-            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
-              ? undefined
-              : sharingMemberRemoveAccess.reason,
-            onOpen: () => void this.loadSessionSharing(row),
-            onVisibilityChange: (visibility: SessionVisibility) =>
-              void this.setSessionVisibility(row, visibility),
-            onMemberChange: (identityId: string, member: boolean) =>
-              void this.setSessionMember(row, identityId, member),
-          }
-        : null;
     const renameAccess = row
       ? readSessionMethodAccess(this.context.gateway.snapshot, {
           method: "sessions.patch",
@@ -267,7 +293,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
-    const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
+    const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
+    const sidePanelOpen = currentLayout?.open === true && !currentLayout.expanded;
     const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
     const sidePanelAction = html`<openclaw-tooltip
       .content=${t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label")}
@@ -427,16 +454,33 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       (user) =>
         presenceMatchesProfile(user, renderedOwnerIdentity) && user.watchedSessions.includes(key),
     );
-    const ownerOptions = listAssignableSessionOwners({
-      facet: result?.owners,
-      agents: this.context.agents.state.agentsList?.agents,
-      self: sharingSnapshot.selfUser ?? null,
-    });
-    const selfOwner = sharingSnapshot.selfUser
-      ? (ownerOptions.find(
-          (owner) => owner.type === "human" && owner.id === sharingSnapshot.selfUser?.id,
-        ) ?? null)
-      : null;
+    const sharing =
+      sharingMethodsSupported && row
+        ? {
+            session: row,
+            state: this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key)),
+            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
+            membersAvailable: sharingReadAccess.allowed,
+            openDisabledReason: sharingOpenDisabledReason,
+            visibilityDisabledReason: sharingVisibilityAccess.allowed
+              ? undefined
+              : sharingVisibilityAccess.reason,
+            memberAddDisabledReason: sharingMemberAddAccess.allowed
+              ? undefined
+              : sharingMemberAddAccess.reason,
+            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
+              ? undefined
+              : sharingMemberRemoveAccess.reason,
+            ownerViewing,
+            personActivity,
+            showOwner: showOwnerChip,
+            onOpen: () => void this.loadSessionSharing(row),
+            onVisibilityChange: (visibility: SessionVisibility) =>
+              void this.setSessionVisibility(row, visibility),
+            onMemberChange: (identityId: string, member: boolean) =>
+              void this.setSessionMember(row, identityId, member),
+          }
+        : null;
     const header = renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -462,7 +506,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       canReveal,
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
+      actionsDisabled: this.state?.connected !== true,
       panelActions: html`${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
+      panelLayoutActions: this.renderPanelLayoutActions(currentLayout),
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,
@@ -477,42 +523,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             variant="session"
           ></openclaw-viewer-facepile>`
         : nothing,
-      faceControl: renderBoardViewSwitch({
-        hasBoard: board.hasBoard,
-        face: board.face,
-        dock: board.dock,
-        canChangeDock: canChangeBoardDock,
-        fullscreenControl: board.hasBoard ? this.boardFullscreen.renderButton() : undefined,
-        onSelectMode: (mode) => {
-          if (mode === "chat") {
-            void this.boardFullscreen.exit();
-          }
-          if (!canChangeBoardDock) {
-            const face = mode === "chat" ? "chat" : "dashboard";
-            this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
-            this.persistBoardSessionView({ face });
-            return;
-          }
-          if (mode === "chat") {
-            this.syncChatSidebarForDock("hidden");
-            this.persistBoardSessionView({ face: "chat" });
-            return;
-          }
-          this.persistBoardSessionView({ face: "dashboard" });
-          if (mode === "split") {
-            if (board.dock === "hidden") {
-              this.handleBoardDockChange(board.reopenDock);
-            } else {
-              this.syncChatSidebarForDock(board.dock);
-            }
-          } else if (board.dock !== "hidden") {
-            this.handleBoardDockChange("hidden");
-          }
-        },
-        onDockSideChange: (dock) => this.handleBoardDockChange(dock),
-      }),
+      faceControl: nothing,
       sharingControl:
-        sharing && (!this.narrow || !canManageChatSessionSharing(sharing.session))
+        sharing &&
+        (!canManageChatSessionSharing(sharing.session) || !sharing.openDisabledReason) &&
+        (!this.narrow || !canManageChatSessionSharing(sharing.session))
           ? renderChatSessionSharing(sharing)
           : nothing,
       placementControl: renderChatPanePlacement({
@@ -547,8 +562,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               }}
               .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
               .onboarding=${this.onboarding}
-              .preferencesBrowserOnly=${this.context.runtimeConfig?.state.connected &&
-              this.context.runtimeConfig.canPatch === false}
+              .preferencesBrowserOnly=${
+                this.context.runtimeConfig?.state.connected &&
+                this.context.runtimeConfig.canPatch === false
+              }
               .compact=${this.narrow}
               .navigationAllowed=${true}
               .copyMarkdownAllowed=${canCopySessionMarkdown(this.context.gateway.snapshot)}
@@ -556,12 +573,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
-              .statusActions=${this.compactHeaderStatusActions()}
               .sharing=${sharing}
               .groups=${knownGroups}
-              .ownerOptions=${ownerOptions}
-              .selfOwner=${selfOwner}
-              .currentOwnerId=${row.owner?.actor.id ?? null}
+              .currentOwner=${row.owner?.actor ?? null}
               .actionDisabledReasons=${actionDisabledReasons}
               .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
               .forkFromLastCompleted=${row.hasActiveRun === true}
@@ -615,11 +629,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onClosePane: this.onClosePane,
     });
     const continueCommand = this.currentContinueInTerminalCommand(row);
-    return html`${header}${continueCommand
-      ? renderContinueInTerminalDialog({
-          command: continueCommand,
-          onClose: () => this.closeContinueInTerminalDialog(),
-        })
-      : nothing}`;
+    return html`${header}${
+      continueCommand
+        ? renderContinueInTerminalDialog({
+            command: continueCommand,
+            onClose: () => this.closeContinueInTerminalDialog(),
+          })
+        : nothing
+    }`;
   }
 }

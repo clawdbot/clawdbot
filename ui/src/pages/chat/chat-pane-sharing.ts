@@ -481,8 +481,12 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     ) {
       return;
     }
-    if (scope.state.chatAttachments.length > 0) {
-      scope.state.chatError = t("chat.sessionSuggestions.attachmentsUnsupported");
+    if (scope.state.chatMentions?.length || scope.state.chatAttachments.length > 0) {
+      scope.state.chatError = t(
+        scope.state.chatMentions?.length
+          ? "chat.mentions.unsupported"
+          : "chat.sessionSuggestions.attachmentsUnsupported",
+      );
       scope.state.lastError = scope.state.chatError;
       scope.state.requestUpdate?.();
       return;
@@ -507,8 +511,8 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       ) {
         return;
       }
-      if (scope.state.chatMessage === text) {
-        scope.state.handleChatDraftChange("");
+      if (scope.state.chatMessage === text && !scope.state.chatMentions?.length) {
+        scope.state.handleChatDraftChange("", []);
       }
       this.sessionSuggestions = [
         ...this.sessionSuggestions.filter((item) => item.id !== result.suggestion.id),
@@ -552,14 +556,20 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       this.isConnectionScopeCurrent(scope) &&
       scope.state.sessionKey === sessionKey &&
       this.sessionSuggestionTargetSignature === targetSignature;
-    const previousEditDraft = resolution === "edit" ? scope.state.chatMessage : undefined;
+    const previousEditDraft =
+      resolution === "edit"
+        ? {
+            text: scope.state.chatMessage,
+            mentions: scope.state.chatMentions?.map((mention) => ({ ...mention })),
+          }
+        : undefined;
     const editOperation = resolution === "edit" ? Symbol("session-suggestion-edit") : undefined;
     if (editOperation) {
       this.sessionSuggestionEditOperation = editOperation;
     }
     this.sessionSuggestionBusyIds.add(suggestion.id);
     if (resolution === "edit") {
-      scope.state.handleChatDraftChange(suggestion.text);
+      scope.state.handleChatDraftChange(suggestion.text, []);
       queueMicrotask(() =>
         this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
           preventScroll: true,
@@ -598,9 +608,13 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
           resolution === "edit" &&
           error instanceof GatewayRequestError &&
           previousEditDraft !== undefined &&
-          scope.state.chatMessage === suggestion.text
+          scope.state.chatMessage === suggestion.text &&
+          !scope.state.chatMentions?.length
         ) {
-          scope.state.handleChatDraftChange(previousEditDraft);
+          scope.state.handleChatDraftChange(
+            previousEditDraft.text,
+            previousEditDraft.mentions ?? [],
+          );
         }
         scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
