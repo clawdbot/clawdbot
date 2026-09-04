@@ -196,6 +196,7 @@ describe("event-driven session list refresh", () => {
     const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
 
     try {
+      await sessions.refresh({ agentId: "writer", force: true });
       await sessions.refreshList({ ...allAgentsQuery, force: true });
       await sessions.refreshList({ ...allAgentsQuery, offset: 2, append: true, force: true });
       await sessions.refreshList({ ...writerQuery, force: true });
@@ -205,6 +206,7 @@ describe("event-driven session list refresh", () => {
       emitEvent(sessionChangedEvent("agent:research:changed"));
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
+      expect(request).toHaveBeenCalledTimes(1);
       const researchDashboardRequests = request.mock.calls.filter(
         ([, params]) => (params as { hasBoard?: unknown } | undefined)?.hasBoard === true,
       );
@@ -227,6 +229,7 @@ describe("event-driven session list refresh", () => {
       emitEvent(sessionChangedEvent("agent:writer:changed"));
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
+      expect(request).toHaveBeenCalledTimes(3);
       const writerDashboardRequests = request.mock.calls.filter(
         ([, params]) => (params as { hasBoard?: unknown } | undefined)?.hasBoard === true,
       );
@@ -239,6 +242,39 @@ describe("event-driven session list refresh", () => {
     } finally {
       stopAll();
       stopWriter();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { name: "primary", scope: { agentId: " Main " } },
+    { name: "owner-first", scope: { agentId: "main", ownerFirst: true } },
+    { name: "owner-filtered", scope: { agentId: "main", ownerId: "profile-self" } },
+    { name: "involving-me", scope: { agentId: "main", involvingMe: true } },
+    { name: "searched", scope: { agentId: "main", search: "report" } },
+    { name: "all-agents", scope: {} },
+  ])("invalidates the $name roster only for matching or unscoped events", async ({ scope }) => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => sessionsResult([], 1));
+    const { sessions, emitEvent } = createSessionCapabilityHarness(
+      request as unknown as GatewayBrowserClient["request"],
+      { ownerId: "profile-self" },
+    );
+    try {
+      await sessions.refresh({ ...scope, force: true });
+      request.mockClear();
+      for (const agentId of ["research", "main", undefined]) {
+        emitEvent({
+          type: "event",
+          event: "session.message",
+          payload: { sessionKey: "global", agentId, hasActiveRun: false, status: "done" },
+        });
+        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_MAX_WAIT_MS);
+        expect(request).toHaveBeenCalledTimes(agentId === "research" && scope.agentId ? 0 : 1);
+        request.mockClear();
+      }
+    } finally {
       sessions.dispose();
       vi.useRealTimers();
     }
