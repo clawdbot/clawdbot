@@ -103,9 +103,14 @@ export class AcpSessionNewOrdering {
     // not exist. The translator rejects those, so recording them here would let a
     // peer grow this set for the lifetime of the process.
     if (SESSION_ESTABLISHING_METHODS.has(method)) {
+      // Only recognition this request introduces is provisional. Reloading a session
+      // that is already established must not make its recognition contingent on the
+      // reload succeeding: the session is live either way, and forgetting it would
+      // park its later updates behind an unrelated pending creation.
+      const alreadyEstablished = this.establishedSessionIds.has(sessionId);
       this.establish(sessionId);
       const requestId = readRequestId(messageObject?.id);
-      if (requestId !== undefined) {
+      if (!alreadyEstablished && requestId !== undefined) {
         this.provisionalSessions.set(requestId, sessionId);
       }
       return;

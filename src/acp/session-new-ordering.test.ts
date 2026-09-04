@@ -372,6 +372,39 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([rejected, other, late]);
   });
 
+  it("keeps recognizing a live session whose reload was rejected", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const created = newSessionResponse(2, "live-session");
+    const rejectedReload = {
+      jsonrpc: "2.0",
+      id: 6,
+      error: { code: -32602, message: "no" },
+    } as AnyMessage;
+    const update = sessionUpdate("live-session", "still live");
+
+    const output = await runSteps(ordering, [
+      { inbound: newSessionRequest(2) },
+      { outbound: created },
+      // A second load naming the same, already-live session; the agent refuses it.
+      {
+        inbound: {
+          jsonrpc: "2.0",
+          id: 6,
+          method: "session/load",
+          params: { sessionId: "live-session", cwd: "/tmp" },
+        } as AnyMessage,
+      },
+      { outbound: rejectedReload },
+      { inbound: newSessionRequest(7) },
+      { outbound: update },
+    ]);
+
+    // The session was established before the reload, so the rejection retires
+    // nothing and its update still goes straight out rather than waiting behind
+    // the creation that is now pending.
+    expect(output).toEqual([created, rejectedReload, update]);
+  });
+
   it("keeps a loaded session the agent accepted", async () => {
     const ordering = new AcpSessionNewOrdering();
     const accepted = { jsonrpc: "2.0", id: 4, result: {} } as AnyMessage;
