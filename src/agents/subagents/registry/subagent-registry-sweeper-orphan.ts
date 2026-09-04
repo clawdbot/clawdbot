@@ -44,6 +44,33 @@ export async function reconcileStaleActiveSubagentRun(params: {
 }): Promise<boolean> {
   const { entry, now, runId } = params;
   const accountId = entry.requesterOrigin?.accountId;
+  const runStartedAtMs = entry.execution.startedAt ?? entry.createdAt;
+  const sessionEntry = loadSubagentSessionEntry({
+    childSessionKey: entry.childSessionKey,
+    storeCache: params.storeCache,
+  });
+  // A fresh persisted terminal state is the child's authoritative outcome.
+  // Resolve it before crash attribution so a later gateway death cannot
+  // rewrite a real failure, timeout, or kill as an orphan diagnosis.
+  const persistedCompletion = resolveCompletionFromSessionEntry(sessionEntry, now, {
+    notBeforeMs: runStartedAtMs,
+  });
+  if (persistedCompletion) {
+    await params.completeSubagentRunWithRecovery(
+      {
+        runId,
+        startedAt: persistedCompletion.startedAt,
+        endedAt: persistedCompletion.endedAt,
+        outcome: persistedCompletion.outcome,
+        reason: persistedCompletion.reason,
+        sendFarewell: true,
+        accountId,
+        triggerCleanup: true,
+      },
+      "sweeper-session-completion",
+    );
+    return false;
+  }
   // The reap happens arbitrarily long after the death — it includes however
   // long the host stayed down. Correlate against boot history before writing
   // anything about this run: the reap clock is not evidence of its lifetime.
@@ -55,7 +82,7 @@ export async function reconcileStaleActiveSubagentRun(params: {
       (boot) => boot.pid === process.pid && boot.completedAtMs === null && boot.outcome === null,
     )?.bootId;
   const attribution = resolveSubagentOrphanAttribution({
-    runStartedAtMs: entry.execution.startedAt ?? entry.createdAt,
+    runStartedAtMs,
     lastActivityAtMs: resolveSubagentRunLastActivityMs(entry),
     assistantMessageCount,
     boots,
@@ -92,34 +119,6 @@ export async function reconcileStaleActiveSubagentRun(params: {
       runs: params.runs,
       resumedRuns: params.resumedRuns,
     });
-  }
-
-  const completion = resolveCompletionFromSessionEntry(
-    loadSubagentSessionEntry({
-      childSessionKey: entry.childSessionKey,
-      storeCache: params.storeCache,
-    }),
-    now,
-    {
-      notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
-      failedRunError: attributedError,
-    },
-  );
-  if (completion) {
-    await params.completeSubagentRunWithRecovery(
-      {
-        runId,
-        startedAt: completion.startedAt,
-        endedAt: completion.endedAt,
-        outcome: completion.outcome,
-        reason: completion.reason,
-        sendFarewell: true,
-        accountId,
-        triggerCleanup: true,
-      },
-      "sweeper-session-completion",
-    );
-    return false;
   }
 
   await params.completeSubagentRunWithRecovery(

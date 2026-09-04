@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../../config/sessions.js";
 import type { GatewayBootLifecycleSegment } from "../../../infra/gateway-boot-lifecycle.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
@@ -16,6 +17,9 @@ const bootSegments = vi.hoisted(() => ({
 const orphanReason = vi.hoisted(() => ({
   current: undefined as string | undefined,
 }));
+const childSessionEntry = vi.hoisted(() => ({
+  current: undefined as SessionEntry | undefined,
+}));
 
 vi.mock("./subagent-orphan-attribution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent-orphan-attribution.js")>();
@@ -29,7 +33,7 @@ vi.mock("./subagent-session-reconciliation.js", async (importOriginal) => {
   return {
     ...actual,
     resolveSubagentRunOrphanReason: () => orphanReason.current ?? null,
-    loadSubagentSessionEntry: () => undefined,
+    loadSubagentSessionEntry: () => childSessionEntry.current,
   };
 });
 // Partial mock: agent-events registers a reset handler against this module at
@@ -129,6 +133,7 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     // Reap long after the death, exactly as the real 34-minute outage did.
     vi.useFakeTimers({ now: RUN_REAPED_AT });
     orphanReason.current = "missing-session-entry";
+    childSessionEntry.current = undefined;
     bootSegments.current = [
       segment({ bootId: "boot-minus-5", startedAtMs: RUN_STARTED_AT - 60_000 }),
       segment({
@@ -233,5 +238,37 @@ describe("sweeper attribution for runs orphaned by a gateway death", () => {
     // Output-bearing runs keep the existing prune path; the loud notification
     // is reserved for the case the requester cannot recover from on its own.
     expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      status: "failed" as const,
+      expectedOutcome: { status: "error", error: "session completed before registry settled" },
+    },
+    { status: "timeout" as const, expectedOutcome: { status: "timeout" } },
+    {
+      status: "killed" as const,
+      expectedOutcome: { status: "error", error: "subagent run terminated" },
+    },
+  ])("preserves a fresh persisted $status outcome before crash attribution", async (testCase) => {
+    orphanReason.current = undefined;
+    childSessionEntry.current = {
+      sessionId: "orphaned",
+      status: testCase.status,
+      startedAt: RUN_STARTED_AT,
+      updatedAt: RUN_DIED_AT,
+      endedAt: RUN_DIED_AT,
+    } as SessionEntry;
+    const { completeSubagentRunWithRecovery, sweeper } = createHarness();
+
+    await sweeper.sweepOnce();
+    sweeper.reset();
+
+    expect(completeSubagentRunWithRecovery).toHaveBeenCalledTimes(1);
+    const [completion, source] = completeSubagentRunWithRecovery.mock.calls[0]!;
+    expect(source).toBe("sweeper-session-completion");
+    expect(completion.outcome).toEqual(testCase.expectedOutcome);
+    expect(completion.endedAt).toBe(RUN_DIED_AT);
+    expect(JSON.stringify(completion.outcome)).not.toContain("gateway");
   });
 });

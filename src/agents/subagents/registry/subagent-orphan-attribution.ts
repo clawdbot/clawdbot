@@ -51,7 +51,7 @@ export type SubagentOrphanAttribution = {
   elapsedBound: SubagentOrphanElapsedBound;
   /** How long the gateway was absent before it could reap the run. */
   downtimeMs: number;
-  /** True when the host-continuity verdict rests on the uptime fallback. */
+  /** True when uptime-derived boot evidence forces a generic restart cause. */
   hostContinuityInferred: boolean;
   assistantMessageCount: number;
 };
@@ -74,9 +74,16 @@ function resolveHostContinuity(
   }
   const inferred =
     isInferredHostBootId(prior.hostBootId) || isInferredHostBootId(successor.hostBootId);
+  if (inferred) {
+    // Uptime buckets are useful forensic hints, but equal buckets are not
+    // collision-free host identities and unequal buckets can reflect clock
+    // discipline. Never turn either relationship into a categorical reboot
+    // or process-death claim.
+    return { cause: "gateway_restart", inferred: true };
+  }
   return {
     cause: prior.hostBootId === successor.hostBootId ? "gateway_process_death" : "host_reboot",
-    inferred,
+    inferred: false,
   };
 }
 
@@ -225,7 +232,7 @@ function describeEvidence(attribution: SubagentOrphanAttribution): string {
 export function formatSubagentOrphanErrorMessage(attribution: SubagentOrphanAttribution): string {
   const restartedAt = new Date(attribution.restartedAtMs).toISOString();
   const inferredNote = attribution.hostContinuityInferred
-    ? " [host continuity inferred from uptime, not kernel boot id]"
+    ? " [host boot identity derived from uptime; restart cause kept generic]"
     : "";
   const messages =
     attribution.assistantMessageCount === 1

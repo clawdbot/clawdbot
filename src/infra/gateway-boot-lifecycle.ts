@@ -53,18 +53,18 @@ const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");
 
 /**
  * Identifies the host boot the gateway process is running on. Two boot rows
- * carrying different host boot ids were separated by a host reboot; two rows
- * carrying the same id were separated by a process death while the host stayed
- * up. The remedies differ, so the recorded cause has to tell them apart.
+ * carrying different authoritative kernel ids were separated by a host reboot;
+ * two rows carrying the same kernel id were separated by a process death while
+ * the host stayed up. The remedies differ, so the recorded cause has to tell
+ * them apart.
  *
  * The kernel value is authoritative. The uptime fallback is only a coarse
- * bucket of the host start time, so anything derived from it is reported as
- * inferred rather than observed.
+ * bucket of the host start time, so attribution keeps its cause generic.
  */
 const HOST_BOOT_ID_KERNEL_PREFIX = "kernel:";
 const HOST_BOOT_ID_UPTIME_PREFIX = "uptime:";
-// Wide enough to absorb ordinary clock discipline, narrow enough that a real
-// reboot always lands in a different bucket.
+// Wide enough to absorb ordinary clock discipline. This is a forensic hint,
+// not a collision-free identity: two quick boots can occupy the same bucket.
 const HOST_BOOT_ID_UPTIME_BUCKET_MS = 5 * 60_000;
 
 let cachedHostBootId: string | undefined;

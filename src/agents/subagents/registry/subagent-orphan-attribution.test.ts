@@ -176,7 +176,7 @@ describe("resolveSubagentOrphanAttribution", () => {
     expect(attribution?.hostContinuityInferred).toBe(false);
   });
 
-  it("marks an uptime-derived verdict as inferred", () => {
+  it("keeps changed uptime-derived boot ids on the generic restart cause", () => {
     const attribution = resolveSubagentOrphanAttribution({
       runStartedAtMs: RUN_STARTED_AT,
       boots: [
@@ -192,7 +192,7 @@ describe("resolveSubagentOrphanAttribution", () => {
         }),
       ],
     });
-    expect(attribution?.cause).toBe("host_reboot");
+    expect(attribution?.cause).toBe("gateway_restart");
     expect(attribution?.hostContinuityInferred).toBe(true);
   });
 
@@ -283,7 +283,7 @@ describe("formatSubagentOrphanErrorMessage", () => {
     expect(message).not.toContain("gateway absent under 1s");
   });
 
-  it("flags an inferred host-continuity verdict", () => {
+  it("keeps equal uptime-derived boot ids on the generic restart cause", () => {
     const inferred = resolveSubagentOrphanAttribution({
       runStartedAtMs: RUN_STARTED_AT,
       boots: [
@@ -299,7 +299,10 @@ describe("formatSubagentOrphanErrorMessage", () => {
         }),
       ],
     });
-    expect(formatSubagentOrphanErrorMessage(inferred!)).toContain("inferred from uptime");
+    expect(inferred?.cause).toBe("gateway_restart");
+    expect(formatSubagentOrphanErrorMessage(inferred!)).toContain(
+      "host boot identity derived from uptime; restart cause kept generic",
+    );
   });
 
   it("uses singular wording for a single recorded assistant message", () => {
