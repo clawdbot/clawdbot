@@ -10,6 +10,7 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createChatPageSessions } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
@@ -41,7 +42,7 @@ function splitLayout(sessionKey: string): ChatSplitLayout {
 
 function configure(page: ChatPage) {
   const context = {
-    sessions: { state: { result: null }, subscribe: () => () => undefined, patch: vi.fn() },
+    sessions: { ...createChatPageSessions(), patch: vi.fn() },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
       snapshot: { hello: null },
