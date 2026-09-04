@@ -142,13 +142,20 @@ function resolveClaudeAgentSdkOptions(
   currentTurn: () => ClaudeAgentSdkTurn | undefined,
   processOwner: ReturnType<typeof createClaudeAgentSdkProcessOwner>,
 ): ClaudeAgentSdkOptions {
+  // On Windows, the bare command resolves to npm's extensionless POSIX shim
+  // (a shell script), which fails to spawn. The identity layer resolves the
+  // actual .cmd/.exe entrypoint after #135138.
+  const pathToClaudeCodeExecutable =
+    process.platform === "win32" && context.executableIdentity
+      ? context.executableIdentity.invocation.command
+      : context.command;
   const options: ClaudeAgentSdkOptions = {
     abortController,
     cwd: context.cwd,
     env: context.env,
     includePartialMessages: true,
     model: context.modelId,
-    pathToClaudeCodeExecutable: context.command,
+    pathToClaudeCodeExecutable,
     permissionMode: "default",
     settingSources: ["user"],
     spawnClaudeCodeProcess: processOwner.spawn,

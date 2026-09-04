@@ -543,6 +543,9 @@ export async function executePluginOwnedProcess(params: {
       timeoutMs: run.timeoutMs,
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
+      ...(params.context.executableIdentity
+        ? { executableIdentity: params.context.executableIdentity }
+        : {}),
       ...(liveSession ? { liveSession } : {}),
       requestToolPermission: createPluginToolPermissionHandler({
         context: params.context,

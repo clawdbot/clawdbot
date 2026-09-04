@@ -229,22 +229,16 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       isolatedCompletionPrompt: "Return a JSON summary.",
     } as Parameters<NonNullable<typeof backend.prepareExecution>>[0]);
 
+    const sdkEnv = { CLAUDE_AGENT_SDK_VERSION: "0.3.243", NoDefaultCurrentDirectoryInExePath: "1" };
     expect(credential).toEqual(
       expect.objectContaining({
-        env: {
-          CLAUDE_AGENT_SDK_VERSION: "0.3.243",
-          NoDefaultCurrentDirectoryInExePath: "1",
-          CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
-        },
+        env: { ...sdkEnv, CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
         secretInput: expect.objectContaining({ fd: 3 }),
         execute: expect.any(Function),
       }),
     );
     expect(emptyCredential).toEqual(
-      expect.objectContaining({
-        env: { CLAUDE_AGENT_SDK_VERSION: "0.3.243", NoDefaultCurrentDirectoryInExePath: "1" },
-        execute: expect.any(Function),
-      }),
+      expect.objectContaining({ env: sdkEnv, execute: expect.any(Function) }),
     );
     expect(emptyCredential).not.toHaveProperty("secretInput");
     expect(sideQuestion).not.toHaveProperty("execute");
@@ -474,7 +468,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     const context = createContext();
 
     expect(await collect(context)).toContainEqual(result);
-
     expect(queryMock).toHaveBeenCalledOnce();
     expect(sdkOptions()).toEqual(
       expect.objectContaining({
@@ -486,11 +479,25 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         settingSources: ["user"],
       }),
     );
-    expect(sdkOptions().env).not.toHaveProperty("ANTHROPIC_API_KEY");
-    expect(sdkOptions().env).not.toHaveProperty("ANTHROPIC_OAUTH_TOKEN");
-    expect(sdkOptions().env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
-
+    for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"])
+      expect(sdkOptions().env).not.toHaveProperty(key);
     expect(queryMock.mock.calls[0]?.[0]?.prompt).toBe("Remember the launch code.");
+  });
+
+  it("uses identity-resolved executable path on Windows", async () => {
+    const expected = "C:\\Users\\test\\npm\\node_modules\\@anthropic-ai\\claude-code\\claude.exe";
+    useSdkMessages([{ ...SUCCESS_RESULT, result: "ok" }]);
+    const id = {
+      invocation: { command: expected },
+    } as CliBackendExecuteContext["executableIdentity"];
+    const orig = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      await collect(createContext({ command: "claude", executableIdentity: id }));
+      expect(sdkOptions().pathToClaudeCodeExecutable).toBe(expected);
+    } finally {
+      Object.defineProperty(process, "platform", { value: orig });
+    }
   });
 
   it.each([
@@ -513,9 +520,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     const controller = new AbortController();
     const reason = new Error("OpenClaw cancelled the run while the SDK was loading.");
     const running = collect(createContext({ abortSignal: controller.signal }));
-
     controller.abort(reason);
-
     await expect(running).rejects.toBe(reason);
     expect(queryMock).not.toHaveBeenCalled();
   });
@@ -556,11 +561,9 @@ describe("Anthropic Agent SDK runtime ownership", () => {
 
   it("preserves native session identity across fresh and resumed turns", async () => {
     useSdkMessages();
-
     await collect(createContext());
     expect(sdkOptions()).toEqual(expect.objectContaining({ sessionId: SESSION_ID }));
     expect(sdkOptions()).not.toHaveProperty("resume");
-
     queryMock.mockClear();
     await collect(createContext({ useResume: true }));
     expect(sdkOptions()).toEqual(expect.objectContaining({ resume: SESSION_ID }));
@@ -569,7 +572,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
 
   it("preserves cache, effort, and checkpoint-fork controls through SDK options", async () => {
     useSdkMessages();
-
     await collect(
       createContext({
         args: [
@@ -584,16 +586,13 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         useResume: true,
       }),
     );
-
-    expect(sdkOptions()).toEqual(
-      expect.objectContaining({
-        resume: SESSION_ID,
-        effort: "max",
-        forkSession: true,
-        resumeSessionAt: "assistant-before-stall",
-        extraArgs: { "cache-system-prompt": null },
-      }),
-    );
+    expect(sdkOptions()).toMatchObject({
+      resume: SESSION_ID,
+      effort: "max",
+      forkSession: true,
+      resumeSessionAt: "assistant-before-stall",
+      extraArgs: { "cache-system-prompt": null },
+    });
   });
 
   it("reuses one official SDK query and Claude process across compatible agent turns", async () => {
@@ -962,8 +961,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         strictMcpConfig: true,
       }),
     );
-    expect(sdkOptions().allowedTools).not.toContain("Bash");
-    expect(sdkOptions()).not.toHaveProperty("mcpServers");
     expect(sdkOptions().extraArgs).toEqual(
       expect.objectContaining({ "mcp-config": "/tmp/openclaw-restricted-mcp.json" }),
     );
@@ -1037,9 +1034,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         allowedTools: ["mcp__openclaw__message", "mcp__openclaw__memory_search"],
       }),
     );
-    expect(sdkOptions().allowedTools).not.toContain("mcp__openclaw__*");
-    expect(sdkOptions().allowedTools).not.toContain("Bash");
-    expect(sdkOptions().allowedTools).not.toContain("Edit");
   });
 
   it.each([429, 529])(

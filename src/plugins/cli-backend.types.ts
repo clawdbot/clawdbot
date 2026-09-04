@@ -2,6 +2,33 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
 
+/**
+ * Structural subset of the agent-side CliExecutableIdentity.
+ * Re-declared here to avoid a cross-boundary import from src/agents/ into src/plugins/.
+ */
+type CliExecutableIdentityRef = Readonly<{
+  command: string;
+  resolvedPath: string;
+  invocation: Readonly<{
+    command: string;
+    argv0?: string;
+    leadingArgv: readonly string[];
+    resolution: "direct" | "node-entrypoint" | "exe-entrypoint";
+  }>;
+  files: readonly unknown[];
+  runtimeArtifact:
+    | Readonly<{ kind: "self-contained-executable" }>
+    | Readonly<{
+        kind: "package-tree";
+        packageName: string;
+        packageVersion: string;
+        rootPath: string;
+        fileCount: number;
+        totalBytes: string;
+        treeSha256: string;
+      }>;
+}>;
+
 /** Static command adapter owned by a CLI backend plugin registration. */
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
@@ -256,6 +283,8 @@ export type CliBackendExecuteContext = {
   timeoutMs: number;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;
+  /** Resolved executable identity when auth binding or exact tool availability ran. */
+  executableIdentity?: CliExecutableIdentityRef;
   /** Exact host-owned reusable process lifecycle and current-turn admission. */
   liveSession?: CliBackendLiveSessionCapability;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
