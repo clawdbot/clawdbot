@@ -100,10 +100,6 @@ function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
   return { ...message, turnId: uuidv7() };
 }
 
-/**
- * Stream an assistant response from the LLM.
- * This is where AgentMessage[] gets transformed to Message[] for the LLM.
- */
 export async function streamAgentResponse(
   context: AgentContext,
   config: AgentLoopConfig,
@@ -136,7 +132,6 @@ export async function streamAgentResponse(
   const llmMessages = await convertMessages(sourceMessages);
   let requestPrefix: string | undefined;
 
-  // Build LLM context
   const llmContext: Context = {
     systemPrompt: context.systemPrompt,
     messages: llmMessages,
@@ -153,6 +148,11 @@ export async function streamAgentResponse(
   const executionSignal = signal
     ? AbortSignal.any([signal, executionAbort.signal])
     : executionAbort.signal;
+  const abortFailedResponse = (message?: AssistantMessage) => {
+    if (message?.stopReason === "error" || message?.stopReason === "aborted") {
+      executionAbort.abort(new Error(message.errorMessage ?? "Model response interrupted"));
+    }
+  };
   const steering = createStreamSteering(config, executionSignal, async (pending) => {
     requestPrefix ??= JSON.stringify(llmMessages);
     const projected = await convertMessages([...sourceMessages, ...pending], executionSignal);
@@ -218,11 +218,16 @@ export async function streamAgentResponse(
     let committedContentCount = 0;
     let streamedTurnId: string | undefined;
 
+    // Result wrappers bind ownership to unchanged content. Only split actual async fragments.
+    const remainingFragment = (message: AssistantMessage) =>
+      committedContentCount === 0
+        ? message
+        : replaceCompactionReplayOwnerContent(
+            message,
+            message.content.slice(committedContentCount),
+          );
     const updatePartial = async (message: AssistantMessage) => {
-      const fragment = replaceCompactionReplayOwnerContent(
-        message,
-        message.content.slice(committedContentCount),
-      );
+      const fragment = remainingFragment(message);
       if (partialIndex === undefined) {
         partialIndex = context.messages.length;
         context.messages.push(fragment);
@@ -281,14 +286,14 @@ export async function streamAgentResponse(
               assistantMessageEvent: fragmentEvent,
               message: { ...fragment },
             });
-            const canStartAsync =
+            if (
               event.type === "toolcall_end" &&
               event.toolCall.async &&
               !executedIds.has(event.toolCall.id) &&
               message.content
                 .slice(committedContentCount, event.contentIndex)
-                .every((item) => item.type !== "toolCall" || item.async === true);
-            if (event.type === "toolcall_end" && canStartAsync) {
+                .every((item) => item.type !== "toolCall" || item.async === true)
+            ) {
               const prefix = prepareAssistantMessage(
                 ensureToolTurnIdentity({
                   ...replaceCompactionReplayOwnerContent(
@@ -332,19 +337,14 @@ export async function streamAgentResponse(
     return await finalizeAssistantMessage();
 
     async function finalizeAssistantMessage(terminal?: AssistantMessage) {
-      const result = terminal ?? (await response.result());
-      // Fence queued side effects as soon as failure is known. Persisting the
-      // terminal fragment can yield while an earlier tool finishes.
-      if (result.stopReason === "error" || result.stopReason === "aborted") {
-        executionAbort.abort(new Error(result.errorMessage ?? "Model response interrupted"));
-      }
+      // Fence queued side effects before result hooks or transcript persistence can yield.
+      abortFailedResponse(terminal);
+      const result = await response.result();
+      abortFailedResponse(result);
       const finalMessage = prepareAssistantMessage(
         ensureToolTurnIdentity(
           removeNonExecutableToolCalls({
-            ...replaceCompactionReplayOwnerContent(
-              result,
-              result.content.slice(committedContentCount),
-            ),
+            ...remainingFragment(result),
             ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
           }),
         ),

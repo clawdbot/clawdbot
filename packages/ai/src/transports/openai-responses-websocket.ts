@@ -599,8 +599,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
                 acceptedInput,
                 requiresInput: (terminalResponse?.output ?? []).some(
                   (item) =>
-                    (item.type === "function_call" && !(isRecord(item) && item.async === true)) ||
-                    (item.type === "custom_tool_call" &&
+                    ((item.type === "function_call" || item.type === "custom_tool_call") &&
                       !(isRecord(item) && item.async === true)) ||
                     item.type === "mcp_approval_request",
                 ),

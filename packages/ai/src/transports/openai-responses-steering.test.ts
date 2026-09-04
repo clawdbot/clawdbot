@@ -253,10 +253,10 @@ describe("accepted steering continuation input", () => {
       call_id: "call_1",
       output: "result",
     };
-    const next = [...input, toolResult, ...input];
     const update = { type: "configuration_update" as const, reasoning: { effort: "high" } };
-    expect(omitAcceptedSteering([...next, update], input)).toEqual([toolResult, ...input, update]);
-    expect(next).toEqual([...input, toolResult, ...input]);
+    const next = [...input, toolResult, ...input, update];
+    expect(omitAcceptedSteering(next, input)).toEqual([toolResult, ...input, update]);
+    expect(next).toEqual([...input, toolResult, ...input, update]);
     expect(() => omitAcceptedSteering([toolResult], input)).toThrow("accepted user input");
   });
 });

@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import type { AssistantMessage, Context, Model, ToolCall } from "@openclaw/llm-core";
 import { Type } from "typebox";
@@ -509,4 +510,3 @@ it.each(["error", "aborted"] as const)(
     }
   },
 );
-import { setImmediate } from "node:timers/promises";

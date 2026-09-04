@@ -92,11 +92,9 @@ export function createResponsesInputReplay(model: Model) {
       end = input.at(-1);
       input.push(...after);
     }
-    if (message.responseId && input.length > 0) {
+    if (message.responseId && end) {
       // Deferred inputs are not part of this response's prefix.
-      if (end) {
-        ends.set(message.responseId, end);
-      }
+      ends.set(message.responseId, end);
     }
   };
 }

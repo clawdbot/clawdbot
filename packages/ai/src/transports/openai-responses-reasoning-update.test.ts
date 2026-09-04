@@ -59,7 +59,7 @@ describe("cache-preserving Responses reasoning changes", () => {
     expect({ first, second }).toEqual(before);
     const third = {
       ...next("medium"),
-      input: [...(second.input ?? []), answer, user("third")],
+      input: [...second.input, answer, user("third")],
     };
     const medium = resolveResponsesContinuationRequest(
       { ...first, lastRequest: high.fullRequest, lastResponseId: "resp_2" },

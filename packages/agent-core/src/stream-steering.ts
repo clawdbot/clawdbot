@@ -53,12 +53,12 @@ export function createStreamSteering(
           const userMessages = converted.filter(
             (message): message is UserMessage => message.role === "user",
           );
-          if (!open || signal?.aborted || userMessages.length !== converted.length) {
-            release();
-            stop();
-            return;
-          }
-          if (userMessages.length === 0) {
+          if (
+            !open ||
+            signal?.aborted ||
+            userMessages.length !== converted.length ||
+            userMessages.length === 0
+          ) {
             release();
             stop();
             return;
