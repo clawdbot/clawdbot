@@ -845,12 +845,12 @@ defineDiscordVoiceTests(
       await vi.waitFor(() => expect(realtimeSessionMock.connect).toHaveBeenCalledOnce());
       const provider = lastRealtimeBridgeParams();
       session.close();
-      expect(provider.audioSink.isOpen()).toBe(false);
+      expect(provider.audioSink.isOpen?.()).toBe(false);
       resolveConnect();
       await connect;
 
       provider.onReady?.();
-      expect(provider.audioSink.isOpen()).toBe(false);
+      expect(provider.audioSink.isOpen?.()).toBe(false);
       expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
     });
 
