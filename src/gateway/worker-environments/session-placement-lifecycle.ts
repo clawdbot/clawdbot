@@ -7,7 +7,6 @@ import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
 } from "./service-contract.js";
-import { isWorkerEnvironmentGone } from "./state.js";
 
 export type SessionWorkerPlacementContext = {
   workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get">;
@@ -55,7 +54,11 @@ export function isFailedWorkerPlacementEnvironmentGone(params: {
   }
   try {
     const environment = params.environmentService.get(params.placement.environmentId);
-    return environment === undefined || isWorkerEnvironmentGone(environment);
+    return (
+      environment === undefined ||
+      environment.state === "destroyed" ||
+      (environment.state === "failed" && environment.leaseId === null)
+    );
   } catch {
     return false;
   }

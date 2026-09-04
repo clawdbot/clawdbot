@@ -25,6 +25,7 @@ import { prepareSessionLifecycleDrain } from "../server-methods/sessions-lifecyc
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import { success } from "./tunnel.test-support.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -817,7 +818,7 @@ describe("worker turn launcher local placement", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
+        runWorkspaceCommand: vi.fn(async () => success()),
         quiesceWorkspace: vi.fn(async () => ({
           assertActive: vi.fn(async () => {}),
           resume: vi.fn(async () => {}),
@@ -922,7 +923,7 @@ describe("worker turn launcher local placement", () => {
         ownerEpoch: OWNER_EPOCH,
         measureLaunchTurn,
         launchTurn,
-        runWorkspaceCommand: vi.fn(),
+        runWorkspaceCommand: vi.fn(async () => success()),
         quiesceWorkspace,
         syncWorkspace: vi.fn(),
         reconcileWorkspace,

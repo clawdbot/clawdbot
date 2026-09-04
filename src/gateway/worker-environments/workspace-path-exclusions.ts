@@ -24,18 +24,6 @@ export const WORKER_ATTACHMENT_DIRECTORY_PATTERN =
     UUID_HEX.repeat(12),
   ].join("-");
 const WORKER_ATTACHMENT_DIRECTORY_RE = new RegExp(`^${WORKER_ATTACHMENT_DIRECTORY_PATTERN}$`);
-const SKILL_RESOURCE_ID_PATTERN = "[0-9a-f]".repeat(32);
-const SKILL_RESOURCE_SHA256_PATTERN = "[0-9a-f]".repeat(64);
-const SKILL_RESOURCE_RUNTIME_PATH_PATTERNS = [
-  String.raw`\.openclaw-skill-resource-lease-${SKILL_RESOURCE_ID_PATTERN}`,
-  String.raw`\.openclaw-skill-resource-permit-${SKILL_RESOURCE_ID_PATTERN}(?:\.claimed)?`,
-  String.raw`\.openclaw-private-publish\.${SKILL_RESOURCE_SHA256_PATTERN}\.${SKILL_RESOURCE_ID_PATTERN}\.tmp`,
-  String.raw`\.retired-(?:permit|claimed-permit)\.${SKILL_RESOURCE_ID_PATTERN}\.${SKILL_RESOURCE_ID_PATTERN}`,
-  String.raw`\.retired-registry\.${SKILL_RESOURCE_ID_PATTERN}\.${SKILL_RESOURCE_SHA256_PATTERN}\.${SKILL_RESOURCE_ID_PATTERN}`,
-] as const;
-const SKILL_RESOURCE_RUNTIME_PATH_RE = new RegExp(
-  `^(?:${SKILL_RESOURCE_RUNTIME_PATH_PATTERNS.join("|")})$`,
-);
 
 // Derived caches and runtime attachment copies are not workspace edits. Keep
 // sync, manifest, divergence, apply, and recovery on this single predicate.
@@ -48,7 +36,6 @@ export function isDerivedWorkspacePath(relativePath: string, retainedInput = fal
   return segments.some(
     (segment) =>
       WORKER_ATTACHMENT_DIRECTORY_RE.exec(segment)?.[0] === segment ||
-      SKILL_RESOURCE_RUNTIME_PATH_RE.test(segment) ||
       (DERIVED_WORKSPACE_DIRECTORY_NAMES as readonly string[]).includes(segment) ||
       (DERIVED_WORKSPACE_FILE_NAMES as readonly string[]).includes(segment) ||
       DERIVED_WORKSPACE_FILE_SUFFIXES.some((suffix) => segment.endsWith(suffix)),
@@ -60,13 +47,6 @@ export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [
   ...DERIVED_WORKSPACE_FILE_NAMES,
   ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `*${suffix}`),
   WORKER_ATTACHMENT_DIRECTORY_PATTERN,
-  `.openclaw-skill-resource-lease-${SKILL_RESOURCE_ID_PATTERN}`,
-  `.openclaw-skill-resource-permit-${SKILL_RESOURCE_ID_PATTERN}`,
-  `.openclaw-skill-resource-permit-${SKILL_RESOURCE_ID_PATTERN}.claimed`,
-  `.openclaw-private-publish.${SKILL_RESOURCE_SHA256_PATTERN}.${SKILL_RESOURCE_ID_PATTERN}.tmp`,
-  `.retired-permit.${SKILL_RESOURCE_ID_PATTERN}.${SKILL_RESOURCE_ID_PATTERN}`,
-  `.retired-claimed-permit.${SKILL_RESOURCE_ID_PATTERN}.${SKILL_RESOURCE_ID_PATTERN}`,
-  `.retired-registry.${SKILL_RESOURCE_ID_PATTERN}.${SKILL_RESOURCE_SHA256_PATTERN}.${SKILL_RESOURCE_ID_PATTERN}`,
 ] as const;
 
 export const WORKSPACE_PATH_EXCLUSIONS_JS = `
@@ -75,7 +55,6 @@ const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIR
 const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
 const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
 const WORKER_ATTACHMENT_DIRECTORY_RE = ${WORKER_ATTACHMENT_DIRECTORY_RE.toString()};
-const SKILL_RESOURCE_RUNTIME_PATH_RE = ${SKILL_RESOURCE_RUNTIME_PATH_RE.toString()};
 const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};`;
 
 // Standalone node capture/reset scripts cannot import fs-safe. Read only the

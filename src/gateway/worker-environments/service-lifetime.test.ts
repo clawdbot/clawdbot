@@ -15,7 +15,6 @@ describe("worker environment service", () => {
     const workerService = support.createService(support.createProvider(), {
       maintainProviders: maintain,
     });
-    vi.spyOn(workerService.skillResourceAllocations, "recover").mockResolvedValue(undefined);
 
     expect(support.testState.store.list()).toEqual([]);
     workerService.start();
@@ -57,116 +56,6 @@ describe("worker environment service", () => {
     expect(stopped).toBe(true);
     await workerService.reconcileOnce();
     expect(maintainProviders).toHaveBeenCalledOnce();
-  });
-
-  it("releases skill resource ownership when earlier shutdown cleanup fails", async () => {
-    let failBootstrapCleanup = true;
-    const workerService = support.createService(support.createProvider(), {
-      closeNodeBootstrapArtifacts: async () => {
-        if (failBootstrapCleanup) {
-          failBootstrapCleanup = false;
-          throw new Error("fixture bootstrap cleanup failure");
-        }
-      },
-    });
-    const stopAllocations = vi.spyOn(workerService.skillResourceAllocations, "stop");
-
-    await expect(workerService.stop()).rejects.toThrow("fixture bootstrap cleanup failure");
-    expect(stopAllocations).toHaveBeenCalledOnce();
-  });
-
-  it("releases skill resource ownership when shutdown fails before tunnel cleanup", async () => {
-    const bootstrapStarted = createDeferred();
-    const finishBootstrap = createDeferred();
-    support.testState.bootstrapWorker = vi.fn(async () => {
-      bootstrapStarted.resolve();
-      await finishBootstrap.promise;
-      return support.BOOTSTRAP_RECEIPT;
-    });
-    let failTransferCleanup = true;
-    const stopNodeWorkerBundleTransfers = vi.fn(() => {
-      if (failTransferCleanup) {
-        failTransferCleanup = false;
-        throw new Error("fixture transfer cleanup failure");
-      }
-    });
-    const workerService = support.createService(support.createProvider(), {
-      stopNodeWorkerBundleTransfers,
-    });
-    const stopAllocations = vi.spyOn(workerService.skillResourceAllocations, "stop");
-    const creation = workerService.create("development", "shutdown-transfer-cleanup-failure");
-    await bootstrapStarted.promise;
-
-    const stopping = workerService.stop();
-    const stoppingResult = expect(stopping).rejects.toThrow("fixture transfer cleanup failure");
-    await support.waitForFast(() => expect(stopNodeWorkerBundleTransfers).toHaveBeenCalledOnce());
-    expect(stopAllocations).not.toHaveBeenCalled();
-
-    finishBootstrap.resolve();
-    await expect(creation).resolves.toMatchObject({ state: "ready" });
-    await stoppingResult;
-    expect(stopAllocations).toHaveBeenCalledOnce();
-  });
-
-  it("drains allocation recovery before tunnel teardown and releases ownership afterward", async () => {
-    const order: string[] = [];
-    const admissionStarted = createDeferred();
-    const finishAdmission = createDeferred();
-    const tunnelManager = {
-      stopAll: vi.fn(async () => {
-        order.push("tunnels");
-      }),
-    } as unknown as WorkerTunnelManager;
-    const workerService = support.createService(support.createProvider(), { tunnelManager });
-    vi.spyOn(workerService.skillResourceAllocations, "closeRecoveryAdmission").mockImplementation(
-      async () => {
-        order.push("admission-start");
-        admissionStarted.resolve();
-        await finishAdmission.promise;
-        order.push("admission-finished");
-      },
-    );
-    vi.spyOn(workerService.skillResourceAllocations, "stop").mockImplementation(async () => {
-      order.push("ownership-released");
-    });
-
-    let stopped = false;
-    const stopping = workerService.stop().then(() => {
-      stopped = true;
-    });
-    await admissionStarted.promise;
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-    expect(tunnelManager.stopAll).not.toHaveBeenCalled();
-
-    finishAdmission.resolve();
-    await stopping;
-    expect(order).toEqual([
-      "admission-start",
-      "admission-finished",
-      "tunnels",
-      "ownership-released",
-    ]);
-  });
-
-  it("closes idle allocation recovery before tunnel teardown", async () => {
-    const stopAll = vi.fn(async () => {});
-    const tunnelManager = {
-      stopAll,
-    } as unknown as WorkerTunnelManager;
-    const workerService = support.createService(support.createProvider(), { tunnelManager });
-    const closeRecoveryAdmission = vi.spyOn(
-      workerService.skillResourceAllocations,
-      "closeRecoveryAdmission",
-    );
-
-    await workerService.stop();
-
-    expect(closeRecoveryAdmission).toHaveBeenCalledTimes(2);
-    expect(stopAll).toHaveBeenCalledOnce();
-    expect(closeRecoveryAdmission.mock.invocationCallOrder[0]).toBeLessThan(
-      stopAll.mock.invocationCallOrder[0]!,
-    );
   });
 
   it("reports failed maintenance and retries on the next sweep", async () => {
@@ -222,89 +111,6 @@ describe("worker environment service", () => {
     await support.createService(support.createProvider()).reconcileOnce();
 
     expect(prune).toHaveBeenCalledOnce();
-  });
-
-  it("prunes a failed environment after its cleared lease retires allocation intent", async () => {
-    const environmentId = "worker-failed-cleanup-complete";
-    const requested = support.testState.store.createIntent({
-      environmentId,
-      providerId: "fake",
-      profileId: "development",
-      profileSnapshot: { settings: { region: "test" } },
-      provisionOperationId: `provision:${environmentId}`,
-    });
-    support.testState.store.transition({
-      environmentId,
-      from: requested.state,
-      to: "failed",
-    });
-    const workerService = support.createService(support.createProvider());
-    const allocationId = "a".repeat(32);
-    await workerService.skillResourceAllocations.createIntent({
-      allocationId,
-      environmentId,
-      ownerEpoch: 0,
-      workspace: support.testState.root,
-      leaseToken: "b".repeat(64),
-    });
-    workerService.skillResourceAllocations.abandon(allocationId);
-    const prune = vi.spyOn(support.testState.store, "pruneTerminalEnvironments");
-
-    await workerService.reconcileOnce();
-
-    await expect(workerService.skillResourceAllocations.ledger.list()).resolves.toEqual([]);
-    expect(prune).toHaveBeenCalledOnce();
-  });
-
-  it("schedules durable skill resource cleanup on full startup reconciliation", async () => {
-    const workerService = support.createService(support.createProvider());
-    const recover = vi
-      .spyOn(workerService.skillResourceAllocations, "recover")
-      .mockResolvedValue(undefined);
-
-    await workerService.reconcileOnce("missing-environment");
-    expect(recover).not.toHaveBeenCalled();
-    await workerService.reconcileOnce();
-
-    expect(recover).toHaveBeenCalledOnce();
-    expect(recover.mock.calls[0]![0]).toMatchObject({
-      getEnvironment: expect.any(Function),
-      startTunnel: expect.any(Function),
-    });
-  });
-
-  it("keeps allocation ownership contention from aborting the full maintenance sweep", async () => {
-    const warn = vi.fn();
-    const maintainProviders = vi.fn(async () => {});
-    const workerService = support.createService(support.createProvider(), {
-      logger: { warn },
-      maintainProviders,
-    });
-    vi.spyOn(workerService.skillResourceAllocations, "recover").mockRejectedValue(
-      new Error("replacement Gateway still owns cleanup"),
-    );
-    const prune = vi.spyOn(support.testState.store, "pruneTerminalEnvironments");
-
-    await expect(workerService.reconcileOnce()).resolves.toBeUndefined();
-    await support.waitForFast(() => expect(maintainProviders).toHaveBeenCalledOnce());
-    expect(prune).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
-      "Skill resource allocation cleanup failed; cleanup will retry",
-    );
-  });
-
-  it("retains terminal environment evidence while allocation cleanup is deferred", async () => {
-    const workerService = support.createService(support.createProvider());
-    vi.spyOn(workerService.skillResourceAllocations, "recover").mockImplementation(
-      async (options) => {
-        options.onEnvironmentCleanupDeferred?.("worker-cleanup-deferred");
-      },
-    );
-    const prune = vi.spyOn(support.testState.store, "pruneTerminalEnvironments");
-
-    await expect(workerService.reconcileOnce()).resolves.toBeUndefined();
-
-    expect(prune).not.toHaveBeenCalled();
   });
 
   it("coalesces targeted and full inspection while retaining full-sweep maintenance", async () => {
@@ -445,7 +251,6 @@ describe("worker environment service", () => {
       liveEvents,
       placementStore,
     });
-    vi.spyOn(workerService.skillResourceAllocations, "recover").mockResolvedValue(undefined);
     const guardedEnvironmentIds: string[] = [];
     const uninstallGuard = workerService.installReconcileEnvironmentGuard(
       async (guardedEnvironmentId, reconcileCore) => {

@@ -17,9 +17,6 @@ import { SkillLibraryError } from "./errors.js";
 
 export const SKILL_LIBRARY_MAX_PATH_COMPONENTS = 16;
 export const SKILL_LIBRARY_MAX_TREE_ENTRIES = SKILL_LIBRARY_MAX_FILES * 2;
-export const SKILL_WINDOWS_RESERVED_BASENAME_PATTERN = String.raw`^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$)(?:\.|$)`;
-
-const skillWindowsReservedBasename = new RegExp(SKILL_WINDOWS_RESERVED_BASENAME_PATTERN, "iu");
 
 /** Identifies the exact directory failure that prevented complete skill-tree traversal. */
 export class SkillTreeDirectoryError extends SkillLibraryError {
@@ -135,7 +132,8 @@ function validateSkillBundlePath(filePath: string): void {
         ) ||
         /[ .]$/u.test(part) ||
         part !== part.normalize("NFC") ||
-        skillWindowsReservedBasename.test(part),
+        /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(part) ||
+        /^(conin|conout)\$$/iu.test(part),
     )
   ) {
     throw new SkillLibraryError("INVALID_BUNDLE", `Non-portable skill file path: ${filePath}`);

@@ -10,8 +10,6 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { NodeWorkerWorkspaceRetainEntry } from "../../worker/node-workspace-retain-protocol.js";
-import { createSkillResourceAllocationCoordinator } from "./skill-resource-allocation-coordinator.js";
-import { createSkillResourceAllocationLedger } from "./skill-resource-allocation-ledger.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -26,7 +24,6 @@ import {
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
-  unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -44,15 +41,7 @@ describe("concurrent worker workspace results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
-  it("accepts the worker-turn environment facade before resources need an owner", () => {
-    const environments: Parameters<typeof executeRemoteExecTurn>[0]["environments"] =
-      unusedEnvironments();
-
-    expect(environments).toBeDefined();
-    expect(environments.skillResourceAllocations).toBeUndefined();
-  });
-
-  it("retains failed resource cleanup for recovery after reconciling the completed turn", async () => {
+  it("reports cleanup failure and reclaims the inputs before the next turn without skills", async () => {
     const remote = path.join(await fs.realpath(root), "remote");
     const source = path.join(root, "source");
     await fs.mkdir(remote);
@@ -78,12 +67,13 @@ describe("concurrent worker workspace results", () => {
       claimId: "cleanup-failure",
       runId: inputTurn.runId,
     });
-    let denyCleanup = true;
+    let failCleanup = true;
     const tunnel: WorkerTunnelHandle = {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
       runWorkspaceCommand: async (command) => {
-        if (JSON.parse(command.input!).op === "cleanup" && denyCleanup) {
+        if (JSON.parse(command.input!).op === "cleanup" && failCleanup) {
+          failCleanup = false;
           return {
             code: 1,
             stdout: "",
@@ -112,48 +102,49 @@ describe("concurrent worker workspace results", () => {
       syncWorkspace: vi.fn(),
       stop: async () => {},
     };
-    const databaseOptions = {
-      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "resource-state") },
-    };
-    const ledger = createSkillResourceAllocationLedger({ databaseOptions });
-    const coordinator = createSkillResourceAllocationCoordinator(ledger, {
-      ownershipDatabaseOptions: databaseOptions,
-    });
-    try {
-      await expect(
-        executeRemoteExecTurn({
-          environments: {
-            get: attachedEnvironment,
-            startTunnel: async () => tunnel,
-            skillResourceAllocations: coordinator,
-          },
-          onHandoff: () => {},
-          placement,
-          placements,
-          workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-          turn: inputTurn,
-          turnClaim,
-          localWorkspaceDir: root,
-          runLocal: async () => ({ meta: { durationMs: 1 } }),
-        }),
-      ).resolves.toBeDefined();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
-      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-      await expect(ledger.list()).resolves.toMatchObject([{ phase: "cleanup-pending" }]);
+    await expect(
+      executeRemoteExecTurn({
+        environments: { get: attachedEnvironment, startTunnel: async () => tunnel },
+        onHandoff: () => {},
+        placement,
+        placements,
+        workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+        turn: inputTurn,
+        turnClaim,
+        localWorkspaceDir: root,
+        runLocal: async () => ({ meta: { durationMs: 1 } }),
+      }),
+    ).rejects.toThrow("Skill resource cleanup failed");
+    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
 
-      denyCleanup = false;
-      await coordinator.recover({
-        getEnvironment: () => ({
-          state: "attached",
-          ownerEpoch: OWNER_EPOCH,
-          leaseId: "lease-active",
-        }),
-        startTunnel: async () => tunnel,
-      });
-      await expect(ledger.list()).resolves.toEqual([]);
-    } finally {
-      await coordinator.stop();
-    }
+    const leftovers = await fs.readdir(remote);
+    expect(leftovers).toHaveLength(1);
+    const nextTurn = turn("cleanup-recovery");
+    const nextClaim = placements.claimTurn({
+      ...sessionTarget,
+      owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      claimId: "cleanup-recovery",
+      runId: nextTurn.runId,
+    });
+    let executed = false;
+    await executeRemoteExecTurn({
+      environments: { get: attachedEnvironment, startTunnel: async () => tunnel },
+      onHandoff: () => {},
+      placement,
+      placements,
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      turn: nextTurn,
+      turnClaim: nextClaim,
+      localWorkspaceDir: root,
+      runLocal: async () => {
+        expect(await fs.readdir(remote)).toEqual([]);
+        executed = true;
+        return { meta: { durationMs: 1 } };
+      },
+    });
+    expect(executed).toBe(true);
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
 
   it.each([1, 50])(

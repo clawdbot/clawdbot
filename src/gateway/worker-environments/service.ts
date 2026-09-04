@@ -11,6 +11,7 @@ import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protoc
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
+import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
@@ -35,8 +36,6 @@ import type {
   WorkerEnvironmentAbandonment,
   WorkerProviderLifecycleInputOptions,
 } from "./provider-lifecycle.types.js";
-import type { SkillResourceAllocationCoordinator } from "./skill-resource-allocation-coordinator.js";
-import { createSkillResourceAllocationService } from "./skill-resource-allocation-service.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
@@ -92,7 +91,6 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   generateWorkerCredential?: (bytes: number) => string;
   now?: () => number;
   logger?: { warn: (message: string) => void };
-  skillResourceAllocationCoordinator?: SkillResourceAllocationCoordinator;
   applyTranscriptCommit?: (params: {
     identity: WorkerConnectionIdentity;
     request: WorkerTranscriptCommitParams;
@@ -365,13 +363,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     serviceError,
     withLock,
   });
-  const skillResources = createSkillResourceAllocationService({
-    coordinator: options.skillResourceAllocationCoordinator,
-    store,
-    startTunnel: environmentAccess.startTunnel,
-    warn,
-  });
-  const skillResourceAllocations = skillResources.coordinator;
 
   const turnRpc = createWorkerTurnRpc({
     store,
@@ -475,7 +466,15 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (environmentId !== undefined) {
       return;
     }
-    await skillResources.recoverAndPrune();
+    try {
+      store.pruneTerminalEnvironments();
+    } catch (error) {
+      // Pruning is opportunistic and retries on the next sweep; lock contention must not
+      // turn a healthy worker reconciliation into a startup or periodic-reconcile failure.
+      if (!isSqliteLockError(error)) {
+        throw error;
+      }
+    }
   };
 
   const reconcileOnce = (environmentId?: string) => {
@@ -540,30 +539,20 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     unsubscribeSessionIdentityMutation = undefined;
     unsubscribeTurnClaimClosed?.();
     unsubscribeTurnClaimClosed = undefined;
-    let shutdownError: unknown;
-    try {
-      // Shutdown owns both admission handoffs before tunnel teardown. Allocation recovery may
-      // open a tunnel, so drain it while retaining the global allocation lease until all other
-      // admitted work has settled below.
-      await closeReconcileEnvironmentGuard();
-      await skillResourceAllocations.closeRecoveryAdmission();
-      await options
-        .closeComputers?.()
-        .catch(() => warn("Session computer cleanup failed during Gateway shutdown"));
-      await inference.stop();
-      credentialBroker.clear();
-      options.liveEvents?.clear();
-      options.stopNodeWorkerBundleTransfers?.();
-    } catch (error) {
-      shutdownError = error;
-    }
+    // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
+    // inference or tunnel teardown can invalidate its closure-bound placement authority.
+    await closeReconcileEnvironmentGuard();
+    await options
+      .closeComputers?.()
+      .catch(() => warn("Session computer cleanup failed during Gateway shutdown"));
+    await inference.stop();
+    credentialBroker.clear();
+    options.liveEvents?.clear();
+    options.stopNodeWorkerBundleTransfers?.();
     try {
       await Promise.all([environmentAccess.stopAllTunnels(), options.nodePortalCarrier?.stopAll()]);
-    } catch (error) {
-      shutdownError ??= error;
-    }
-    try {
-      // No earlier shutdown failure can release allocation ownership while admitted work remains.
+    } finally {
+      // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
       const reconciliation = reconcileInFlight;
       if (reconciliation) {
         await Promise.allSettled([reconciliation]);
@@ -575,19 +564,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       turnRpc.clear();
       options.liveEvents?.clear();
       await options.closeNodeBootstrapArtifacts?.();
-    } catch (error) {
-      shutdownError ??= error;
-    }
-    try {
-      await skillResourceAllocations.stop();
-    } catch (error) {
-      shutdownError ??= error;
-    }
-    if (shutdownError instanceof Error) {
-      throw shutdownError;
-    }
-    if (shutdownError !== undefined) {
-      throw new Error("Worker environment shutdown failed", { cause: shutdownError });
     }
   };
 
@@ -719,8 +695,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
-    skillResourceAllocations,
-    startTunnel: skillResources.startTunnel,
+    startTunnel: environmentAccess.startTunnel,
     stopTunnel: async (environmentId: string, ownerEpoch?: number) => {
       await Promise.all([
         environmentAccess.stopTunnel(environmentId, ownerEpoch),
