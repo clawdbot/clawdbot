@@ -97,10 +97,18 @@ export function isToolAllowedByPolicies(
   return policies.every((policy) => isToolAllowedByPolicyName(name, policy));
 }
 
-// Outside the sanitized tool-name alphabet (`[A-Za-z0-9_-]`), so a deny entry
+// Outside the sanitized tool-name alphabet (`[A-Za-z0-9_-]`), so a policy entry
 // can cover a witness only through a wildcard, never by a literal that happens
 // to spell the placeholder while missing the server's real tools.
 const NAMESPACE_WITNESS = "~";
+// Entries a provider-safe tool name could ever match once `expandToolGroups`
+// has trimmed and lowercased them; anything else (including one spelling the
+// placeholder) authorizes or denies no real tool.
+const REALIZABLE_ENTRY_RE = /^[a-z0-9_*-]+$/;
+
+function realizableEntries(list: string[] | undefined): string[] {
+  return expandToolGroups(list).filter((entry) => REALIZABLE_ENTRY_RE.test(entry));
+}
 // Ways of picking one glob per allow layer; exotic policies beyond this fall closed.
 const MAX_WITNESS_COMBINATIONS = 64;
 
@@ -174,15 +182,21 @@ export function policiesAdmitToolNamespace(
   const namespace = normalizeToolPolicyName(prefix);
   const names = new Set<string>();
   const globLayers: GlobShape[][] = [];
+  const judged: SandboxToolPolicy[] = [];
   for (const policy of policies) {
-    const allow = expandToolGroups(policy?.allow);
+    const allow = realizableEntries(policy?.allow);
+    // A layer whose allow list names nothing realizable admits no real tool.
+    if (allow.length === 0 && expandToolGroups(policy?.allow).length > 0) {
+      return false;
+    }
+    judged.push({ allow, deny: realizableEntries(policy?.deny) });
     if (allow.length === 0) {
       continue;
     }
     const shapes: GlobShape[] = [];
     let reached = false;
     for (const entry of allow) {
-      const reach = namespaceReach(normalizeToolPolicyName(entry), namespace);
+      const reach = namespaceReach(entry, namespace);
       if (reach === undefined) {
         continue;
       }
@@ -201,5 +215,5 @@ export function policiesAdmitToolNamespace(
     }
   }
   const witnesses = [...names, ...intersectGlobWitnesses(globLayers, namespace)];
-  return witnesses.some((name) => isToolAllowedByPolicies(name, policies));
+  return witnesses.some((name) => isToolAllowedByPolicies(name, judged));
 }

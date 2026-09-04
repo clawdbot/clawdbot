@@ -454,6 +454,26 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: false,
     },
     {
+      label: "an allow glob no provider-safe memos tool name can match",
+      tools: { allow: ["memos__~*"] },
+      visible: false,
+    },
+    {
+      label: "a deny entry no provider-safe memos tool name can match",
+      tools: { profile: "coding", deny: ["memos__~"] },
+      visible: true,
+    },
+    {
+      label: "an allow entry spelled in uppercase with surrounding spaces",
+      tools: { allow: [" Memos__READ_note "] },
+      visible: true,
+    },
+    {
+      label: "a deny glob spelled in uppercase",
+      tools: { profile: "coding", deny: ["MEMOS__*"] },
+      visible: false,
+    },
+    {
       label: "an allow and a deny naming the same memos tool",
       tools: { allow: ["memos__read_note"], deny: ["memos__read_note"] },
       visible: false,
