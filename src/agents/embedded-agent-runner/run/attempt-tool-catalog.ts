@@ -230,7 +230,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       ? null
       : buildEmptyExplicitToolAllowlistError({
           sources: explicitToolAllowlistSources,
-          callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
+          hasCallableTools: toolSearchRunPlan.hasCallableTools,
           toolsEnabled,
           disableTools: attempt.disableTools,
           toolsAllowExplicitlyEmpty: preparedToolBase.effectiveToolsAllow?.length === 0,
@@ -303,11 +303,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         hostPromptPlan[key] = new Set(next.toolSearchRunPlan[key]);
       }
       current.emptyExplicitToolAllowlistError = next.emptyExplicitToolAllowlistError;
-      current.toolSearchRunPlan.emptyAllowlistCallableNames.splice(
-        0,
-        current.toolSearchRunPlan.emptyAllowlistCallableNames.length,
-        ...next.toolSearchRunPlan.emptyAllowlistCallableNames,
-      );
+      current.toolSearchRunPlan.hasCallableTools = next.toolSearchRunPlan.hasCallableTools;
     },
   });
 }
