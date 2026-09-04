@@ -499,6 +499,21 @@ describe("agents helpers", () => {
       "agents.defaults.systemAgent.agentId",
       "talk.agentId",
     ]);
+    // Complete, sorted surface digested for adopted-agent removal blocking: every kind the fixture
+    // exercises (bindings, allow list, per-entry/defaults allowAgents, owner refs, broadcast, hooks).
+    expect(result.removedReferences).toEqual([
+      "agents.defaults.heartbeat.agentId",
+      "agents.defaults.subagents.allowAgents[0]",
+      "agents.defaults.systemAgent.agentId",
+      "agents.entries.home.subagents.allowAgents[0]",
+      "bindings[0]",
+      "broadcast.peer-1[0]",
+      "broadcast.peer-2[0]",
+      "hooks.allowedAgentIds[1]",
+      "hooks.mappings[0]",
+      "talk.agentId",
+      "tools.agentToAgent.allow[0]",
+    ]);
   });
 
   it("pruneAgentConfig pins a survivor's workspace before the roster becomes sole", () => {
@@ -515,6 +530,9 @@ describe("agents helpers", () => {
     expect(result.config.agents?.entries).toEqual({
       research: { workspace: "/srv/fleet/research" },
     });
+    // Roster-collapse pins (workspace, ownership) are not references to the removed agent and
+    // must not appear here.
+    expect(result.removedReferences).toEqual([]);
   });
 
   it("removes ambient heartbeat policy when its owner leaves a surviving fleet", () => {

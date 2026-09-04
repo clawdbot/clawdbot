@@ -1,5 +1,4 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { listAgentEntries } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -10,6 +9,7 @@ import {
   PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
 } from "../plugins/install-artifact-inspection.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveCanonicalClawAgent } from "./agent-adoption-apply.js";
 import { readClawCronRefs, type PersistedClawCronRef } from "./cron.js";
 import { digestClawAgentConfig } from "./lifecycle-config-removal.js";
 import {
@@ -132,6 +132,7 @@ async function inspectClawPackageCompatibility(params: {
 
 export type ClawStatusRecord = {
   install: PersistedClawInstall;
+  agentOrigin: PersistedClawInstall["agentOrigin"];
   orphaned?: boolean;
   agentState: "present" | "modified" | "missing";
   bootstrapState: ClawBootstrapStatus["state"];
@@ -239,7 +240,7 @@ export async function readClawStatus(
   const records: ClawStatusRecord[] = [];
   const packagePreflight = options.packagePreflight;
   for (const install of installs) {
-    const agent = listAgentEntries(config).find((candidate) => candidate.id === install.agentId);
+    const agent = resolveCanonicalClawAgent(config, install.agentId);
     const packageRefs = allPackageRefs.filter(
       (packageRef) => packageRef.agentId === install.agentId,
     );
@@ -255,6 +256,7 @@ export async function readClawStatus(
         };
     records.push({
       install,
+      agentOrigin: install.agentOrigin,
       ...(installAgentIds.has(install.agentId) ? {} : { orphaned: true }),
       agentState: !agent
         ? "missing"

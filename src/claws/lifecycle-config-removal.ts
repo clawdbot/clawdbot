@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
-import { listAgentEntries } from "../agents/agent-scope.js";
+import { pruneAgentConfig } from "../commands/agents.config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -18,6 +18,7 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
+import { canonicalizeClawAgent, resolveCanonicalClawAgent } from "./agent-adoption-apply.js";
 import { digestClawAgentConfig } from "./agent-config-digest.js";
 import {
   deletionEffects,
@@ -58,6 +59,9 @@ export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: s
     agentToAgentAllow: (config.tools?.agentToAgent?.allow ?? []).filter(
       (entry) => entry === normalizedId,
     ),
+    // Bindings and allow are two of the kinds pruneAgentConfig deletes; digest every recorded
+    // reference so one added between plan and apply trips agent_modified instead of being pruned.
+    removedReferences: pruneAgentConfig(config, agentId).removedReferences,
   };
   return `sha256:${createHash("sha256").update(stableStringify(surface)).digest("hex")}`;
 }
@@ -69,7 +73,7 @@ async function commitClawAgentConfigRemoval(
     let result: ClawAgentConfigRemovalResult | undefined;
     await params.commitConfig((config) => {
       const effects = deletionEffects(config, params.agentId, params.fallbackWorkspace);
-      const agent = listAgentEntries(config).find((candidate) => candidate.id === params.agentId);
+      const agent = resolveCanonicalClawAgent(config, params.agentId);
       if (
         (agent && digestClawAgentConfig(agent) !== params.expectedDigest) ||
         digestClawAgentRemovalSurface(config, params.agentId) !==
@@ -118,7 +122,10 @@ async function commitClawAgentConfigRemoval(
         if (params.expectedState === "missing") {
           throw params.onModified();
         }
-        if (digestClawAgentConfig(agent) !== params.expectedDigest) {
+        if (
+          digestClawAgentConfig(canonicalizeClawAgent(agent, params.agentId)) !==
+          params.expectedDigest
+        ) {
           throw params.onModified();
         }
       },
@@ -143,7 +150,7 @@ async function commitClawAgentConfigRemoval(
       throw error;
     }
     const latestConfig = getRuntimeConfig();
-    if (listAgentEntries(latestConfig).some((agent) => agent.id === params.agentId)) {
+    if (resolveCanonicalClawAgent(latestConfig, params.agentId)) {
       throw params.onModified();
     }
     const effects = deletionEffects(latestConfig, params.agentId, params.fallbackWorkspace);
