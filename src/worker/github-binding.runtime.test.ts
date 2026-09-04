@@ -6,10 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as exec from "../process/exec.js";
 import { prepareWorkerGitHubEnvironment } from "./github-binding.runtime.js";
 
-const { warn, inspectPathPermissions } = vi.hoisted(() => ({
+const { warn, inspectPathPermissions, isPathCaseInsensitive } = vi.hoisted(() => ({
   warn: vi.fn(),
   inspectPathPermissions: vi.fn(),
+  isPathCaseInsensitive: vi.fn(),
 }));
+vi.mock("../infra/path-case.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/path-case.js")>();
+  isPathCaseInsensitive.mockImplementation(actual.isPathCaseInsensitive);
+  return { ...actual, isPathCaseInsensitive };
+});
 vi.mock("../infra/permissions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/permissions.js")>();
   inspectPathPermissions.mockImplementation(actual.inspectPathPermissions);
@@ -180,6 +186,88 @@ describe("prepareWorkerGitHubEnvironment", () => {
     await prepare();
 
     await expect(fs.readFile(path.join(cwd, localFile), "utf8")).resolves.toBe(localContent);
+    expect(await git(cwd, "status", "--porcelain", "--ignored", "-z")).toBe(before);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("GitHub checkout fast-forward skipped"),
+    );
+  });
+
+  it("preserves a tracked dirty file that blocks an incoming directory", async () => {
+    const collision = "collision";
+    const localContent = "local edit\n";
+    await fs.writeFile(path.join(cwd, collision), "base file\n");
+    initialHead = await commit(cwd, "Track collision file");
+    await git(cwd, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.rm(path.join(seed, collision));
+    await fs.mkdir(path.join(seed, collision));
+    await fs.writeFile(path.join(seed, collision, "remote.txt"), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+    await fs.writeFile(path.join(cwd, collision), localContent);
+    const before = await git(cwd, "status", "--porcelain", "--ignored", "-z");
+
+    await prepare();
+
+    await expect(fs.readFile(path.join(cwd, collision), "utf8")).resolves.toBe(localContent);
+    await expect(fs.access(path.join(cwd, collision, "remote.txt"))).rejects.toThrow();
+    expect(await git(cwd, "status", "--porcelain", "--ignored", "-z")).toBe(before);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("GitHub checkout fast-forward skipped"),
+    );
+  });
+
+  it("preserves a tracked dirty directory that blocks an incoming file", async () => {
+    const collision = "collision";
+    const localFile = path.join(collision, "local.txt");
+    const localContent = "local edit\n";
+    await fs.mkdir(path.join(cwd, collision));
+    await fs.writeFile(path.join(cwd, localFile), "base file\n");
+    initialHead = await commit(cwd, "Track collision directory");
+    await git(cwd, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.rm(path.join(seed, collision), { recursive: true });
+    await fs.writeFile(path.join(seed, collision), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+    await fs.writeFile(path.join(cwd, localFile), localContent);
+    const before = await git(cwd, "status", "--porcelain", "--ignored", "-z");
+
+    await prepare();
+
+    await expect(fs.readFile(path.join(cwd, localFile), "utf8")).resolves.toBe(localContent);
+    expect(await git(cwd, "status", "--porcelain", "--ignored", "-z")).toBe(before);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("GitHub checkout fast-forward skipped"),
+    );
+  });
+
+  it("honors case-insensitive paths when a local file blocks an incoming directory", async () => {
+    isPathCaseInsensitive.mockReturnValueOnce(true);
+    const localCollision = "Collision";
+    const remoteCollision = "collision";
+    const localContent = "local file\n";
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.mkdir(path.join(seed, remoteCollision));
+    await fs.writeFile(path.join(seed, remoteCollision, "remote.txt"), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+    await fs.writeFile(path.join(cwd, localCollision), localContent);
+    const before = await git(cwd, "status", "--porcelain", "--ignored", "-z");
+
+    await prepare();
+
+    await expect(fs.readFile(path.join(cwd, localCollision), "utf8")).resolves.toBe(localContent);
+    await expect(fs.access(path.join(cwd, remoteCollision, "remote.txt"))).rejects.toThrow();
     expect(await git(cwd, "status", "--porcelain", "--ignored", "-z")).toBe(before);
     expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
     expect(remoteHead).not.toBe(initialHead);

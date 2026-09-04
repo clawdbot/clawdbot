@@ -6,6 +6,7 @@ import {
   type PreparedGitHubToolEnvironment,
 } from "../agents/github-tool-identity.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import { isPathCaseInsensitive } from "../infra/path-case.js";
 import { inspectPathPermissions } from "../infra/permissions.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -87,7 +88,7 @@ async function bindWorkerGitHubCheckout(
     }
     const listPaths = async (args: string[]) =>
       (await requireGit(args)).split("\0").filter(Boolean);
-    const [added, untracked, ignored] = await Promise.all([
+    const [added, tracked, untracked, ignored] = await Promise.all([
       listPaths([
         "diff",
         "--name-only",
@@ -98,16 +99,22 @@ async function bindWorkerGitHubCheckout(
         "FETCH_HEAD",
         "--",
       ]),
+      listPaths(["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"]),
       listPaths(["ls-files", "--others", "--exclude-standard", "-z"]),
       listPaths(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]),
     ]);
-    const localPaths = [...untracked, ...ignored];
-    const hasPathPrefixCollision = added.some((addedPath) =>
-      localPaths.some(
-        (localPath) =>
-          addedPath.startsWith(`${localPath}/`) || localPath.startsWith(`${addedPath}/`),
-      ),
-    );
+    const normalizePath = isPathCaseInsensitive(cwd)
+      ? (value: string) => value.toLowerCase()
+      : (value: string) => value;
+    const localPaths = [...tracked, ...untracked, ...ignored].map(normalizePath);
+    const hasPathPrefixCollision = added
+      .map(normalizePath)
+      .some((addedPath) =>
+        localPaths.some(
+          (localPath) =>
+            addedPath.startsWith(`${localPath}/`) || localPath.startsWith(`${addedPath}/`),
+        ),
+      );
     if (hasPathPrefixCollision) {
       log.warn(`GitHub checkout fast-forward skipped: local path conflicts with ${binding.branch}`);
       return;
