@@ -275,6 +275,29 @@ export function isCwdBoundHashedArgPattern(value: string | null | undefined): bo
   return typeof value === "string" && value.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX);
 }
 
+// What an allowlist entry actually authorizes, read off the same fields
+// matchAllowlist branches on. Audit surfaces render this instead of re-deriving
+// scope, which reads a narrow or inactive grant as a broad path grant.
+export type ExecAllowlistScope = "command text" | "argv+cwd" | "argv" | "any args" | "inactive";
+
+export function classifyExecAllowlistScope(
+  entry: Pick<ExecAllowlistEntry, "pattern" | "source" | "argPattern">,
+): ExecAllowlistScope {
+  const pattern = entry.pattern?.trim() ?? "";
+  if (pattern.startsWith("=command:") || pattern.startsWith("=node-command:")) {
+    return "command text";
+  }
+  // matchAllowlist skips path-only and legacy-hashed generated grants outright,
+  // so an allow-always entry authorizes nothing unless it is cwd-bound.
+  if (entry.source === "allow-always" && !isCwdBoundHashedArgPattern(entry.argPattern)) {
+    return "inactive";
+  }
+  if (isCwdBoundHashedArgPattern(entry.argPattern)) {
+    return "argv+cwd";
+  }
+  return entry.argPattern ? "argv" : "any args";
+}
+
 function renderGeneratedArgPatternSubject(argv: string[]): string {
   const argsSlice = argv.slice(1);
   return argsSlice.length === 0 ? "\x00\x00" : argsSlice.join("\x00") + "\x00";

@@ -188,6 +188,34 @@ describe("exec approvals CLI", () => {
     expect(requireRecord(allowlist[0], "JSON allowlist entry").pattern).toBe(pattern);
   });
 
+  it("separates allowlist grants that differ only by scope", async () => {
+    const pattern = "/usr/bin/git";
+    const lastUsedAt = 1;
+    localSnapshot.file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [
+            { pattern, lastUsedAt },
+            { pattern, source: "allow-always", argPattern: "sha256:cwd-argv:v1:abc", lastUsedAt },
+            { pattern, source: "allow-always", lastUsedAt },
+          ],
+        },
+      },
+    };
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    const rows = loggedOutput()
+      .split("\n")
+      .filter((line) => line.includes(pattern));
+    expect(rows).toHaveLength(3);
+    expect(new Set(rows).size).toBe(3);
+    expect(rows[0]).toContain("any args");
+    expect(rows[1]).toContain("argv+cwd");
+    expect(rows[2]).toContain("inactive");
+  });
+
   it("redacts the socket token from local get JSON while preserving its path", async () => {
     localSnapshot.file = {
       version: 1,

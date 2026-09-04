@@ -54,6 +54,12 @@ openclaw approvals resolve <id> <allow-once|allow-always|deny>
 
 `get` shows the effective exec policy for the target: the requested `tools.exec` policy, the host approvals-file policy, and the merged effective result. Nodes with a host-native policy, such as the Windows companion, show that policy directly instead of applying OpenClaw approvals-file policy math.
 
+The Allowlist table's **Scope** column says what each grant actually authorizes:
+`any args` for a path-only rule, `argv` for an `argPattern` regex, `argv+cwd` for a
+generated **Always allow here** grant, `command text` for an exact-command grant, and
+`inactive` for a generated grant that no longer authorizes anything. Clear `inactive`
+rows with `openclaw doctor --fix`.
+
 For file-backed nodes, the merged view requires a host-resolved policy snapshot. Older nodes show the effective policy as unavailable instead of assuming the Gateway's requested policy also applies on the host.
 
 <Note>
