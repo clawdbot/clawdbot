@@ -61,6 +61,7 @@ const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.
 
 const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
 const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./channel-type.js"));
+const loadSlackCanvasRuntime = createLazyRuntimeModule(() => import("./canvas-actions.js"));
 
 function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
   key: K,
@@ -585,6 +586,60 @@ export async function handleSlackAction(
       context,
     });
   };
+
+  if (action === "createCanvas" || action === "editCanvas") {
+    if (!isActionEnabled("canvas", false)) {
+      throw new Error("Slack canvas actions are disabled.");
+    }
+    if (!isActionEnabled("messages")) {
+      throw new Error("Slack messages are disabled.");
+    }
+    if (account.identity === "user" || !botToken) {
+      throw new Error(
+        "Slack canvas actions require a bot account and botToken; user tokens are not used.",
+      );
+    }
+    const canvasRuntime = await loadSlackCanvasRuntime();
+    const input = canvasRuntime.parseSlackCanvasInput(params);
+    const target = resolveChannelTarget();
+    const policyParams = {
+      account,
+      cfg,
+      ...target,
+      conversationReadOrigin: context?.conversationReadOrigin,
+      currentConversation: isCurrentSlackReadTarget({
+        account,
+        target: formatSlackTarget({ ...target, kind: "channel", id: target.channelId }),
+        context,
+      }),
+    };
+    const preliminary = resolveSlackChannelReadPolicy(policyParams);
+    const deny = () => {
+      throw new Error("Slack canvas target channel is not allowed.");
+    };
+    if (
+      preliminary.channelExplicitlyDisabled ||
+      (!preliminary.channelAllowed && !preliminary.shouldResolveName)
+    ) {
+      deny();
+    }
+    const result = await canvasRuntime.mutateSlackChannelCanvas(input, target, botToken, (name) => {
+      // Canvas access follows fresh bot metadata, never the optional user's
+      // read credentials or cached channel classification.
+      if (preliminary.shouldResolveName && !name) {
+        deny();
+      }
+      const resolved = resolveSlackChannelReadPolicy({
+        ...policyParams,
+        channelName: name,
+        metadataResolved: true,
+      });
+      if (!resolved.channelAllowed) {
+        deny();
+      }
+    });
+    return jsonResult({ ok: true, ...result });
+  }
 
   if (reactionsActions.has(action)) {
     if (!isActionEnabled("reactions")) {

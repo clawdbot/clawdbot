@@ -52,6 +52,20 @@ describe("slack actions contract", () => {
         expectedCapabilities: ["presentation"],
       },
       {
+        name: "configured account exposes explicitly enabled canvas actions",
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "xoxb-test",
+              appToken: "xapp-test",
+              actions: { canvas: true },
+            },
+          },
+        } as OpenClawConfig,
+        expectedActions: [...slackDefaultActions, "canvas-create", "canvas-edit"],
+        expectedCapabilities: ["presentation"],
+      },
+      {
         name: "missing tokens disables the actions surface",
         cfg: {
           channels: {

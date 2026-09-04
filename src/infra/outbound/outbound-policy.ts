@@ -38,6 +38,8 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "sendAttachment",
   "upload-file",
   "edit",
+  "canvas-create",
+  "canvas-edit",
   "delete",
   "pin",
   "unpin",

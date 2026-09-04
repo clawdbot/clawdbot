@@ -125,6 +125,7 @@ const SlackAccountSchema = z
       .object({
         reactions: z.boolean().optional(),
         messages: z.boolean().optional(),
+        canvas: z.boolean().optional(),
         pins: z.boolean().optional(),
         search: z.boolean().optional(),
         permissions: z.boolean().optional(),

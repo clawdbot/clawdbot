@@ -93,6 +93,8 @@ const CHANNEL_MESSAGE_ACTION_READ_POLICIES = {
   "channel-list": CONVERSATION_READ,
   "channel-create": NO_CONVERSATION_READ,
   "conversation-open": NO_CONVERSATION_READ,
+  "canvas-create": CONVERSATION_READ,
+  "canvas-edit": CONVERSATION_READ,
   "channel-edit": NO_CONVERSATION_READ,
   "channel-delete": NO_CONVERSATION_READ,
   "channel-move": NO_CONVERSATION_READ,

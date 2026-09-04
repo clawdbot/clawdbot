@@ -95,6 +95,61 @@ export function describeSlackMessageTool({
   const actions = listSlackMessageActions(cfg, accountId);
   const capabilities = new Set<"presentation">();
   const schema: ChannelMessageToolSchemaContribution[] = [];
+  if (actions.includes("canvas-create")) {
+    schema.push({
+      actions: ["canvas-create", "canvas-edit"],
+      properties: {
+        canvasMarkdown: Type.Optional(
+          Type.String({
+            description:
+              "Slack canvas Markdown. Required for canvas-create and canvas-edit except delete. Channel canvas only, not a thread reply. Uses the bot identity; requires canvases:write.",
+            minLength: 1,
+            maxLength: 1048576,
+          }),
+        ),
+      },
+    });
+    schema.push({
+      actions: ["canvas-create"],
+      properties: {
+        canvasTitle: Type.Optional(
+          Type.String({ description: "Title for the new channel canvas." }),
+        ),
+      },
+    });
+    schema.push({
+      actions: ["canvas-edit"],
+      properties: {
+        canvasId: Type.Optional(
+          Type.String({
+            description:
+              "Required canvas ID. Must be the canvas associated with the target channel.",
+            pattern: "^F[A-Z0-9]+$",
+          }),
+        ),
+        canvasOperation: Type.Optional(
+          Type.String({
+            enum: [
+              "insert_before",
+              "insert_after",
+              "insert_at_start",
+              "insert_at_end",
+              "replace",
+              "delete",
+            ],
+            description:
+              "Required: one canvas edit per call. replace without canvasSectionId replaces the entire canvas. delete requires a section and forbids canvasMarkdown.",
+          }),
+        ),
+        canvasSectionId: Type.Optional(
+          Type.String({
+            description:
+              "Known section ID: required for insert_before, insert_after, delete; optional for replace; forbidden for insert_at_start/end. This tool does not discover section IDs.",
+          }),
+        ),
+      },
+    });
+  }
   if (actions.includes("conversation-open")) {
     schema.push({
       actions: ["conversation-open"],

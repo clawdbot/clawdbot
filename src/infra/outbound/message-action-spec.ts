@@ -61,6 +61,8 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "channel-list": "none",
     "channel-create": "none",
     "conversation-open": "none",
+    "canvas-create": "to",
+    "canvas-edit": "to",
     "channel-edit": "channelId",
     "channel-delete": "channelId",
     "channel-move": "channelId",

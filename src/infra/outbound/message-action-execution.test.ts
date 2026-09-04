@@ -293,13 +293,14 @@ describe("runMessageAction plugin dispatch", () => {
       resolveAutoThreadId: ({ toolContext, to }) =>
         toolContext?.currentChannelId === to ? toolContext.currentThreadTs : undefined,
     };
+    const actions = ["sticker", "download-file", "canvas-create", "canvas-edit"] as const;
     const createThreadedPlugin = (executionMode: "local" | "gateway") =>
       createGatewayActionPlugin({
         pluginId: "forumchat",
         label: "Forum Chat",
         blurb: "Forum chat threaded action dispatch test plugin.",
-        actions: ["sticker", "download-file"],
-        gatewayActions: executionMode === "gateway" ? ["sticker", "download-file"] : [],
+        actions: [...actions],
+        gatewayActions: executionMode === "gateway" ? [...actions] : [],
         capabilities: { chatTypes: ["channel"] },
         threading,
         handleAction,
@@ -359,20 +360,36 @@ describe("runMessageAction plugin dispatch", () => {
       },
     );
 
-    it.each(["local", "gateway"] as const)(
-      "does not add an implicit thread scope to download-file before %s dispatch",
-      async (executionMode) => {
+    it.each(
+      (["local", "gateway"] as const).flatMap((executionMode) =>
+        (["download-file", "canvas-create", "canvas-edit"] as const).map((action) => ({
+          executionMode,
+          action,
+        })),
+      ),
+    )(
+      "does not add an implicit thread scope to $action before $executionMode dispatch",
+      async ({ executionMode, action }) => {
         setTestPlugin(createThreadedPlugin(executionMode), "forumchat");
         mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+        const resourceParams =
+          action === "download-file"
+            ? { fileId: "F123" }
+            : {
+                canvasMarkdown: "# Shared plan",
+                ...(action === "canvas-edit"
+                  ? { canvasId: "F123", canvasOperation: "insert_at_end" }
+                  : {}),
+              };
 
         await runMessageAction({
           cfg,
-          action: "download-file",
+          action,
           conversationReadOrigin: "direct-operator",
           params: {
             channel: "forumchat",
             channelId: "forum:123",
-            fileId: "F123",
+            ...resourceParams,
           },
           toolContext: {
             currentChannelProvider: "forumchat",
@@ -396,10 +413,14 @@ describe("runMessageAction plugin dispatch", () => {
               )
             : readRecordField(readFirstPluginCall(handleAction), "params", "plugin params");
         expect(dispatchedParams.threadId).toBeUndefined();
+        expect(dispatchedParams.replyTo).toBeUndefined();
         expectRecordFields(
           dispatchedParams,
-          { channelId: "forum:123", fileId: "F123" },
-          `${executionMode} download-file params`,
+          {
+            ...(action === "download-file" ? { channelId: "forum:123" } : { to: "forum:123" }),
+            ...resourceParams,
+          },
+          `${executionMode} ${action} params`,
         );
       },
     );

@@ -110,6 +110,19 @@ export async function handleSlackMessageAction(params: {
     );
   }
 
+  if (action === "canvas-create" || action === "canvas-edit") {
+    return await invoke(
+      {
+        ...actionParams,
+        action: action === "canvas-create" ? "createCanvas" : "editCanvas",
+        channelId: resolveChannelId(),
+        accountId,
+      },
+      cfg,
+      ctx.toolContext,
+    );
+  }
+
   if (action === "send") {
     const to = readStringParam(actionParams, "to", { required: true });
     const content = readStringParam(actionParams, "message", {

@@ -304,6 +304,7 @@ describe("slackPlugin actions", () => {
               actions: {
                 reactions: true,
                 messages: true,
+                canvas: true,
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
@@ -337,6 +338,8 @@ describe("slackPlugin actions", () => {
         "delete",
         "download-file",
         "upload-file",
+        "canvas-create",
+        "canvas-edit",
       ],
     });
     expect(requireArray(workDiscovery.capabilities, "work capabilities")).toContain("presentation");

@@ -1228,6 +1228,14 @@ Existing apps that already use `features.assistant_view` can keep that feature s
     If you use an emoji icon, Slack expects `:emoji_name:` syntax.
 
   </Accordion>
+  <Accordion title="Optional canvas scope (bot operations)">
+    Add the `canvases:write` bot scope to enable channel canvas creation and editing,
+    then reinstall or reauthorize the app in the workspace and set
+    `channels.slack.actions.canvas: true`. Canvas actions also use the existing
+    channel-read permissions to check the target channel. Ordinary message actions
+    do not require this scope. See [Slack canvases](/channels/slack#slack-canvases).
+
+  </Accordion>
   <Accordion title="Optional user-token scopes (read operations)">
     If you configure `channels.slack.userToken`, typical read scopes are:
 
@@ -1266,7 +1274,7 @@ Status snapshot behavior:
   `userTokenStatus` + `appTokenStatus` for user identity.
 
 <Tip>
-For bot identity, actions and directory reads can prefer an optional user token; writes continue to use the bot token unless `userTokenReadOnly: false` allows fallback. For `postAs: "user"`, reads and writes always use `userToken`.
+For bot identity, ordinary message actions and directory reads can prefer an optional user token; writes continue to use the bot token unless `userTokenReadOnly: false` allows fallback. For `postAs: "user"`, supported reads and writes always use `userToken`. Canvas actions are bot-only: their canvas association checks and mutations use the bot token, never a user-token fallback, and are unavailable with `postAs: "user"`.
 </Tip>
 
 ## Actions and gates
@@ -1275,15 +1283,16 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default |
-| ---------- | ------- |
-| messages   | enabled |
-| reactions  | enabled |
-| pins       | enabled |
-| memberInfo | enabled |
-| emojiList  | enabled |
+| Group      | Default  |
+| ---------- | -------- |
+| messages   | enabled  |
+| canvas     | disabled |
+| reactions  | enabled  |
+| pins       | enabled  |
+| memberInfo | enabled  |
+| emojiList  | enabled  |
 
-Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `canvas-create`, `canvas-edit`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 Use `emoji-list` to discover workspace custom emoji and aliases:
 
@@ -1304,6 +1313,95 @@ Results are sorted by shortcode name. `limit` defaults to and cannot exceed 100:
 ```
 
 Use an entry's `identifier` directly as the `react` emoji; surrounding colons are optional. `channels.slack.actions.emojiList` controls discovery separately from the `reactions` gate, and the app needs the `emoji:read` scope.
+
+### Slack canvases
+
+Use `canvas-create` to create a channel canvas and `canvas-edit` to update that
+channel's existing canvas. Both actions use the selected account's bot identity
+and require both `channels.slack.actions.canvas: true` and the existing
+`channels.slack.actions.messages` gate. Canvas actions are hidden until explicitly
+enabled. The `edit` action still updates Slack messages, not canvas content.
+
+Before using canvas actions:
+
+1. Add `canvases:write` to the Slack app's **Bot Token Scopes**, then reinstall or
+   reauthorize the app in the workspace. Keep the existing channel-read scopes.
+   These actions do not require `canvases:read`.
+2. Enable the default-off canvas gate:
+
+   ```json5
+   {
+     channels: {
+       slack: {
+         actions: { canvas: true },
+       },
+     },
+   }
+   ```
+
+   For a named account, set `channels.slack.accounts.<id>.actions.canvas: true`
+   instead.
+
+3. Use a bot-identity account with access to the channel and the `messages` gate
+   enabled. User-identity accounts and user-token fallback are not supported.
+4. Supply the channel target. Canvas actions follow the account's channel access
+   policy and check fresh channel metadata using the bot identity before writing.
+   The message tool's cross-context restrictions also apply.
+
+Create a canvas with nonblank `canvasMarkdown` and an optional `canvasTitle`:
+
+```json
+{
+  "action": "canvas-create",
+  "channel": "slack",
+  "target": "channel:C12345678",
+  "canvasTitle": "Project plan",
+  "canvasMarkdown": "# Project plan\n\n## Next steps\n\n- Review the proposal"
+}
+```
+
+Retain the returned canvas ID for edits. `canvas-edit` requires `canvasId` and
+verifies that it matches the canvas attached to the target channel. A canvas ID
+from another channel is not sufficient authorization.
+
+For example, append a paragraph without replacing existing content:
+
+```json
+{
+  "action": "canvas-edit",
+  "channel": "slack",
+  "target": "channel:C12345678",
+  "canvasId": "<canvas ID returned by canvas-create>",
+  "canvasOperation": "insert_at_end",
+  "canvasMarkdown": "## Decision\n\nProceed with the reviewed proposal."
+}
+```
+
+| `canvasOperation` | `canvasSectionId` | `canvasMarkdown`   | Effect                                                                             |
+| ----------------- | ----------------- | ------------------ | ---------------------------------------------------------------------------------- |
+| `insert_at_start` | Omit              | Required, nonblank | Insert at the beginning of the canvas.                                             |
+| `insert_at_end`   | Omit              | Required, nonblank | Insert at the end of the canvas.                                                   |
+| `insert_before`   | Required          | Required, nonblank | Insert before the selected section.                                                |
+| `insert_after`    | Required          | Required, nonblank | Insert after the selected section.                                                 |
+| `replace`         | Optional          | Required, nonblank | Replace the selected section, or the entire canvas when the section ID is omitted. |
+| `delete`          | Required          | Omit               | Delete the selected section.                                                       |
+
+**`replace` without `canvasSectionId` replaces the entire canvas.** Use a targeted
+section edit or insertion when existing human-written content should remain.
+Section IDs must come from an authorized source; these actions do not provide
+section lookup. `canvasTitle` is only accepted when creating a canvas.
+
+Canvas actions support public and private channel canvases only. They do not
+create standalone canvases, operate in DMs or group DMs, change canvas sharing or
+access controls, or target a thread. Omit thread and message-send fields.
+An ambient conversation thread is not applied to a canvas action.
+
+If Slack reports `missing_scope`, check the bot scope and app reauthorization.
+If a mutation loses its response, inspect the canvas before retrying; the update
+may already have succeeded. Canvas mutations are not automatically retried.
+
+Slack canvases are separate from OpenClaw's [Canvas plugin](/plugins/reference/canvas),
+which presents hosted widget documents on paired macOS panels.
 
 ## Access control and routing
 

@@ -42,6 +42,8 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "channel-list",
   "channel-create",
   "conversation-open",
+  "canvas-create",
+  "canvas-edit",
   "channel-edit",
   "channel-delete",
   "channel-move",

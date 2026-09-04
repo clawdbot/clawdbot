@@ -339,6 +339,7 @@ describe("Slack message tools", () => {
               actions: {
                 reactions: false,
                 messages: false,
+                canvas: false,
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
@@ -349,6 +350,7 @@ describe("Slack message tools", () => {
               actions: {
                 reactions: true,
                 messages: true,
+                canvas: true,
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
@@ -370,6 +372,8 @@ describe("Slack message tools", () => {
       "delete",
       "download-file",
       "upload-file",
+      "canvas-create",
+      "canvas-edit",
     ]);
   });
 

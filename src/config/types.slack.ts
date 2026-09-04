@@ -81,6 +81,8 @@ export type SlackCapabilitiesConfig = string[];
 export type SlackActionConfig = {
   reactions?: boolean;
   messages?: boolean;
+  /** Enable bot-only channel canvas create/edit actions. Default: false. */
+  canvas?: boolean;
   pins?: boolean;
   search?: boolean;
   permissions?: boolean;

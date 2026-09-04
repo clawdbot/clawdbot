@@ -51,6 +51,11 @@ describe("slack config schema", () => {
     expectSlackConfigIssue({ capabilities: { interactiveReplies: true } }, "capabilities");
   });
 
+  it("accepts canvas action gates at root and account scope", () => {
+    expectSlackConfigValid({ actions: { canvas: true } });
+    expectSlackConfigValid({ accounts: { ops: { actions: { canvas: false } } } });
+  });
+
   it("rejects the retired Enterprise Grid installation setting", () => {
     expectSlackConfigKeyRejected({ enterpriseOrgInstall: true }, "enterpriseOrgInstall");
     expectSlackConfigKeyRejected(

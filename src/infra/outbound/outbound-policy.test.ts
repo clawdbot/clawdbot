@@ -228,7 +228,15 @@ describe("outbound policy helpers", () => {
     expectCrossContextPolicyResult(params);
   });
 
-  it.each(["edit", "delete", "pin", "unpin", "poll-vote"] satisfies ChannelMessageActionName[])(
+  it.each([
+    "edit",
+    "delete",
+    "pin",
+    "unpin",
+    "poll-vote",
+    "canvas-create",
+    "canvas-edit",
+  ] satisfies ChannelMessageActionName[])(
     "blocks cross-provider %s actions by default",
     (action) => {
       expectCrossContextPolicyResult({
@@ -243,7 +251,32 @@ describe("outbound policy helpers", () => {
     },
   );
 
-  it.each(["edit", "delete", "pin", "unpin"] satisfies ChannelMessageActionName[])(
+  it.each(["canvas-create", "canvas-edit"] satisfies ChannelMessageActionName[])(
+    "blocks same-provider %s when cross-context messaging is disabled",
+    (action) => {
+      expectCrossContextPolicyResult({
+        cfg: {
+          ...workspaceConfig,
+          tools: { message: { crossContext: { allowWithinProvider: false } } },
+        } as OpenClawConfig,
+        channel: "workspace",
+        action,
+        to: "C999",
+        currentChannelId: "C123",
+        currentChannelProvider: "workspace",
+        expected: /target="C999" while bound to "C123"/,
+      });
+    },
+  );
+
+  it.each([
+    "edit",
+    "delete",
+    "pin",
+    "unpin",
+    "canvas-create",
+    "canvas-edit",
+  ] satisfies ChannelMessageActionName[])(
     "allows cross-provider %s actions when explicitly enabled",
     (action) => {
       expectCrossContextPolicyResult({
@@ -263,7 +296,14 @@ describe("outbound policy helpers", () => {
     },
   );
 
-  it.each(["edit", "delete", "pin", "unpin"] satisfies ChannelMessageActionName[])(
+  it.each([
+    "edit",
+    "delete",
+    "pin",
+    "unpin",
+    "canvas-create",
+    "canvas-edit",
+  ] satisfies ChannelMessageActionName[])(
     "allows current-context %s actions without cross-provider opt-in",
     (action) => {
       expectCrossContextPolicyResult({
@@ -348,6 +388,8 @@ describe("outbound policy helpers", () => {
     { action: "upload-file", expected: true },
     { action: "thread-reply", expected: true },
     { action: "thread-create", expected: false },
+    { action: "canvas-create", expected: false },
+    { action: "canvas-edit", expected: false },
   ] satisfies Array<{ action: ChannelMessageActionName; expected: boolean }>)(
     "marks supported cross-context action %j",
     ({ action, expected }) => {

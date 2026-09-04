@@ -625,9 +625,11 @@ export async function executeMessagePlugin(
   // gateway or local dispatch to keep both execution modes on the same topic.
   const targetForThreading =
     normalizeOptionalString(params.to) ?? normalizeOptionalString(params.channelId) ?? "";
-  // File downloads authorize caller-supplied resource scope. Ambient threading
-  // must not silently narrow a channel-only request to the current thread.
-  if (targetForThreading && action !== "download-file") {
+  // Downloads and channel canvases use explicit resource scope. Ambient threading
+  // must not narrow that scope or turn a channel-canvas action into a thread action.
+  const inheritsThreadScope =
+    action !== "download-file" && action !== "canvas-create" && action !== "canvas-edit";
+  if (targetForThreading && inheritsThreadScope) {
     resolveAndApplyOutboundThreadId(params, {
       cfg,
       to: targetForThreading,

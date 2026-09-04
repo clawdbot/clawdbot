@@ -89,6 +89,10 @@ export const slackChannelConfigUiHints = {
     label: "Slack Bot Token",
     help: "Slack bot token used for standard chat actions in the configured workspace. Keep this credential scoped and rotate if workspace app permissions change.",
   },
+  "actions.canvas": {
+    label: "Slack Canvas Actions",
+    help: "Enable bot-only channel canvas creation and editing after adding the canvases:write bot scope and reauthorizing the Slack app. Default: false.",
+  },
   appToken: {
     label: "Slack App Token",
     help: "Slack app-level token used for Socket Mode connections and event transport when enabled. Use least-privilege app scopes and store this token as a secret.",
