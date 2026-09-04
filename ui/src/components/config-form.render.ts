@@ -6,7 +6,13 @@ import "./web-awesome-popover.ts";
 import { SECTION_META } from "./config-form.meta.ts";
 import { renderNode } from "./config-form.node.ts";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import {
+  hintForPath,
+  humanize,
+  localizedHintForPath,
+  schemaType,
+  type JsonSchema,
+} from "./config-form.shared.ts";
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 import {
   renderLearnMoreLink,
@@ -308,7 +314,7 @@ export function renderConfigForm(props: ConfigFormProps) {
     subsectionContext
       ? (() => {
           const { sectionKey, subsectionKey, schema: node } = subsectionContext;
-          const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
+          const hint = localizedHintForPath([sectionKey, subsectionKey], props.uiHints);
           const label = hint?.label ?? node.title ?? humanize(subsectionKey);
           const description = hint?.help ?? node.description ?? "";
           const sectionValue = value[sectionKey];

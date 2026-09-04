@@ -1,6 +1,8 @@
 // Control UI tests cover config form behavior.
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import { analyzeConfigSchema, renderConfigForm as renderConfigFormBase } from "./config-form.ts";
 
 function renderConfigForm(
@@ -60,7 +62,56 @@ function selectSegmented(control: HTMLElement) {
   group.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+afterEach(async () => {
+  await i18n.setLocale("en");
+});
+
 describe("config form renderer", () => {
+  it("renders translated schema hint labels and help with English fallback", async () => {
+    const label = "Gateway Token";
+    const help = "Token used to authenticate with the Gateway.";
+    const labelHash = configHintTranslationKey("gateway.auth.token", "label", label)
+      .split(".")
+      .at(-1)!;
+    const helpHash = configHintTranslationKey("gateway.auth.token", "help", help)
+      .split(".")
+      .at(-1)!;
+    i18n.registerTranslation("tr", {
+      configHints: {
+        "gateway%2Eauth%2Etoken": {
+          label: { [labelHash]: "Ağ geçidi belirteci" },
+          help: { [helpHash]: "Ağ geçidi kimlik doğrulamasında kullanılan belirteç." },
+        },
+      },
+    });
+    await i18n.setLocale("tr");
+    const container = document.createElement("div");
+    const props = {
+      schema: rootAnalysis.schema,
+      uiHints: {
+        "gateway.auth.token": {
+          label,
+          help,
+        },
+      },
+      unsupportedPaths: rootAnalysis.unsupportedPaths,
+      value: {},
+      onPatch: vi.fn(),
+    };
+
+    render(renderConfigForm(props), container);
+
+    expect(container.querySelector("input")?.getAttribute("aria-label")).toBe(
+      "Ağ geçidi belirteci",
+    );
+    expect(container.textContent).toContain("Ağ geçidi kimlik doğrulamasında kullanılan belirteç.");
+
+    await i18n.setLocale("en");
+    render(renderConfigForm(props), container);
+    expect(container.querySelector("input")?.getAttribute("aria-label")).toBe("Gateway Token");
+    expect(container.textContent).toContain("Token used to authenticate with the Gateway.");
+  });
+
   it("conceals core-classified encryption, private-key, and local service env values", () => {
     const container = document.createElement("div");
     const analysis = analyzeConfigSchema({

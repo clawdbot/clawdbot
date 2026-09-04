@@ -6,6 +6,7 @@ import { hintForPath, pathKey } from "../lib/config-form-utils.ts";
 export {
   hintForPath,
   humanize,
+  localizedHintForPath,
   pathKey,
   schemaMayAcceptString,
   schemaType,
