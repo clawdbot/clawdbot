@@ -179,35 +179,6 @@ import java.text.DateFormat
 import java.util.Date
 
 /**
- * Detail routes reachable from the Android settings home surface.
- */
-internal enum class SettingsRoute {
-  Home,
-  Profile,
-  Voice,
-  Agents,
-  ProvidersModels,
-  Approvals,
-  CronJobs,
-  Usage,
-  Skills,
-  SkillWorkshop,
-  SystemAgent,
-  NodesDevices,
-  Channels,
-  Dreaming,
-  Terminal,
-  Desktop,
-  Notifications,
-  PhoneCapabilities,
-  Gateway,
-  Appearance,
-  Health,
-  About,
-  Licenses,
-}
-
-/**
  * Dispatches a selected settings route to its detail screen without changing navigation ownership.
  */
 @Composable
