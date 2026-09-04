@@ -575,7 +575,6 @@ enum class GatewayMethod(
   ToolsEffective("tools.effective"),
   ToolsInvoke("tools.invoke"),
   McpAppView("mcp.app.view"),
-  CanvasDocumentView("canvas.document.view"),
   McpAppListTools("mcp.app.listTools"),
   McpAppListResources("mcp.app.listResources"),
   McpAppListResourceTemplates("mcp.app.listResourceTemplates"),
@@ -912,6 +911,7 @@ enum class GatewayMethod(
   TranscriptsList("transcripts.list"),
   TranscriptsGet("transcripts.get"),
   ModelsAuthOrderSet("models.authOrderSet"),
+  CanvasDocumentView("canvas.document.view"),
 }
 
 enum class GatewayEvent(
