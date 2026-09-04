@@ -39,7 +39,7 @@ afterEach(() => {
 
 async function resolveTextSlashDirective(
   body: string,
-  options?: { commandsText?: boolean; surface?: string },
+  options?: { botUsername?: string; commandsText?: boolean; surface?: string },
 ) {
   const storePath = path.join(tempDirs.make("openclaw-text-slash-directive-"), "sessions.json");
   const surface = options?.surface ?? "webchat";
@@ -59,6 +59,7 @@ async function resolveTextSlashDirective(
     },
     Provider: surface,
     Surface: surface,
+    BotUsername: options?.botUsername,
     GatewayClientScopes: ["operator.admin"],
     SessionKey: sessionKey,
   });
@@ -114,6 +115,17 @@ describe("text slash directive ownership", () => {
       reply: { text: expect.stringContaining("Exec defaults set (host=gateway).") },
     });
     expect(loadExactSessionEntry({ sessionKey, storePath })?.entry.execHost).toBe("gateway");
+  });
+
+  it("rejects positional exec arguments addressed to the current bot", async () => {
+    const { result } = await resolveTextSlashDirective("/exec@openclaw gateway", {
+      botUsername: "openclaw",
+    });
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: 'Unexpected argument "gateway" for /exec.' },
+    });
   });
 
   it("preserves text exec commands when text routing is disabled on a native surface", async () => {

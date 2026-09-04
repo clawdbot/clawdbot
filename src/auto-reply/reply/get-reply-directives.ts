@@ -316,11 +316,15 @@ export async function resolveReplyDirectives(params: {
         ? commandRegistry.findCommandByNativeName(commandTurn.commandName ?? "", command.channel, {
             includeBundledChannelFallback: false,
           })?.key
-        : commandRegistry.resolveTextCommand(commandTurn.body ?? "", cfg)?.command.key
+        : commandRegistry.resolveTextCommand(command.commandBodyNormalized, cfg)?.command.key
       : undefined,
   );
+  const directiveCommandText =
+    explicitDirectiveCommand && commandTurn.kind === "text-slash"
+      ? command.commandBodyNormalized
+      : commandText;
   const routedDirectives = resolveReplyDirectiveRouting({
-    commandText,
+    commandText: directiveCommandText,
     agentText: sessionCtx.agentText,
     modelAliases: configuredAliases,
     nativeCommand: explicitDirectiveCommand,
