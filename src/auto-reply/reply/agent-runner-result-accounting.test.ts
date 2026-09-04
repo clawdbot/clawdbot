@@ -7,10 +7,12 @@ const mocks = vi.hoisted(() => ({
   persistSessionUsageUpdate: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
   resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
+  resolveBundledStaticCatalogContext: vi.fn<() => Promise<undefined>>(async () => undefined),
 }));
 
 vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => mocks.resolveContextTokensForModel(),
+  resolveBundledStaticCatalogContext: () => mocks.resolveBundledStaticCatalogContext(),
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({

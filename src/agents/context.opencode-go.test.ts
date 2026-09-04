@@ -14,7 +14,7 @@ describe("OpenCode Go context metadata", () => {
     };
 
     await refreshContextWindowCache(cfg);
-    contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    contextWindowTokens = await resolveMemoryFlushContextWindowTokens({
       cfg,
       provider: "opencode-go",
       modelId: "deepseek-v4-pro",

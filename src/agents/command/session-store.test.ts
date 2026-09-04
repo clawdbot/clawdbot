@@ -13,6 +13,7 @@ import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
+import { resetContextWindowCacheForTest } from "../context.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   consumeCliSessionForkInStore,
@@ -25,6 +26,11 @@ import { resolveSession } from "./session.js";
 
 const { listSessionEntriesCore, loadSessionEntry, patchSessionEntryCore, replaceSessionEntry } =
   sessionAccessor;
+
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getRuntimeConfig: () => ({}),
+}));
 
 vi.mock("../model-selection.js", () => ({
   isCliProvider: (provider: string, _cfg?: OpenClawConfig) =>
@@ -601,6 +607,52 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(400_000);
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe("runtime");
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.agentHarnessId).toBeUndefined();
+    });
+  });
+
+  it("persists the bundled static catalog budget when no runtime context tokens are reported", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      resetContextWindowCacheForTest();
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-bundled-catalog-context";
+      const sessionId = "test-bundled-catalog-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          agentHarnessId: "openclaw",
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "deepseek",
+            model: "deepseek-v4-flash",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "deepseek",
+        defaultModel: "deepseek-v4-flash",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(1_000_000);
+      expect(sessionStore[sessionKey]?.contextTokensSource).toBe("resolved");
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(1_000_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokensSource).toBe(
+        "resolved",
+      );
     });
   });
 

@@ -1,4 +1,7 @@
-import { resolveContextTokensForModel } from "../../agents/context.js";
+import {
+  resolveBundledStaticCatalogContext,
+  resolveContextTokensForModel,
+} from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
@@ -263,12 +266,21 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     runResult.meta.agentMeta.contextTokens > 0
       ? Math.floor(runResult.meta.agentMeta.contextTokens)
       : undefined;
+  const staticCatalogContext =
+    runtimeContextTokens === undefined
+      ? await resolveBundledStaticCatalogContext({
+          cfg,
+          provider: sessionModel.provider,
+          model: sessionModel.model,
+        })
+      : undefined;
   const resolvedContextTokens =
     runtimeContextTokens === undefined
       ? resolveContextTokensForModel({
           cfg,
           provider: sessionModel.provider,
           model: sessionModel.model,
+          ...staticCatalogContext,
           allowAsyncLoad: false,
         })
       : undefined;

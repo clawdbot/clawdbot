@@ -90,16 +90,24 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
   const runtimeContextTokens = normalizeSessionTokenCount(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
-  const contextTokens =
-    runtimeContextTokens !== undefined
-      ? runtimeContextTokens
-      : ((await getContextModule()).resolveContextTokensForModel({
-          cfg,
-          provider: providerUsed,
-          model: modelUsed,
-          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-          allowAsyncLoad: false,
-        }) ?? DEFAULT_CONTEXT_TOKENS);
+  let contextTokens = runtimeContextTokens;
+  if (contextTokens === undefined) {
+    const contextModule = await getContextModule();
+    const staticCatalogContext = await contextModule.resolveBundledStaticCatalogContext({
+      cfg,
+      provider: providerUsed,
+      model: modelUsed,
+    });
+    contextTokens =
+      contextModule.resolveContextTokensForModel({
+        cfg,
+        provider: providerUsed,
+        model: modelUsed,
+        ...staticCatalogContext,
+        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+        allowAsyncLoad: false,
+      }) ?? DEFAULT_CONTEXT_TOKENS;
+  }
   const contextTokensSource = result.meta.agentMeta?.contextTokensSource ?? "resolved";
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;

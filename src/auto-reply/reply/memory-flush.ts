@@ -1,7 +1,10 @@
 // Builds memory flush prompts when conversation context exceeds model budget.
 import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
-import { resolveContextTokensForModel } from "../../agents/context.js";
+import {
+  resolveBundledStaticCatalogContext,
+  resolveContextTokensForModel,
+} from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
@@ -14,16 +17,22 @@ import {
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-export function resolveMemoryFlushContextWindowTokens(params: {
+export async function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
   cfg?: OpenClawConfig;
   provider?: string;
-}): number {
+}): Promise<number> {
+  const staticCatalogContext = await resolveBundledStaticCatalogContext({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.modelId,
+  });
   return (
     resolveContextTokensForModel({
       cfg: params.cfg,
       provider: params.provider,
       model: params.modelId,
+      ...staticCatalogContext,
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS
   );
@@ -53,11 +62,11 @@ export function resolveCompactionThreshold(params: {
   return Math.max(0, contextWindow - reserveTokens, Math.floor(params.minimumThresholdTokens ?? 0));
 }
 
-export function resolveResponsesServerCompactionThreshold(params: {
+export async function resolveResponsesServerCompactionThreshold(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   modelId?: string;
-}): number | undefined {
+}): Promise<number | undefined> {
   const provider = params.provider?.trim();
   const modelId = params.modelId?.trim();
   if (!provider || !modelId) {
@@ -85,14 +94,14 @@ export function resolveResponsesServerCompactionThreshold(params: {
         baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
         contextWindow:
           configuredModel?.contextWindow ??
-          resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+          (await resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId })),
       },
       extraParams,
     ).threshold;
   }
   const defaultOpenAIBaseUrl =
     normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
-  const activeContextTokens = resolveMemoryFlushContextWindowTokens({
+  const activeContextTokens = await resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider,
     modelId,

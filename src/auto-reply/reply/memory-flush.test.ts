@@ -2,11 +2,20 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetContextWindowCacheForTest } from "../../agents/context.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { modelKey } from "../../shared/model-key.js";
-import { resolveResponsesServerCompactionThreshold } from "./memory-flush.js";
+import {
+  resolveMemoryFlushContextWindowTokens,
+  resolveResponsesServerCompactionThreshold,
+} from "./memory-flush.js";
+
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getRuntimeConfig: () => ({}),
+}));
 
 const TEST_MODEL_ID = "gpt-5.4";
 const TEST_CONTEXT_WINDOW = 200_000;
@@ -75,8 +84,11 @@ describe("Responses server compaction host/transport parity", () => {
       provider: "openai",
       api: "openai-responses" as const,
       resolvedBaseUrl: "https://api.openai.com/v1",
+      // No authored rows: the bundled gpt-5.4 manifest catalog window (1_050_000)
+      // resolves instead of the generic 200k default.
+      contextWindow: 1_050_000,
       expectedEnabled: true,
-      expectedThreshold: 140_000,
+      expectedThreshold: 735_000,
     },
     {
       name: "OpenAI direct Sol route with an active runtime cap",
@@ -170,7 +182,7 @@ describe("Responses server compaction host/transport parity", () => {
       expectedEnabled: true,
       expectedThreshold: 150_000,
     },
-  ])("keeps $name gates aligned", (testCase) => {
+  ])("keeps $name gates aligned", async (testCase) => {
     const cfg = buildHostConfig({
       provider: testCase.provider,
       api: testCase.api,
@@ -180,7 +192,7 @@ describe("Responses server compaction host/transport parity", () => {
       contextWindow: testCase.contextWindow,
       extraParams: testCase.extraParams,
     });
-    const hostThreshold = resolveResponsesServerCompactionThreshold({
+    const hostThreshold = await resolveResponsesServerCompactionThreshold({
       cfg,
       provider: testCase.provider,
       modelId: TEST_MODEL_ID,
@@ -246,7 +258,7 @@ describe("Anthropic server compaction host threshold", () => {
       contextWindowTokens: 200_000,
       expected: 80_000,
     },
-  ])("$name", ({ params, contextWindowTokens, expected }) => {
+  ])("$name", async ({ params, contextWindowTokens, expected }) => {
     const cfg: OpenClawConfig = {
       models: {
         providers: {
@@ -271,11 +283,37 @@ describe("Anthropic server compaction host threshold", () => {
     };
 
     expect(
-      resolveResponsesServerCompactionThreshold({
+      await resolveResponsesServerCompactionThreshold({
         cfg,
         provider: "anthropic",
         modelId,
       }),
     ).toBe(expected);
+  });
+});
+
+describe("bundled static catalog fallback for flush budgets", () => {
+  afterEach(() => {
+    resetContextWindowCacheForTest();
+  });
+
+  it("resolves the bundled deepseek catalog window for flush budgets without async discovery", async () => {
+    resetContextWindowCacheForTest();
+    expect(
+      await resolveMemoryFlushContextWindowTokens({
+        provider: "deepseek",
+        modelId: "deepseek-v4-flash",
+      }),
+    ).toBe(1_000_000);
+  });
+
+  it("resolves bundled manifest catalog rows for flush budgets without async discovery", async () => {
+    resetContextWindowCacheForTest();
+    expect(
+      await resolveMemoryFlushContextWindowTokens({
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+      }),
+    ).toBe(400_000);
   });
 });
