@@ -90,8 +90,8 @@ export async function writeArchiveStreamToFile(params: {
   let producerBytes = 0;
   let settled = false;
   const reportProgress = (progress?: BackupArchiveProgress) => {
-    // A destroyed producer may finish an in-flight filesystem callback later;
-    // do not let that callback rearm the watchdog after cleanup has completed.
+    // One archive owns this watchdog. Late producer callbacks must not refresh
+    // its timer after cleanup has completed.
     if (settled) {
       return;
     }
@@ -108,19 +108,18 @@ export async function writeArchiveStreamToFile(params: {
         }
       }
     }
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-    }
-    idleTimer = setTimeout(() => {
-      const entrySuffix = lastEntryPath
-        ? `, entry=${JSON.stringify(lastEntryPath.slice(-512))}`
-        : "";
-      idleTimeoutError = new Error(
-        `Backup archive write stalled: no progress observed for ${idleTimeoutMs}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${producerBytes}, outputBytes=${outputBytes})`,
-      );
-      archiveStream?.destroy(idleTimeoutError);
-      controller.abort(idleTimeoutError);
-    }, idleTimeoutMs);
+    idleTimer =
+      idleTimer?.refresh() ??
+      setTimeout(() => {
+        const entrySuffix = lastEntryPath
+          ? `, entry=${JSON.stringify(lastEntryPath.slice(-512))}`
+          : "";
+        idleTimeoutError = new Error(
+          `Backup archive write stalled: no progress observed for ${idleTimeoutMs}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${producerBytes}, outputBytes=${outputBytes})`,
+        );
+        archiveStream?.destroy(idleTimeoutError);
+        controller.abort(idleTimeoutError);
+      }, idleTimeoutMs);
   };
   const progress = new Transform({
     transform(chunk, _encoding, callback) {

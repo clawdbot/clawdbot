@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
@@ -130,6 +130,17 @@ export function clawHubIdentityFromEnvironment(env) {
     throw new Error("ClawHub identity does not match the executing workflow context.");
   }
   return identity;
+}
+
+// actions/download-artifact writes a lone `pattern` match straight into `path`
+// instead of `path/<artifact>`, so a one-package matrix must read the flat
+// layout; anything else keeps the per-artifact directory contract.
+export function resolvePackedClawHubArtifactDir({ directory, artifactName, matrixSize }) {
+  const nested = join(directory, artifactName);
+  if (existsSync(nested) || matrixSize !== 1) {
+    return nested;
+  }
+  return directory;
 }
 
 export function readPackedClawHubTransaction({ artifactDir, packageName, version, artifactName }) {
@@ -437,10 +448,11 @@ async function main() {
     const packages = matrix
       .map((entry) =>
         readPackedClawHubTransaction({
-          artifactDir: join(
-            values.directory,
-            pattern(entry.artifactName, ARTIFACT, "Artifact name"),
-          ),
+          artifactDir: resolvePackedClawHubArtifactDir({
+            directory: values.directory,
+            artifactName: pattern(entry.artifactName, ARTIFACT, "Artifact name"),
+            matrixSize: matrix.length,
+          }),
           artifactName: entry.artifactName,
           packageName: entry.packageName,
           version: entry.version,

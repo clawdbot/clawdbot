@@ -4,13 +4,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 // This zero-install hook runs on Node 22.22.3+, where native TypeScript stripping is enabled.
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
-import {
-  cancelResponseReaderSoon,
-  readBoundedResponseText as readBoundedResponseTextWithLimit,
-} from "../lib/bounded-response.mjs";
+import { cancelResponseReaderSoon, readBoundedResponseText } from "../lib/bounded-response.mjs";
 import { pnpmLockfileDocuments } from "../lib/pnpm-lockfile-documents.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
@@ -771,15 +769,6 @@ export async function withAdvisoryRequestTimeout({ label, timeoutMs, run }) {
   }
 }
 
-async function readBoundedResponseText(response, maxBytes, label, options = {}) {
-  return await readBoundedResponseTextWithLimit(response, label, maxBytes, {
-    signal: options.signal,
-    timeoutPromise: options.timeoutPromise,
-    formatTooLargeMessage: (messageLabel, bytes) => `${messageLabel} exceeded ${bytes} bytes`,
-    createTooLargeError: (message) => Object.assign(new Error(message), { code: "ETOOBIG" }),
-  });
-}
-
 export async function readBoundedBulkAdvisoryErrorText(
   response,
   maxChars = BULK_ADVISORY_ERROR_BODY_MAX_CHARS,
@@ -833,12 +822,7 @@ export async function readBoundedBulkAdvisoryErrorText(
 }
 
 async function readBulkAdvisoryJson(response, maxBytes, options = {}) {
-  const text = await readBoundedResponseText(
-    response,
-    maxBytes,
-    "Bulk advisory response body",
-    options,
-  );
+  const text = await readBoundedResponseText(response, "Bulk advisory", maxBytes, options);
   if (!text.trim()) {
     throw new Error("Bulk advisory response body was empty");
   }
@@ -853,44 +837,53 @@ export async function fetchBulkAdvisories({
   timeoutMs = resolveBulkAdvisoryRequestTimeoutMs(),
 }) {
   const url = `${registryBaseUrl}${BULK_ADVISORY_PATH}`;
-  const request = async () =>
-    await withAdvisoryRequestTimeout({
-      label: "Bulk advisory request",
-      timeoutMs,
-      run: async ({ signal, timeoutPromise }) => {
-        const response = await fetchImpl(url, {
-          method: "POST",
-          headers: {
-            accept: "application/json",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
-          signal,
-        });
-
-        if (!response.ok) {
-          const bodyText = await readBoundedBulkAdvisoryErrorText(response, undefined, {
+  // At the default timeout, three fresh 60s request/body deadlines plus 1–2s / 2–4s
+  // backoff cap a chunk at 186s; timed-out attempts abort before the next starts.
+  for (let attempt = 0; ; attempt += 1) {
+    let responseStatus;
+    try {
+      return await withAdvisoryRequestTimeout({
+        label: "Bulk advisory request",
+        timeoutMs,
+        run: async ({ signal, timeoutPromise }) => {
+          const response = await fetchImpl(url, {
+            method: "POST",
+            headers: { accept: "application/json", "content-type": "application/json" },
+            body: JSON.stringify(payload),
+            signal,
+          });
+          responseStatus = response.status;
+          if (!response.ok) {
+            const bodyText = await readBoundedBulkAdvisoryErrorText(response, undefined, {
+              timeoutPromise,
+            });
+            throw new Error(
+              `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
+            );
+          }
+          return await readBulkAdvisoryJson(response, responseBodyMaxBytes, {
+            signal,
             timeoutPromise,
           });
-          throw new Error(
-            `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
-          );
-        }
-
-        return await readBulkAdvisoryJson(response, responseBodyMaxBytes, {
-          signal,
-          timeoutPromise,
-        });
-      },
-    });
-  try {
-    return await request();
-  } catch (error) {
-    if (!(error instanceof AdvisoryRequestTimeoutError)) {
-      throw error;
+        },
+      });
+    } catch (error) {
+      const retryable =
+        responseStatus === undefined || responseStatus < 400
+          ? error instanceof AdvisoryRequestTimeoutError || error instanceof TypeError
+          : responseStatus >= 500 && responseStatus < 600;
+      if (!retryable) {
+        throw error;
+      }
+      if (attempt === 2) {
+        throw new Error(
+          `Bulk advisory request failed after 3 attempts. Check npm registry availability and retry the audit; no clearance was obtained. Last failure: ${error.message}`,
+          { cause: error },
+        );
+      }
     }
+    await delay(1000 * 2 ** attempt * (1 + Math.random()));
   }
-  return await request();
 }
 
 /** @param {PnpmAuditOptions} [options] */
