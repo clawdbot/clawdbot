@@ -28,6 +28,7 @@ type AgentInternalEvent = {
   taskLabel: string;
   status: "ok" | "error";
   statusLabel: string;
+  disposition?: "exited" | "killed" | "still-running";
   result: string;
   modelRouteChange?: string;
   attachments?: unknown[];
@@ -106,6 +107,24 @@ describe("AgentParamsSchema", () => {
     });
 
     expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+  });
+
+  it("accepts a producer-owned run disposition on internal completion events", () => {
+    const params = makeAgentParamsWithInternalEvent({
+      ...musicCompletionEvent,
+      disposition: "still-running",
+    });
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(true);
+  });
+
+  it("rejects unknown run dispositions on internal completion events", () => {
+    const params = makeAgentParamsWithInternalEvent({
+      ...musicCompletionEvent,
+      disposition: "ambiguous",
+    } as unknown as AgentInternalEvent);
+
+    expect(Value.Check(AgentParamsSchema, params)).toBe(false);
   });
 
   it("keeps task completion internal events strict", () => {

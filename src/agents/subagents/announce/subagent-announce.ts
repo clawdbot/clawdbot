@@ -252,9 +252,10 @@ export async function runSubagentAnnounceFlow(params: {
         if (outcome?.status !== "timeout" || params.cleanup === "delete") {
           return "retryable";
         }
-        // Announcing a timeout over a run this process can still see executing
-        // is the strongest liveness evidence available; carry it to the event.
-        outcome = { ...outcome, disposition: "still-running" };
+        // A terminal timeout snapshot owns the disposition. The embedded-run
+        // map can lag finalization, so it is only a delete fence here; rewriting
+        // the event to still-running would promise a later completion after the
+        // registry has already committed its terminal winner.
       }
     }
 

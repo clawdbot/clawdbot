@@ -813,7 +813,7 @@ describe("subagent announce still-running disposition", () => {
     expect(onBeforeDeleteChildSession).not.toHaveBeenCalled();
   });
 
-  it("marks a timeout announced over a run this process still sees executing", async () => {
+  it("keeps a terminal timeout exited when the embedded active map lags", async () => {
     isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(true);
     waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(false);
 
@@ -825,6 +825,6 @@ describe("subagent announce still-running disposition", () => {
     });
 
     const { event } = readAnnouncedEvent();
-    expect(event?.disposition).toBe("still-running");
+    expect(event?.disposition).toBe("exited");
   });
 });
