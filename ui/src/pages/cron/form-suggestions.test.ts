@@ -2,7 +2,7 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
-import { buildCronSuggestions } from "./form-suggestions.ts";
+import { buildCronSuggestions, resolveConversationTargetSuggestions } from "./form-suggestions.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 
 describe("buildCronSuggestions", () => {
@@ -90,5 +90,46 @@ describe("buildCronSuggestions", () => {
           ].toSorted(),
     );
     expect(suggestions.accountTargets).toEqual(scenario.accounts);
+  });
+});
+
+describe("resolveConversationTargetSuggestions", () => {
+  const conversations = [
+    {
+      conversationRef: "conv_personal",
+      channel: "telegram",
+      accountId: "personal",
+      kind: "group" as const,
+      target: "-100personal",
+      firstSeenAt: 0,
+      lastSeenAt: 0,
+    },
+    {
+      conversationRef: "conv_work",
+      channel: "telegram",
+      accountId: "work",
+      kind: "group" as const,
+      target: "-100work",
+      firstSeenAt: 0,
+      lastSeenAt: 0,
+    },
+    {
+      conversationRef: "conv_work_topic",
+      channel: "telegram",
+      accountId: "work",
+      kind: "group" as const,
+      target: "-100work",
+      threadId: "42",
+      firstSeenAt: 0,
+      lastSeenAt: 0,
+    },
+  ];
+
+  it("filters the cached unscoped directory locally and deduplicates target text", () => {
+    expect(resolveConversationTargetSuggestions(conversations, " work ")).toEqual(["-100work"]);
+    expect(resolveConversationTargetSuggestions(conversations, "")).toEqual([
+      "-100personal",
+      "-100work",
+    ]);
   });
 });

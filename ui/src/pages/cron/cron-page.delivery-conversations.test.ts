@@ -19,6 +19,8 @@ type CronTestPage = HTMLElement & {
   deliveryConversations: ConversationListItem[];
   deliveryConversationsError: string | null;
   patchForm: (patch: Partial<CronState["cronForm"]>) => void;
+  closePanel: () => void;
+  submitForm: () => void;
 };
 
 function waitForCronPage(assertion: () => void) {
@@ -279,28 +281,32 @@ describe("CronPage lifecycle", () => {
     expect(page.deliveryConversations.map((entry) => entry.target)).toEqual(["channel:current"]);
   });
 
-  it("clears stale targets before a replacement directory request resolves", async () => {
-    const replacement = createDeferred<{ conversations: ConversationListItem[] }>();
-    let calls = 0;
+  it("filters a cached directory locally when the account changes", async () => {
     const fallbackRequest = createRequest();
     const request = vi.fn(async (method: string) => {
       if (method === "conversations.list") {
-        calls += 1;
-        return calls === 1
-          ? {
-              conversations: [
-                {
-                  conversationRef: "conv_telegram_old",
-                  channel: "telegram",
-                  accountId: "personal",
-                  kind: "group",
-                  target: "-100old",
-                  firstSeenAt: 0,
-                  lastSeenAt: 0,
-                },
-              ],
-            }
-          : replacement.promise;
+        return {
+          conversations: [
+            {
+              conversationRef: "conv_telegram_personal",
+              channel: "telegram",
+              accountId: "personal",
+              kind: "group",
+              target: "-100personal",
+              firstSeenAt: 0,
+              lastSeenAt: 0,
+            },
+            {
+              conversationRef: "conv_telegram_work",
+              channel: "telegram",
+              accountId: "work",
+              kind: "group",
+              target: "-100work",
+              firstSeenAt: 0,
+              lastSeenAt: 0,
+            },
+          ],
+        };
       }
       return fallbackRequest(method);
     });
@@ -309,13 +315,16 @@ describe("CronPage lifecycle", () => {
 
     await waitForCronPage(() => expect(page.cron.connected).toBe(true));
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-    await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
+    await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(2));
 
     page.patchForm({ deliveryAccountId: "work" });
-    expect(page.deliveryConversations).toEqual([]);
+    await page.updateComplete;
 
-    replacement.resolve({ conversations: [] });
-    await waitForCronPage(() => expect(page.deliveryConversations).toEqual([]));
+    expect(request.mock.calls.filter(([method]) => method === "conversations.list")).toHaveLength(
+      1,
+    );
+    expect(page.deliveryConversations).toHaveLength(2);
+    expect(page.cron.cronForm.deliveryAccountId).toBe("work");
   });
 
   it("drops an in-flight directory response after administrator access is lost", async () => {
@@ -352,7 +361,7 @@ describe("CronPage lifecycle", () => {
     expect(page.deliveryConversations).toEqual([]);
   });
 
-  it("retains a selected conversation's account and thread route", async () => {
+  it("keeps directory suggestions target-only instead of inferring account or topic routing", async () => {
     const fallbackRequest = createRequest();
     const request = vi.fn(async (method: string) => {
       if (method === "conversations.list") {
@@ -382,295 +391,88 @@ describe("CronPage lifecycle", () => {
 
     page.patchForm({ deliveryTo: "-1009876543210" });
 
-    expect(page.cron.cronForm.deliveryAccountId).toBe("bound-account");
-    expect(page.cron.cronForm.deliveryThreadId).toBe("42");
-  });
-
-  it.each([
-    ["mode", { deliveryMode: "none" }],
-    ["account", { deliveryAccountId: "other-account" }],
-    ["account to the inherited default", { deliveryAccountId: undefined }],
-    ["channel", { deliveryChannel: "discord" }],
-    ["agent", { agentId: "other-agent" }],
-  ] as const)(
-    "clears a selected topic route when the delivery %s changes",
-    async (_name, patch) => {
-      const fallbackRequest = createRequest();
-      const request = vi.fn(async (method: string) => {
-        if (method === "conversations.list") {
-          return {
-            conversations: [
-              {
-                conversationRef: "conv_telegram_bound_topic",
-                channel: "telegram",
-                accountId: "bound-account",
-                kind: "group",
-                target: "-1009876543210",
-                threadId: "42",
-                firstSeenAt: 0,
-                lastSeenAt: 0,
-              },
-            ],
-          };
-        }
-        return fallbackRequest(method);
-      });
-      const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-      const page = createPage(createContext(gateway, "writer"));
-
-      await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-      page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-      await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
-      page.patchForm({ deliveryTo: "-1009876543210" });
-      expect(page.cron.cronForm.deliveryThreadId).toBe("42");
-
-      page.patchForm(patch);
-
-      expect(page.cron.cronForm.deliveryThreadId).toBeUndefined();
-    },
-  );
-
-  it("keeps a newly selected topic route when its account changes in the same patch", async () => {
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return {
-          conversations: [
-            {
-              conversationRef: "conv_telegram_bound_topic",
-              channel: "telegram",
-              accountId: "bound-account",
-              kind: "group",
-              target: "-1009876543210",
-              threadId: "42",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-          ],
-        };
-      }
-      return fallbackRequest(method);
-    });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-    await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
-
-    page.patchForm({
-      deliveryAccountId: "bound-account",
-      deliveryTo: "-1009876543210",
-    });
-
-    expect(page.cron.cronForm.deliveryAccountId).toBe("bound-account");
-    expect(page.cron.cronForm.deliveryThreadId).toBe("42");
-  });
-
-  it("clears a selected topic route when same-patch reselection does not resolve", async () => {
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return {
-          conversations: [
-            {
-              conversationRef: "conv_telegram_bound_topic",
-              channel: "telegram",
-              accountId: "bound-account",
-              kind: "group",
-              target: "-1009876543210",
-              threadId: "42",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-          ],
-        };
-      }
-      return fallbackRequest(method);
-    });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-    await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
-    page.patchForm({ deliveryTo: "-1009876543210" });
-    expect(page.cron.cronForm.deliveryThreadId).toBe("42");
-
-    page.patchForm({
-      deliveryAccountId: "other-account",
-      deliveryTo: "-1009876543210",
-    });
-
-    expect(page.cron.cronForm.deliveryAccountId).toBe("other-account");
+    expect(page.cron.cronForm.deliveryAccountId).toBe("");
     expect(page.cron.cronForm.deliveryThreadId).toBeUndefined();
   });
 
-  it("reloads suggestions when selecting a target infers its account", async () => {
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return {
-          conversations: [
-            {
-              conversationRef: "conv_telegram_account_a",
-              channel: "telegram",
-              accountId: "account-a",
-              kind: "group",
-              target: "-1000000000001",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-            {
-              conversationRef: "conv_telegram_account_b",
-              channel: "telegram",
-              accountId: "account-b",
-              kind: "group",
-              target: "-1000000000002",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-          ],
-        };
-      }
-      return fallbackRequest(method);
-    });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-    await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(2));
-
-    page.patchForm({ deliveryTo: "-1000000000001" });
-
-    expect(page.cron.cronForm.deliveryAccountId).toBe("account-a");
-    await waitForCronPage(() =>
-      expect(page.deliveryConversations.map((conversation) => conversation.target)).toEqual([
-        "-1000000000001",
-      ]),
+  it("clears stale topic metadata when an explicitly authored target changes", async () => {
+    const page = createPage(
+      createContext(
+        createGateway({ request: createRequest() } as unknown as GatewayBrowserClient, true),
+        "writer",
+      ),
     );
-  });
-
-  it("does not restore a scoped account when it is cleared with the same target", async () => {
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return {
-          conversations: [
-            {
-              conversationRef: "conv_telegram_bound_topic",
-              channel: "telegram",
-              accountId: "bound-account",
-              kind: "group",
-              target: "-1009876543210",
-              threadId: "42",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-          ],
-        };
-      }
-      return fallbackRequest(method);
-    });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
 
     await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-    await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
-    page.patchForm({ deliveryTo: "-1009876543210" });
-    await waitForCronPage(() => expect(page.cron.cronForm.deliveryAccountId).toBe("bound-account"));
+    page.patchForm({
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryAccountId: "operator-account",
+      deliveryTo: "-100old",
+      deliveryThreadId: "42",
+    });
+    page.patchForm({ deliveryTo: "-100new" });
 
-    page.patchForm({ deliveryAccountId: undefined, deliveryTo: "-1009876543210" });
-
-    expect(page.cron.cronForm.deliveryAccountId).toBeUndefined();
+    expect(page.cron.cronForm.deliveryAccountId).toBe("operator-account");
     expect(page.cron.cronForm.deliveryThreadId).toBeUndefined();
   });
 
-  it.each([
-    ["mode", { deliveryMode: "none", deliveryTo: "-1009876543210" }],
-    ["channel", { deliveryChannel: "discord", deliveryTo: "-1009876543210" }],
-    ["agent", { agentId: "other-agent", deliveryTo: "-1009876543210" }],
-  ] as const)(
-    "does not reselect an old topic when the delivery %s changes in the same patch",
-    async (_name, patch) => {
-      const fallbackRequest = createRequest();
-      const request = vi.fn(async (method: string) => {
-        if (method === "conversations.list") {
-          return {
-            conversations: [
-              {
-                conversationRef: "conv_telegram_bound_topic",
-                channel: "telegram",
-                accountId: "bound-account",
-                kind: "group",
-                target: "-1009876543210",
-                threadId: "42",
-                firstSeenAt: 0,
-                lastSeenAt: 0,
-              },
-            ],
-          };
-        }
-        return fallbackRequest(method);
-      });
-      const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-      const page = createPage(createContext(gateway, "writer"));
-
-      await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-      page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-      await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
-      page.patchForm({ deliveryTo: "-1009876543210" });
-      expect(page.cron.cronForm.deliveryThreadId).toBe("42");
-
-      page.patchForm(patch);
-
-      expect(page.cron.cronForm.deliveryThreadId).toBeUndefined();
-    },
-  );
-
-  it("omits targets whose account or thread route is ambiguous", async () => {
+  it("drops an in-flight directory failure after the editor closes", async () => {
+    const pending = createDeferred<{ conversations: ConversationListItem[] }>();
     const fallbackRequest = createRequest();
     const request = vi.fn(async (method: string) => {
       if (method === "conversations.list") {
-        return {
-          conversations: [
-            {
-              conversationRef: "conv_telegram_topic_1",
-              channel: "telegram",
-              accountId: "default",
-              kind: "group",
-              target: "-1009876543210",
-              threadId: "1",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-            {
-              conversationRef: "conv_telegram_topic_2",
-              channel: "telegram",
-              accountId: "default",
-              kind: "group",
-              target: "-1009876543210",
-              threadId: "2",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-          ],
-        };
+        return pending.promise;
       }
       return fallbackRequest(method);
     });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
+    const page = createPage(
+      createContext(createGateway({ request } as unknown as GatewayBrowserClient, true), "writer"),
+    );
 
     await waitForCronPage(() => expect(page.cron.connected).toBe(true));
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-    await waitForCronPage(() =>
-      expect(request).toHaveBeenCalledWith("conversations.list", expect.anything()),
-    );
+    page.closePanel();
+    pending.reject(new Error("late directory failure"));
+    await Promise.resolve();
 
     expect(page.deliveryConversations).toEqual([]);
+    expect(page.deliveryConversationsError).toBeNull();
+  });
+
+  it("drops an in-flight directory failure after a successful save", async () => {
+    const pending = createDeferred<{ conversations: ConversationListItem[] }>();
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "conversations.list") {
+        return pending.promise;
+      }
+      return fallbackRequest(method);
+    });
+    const page = createPage(
+      createContext(createGateway({ request } as unknown as GatewayBrowserClient, true), "writer"),
+    );
+
+    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    page.cron.cronCreateOpen = true;
+    page.patchForm({
+      name: "Saved task",
+      payloadText: "Send the digest",
+      deliveryMode: "announce",
+      deliveryChannel: "telegram",
+      deliveryTo: "-100saved",
+    });
+    page.submitForm();
+    await waitForCronPage(() =>
+      expect(request).toHaveBeenCalledWith("cron.add", expect.anything()),
+    );
+    await waitForCronPage(() => expect(page.cron.cronCreateOpen).toBe(false));
+
+    pending.reject(new Error("late directory failure"));
+    await Promise.resolve();
+
+    expect(page.deliveryConversations).toEqual([]);
+    expect(page.deliveryConversationsError).toBeNull();
   });
 
   it("clears a recipient directory error after a successful retry", async () => {
@@ -705,7 +507,8 @@ describe("CronPage lifecycle", () => {
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryConversationsError).toContain("temporary"));
 
-    page.patchForm({ deliveryAccountId: "work" });
+    page.patchForm({ deliveryChannel: "discord" });
+    page.patchForm({ deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
 
     expect(page.deliveryConversationsError).toBeNull();

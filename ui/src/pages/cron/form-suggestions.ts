@@ -1,3 +1,4 @@
+import type { ConversationListItem } from "@openclaw/gateway-protocol";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AgentsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -11,6 +12,18 @@ import {
 import { resolveCronTimezoneSuggestions } from "./timezone-suggestions.ts";
 
 export const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
+
+export function resolveConversationTargetSuggestions(
+  conversations: readonly ConversationListItem[],
+  accountIdRaw: string,
+): string[] {
+  const accountId = accountIdRaw.trim();
+  return normalizeSortedUniqueTrimmedStringList(
+    conversations
+      .filter((conversation) => !accountId || conversation.accountId === accountId)
+      .map((conversation) => conversation.target),
+  );
+}
 
 export function buildCronSuggestions(params: {
   channels: ApplicationContext["channels"]["state"];
