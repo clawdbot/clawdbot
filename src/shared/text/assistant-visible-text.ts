@@ -50,7 +50,12 @@ const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
 const TOOL_CALL_XML_PAYLOAD_START_RE =
   /^\s*(?:\r?\n\s*)?<(?:antml:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
-const TOOL_CALL_GLM_ARG_PAYLOAD_START_RE = /^(?:[A-Za-z_][\w./:-]*)?\s*<\s*arg_key\b/i;
+const TOOL_CALL_GLM_ARG_CLOSED_RE =
+  /^(?:[A-Za-z_][\w./:-]*)?\s*<\s*arg_key\b[\s\S]*<\/\s*arg_key\b/i;
+// Hold a <tool_call> tool-name / partial <arg_key> prefix until prose or a closed
+// GLM argument pair arrives. A later replacement cannot unsay an emitted prefix.
+const TOOL_CALL_GLM_ARG_INCOMPLETE_RE =
+  /^(?:[A-Za-z_][\w./:-]+)?(?:\s*<\s*(?:arg_key\b[^>]*)?|\s*<\s*arg_key\b[^>]*>[^\s<]*)?$/i;
 const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
@@ -162,10 +167,14 @@ function detectToolCallPayloadKind(text: string, start: number): ToolCallPayload
   if (TOOL_CALL_XML_PAYLOAD_START_RE.test(rest)) {
     return "xml";
   }
-  if (TOOL_CALL_GLM_ARG_PAYLOAD_START_RE.test(rest)) {
+  if (TOOL_CALL_GLM_ARG_CLOSED_RE.test(rest) || isIncompleteGlmArgPayload(rest)) {
     return "xml";
   }
   return null;
+}
+
+function isIncompleteGlmArgPayload(rest: string): boolean {
+  return TOOL_CALL_GLM_ARG_INCOMPLETE_RE.test(rest) && /[A-Za-z_<]/.test(rest);
 }
 
 function startsWithNestedJsonToolCallPayload(text: string, start: number): boolean {

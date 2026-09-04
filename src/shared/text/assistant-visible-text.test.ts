@@ -313,6 +313,22 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("holds an incomplete <tool_call>exec prefix until GLM args arrive", () => {
+      expectVisibleText("Visible\n<tool_call>exec", "Visible\n");
+      expectVisibleText("Visible\n<tool_call>exec<arg_key>", "Visible\n");
+    });
+
+    it("preserves literal exec<arg_key> syntax outside a GLM tool-call block", () => {
+      expectVisibleText(
+        "Models emit exec<arg_key>command</arg_key> next to a structured tool call.",
+        "Models emit exec<arg_key>command</arg_key> next to a structured tool call.",
+      );
+      expectVisibleText(
+        "Use <tool_call>exec<arg_key> literally.",
+        "Use <tool_call>exec<arg_key> literally.",
+      );
+    });
+
     it("strips Qwen-style <tool_call> with nested <function=...> XML", () => {
       expectVisibleText(
         "prefix\n<tool_call><function=read><parameter=path>/home/user</parameter></function></tool_call>\nsuffix",
@@ -905,6 +921,12 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText("Use <tool_call><arg> literally.")).toBe(
       "Use <tool_call><arg> literally.",
     );
+    expect(
+      sanitizeAssistantVisibleText(
+        "Models emit exec<arg_key>command</arg_key> next to a structured tool call.",
+      ),
+    ).toBe("Models emit exec<arg_key>command</arg_key> next to a structured tool call.");
+    expect(sanitizeAssistantVisibleText("Visible\n<tool_call>exec")).toBe("Visible");
   });
 
   it("strips adjacent plural function-call XML on the delivery path", () => {

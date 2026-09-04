@@ -97,6 +97,18 @@ describe("handleMessageUpdate text signatures", () => {
       updates: [{ text: "Done.", delta: "Done." }],
     },
     {
+      name: "held GLM arg_key tool call",
+      chunks: [
+        "Visible\n<tool_call>exec",
+        "<arg_key>command</arg_key><arg_value>secret</arg_value></tool_call>",
+        "\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
       name: "split voice directive",
       chunks: ["[[audio_as_", "voice]]Hello", " world"],
       updates: [
