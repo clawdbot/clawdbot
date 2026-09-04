@@ -2429,6 +2429,7 @@ describe("resolvePluginTools optional tools", () => {
         ...makeTool("cached_tool"),
         displaySummary: "Cached tool summary",
         hideFromChannelProgress,
+        catalogMode: "direct-only" as const,
         outputSchema,
         async execute() {
           return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
@@ -2463,6 +2464,8 @@ describe("resolvePluginTools optional tools", () => {
     expect(second[0]).not.toBe(first[0]);
     expect(first[0]?.outputSchema).toBe(outputSchema);
     expect(second[0]?.outputSchema).toBe(outputSchema);
+    expect(first[0]?.catalogMode).toBe("direct-only");
+    expect(second[0]?.catalogMode).toBe("direct-only");
     expect(first[0]?.hideFromChannelProgress).toBe(true);
     expect(second[0]?.hideFromChannelProgress).toBe(true);
     expect(second[0]?.displaySummary).toBe("Cached tool summary");
@@ -2534,6 +2537,8 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(fresh).not.toHaveProperty("resultContentSource");
     expect(cached).not.toHaveProperty("resultContentSource");
+    expect(fresh).not.toHaveProperty("catalogMode");
+    expect(cached).not.toHaveProperty("catalogMode");
     expect(fresh).not.toHaveProperty("hideFromChannelProgress");
     expect(cached).not.toHaveProperty("hideFromChannelProgress");
     expect(cached).not.toBe(fresh);

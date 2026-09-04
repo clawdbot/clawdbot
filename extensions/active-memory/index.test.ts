@@ -1740,6 +1740,72 @@ describe("active-memory plugin", () => {
     expect(hasDebugLine("active-memory: recall skipped reason=no-recall-intent")).toBe(true);
   });
 
+  it.each([
+    { mode: "escalate", reason: "no-recall-intent", hasStrongHit: false },
+    { mode: "off", reason: "mode-off", hasStrongHit: false },
+    { mode: "escalate", reason: "strong-lane-one-hit", hasStrongHit: true },
+  ])("clears denied-turn status when the next turn skips recall for $reason", async (testCase) => {
+    registerPluginConfig({ mode: testCase.mode });
+    const sessionKey = "agent:main:telegram:direct:owner";
+    const otherPluginEntry = { pluginId: "other-plugin", lines: ["Other plugin status"] };
+    seedSession(sessionKey, "status-transition", 25);
+    expectDefined(hoisted.sessionStore[sessionKey], "seeded status session").pluginDebugEntries = [
+      otherPluginEntry,
+    ];
+    const context = { sessionKey, messageProvider: "telegram", channelId: "owner" };
+    const event = { prompt: "Help when booking a flight" };
+
+    const denied = await runPromptBuild(event, {
+      ...context,
+      toolAuthority: {
+        fingerprint: "denied-memory-authority",
+        allows: () => false,
+        assertActive: () => undefined,
+      },
+    });
+
+    expect(denied).toBeUndefined();
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=policy-disabled");
+    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
+    if (testCase.hasStrongHit) {
+      hoisted.getActiveMemorySearchManager.mockResolvedValueOnce({
+        manager: {
+          search: vi.fn(async () => []),
+          listTriggerCandidates: vi.fn(async () => [
+            {
+              path: "MEMORY.md",
+              startLine: 1,
+              endLine: 1,
+              score: 1,
+              snippet: "Prefer aisle seats.",
+              source: "memory" as const,
+              provenance: {
+                originClass: "agent" as const,
+                sessionKind: "interactive" as const,
+                observedAt: 1,
+              },
+              triggers: "booking a flight",
+            },
+          ]),
+        },
+      } as never);
+    }
+
+    const allowed = await runPromptBuild(event, context);
+
+    if (testCase.hasStrongHit) {
+      expectPrependContextContains(allowed, "Prefer aisle seats.");
+    } else if (testCase.reason === "no-recall-intent") {
+      expectPrependContextContains(allowed, skippedRecallContext);
+    } else {
+      expect(allowed).toBeUndefined();
+    }
+    expect(hasDebugLine(`active-memory: recall skipped reason=${testCase.reason}`)).toBe(true);
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(hoisted.sessionStore[sessionKey]?.pluginDebugEntries).toEqual([otherPluginEntry]);
+    expect(hoisted.sessionStore[sessionKey]?.updatedAt).toBe(25);
+  });
+
   it("does not run deep recall when the live active-memory plugin entry is removed", async () => {
     configFile = {
       plugins: {
@@ -4755,6 +4821,20 @@ describe("active-memory plugin", () => {
 
   it("fails open at the live deadline when pre-recall session state stalls", async () => {
     vi.useFakeTimers();
+    const sessionKey = "agent:main:stalled-toggle";
+    seedSession(sessionKey, "stalled-toggle", 25);
+    await runPromptBuild(
+      { prompt: "what did we decide?" },
+      {
+        sessionKey,
+        toolAuthority: {
+          fingerprint: "denied-memory-authority",
+          allows: () => false,
+          assertActive: () => undefined,
+        },
+      },
+    );
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=policy-disabled");
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -4773,9 +4853,7 @@ describe("active-memory plugin", () => {
 
     const resultPromise = runPromptBuild(
       { prompt: "what food do i usually order? stalled toggle lookup" },
-      {
-        sessionKey: "agent:main:stalled-toggle",
-      },
+      { sessionKey },
     );
     await vi.advanceTimersByTimeAsync(1_525);
 
@@ -4785,6 +4863,8 @@ describe("active-memory plugin", () => {
       .mocked(api.logger.warn)
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expectLinesToContain(warnLines, "before_prompt_build preflight timed out after 1500ms");
+    expect(getActiveMemoryLines(sessionKey)).toEqual([]);
+    expect(hoisted.sessionStore[sessionKey]?.updatedAt).toBe(25);
     resolveLookup?.(undefined);
     await vi.advanceTimersByTimeAsync(0);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
@@ -5199,11 +5279,23 @@ describe("active-memory plugin", () => {
   });
 
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {
+    const sessionKey = "agent:main:escape-test";
+    seedSession(sessionKey, "escape-test", 25);
+    await runPromptBuild(
+      { prompt: "what did we decide?" },
+      {
+        sessionKey,
+        toolAuthority: {
+          fingerprint: "denied-memory-authority",
+          allows: () => false,
+          assertActive: () => undefined,
+        },
+      },
+    );
+    expectLinesToContain(getActiveMemoryLines(sessionKey), "status=policy-disabled");
     const result = await runPromptBuild(
       { prompt: "what should i eat? escape test", messages: undefined as never },
-      {
-        sessionKey: "agent:main:escape-test",
-      },
+      { sessionKey },
     );
 
     expect(result).toBeUndefined();
@@ -5211,6 +5303,8 @@ describe("active-memory plugin", () => {
       .mocked(api.logger.warn)
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expectLinesToContain(warnLines, "before_prompt_build");
+    expect(getActiveMemoryLines(sessionKey)).toEqual([]);
+    expect(hoisted.sessionStore[sessionKey]?.updatedAt).toBe(25);
   });
 
   it("honors configured timeoutMs values above the former 60 000 ms ceiling", async () => {
