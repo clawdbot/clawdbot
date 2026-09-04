@@ -12,14 +12,14 @@ const withinRoot = (root: string, file: string) => {
 
 export function createDeclarationInputBoundary(cwd: string) {
   const declared = path.resolve(cwd);
+  const prefixes = [declared, fs.realpathSync(declared)];
   const root = fs.realpathSync.native(declared);
-  // Translate only the declared checkout prefix, including Windows 8.3 aliases.
-  // Resolving an entire outside candidate would admit ancestor symlinks into the checkout.
+  // Node's symlink-resolved checkout can retain an OS alias that native realpath expands.
+  // Translate only these checkout prefixes; never canonicalize outside candidates into scope.
   const resolve = (file: string) => {
     const absolute = path.resolve(declared, file);
-    return withinRoot(declared, absolute)
-      ? path.resolve(root, path.relative(declared, absolute))
-      : absolute;
+    const prefix = prefixes.find((candidate) => withinRoot(candidate, absolute));
+    return prefix ? path.resolve(root, path.relative(prefix, absolute)) : absolute;
   };
   return {
     root,

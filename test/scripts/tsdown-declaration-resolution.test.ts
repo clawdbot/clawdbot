@@ -23,7 +23,7 @@ const coreText = (origin: string) =>
   `export interface Marker { origin: "${origin}" }\ndeclare global { const declarationOrigin: "${origin}"; }\n`;
 
 function nestedFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS) {
-  const ancestor = fs.realpathSync(createTempDir("openclaw-declaration-resolution-"));
+  const ancestor = fs.realpathSync.native(createTempDir("openclaw-declaration-resolution-"));
   const root = path.join(ancestor, ".claude/worktrees/validation");
   const fixture = createFixture(groups, root);
   const ancestorPackage = path.join(ancestor, "node_modules/@types/synthetic-core");
@@ -79,8 +79,13 @@ function nestedFixture(groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_
 }
 
 describe("tsdown checkout declaration resolution", () => {
-  for (const kind of ["directory alias", "Windows 8.3 alias"]) {
-    it.skipIf(kind === "Windows 8.3 alias" && process.platform !== "win32")(
+  for (const kind of [
+    "directory alias",
+    "Windows 8.3 alias",
+    "directory alias targeting Windows 8.3",
+    "directory alias targeting a case alias",
+  ]) {
+    it.skipIf(kind.includes("Windows") && process.platform !== "win32")(
       `compiles and receipts every local input through a ${kind}`,
       (context) => {
         const { root, localInput, ancestorInput } = nestedFixture();
@@ -91,21 +96,40 @@ describe("tsdown checkout declaration resolution", () => {
           path.dirname(ancestorInput),
           "junction",
         );
-        let alias = `${root}-alias`;
-        if (kind === "directory alias") {
-          fs.symlinkSync(root, alias, "junction");
-        } else {
+        let target = root;
+        if (kind.includes("Windows")) {
           const short = spawnSync(
             "cmd.exe",
             ["/d", "/c", 'for %I in ("%DECLARATION_ALIAS_ROOT%") do @echo %~sI'],
-            { encoding: "utf8", env: { ...process.env, DECLARATION_ALIAS_ROOT: root } },
+            {
+              encoding: "utf8",
+              // cmd.exe owns this command's quotes; libuv must not backslash-escape them.
+              windowsVerbatimArguments: true,
+              env: { ...process.env, DECLARATION_ALIAS_ROOT: root },
+            },
           );
           expect(short.status, short.stderr).toBe(0);
-          alias = short.stdout.trim();
-          expect(fs.realpathSync.native(alias)).toBe(fs.realpathSync.native(root));
-          if (fs.realpathSync(alias).toLowerCase() === fs.realpathSync.native(root).toLowerCase()) {
+          target = short.stdout.trim();
+          expect(fs.realpathSync.native(target)).toBe(root);
+          if (fs.realpathSync(target).toLowerCase() === root.toLowerCase()) {
             context.skip("Filesystem does not expose a distinct Windows 8.3 checkout alias");
           }
+        } else if (kind.endsWith("case alias")) {
+          target = path.join(path.dirname(root), path.basename(root).toUpperCase());
+          if (!fs.existsSync(target)) {
+            context.skip("Filesystem does not expose a case-insensitive checkout alias");
+          }
+          expect(fs.realpathSync.native(target)).toBe(root);
+        }
+        let alias = target;
+        if (kind.startsWith("directory alias")) {
+          alias = `${root}-alias`;
+          fs.symlinkSync(target, alias, "junction");
+        }
+        if (kind.startsWith("directory alias targeting")) {
+          // Keep all three spellings distinct so native fixture roots cannot mask the bug.
+          expect(fs.realpathSync(alias)).not.toBe(alias);
+          expect(fs.realpathSync(alias)).not.toBe(root);
         }
         const result = runFixture(root, [
           "--import",
@@ -131,7 +155,7 @@ const bundles = await build({
   dts: true, clean: false, logLevel: "silent",
   hooks: createDeclarationBoundaryHooks({ "build:done": createDeclarationInputCapture("alias") }),
   plugins: [{ name: "fixture-checkout-alias", buildStart: { order: "post", handler() {
-    for (const spelling of [cwd, canonical]) {
+    for (const spelling of [cwd, fs.realpathSync(cwd), canonical]) {
       assert.match(ts.sys.readFile(path.join(spelling, "src/shared.ts")), /inferredOrigin/);
       assert.equal(ts.sys.fileExists(path.join(spelling, "src/shared.ts")), true);
       assert.equal(ts.sys.directoryExists(path.join(spelling, "src")), true);
