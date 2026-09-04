@@ -127,11 +127,6 @@ function realizableEntries(list: string[] | undefined): string[] {
   return expandToolGroups(list).filter((entry) => REALIZABLE_ENTRY_RE.test(entry));
 }
 
-// Shapes sharing a head and tail differ only in inner literals; that is the one
-// way combinations can multiply across layers (`memos__*a*` with `memos__*b*`),
-// so it is the one place work is bounded. Unrelated prefixes stay linear.
-const MAX_INNER_SHAPES_PER_BUCKET = 64;
-
 /** A glob split at its wildcards: literal head, inner literals, literal tail. */
 type GlobShape = { head: string; inner: string[]; tail: string };
 
@@ -153,53 +148,44 @@ function namespaceReach(entry: string, namespace: string): string | GlobShape | 
 }
 
 /**
- * One in-namespace name per way of picking a glob from every glob layer whose
- * heads nest and whose tails nest: the longest head, every inner literal in
- * order, and the longest tail, joined by the placeholder, is matched by each
- * chosen glob at once (`memos__read*` with `memos__*note` gives `memos__read~note`).
+ * Whether some way of picking one glob from every glob layer yields an admitted
+ * name. Globs combine only when their heads nest and their tails nest; the
+ * witness is the longest head, every inner literal in order, and the longest
+ * tail joined by the placeholder, which every chosen glob matches at once
+ * (`memos__read*` with `memos__*note` gives `memos__read~note`). The search
+ * stops at the first admitted witness, so only a policy that denies every
+ * candidate walks the full product of same-shaped globs across layers.
  */
-function intersectGlobWitnesses(layers: GlobShape[][], namespace: string): string[] {
-  // Keyed by witness so combinations that land on the same name merge; a long
-  // allowlist of unrelated prefixes costs one entry each, and only same-bucket
-  // inner-literal variants can multiply, which the bucket bound below limits.
-  const witnessOf = (shape: GlobShape) =>
-    [shape.head, ...shape.inner, shape.tail].join(NAMESPACE_WITNESS);
-  const seed: GlobShape = { head: namespace, inner: [], tail: "" };
-  let combinations = new Map<string, GlobShape>([[witnessOf(seed), seed]]);
-  for (const layer of layers) {
-    const next = new Map<string, GlobShape>();
-    for (const combined of combinations.values()) {
-      for (const shape of layer) {
-        const head = combined.head.length >= shape.head.length ? combined.head : shape.head;
-        const tail = combined.tail.length >= shape.tail.length ? combined.tail : shape.tail;
-        const nests =
-          head.startsWith(combined.head) &&
-          head.startsWith(shape.head) &&
-          tail.endsWith(combined.tail) &&
-          tail.endsWith(shape.tail);
-        if (nests) {
-          const merged = { head, inner: [...combined.inner, ...shape.inner], tail };
-          next.set(witnessOf(merged), merged);
-        }
+function globLayersAdmitWitness(
+  layers: GlobShape[][],
+  namespace: string,
+  admits: (witness: string) => boolean,
+): boolean {
+  const judged = new Set<string>();
+  const visit = (depth: number, combined: GlobShape): boolean => {
+    if (depth === layers.length) {
+      const witness = [combined.head, ...combined.inner, combined.tail].join(NAMESPACE_WITNESS);
+      if (judged.has(witness)) {
+        return false;
+      }
+      judged.add(witness);
+      return admits(witness);
+    }
+    for (const shape of layers[depth] ?? []) {
+      const head = combined.head.length >= shape.head.length ? combined.head : shape.head;
+      const tail = combined.tail.length >= shape.tail.length ? combined.tail : shape.tail;
+      const nests =
+        head.startsWith(combined.head) &&
+        head.startsWith(shape.head) &&
+        tail.endsWith(combined.tail) &&
+        tail.endsWith(shape.tail);
+      if (nests && visit(depth + 1, { head, inner: [...combined.inner, ...shape.inner], tail })) {
+        return true;
       }
     }
-    // Past the per-bucket bound the extra inner-literal variants fall closed;
-    // a policy that needs them is exotic, and every unrelated glob still counts.
-    const bucketSizes = new Map<string, number>();
-    for (const [witness, shape] of next) {
-      const bucket = `${shape.head}${NAMESPACE_WITNESS}${shape.tail}`;
-      const size = (bucketSizes.get(bucket) ?? 0) + 1;
-      bucketSizes.set(bucket, size);
-      if (size > MAX_INNER_SHAPES_PER_BUCKET) {
-        next.delete(witness);
-      }
-    }
-    combinations = next;
-    if (combinations.size === 0) {
-      return [];
-    }
-  }
-  return [...combinations.keys()];
+    return false;
+  };
+  return visit(0, { head: namespace, inner: [], tail: "" });
 }
 
 /**
@@ -253,9 +239,13 @@ export function policiesAdmitToolNamespace(
   // `memos__1*` (no tool starts with a digit) and literals past the name budget
   // yield no witness and fall closed; a trailing wildcard on a full-length name
   // still passes because it may match nothing.
-  const witnesses = [...names, ...intersectGlobWitnesses(globLayers, namespace)].filter((name) => {
-    const shortest = shortestWitnessRealization(name, namespace);
-    return shortest !== undefined && couldMaterializeToolName(shortest, namespace);
-  });
-  return witnesses.some((name) => isToolAllowedByPolicies(name, judged));
+  const admits = (witness: string) => {
+    const shortest = shortestWitnessRealization(witness, namespace);
+    return (
+      shortest !== undefined &&
+      couldMaterializeToolName(shortest, namespace) &&
+      isToolAllowedByPolicies(witness, judged)
+    );
+  };
+  return [...names].some(admits) || globLayersAdmitWitness(globLayers, namespace, admits);
 }

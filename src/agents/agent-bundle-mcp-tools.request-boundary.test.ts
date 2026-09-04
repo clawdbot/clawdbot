@@ -520,6 +520,21 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: true,
     },
     {
+      label: "sixty-five same-shaped allow globs with the first sixty-four denied",
+      tools: {
+        allow: Array.from(
+          { length: 65 },
+          (_, index) => `memos__*t${String(index + 1).padStart(2, "0")}*`,
+        ),
+        deny: Array.from(
+          { length: 64 },
+          (_, index) => `memos__*t${String(index + 1).padStart(2, "0")}*`,
+        ),
+      },
+      toolNames: ["at65"],
+      visible: true,
+    },
+    {
       label: "a config allow glob that only the 65th runtime allow glob shares a tool with",
       tools: { allow: ["memos__t65*"] },
       toolsAllow: Array.from(
