@@ -253,7 +253,6 @@ function resolveClaudeAgentSdkOptions(
   const allowedTools: string[] = [];
   const disallowedTools: string[] = [];
   const extraArgs: NonNullable<ClaudeAgentSdkOptions["extraArgs"]> = {};
-  let excludeDynamicSystemPromptSections = false;
 
   for (let index = 0; index < context.args.length; index += 1) {
     const rawArgument = context.args[index] ?? "";
@@ -368,7 +367,10 @@ function resolveClaudeAgentSdkOptions(
         break;
       }
       case "--exclude-dynamic-system-prompt-sections":
-        excludeDynamicSystemPromptSections = true;
+        // Recognised and deliberately ignored. The flag trims the claude_code
+        // preset's per-user sections; a string systemPrompt is a full custom
+        // prompt with no preset to trim, and letting it fall through to the
+        // default branch would forward it to the CLI as an extra argument.
         break;
       default: {
         if (!argument.startsWith("--")) {
@@ -409,23 +411,23 @@ function resolveClaudeAgentSdkOptions(
   if (Object.keys(extraArgs).length > 0) {
     options.extraArgs = extraArgs;
   }
-  if (excludeDynamicSystemPromptSections) {
-    // Same replacement as above; with a string prompt the dynamic-sections
-    // toggle is moot (there is no preset to trim), but this branch would
-    // otherwise re-introduce the `claude_code` preset for newer Claude Code
-    // versions that support the flag.
-    options.systemPrompt = context.systemPrompt;
-  }
   // Keep Claude Code's own memory surfaces out of the agent's context. These
   // are the same two keys OpenClaw already sets on its restricted-run path
   // (CLAUDE_RESTRICTED_SETTINGS in cli-shared.ts); the difference is that a
   // normal agent run never applied them, so a gateway agent inherited the
   // host's auto-memory index and any CLAUDE.md reachable from cwd on top of
   // its own AGENTS.md / MEMORY.md.
-  options.settings = {
-    autoMemoryEnabled: false,
-    claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
-  };
+  //
+  // A restricted run already carries a stricter `--settings` payload, which
+  // this parser leaves in extraArgs. Do not replace it: that payload also
+  // pins `disableAllHooks` and `enabledPlugins`, and a two-key object here
+  // would drop them.
+  if (extraArgs.settings === undefined) {
+    options.settings = {
+      autoMemoryEnabled: false,
+      claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
+    };
+  }
   return options;
 }
 

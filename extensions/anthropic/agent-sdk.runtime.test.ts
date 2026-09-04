@@ -612,6 +612,28 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     );
   });
 
+  it("leaves a restricted run's own --settings payload in place", async () => {
+    useSdkMessages();
+
+    const restricted = JSON.stringify({
+      disableAllHooks: true,
+      enabledPlugins: {},
+      autoMemoryEnabled: false,
+      claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
+    });
+    await collect(
+      createContext({
+        args: ["-p", "--setting-sources", "", "--settings", restricted],
+      }),
+    );
+
+    // That payload also pins disableAllHooks and enabledPlugins; replacing it
+    // with the two memory keys would quietly restore hooks and plugins.
+    const options = sdkOptions();
+    expect(options.settings).toBeUndefined();
+    expect(options.extraArgs).toMatchObject({ settings: restricted });
+  });
+
   it("reuses one official SDK query and Claude process across compatible agent turns", async () => {
     const live = useLiveSdkStreams();
     const capability = createLiveCapability();
