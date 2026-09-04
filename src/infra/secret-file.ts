@@ -41,11 +41,13 @@ async function tightenSecretDirectoryModes(params: {
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     return;
   }
-  const rootReal = await fs.realpath(root).catch(() => root);
   const targetMode = params.dirMode ?? PRIVATE_SECRET_DIR_MODE;
-  const chain: string[] = [rootReal];
+  // Walk the lexical chain; never realpath first. A symlinked component —
+  // including the root itself — must be left for fs-safe to reject, not
+  // resolved and chmodded at its destination.
+  const chain: string[] = [root];
   if (relative) {
-    let current = rootReal;
+    let current = root;
     for (const segment of relative.split(path.sep)) {
       current = path.join(current, segment);
       chain.push(current);
