@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Route } from "playwright";
 import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -28,18 +29,35 @@ suite.define(() => {
         const handoffReady = new Promise<void>((resolve) => {
           releaseHandoff = resolve;
         });
+        const pendingRoutes = new Set<Promise<void>>();
+        const trackRoute = (handle: (route: Route) => Promise<void>) => async (route: Route) => {
+          let finish!: () => void;
+          const pending = new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+          pendingRoutes.add(pending);
+          try {
+            await handle(route);
+          } finally {
+            pendingRoutes.delete(pending);
+            finish();
+          }
+        };
 
         try {
           // Exercise secure-origin browser behavior while serving only this test's local bundle.
-          await page.route(`${origin}/**`, async (route) => {
-            const requested = new URL(route.request().url());
-            const upstream = new URL(
-              `${requested.pathname}${requested.search}`,
-              suite.server.baseUrl,
-            );
-            const response = await route.fetch({ url: upstream.href });
-            await route.fulfill({ response });
-          });
+          await page.route(
+            `${origin}/**`,
+            trackRoute(async (route) => {
+              const requested = new URL(route.request().url());
+              const upstream = new URL(
+                `${requested.pathname}${requested.search}`,
+                suite.server.baseUrl,
+              );
+              const response = await route.fetch({ url: upstream.href });
+              await route.fulfill({ response });
+            }),
+          );
           const gateway = await installMockGateway(page, {
             sessionKey,
             deviceToken,
@@ -56,18 +74,21 @@ suite.define(() => {
               },
             ],
           });
-          await page.route(`${origin}/.well-known/openclaw/browser-bootstrap`, async (route) => {
-            helperCalls += 1;
-            expect(route.request().method()).toBe("GET");
-            expect(route.request().headers().authorization).toBeUndefined();
-            await handoffReady;
-            await route.fulfill({
-              status: 200,
-              contentType: "application/json",
-              headers: { "Cache-Control": "no-store" },
-              body: JSON.stringify({ bootstrapToken, bootstrapProfile: "owner" }),
-            });
-          });
+          await page.route(
+            `${origin}/.well-known/openclaw/browser-bootstrap`,
+            trackRoute(async (route) => {
+              helperCalls += 1;
+              expect(route.request().method()).toBe("GET");
+              expect(route.request().headers().authorization).toBeUndefined();
+              await handoffReady;
+              await route.fulfill({
+                status: 200,
+                contentType: "application/json",
+                headers: { "Cache-Control": "no-store" },
+                body: JSON.stringify({ bootstrapToken, bootstrapProfile: "owner" }),
+              });
+            }),
+          );
 
           await page.goto(deepLink);
           const initialConnect = await gateway.waitForRequest("connect");
@@ -111,10 +132,11 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifactDir, "3-reloaded.png") });
           return page.video();
         } finally {
-          // Release a pending bootstrap even on failure, then drain proxy fetches
-          // before withPage closes the context and disposes their response bodies.
+          // Stop page requests, then drain handlers while the context still owns
+          // fetched bodies. Unrouting during the drain can auto-continue active routes.
           releaseHandoff();
-          await page.unrouteAll({ behavior: "wait" });
+          await page.close();
+          await Promise.all(pendingRoutes);
         }
       },
     );
