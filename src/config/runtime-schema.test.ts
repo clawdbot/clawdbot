@@ -307,6 +307,23 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(channelProps).toHaveProperty("matrix");
   });
 
+  it("does not execute plugin setup probes while selecting channel schemas", async () => {
+    const setupRegistry = await import("../plugins/setup-registry.js");
+    const probes = vi
+      .spyOn(setupRegistry, "resolvePluginSetupAutoEnableReasons")
+      .mockReturnValue([]);
+    mockLoadConfig.mockReturnValue({
+      ...explicitMainRoster(),
+      plugins: { entries: { demo: { enabled: true, config: { mode: "synthetic" } } } },
+    });
+    try {
+      loadGatewayRuntimeConfigSchema();
+      expect(probes).not.toHaveBeenCalled();
+    } finally {
+      probes.mockRestore();
+    }
+  });
+
   it.each(
     [
       { name: "preferred owner", entries: { plus: { enabled: true } }, deny: [], expected: "plus" },

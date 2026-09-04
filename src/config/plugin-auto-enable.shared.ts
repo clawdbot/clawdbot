@@ -240,47 +240,32 @@ function normalizeManifestChannelId(channelId: string): string {
   return normalizeChatChannelId(channelId) ?? channelId;
 }
 
-function getManifestChannelPreferOver(
-  plugin: PluginManifestRecord,
-  channelId: string,
-): readonly string[] {
-  return plugin.channelConfigs?.[channelId]?.preferOver ?? [];
-}
-
 function collectPluginIdsForConfiguredChannel(
   channelId: string,
   registry: PluginManifestRegistry,
 ): string[] {
   const normalizedChannelId = normalizeManifestChannelId(channelId);
   const builtInId = normalizeChatChannelId(normalizedChannelId);
-  const claims: Array<{ plugin: PluginManifestRecord; preferOver: readonly string[] }> = [];
-  for (const record of registry.plugins) {
-    if (
-      (record.channels ?? []).some((id) => normalizeManifestChannelId(id) === normalizedChannelId)
-    ) {
-      claims.push({
-        plugin: record,
-        preferOver: getManifestChannelPreferOver(record, normalizedChannelId),
-      });
-    }
-  }
+  const claims = registry.plugins.filter((record) =>
+    record.channels.some((id) => normalizeManifestChannelId(id) === normalizedChannelId),
+  );
 
   if (claims.length === 0) {
     return builtInId ? [builtInId] : [];
   }
 
-  const claimIds = new Set(claims.map((claim) => claim.plugin.id));
+  const claimIds = new Set(claims.map((claim) => claim.id));
   if (builtInId) {
     claimIds.add(builtInId);
   }
   const preferredIds = new Set<string>();
   for (const claim of claims) {
-    for (const preferredOverId of claim.preferOver) {
+    for (const preferredOverId of claim.channelConfigs?.[normalizedChannelId]?.preferOver ?? []) {
       if (claimIds.has(preferredOverId)) {
         // Keep both sides as candidates. The preferOver filter later disables
         // the lower-priority plugin unless the preferred plugin is explicitly
         // disabled/denied, preserving fallback to bundled channel support.
-        preferredIds.add(claim.plugin.id);
+        preferredIds.add(claim.id);
         preferredIds.add(preferredOverId);
       }
     }
@@ -289,7 +274,7 @@ function collectPluginIdsForConfiguredChannel(
   if (preferredIds.size > 0) {
     return [...preferredIds].toSorted((left, right) => left.localeCompare(right));
   }
-  return [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId];
+  return [claims[0]?.id ?? builtInId ?? normalizedChannelId];
 }
 
 function collectConfiguredChannelIds(
@@ -650,12 +635,16 @@ export function resolvePluginAutoEnableCandidateReason(
   throw new Error("Unsupported plugin auto-enable candidate");
 }
 
-export function resolveConfiguredPluginAutoEnableCandidates(params: {
+type ConfiguredPluginAutoEnableParams = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   registry: PluginManifestRegistry;
   configuredChannelIds?: readonly string[];
-}): PluginAutoEnableCandidate[] {
+};
+
+export function resolveConfiguredChannelAutoEnableCandidates(
+  params: ConfiguredPluginAutoEnableParams,
+): PluginAutoEnableCandidate[] {
   const changes: PluginAutoEnableCandidate[] = [];
   for (const channelId of params.configuredChannelIds ??
     collectConfiguredChannelIds(params.config, params.env)) {
@@ -663,6 +652,13 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
       changes.push({ pluginId, kind: "channel-configured", channelId });
     }
   }
+  return changes;
+}
+
+export function resolveConfiguredPluginAutoEnableCandidates(
+  params: ConfiguredPluginAutoEnableParams,
+): PluginAutoEnableCandidate[] {
+  const changes = resolveConfiguredChannelAutoEnableCandidates(params);
 
   for (const [providerId, pluginId] of Object.entries(
     resolveAutoEnableProviderPluginIds(params.registry),

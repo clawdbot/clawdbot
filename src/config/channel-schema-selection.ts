@@ -1,7 +1,10 @@
 import { resolvePluginActivationSourceConfig } from "../plugins/activation-source-config.js";
 import { resolveDiscoverableScopedChannelPluginIds } from "../plugins/channel-presence-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import {
+  materializePluginAutoEnableCandidatesInternal,
+  resolveConfiguredChannelAutoEnableCandidates,
+} from "./plugin-auto-enable.shared.js";
 import { getRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -14,11 +17,20 @@ export function resolveChannelSchemaSelection(
   const activationSourceConfig = resolvePluginActivationSourceConfig({ config });
   // Runtime config already carries startup's selection. Reapplying auto-enable would
   // mistake generated enabled entries for the operator's explicit choices.
+  // Metadata-only reads prepare channel candidates without executing setup probes.
   const effectiveConfig =
     config === getRuntimeConfigSnapshot()
       ? config
-      : applyPluginAutoEnable({ config: activationSourceConfig, env, manifestRegistry: registry })
-          .config;
+      : materializePluginAutoEnableCandidatesInternal({
+          config: activationSourceConfig,
+          candidates: resolveConfiguredChannelAutoEnableCandidates({
+            config: activationSourceConfig,
+            env,
+            registry,
+          }),
+          env,
+          manifestRegistry: registry,
+        }).config;
   return new Set(
     resolveDiscoverableScopedChannelPluginIds({
       config: effectiveConfig,
