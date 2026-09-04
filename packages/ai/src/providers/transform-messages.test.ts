@@ -210,4 +210,41 @@ describe("transformMessages", () => {
     expect(transformedPaddedResult).toHaveLength(2);
     expect(transformedPaddedResult[1]).toMatchObject({ role: "toolResult", toolCallId: "call_2" });
   });
+
+  it("safely handles non-toolCall content blocks and missing toolCallId without throwing (#137729)", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Here is an attachment" },
+          { type: "attachment", mime: "application/pdf", data: "base64..." },
+        ],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: undefined as unknown as string,
+        toolName: "lookup",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+        timestamp: 2,
+      },
+    ] as Message[];
+
+    expect(() => transformMessages(messages, model)).not.toThrow();
+    const result = transformMessages(messages, model);
+    expect(result).toHaveLength(2);
+  });
 });

@@ -134,7 +134,9 @@ function matchesOllamaContextOverflowError(errorMessage: string): boolean {
 }
 
 function classifyOllamaFailoverReason(errorMessage: string): "server_error" | undefined {
-  return errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined;
+  return typeof errorMessage === "string" && errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR
+    ? "server_error"
+    : undefined;
 }
 
 const OLLAMA_CLOUD_DEFAULT_MODEL_REF = `${OLLAMA_CLOUD_PROVIDER_ID}/${OLLAMA_CLOUD_DEFAULT_MODELS[0].id}`;

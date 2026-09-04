@@ -6,7 +6,7 @@
  */
 /** Returns whether a provider error message indicates a missing or retired model id. */
 export function isModelNotFoundErrorMessage(raw: string): boolean {
-  const msg = raw.trim();
+  const msg = typeof raw === "string" ? raw.trim() : "";
   if (!msg) {
     return false;
   }
