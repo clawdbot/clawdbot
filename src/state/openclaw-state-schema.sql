@@ -1840,6 +1840,15 @@ CREATE TABLE IF NOT EXISTS worktree_provisioned_file_chunks (
   PRIMARY KEY (worktree_id, path, chunk_index)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS worktree_retention_claims (
+  worktree_id TEXT NOT NULL,
+  claim_id TEXT NOT NULL,
+  claim_owner TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (worktree_id, claim_id)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT NOT NULL PRIMARY KEY,
   display_name TEXT NOT NULL,

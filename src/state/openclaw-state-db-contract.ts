@@ -79,6 +79,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "skill_workshop_proposals",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
+  "worktree_retention_claims",
 ] as const;
 export const LAZY_ADDITIVE_STATE_INDEXES = [
   ...FIRST_USE_STATE_INDEXES,

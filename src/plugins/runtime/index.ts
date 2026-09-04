@@ -182,6 +182,14 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
       const { managedWorktrees } = await loadService();
       await managedWorktrees.releaseByPath(params.path);
     },
+    async setRetentionClaim(params) {
+      const { managedWorktrees } = await loadService();
+      return managedWorktrees.setRetentionClaimByPath(
+        params.path,
+        { ownerKind: params.ownerKind, ownerId: params.ownerId },
+        { claimId: params.claimId, active: params.active },
+      );
+    },
     async removeIfLossless(params) {
       const { managedWorktrees } = await loadService();
       return managedWorktrees.removeIfLosslessByPath(params.path, {

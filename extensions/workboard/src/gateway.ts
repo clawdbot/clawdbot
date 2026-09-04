@@ -41,7 +41,7 @@ export function registerWorkboardGatewayMethods(params: {
   store?: WorkboardStore;
 }) {
   const { api: hostApi } = params;
-  const store = params.store ?? WorkboardStore.openSqlite();
+  const store = params.store ?? WorkboardStore.openSqlite({ worktrees: hostApi.runtime.worktrees });
   if (!params.store) {
     registerWorkboardStoreLifecycle(hostApi, store);
   }

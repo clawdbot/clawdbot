@@ -18,10 +18,12 @@ describe("createWorkboardChangeEventService", () => {
       return () => unsubscribe(listener);
     });
     const announceChangeEpoch = vi.fn();
+    const reconcileArtifactRetention = vi.fn();
     const store = {
       subscribeChanges,
       announceChangeEpoch,
       reconcileExternalChanges,
+      reconcileArtifactRetention,
     } as unknown as WorkboardStore;
     const emit = vi.fn();
     const service = createWorkboardChangeEventService(store);
@@ -38,6 +40,7 @@ describe("createWorkboardChangeEventService", () => {
 
     expect(subscribeChanges).toHaveBeenCalledOnce();
     expect(announceChangeEpoch).toHaveBeenCalledOnce();
+    expect(reconcileArtifactRetention).toHaveBeenCalledOnce();
     expect(listeners.size).toBe(1);
 
     for (const listener of listeners) {
@@ -61,6 +64,7 @@ describe("createWorkboardChangeEventService", () => {
     let listener: ((change: WorkboardChange) => void) | undefined;
     const unsubscribe = vi.fn();
     const reconcileExternalChanges = vi.fn();
+    const reconcileArtifactRetention = vi.fn();
     const store = {
       subscribeChanges: vi.fn((next) => {
         listener = next;
@@ -68,6 +72,7 @@ describe("createWorkboardChangeEventService", () => {
       }),
       announceChangeEpoch: vi.fn(() => listener?.({ epoch: "epoch-a", revision: 1 })),
       reconcileExternalChanges,
+      reconcileArtifactRetention,
     } as unknown as WorkboardStore;
     const emit = vi.fn();
     const warn = vi.fn();
@@ -88,6 +93,7 @@ describe("createWorkboardChangeEventService", () => {
       ["changed", { epoch: "epoch-a", revision: 2 }, { scope: "operator.read" }],
     ]);
     expect(reconcileExternalChanges).toHaveBeenCalledOnce();
+    expect(reconcileArtifactRetention).toHaveBeenCalledOnce();
     await service.stop?.(context);
     await vi.advanceTimersByTimeAsync(1000);
     expect(reconcileExternalChanges).toHaveBeenCalledOnce();
@@ -104,6 +110,7 @@ describe("createWorkboardChangeEventService", () => {
       subscribeChanges: vi.fn(() => vi.fn()),
       announceChangeEpoch: vi.fn(),
       reconcileExternalChanges,
+      reconcileArtifactRetention: vi.fn(),
     } as unknown as WorkboardStore;
     const warn = vi.fn();
     const service = createWorkboardChangeEventService(store);

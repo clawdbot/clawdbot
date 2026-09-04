@@ -203,6 +203,13 @@ export type PluginRuntime = PluginRuntimeCore & {
       ownerId: string;
     }) => Promise<PluginManagedWorktree>;
     release: (params: { path: string }) => Promise<void>;
+    setRetentionClaim: (params: {
+      path: string;
+      ownerKind: "workboard";
+      ownerId: string;
+      claimId: string;
+      active: boolean;
+    }) => Promise<boolean>;
     removeIfLossless: (params: {
       path: string;
       ownerKind: "workboard";
