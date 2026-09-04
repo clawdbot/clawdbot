@@ -336,14 +336,13 @@ export async function listClaudeSessionCatalog(params: {
           });
           return Object.assign({}, common, parseCatalogPage(unwrapNodePayload(raw)));
         })
-        .catch(
-          (): ClaudeSessionCatalogHost =>
-            Object.assign({}, common, {
-              error: {
-                code: "NODE_INVOKE_FAILED",
-                message: "Paired node Claude sessions are unavailable",
-              },
-            }),
+        .catch((): ClaudeSessionCatalogHost =>
+          Object.assign({}, common, {
+            error: {
+              code: "NODE_INVOKE_FAILED",
+              message: "Paired node Claude sessions are unavailable",
+            },
+          }),
         );
       if (params.onHost) {
         // The fail-soft response can finish first; the original node invoke still
