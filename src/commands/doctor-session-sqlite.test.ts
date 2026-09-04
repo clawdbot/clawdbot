@@ -45,6 +45,7 @@ import { sessionDeliveryRoute } from "../utils/delivery-context.shared.js";
 import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
+  clearSessionSqliteMigrationGithubIssueClaim,
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
@@ -904,6 +905,48 @@ describe("runDoctorSessionSqlite", () => {
       expect(result.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
     },
   );
+
+  it("preserves a support receipt version while adopting recovery evidence", async () => {
+    const { store, imported, archivePath } = await createVerifiedRecoveryStore([
+      JSON.stringify({ type: "session", id: "session-1", version: 1 }),
+      JSON.stringify({ type: "message", message: { role: "user", content: "legacy IDs" } }),
+    ]);
+    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const manifest = readMigrationManifest(manifestPath);
+    const jsonPath = manifestPath.replace(/\.json$/u, ".failure.json");
+    const markdownPath = manifestPath.replace(/\.json$/u, ".failure.md");
+    manifest.failureReports = { jsonPath, markdownPath };
+    for (const target of manifest.targets) {
+      for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+        delete move.artifact;
+      }
+    }
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(markdownPath, "sanitized report\n", { mode: 0o600 });
+    const issue = {
+      marker: `openclaw-report:${"d".repeat(64)}`,
+      title: "Stable migration report",
+    };
+    expect(
+      claimSessionSqliteMigrationGithubIssue(manifestPath, issue, { assertCurrent: vi.fn() }),
+    ).toMatchObject({ status: "claimed" });
+    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+    expect(preview.artifacts.find((item) => item.path === archivePath)?.outcome).toBe(
+      "verification-required",
+    );
+
+    await retireSessionSqliteRecovery({
+      env: store.env,
+      preview,
+      readConfig: async () => ({}),
+      confirm: async () => true,
+    });
+
+    expect(readMigrationManifest(manifestPath)).toMatchObject({
+      failureReports: { githubIssue: { ...issue, status: "attempted" } },
+      manifestVersion: 4,
+    });
+  });
 
   it.each([
     { name: "invalid message", rows: [{ type: "message", id: "bad", message: {} }] },
@@ -5150,17 +5193,50 @@ describe("runDoctorSessionSqlite", () => {
         body: expect.stringContaining(`stable sanitized report v${manifestVersion}`),
         title: issue.title,
       });
-      expect(readMigrationManifest(manifestPath)).toMatchObject({
+      const receiptManifest = readMigrationManifest(manifestPath);
+      expect(receiptManifest).toMatchObject({
         failureReports: { githubIssue: { ...issue, status: "attempted" } },
-        manifestVersion,
+        manifestVersion: 4,
       });
+      fs.writeFileSync(
+        manifestPath,
+        `${JSON.stringify({ ...receiptManifest, manifestVersion }, null, 2)}\n`,
+        { mode: 0o600 },
+      );
+      expect(migrationRun.readSessionSqliteMigrationManifest(manifestPath)).toBeUndefined();
+      fs.writeFileSync(manifestPath, `${JSON.stringify(receiptManifest, null, 2)}\n`, {
+        mode: 0o600,
+      });
+      const beforeHistoricalRewrite = fs.readFileSync(manifestPath, "utf8");
+      expect(simulateHistoricalFailureReportRewrite(manifestPath)).toBe(false);
+      expect(fs.readFileSync(manifestPath, "utf8")).toBe(beforeHistoricalRewrite);
+      expect(
+        claimSessionSqliteMigrationGithubIssue(
+          manifestPath,
+          {
+            marker: `openclaw-report:${"c".repeat(64)}`,
+            title: "regenerated process must not replace the claim",
+          },
+          authority,
+        ),
+      ).toMatchObject({ issue: { ...issue, status: "attempted" }, status: "existing" });
       const receiptJson = fs.readFileSync(manifestPath, "utf8");
       expect(receiptJson).not.toContain(`stable sanitized report v${manifestVersion}`);
       expect(receiptJson).not.toContain("github.com/openclaw/openclaw/issues/");
+      expect(receiptJson).not.toContain("openclaw doctor");
+      expect(receiptJson).not.toContain('"body"');
+      expect(receiptJson).not.toContain("?body=");
       expect(fs.readFileSync(failureMarkdownPath, "utf8")).toBe(
         `stable sanitized report v${manifestVersion}\n`,
       );
-      expect(authority.assertCurrent).toHaveBeenCalledTimes(2);
+      expect(
+        clearSessionSqliteMigrationGithubIssueClaim(manifestPath, issue.marker, authority),
+      ).toBe(true);
+      const clearedManifest = readMigrationManifest(manifestPath);
+      expect(clearedManifest.manifestVersion).toBe(4);
+      expect(clearedManifest.failureReports).not.toHaveProperty("githubIssue");
+      expect(simulateHistoricalFailureReportRewrite(manifestPath)).toBe(false);
+      expect(authority.assertCurrent).toHaveBeenCalledTimes(4);
     },
   );
 
@@ -6775,6 +6851,25 @@ function readMigrationManifest(manifestPath: string | undefined): SessionSqliteM
     throw new Error("expected migration manifest path");
   }
   return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as SessionSqliteMigrationManifest;
+}
+
+function simulateHistoricalFailureReportRewrite(manifestPath: string): boolean {
+  const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+    failureReports?: { jsonPath?: unknown; markdownPath?: unknown };
+    manifestVersion?: unknown;
+    [key: string]: unknown;
+  };
+  // Released Doctors accept only v1-v3. Their schema strips the unknown receipt
+  // before the failure-report writer atomically serializes the parsed manifest.
+  if (![1, 2, 3].includes(parsed.manifestVersion as number) || !parsed.failureReports) {
+    return false;
+  }
+  parsed.failureReports = {
+    jsonPath: parsed.failureReports.jsonPath,
+    markdownPath: parsed.failureReports.markdownPath,
+  };
+  fs.writeFileSync(manifestPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
+  return true;
 }
 
 function requireMigrationManifestPath(manifestPath: string | undefined): string {

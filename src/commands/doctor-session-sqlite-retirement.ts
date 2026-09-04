@@ -199,7 +199,9 @@ export async function retireSessionSqliteRecovery(params: {
         if (!selected.some((item) => item.path === ref.move.archivePath)) {
           continue;
         }
-        ref.run.manifest.manifestVersion = 3;
+        if (ref.run.manifest.manifestVersion !== 4) {
+          ref.run.manifest.manifestVersion = 3;
+        }
         for (const move of [...ref.target.plannedMoves, ...ref.target.completedMoves]) {
           if (move.archivePath === ref.move.archivePath) {
             move.artifact = artifact;

@@ -59,7 +59,7 @@ export type SessionSqliteMigrationManifest = {
     jsonPath: string;
     markdownPath: string;
   };
-  manifestVersion: 1 | 2 | 3;
+  manifestVersion: 1 | 2 | 3 | 4;
   openClawVersion: string;
   restore?: {
     attemptedAt: string;
@@ -179,7 +179,7 @@ const MigrationManifestSchema = z
         markdownPath: AbsolutePathSchema,
       })
       .optional(),
-    manifestVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    manifestVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
     openClawVersion: z.string().min(1),
     restore: z
       .object({
@@ -196,6 +196,13 @@ const MigrationManifestSchema = z
     targets: z.array(MigrationTargetSchema),
   })
   .superRefine((manifest, context) => {
+    if (manifest.failureReports?.githubIssue && manifest.manifestVersion !== 4) {
+      context.addIssue({
+        code: "custom",
+        message: "GitHub issue receipt requires manifest version 4",
+        path: ["failureReports", "githubIssue"],
+      });
+    }
     const targetKeys = new Set<string>();
     for (const target of manifest.targets) {
       const targetKey = sessionSqliteMigrationTargetKey(target);

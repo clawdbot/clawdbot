@@ -149,6 +149,7 @@ export function claimSessionSqliteMigrationGithubIssue(
     status: "attempted",
     title: issue.title,
   };
+  manifest.manifestVersion = 4;
   manifest.failureReports.githubIssue = claimed;
   writeSessionSqliteMigrationManifest({ manifest, manifestPath });
   return { issue: claimed, status: "claimed" };
