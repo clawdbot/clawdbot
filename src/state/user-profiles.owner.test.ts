@@ -321,9 +321,9 @@ describe("gateway owner profiles", () => {
     const owner = ensureGatewayOwnerProfile(null, options);
     expect(owner.displayName).toBeNull();
     expect(ensureGatewayOwnerProfile(" \t ", options)).toEqual(owner);
-    expect(ensureGatewayOwnerProfile("a".repeat(300), options)).toMatchObject({
+    expect(ensureGatewayOwnerProfile(`${"a".repeat(255)}🤖`, options)).toMatchObject({
       id: owner.id,
-      displayName: "a".repeat(256),
+      displayName: "a".repeat(255),
     });
   });
 });

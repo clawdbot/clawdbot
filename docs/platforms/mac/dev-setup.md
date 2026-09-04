@@ -173,9 +173,12 @@ isolate unrelated tests or the process from the host.
 If packaging stops at `Freezing authenticated Peekaboo sources in a read-only snapshot`,
 check the `hdiutil` error on stderr. Routine image creation and attachment output stays
 quiet, but failures such as `hdiutil: attach failed - Permission denied` are preserved.
-Check the temporary location selected by `TMPDIR` and its filesystem or mount permissions
-before retrying. This step runs before signing; source verification and the read-only
-snapshot remain required.
+Snapshot images and build outputs stay in the checkout. Their read-only mount directories
+use macOS's per-user temporary location (`getconf DARWIN_USER_TEMP_DIR`), independently of
+`TMPDIR`, so an external checkout does not need to support nested mounts. If attachment
+still fails, check that location's mount permissions. Unverified cleanup retains the
+mount directories and build locks at the paths printed in the error. This step runs before
+signing; source verification and the read-only snapshot remain required.
 
 ### Build fails: toolchain or SDK mismatch
 

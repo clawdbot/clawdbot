@@ -1,7 +1,11 @@
 import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { openChatSidePanelType } from "../../e2e/chat-side-panel.test-support.ts";
+import {
+  focusChatSidePanel,
+  openChatSidePanelType,
+  restoreChatAsMain,
+} from "../../e2e/chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type MockGatewayRequest } from "../../test-helpers/control-ui-e2e.ts";
@@ -410,7 +414,7 @@ suite.define(() => {
         });
         expect(page.url()).toBe(chatUrl);
         expect(withoutElapsedLabels(await mainTranscript.textContent())).toBe(mainTranscriptBefore);
-        await page.getByRole("button", { name: "Expand side panel" }).click();
+        await focusChatSidePanel(page);
         await expect
           .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
           .toBe("true");
@@ -429,10 +433,11 @@ suite.define(() => {
           path: path.join(railFlowDir, "02-task-detail-expanded.png"),
           fullPage: true,
         });
-        await page.getByRole("button", { name: "Collapse", exact: true }).click();
+        await page.getByRole("button", { name: "Restore split", exact: true }).click();
         await expect
           .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
           .toBe("false");
+        await restoreChatAsMain(page);
 
         await gateway.emitGatewayEvent("task", {
           action: "upserted",

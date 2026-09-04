@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
+import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
 import {
   finalizeToolTerminalPresentation,
   getBeforeToolCallFailureDisposition,
@@ -13,6 +14,7 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isToolResultError,
@@ -329,7 +331,10 @@ async function validateCatalogSchemaValue(
   schemaName: CatalogSchemaName,
   value: unknown,
 ): Promise<CatalogSchemaValidation | undefined> {
-  const schema = schemaName === "inputSchema" ? entry.parameters : entry.outputSchema;
+  const schema =
+    schemaName === "inputSchema"
+      ? resolveAgentToolExecutionSchema(entry.tool, entry.parameters)
+      : entry.outputSchema;
   if (entry.source !== "openclaw" || !schema) {
     return undefined;
   }
@@ -592,9 +597,10 @@ export class ToolSearchRuntime {
   ) => {
     catalog.callCount += 1;
     const normalizedInput = input ?? {};
-    await assertCatalogOutputSchemaIsValid(entry);
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
+    bindJoinedCollectorInvocation(entry.tool, toolCallId);
+    await assertCatalogOutputSchemaIsValid(entry);
     const executeTool =
       this.ctx.executeTool ??
       (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) => {

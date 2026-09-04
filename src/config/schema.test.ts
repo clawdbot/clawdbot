@@ -1181,6 +1181,13 @@ describe("config schema", () => {
     expect(ToolsSchema.safeParse({ codeMode: { enabled: "always" } }).success).toBe(false);
   });
 
+  it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
+    "preserves authored Swarm config %j without materializing defaults",
+    (swarm) => {
+      expect(ToolsSchema.parse(swarm === undefined ? {} : { swarm })?.swarm).toEqual(swarm);
+    },
+  );
+
   it("accepts strict Swarm config in the runtime zod schema", () => {
     expect(ToolsSchema.parse({ swarm: true })?.swarm).toBe(true);
     expect(

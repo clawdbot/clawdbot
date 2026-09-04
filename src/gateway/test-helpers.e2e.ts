@@ -277,7 +277,10 @@ export async function startGatewayWithClient(params: {
   scopes?: string[];
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
 }) {
-  const gatewayStartupEnv = captureEnv([...GATEWAY_STARTUP_MUTATED_ENV_KEYS]);
+  const gatewayStartupEnv = captureEnv([
+    ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
+    "OPENCLAW_CONFIG_PATH",
+  ]);
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   try {
     await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
@@ -307,20 +310,22 @@ export async function startGatewayWithClient(params: {
       server: {
         startupSettled: startedServer.startupSettled,
         close: async (...args: Parameters<typeof startedServer.close>) => {
-          try {
-            await startedServer.close(...args);
-          } finally {
-            gatewayStartupEnv.restore();
-          }
+          // Failed shutdown retains selectors needed by the still-owned server.
+          await startedServer.close(...args);
+          gatewayStartupEnv.restore();
         },
       },
     };
   } catch (error) {
-    try {
-      await server?.close({ reason: "gateway E2E client setup failed" });
-    } finally {
-      gatewayStartupEnv.restore();
-    }
+    await runQaGatewayFixture(
+      async () => {
+        throw error;
+      },
+      async () => {
+        await server?.close({ reason: "gateway E2E client setup failed" });
+        gatewayStartupEnv.restore();
+      },
+    );
     throw error;
   }
 }

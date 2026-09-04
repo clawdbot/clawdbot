@@ -106,11 +106,6 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
-  /** Host-private bounded recovery state for this exact attempt. */
-  codeModeRecovery?: Exclude<
-    import("./terminal-retry-state.js").CodeModeRecoveryState,
-    { kind: "idle" }
-  >;
   /**
    * Run-owned start timestamp captured by the embedded-run orchestrator before
    * admission. Flows onto the queue handle so recovery can project the active
@@ -397,8 +392,6 @@ export type EmbeddedRunAttemptResult = {
    * how config-enabled code mode stays visible as a no-op on harness routes.
    */
   codeModeEngaged?: boolean;
-  /** Host-authenticated facts for bounded post-mutation inspection and recovery. */
-  codeModeRecoveryCandidate?: import("./terminal-retry-state.js").CodeModeRecoveryCandidate;
   /** Completed assistant round trips observed during this attempt. */
   assistantTurns?: number;
   /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */

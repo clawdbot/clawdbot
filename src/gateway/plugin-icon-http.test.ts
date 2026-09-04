@@ -1,8 +1,9 @@
 // Gateway plugin icon HTTP tests cover authenticated identity lookup, bounded
 // package loading, SVG normalization, caching, and failure fallback behavior.
 import { execFileSync } from "node:child_process";
-import { closeSync, fstatSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -463,22 +464,38 @@ describe("Control UI plugin and catalog icon routes", () => {
 
   it("closes the descriptor when rejecting an empty package icon", async () => {
     writeFileSync(localIconPath, "");
-    const opened = vi.spyOn(boundaryFileRead, "openRootFile");
-    const response = await request("/__openclaw__/plugin-icon/empty-package");
-    expect(response.status).toBe(404);
-    const receipt = await opened.mock.results[0]?.value;
-    expect(receipt?.ok).toBe(true);
-    if (!receipt?.ok) {
-      throw new Error("expected the real empty icon file to open");
-    }
+    let tracked: { fd: number; closed: boolean } | undefined;
+    const openRootFile = boundaryFileRead.openRootFile;
+    const opened = vi.spyOn(boundaryFileRead, "openRootFile").mockImplementation(async (params) => {
+      const receipt = await openRootFile(params);
+      if (receipt.ok) {
+        // Earlier closes of this fd number belong to a different open.
+        tracked = { fd: receipt.fd, closed: false };
+      }
+      return receipt;
+    });
+    const closeSync = fs.closeSync;
+    const closed = vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+      closeSync(fd);
+      if (tracked?.fd === fd) {
+        tracked.closed = true;
+      }
+    });
     try {
-      expect(() => fstatSync(receipt.fd)).toThrow(expect.objectContaining({ code: "EBADF" }));
+      // The owner imports Node's named binding; observe release before the fd number can be reused.
+      syncBuiltinESMExports();
+      const response = await request("/__openclaw__/plugin-icon/empty-package");
+      expect(response.status).toBe(404);
+      expect(tracked?.closed).toBe(true);
     } finally {
-      opened.mockRestore();
       try {
-        closeSync(receipt.fd);
-      } catch {
-        // The fixed owner already released this descriptor.
+        if (tracked && !tracked.closed) {
+          closeSync(tracked.fd);
+        }
+      } finally {
+        opened.mockRestore();
+        closed.mockRestore();
+        syncBuiltinESMExports();
       }
     }
   });

@@ -58,16 +58,10 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
     buildSessionEntry: buildSessionEntryMock,
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
-    listSessionFilesForAgent: vi.fn(async () => []),
     listSessionTranscriptCorpusEntriesForAgent: vi.fn(async () => []),
     parseCanonicalSessionSyncTargetFromPath: (filePath: string) => ({
       agentId: "main",
       sessionId: basename(filePath).replace(/\.jsonl$/, ""),
-    }),
-    resolveSessionFileForSyncTarget: (target: { agentId?: string; sessionId: string }) => ({
-      agentId: target.agentId ?? "main",
-      sessionFile: `/tmp/${target.sessionId}.jsonl`,
-      sessionId: target.sessionId,
     }),
     sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
     sessionPathForSessionIdentity: (agentId: string, sessionId: string) =>

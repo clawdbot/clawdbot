@@ -49,6 +49,7 @@ function composerFixture(
   let unsupported = false;
   const send = vi.fn();
   const abort = vi.fn();
+  const slashCommand = vi.fn();
   const onInput = (next: string, selected?: readonly HumanMention[]) => {
     mentions = selected ?? updateHumanMentions(draft, next, mentions);
     draft = next;
@@ -72,6 +73,7 @@ function composerFixture(
             mentionsUnsupported: unsupported,
             onDraftChange: onInput,
             onRequestUpdate: renderCurrent,
+            onSlashCommand: slashCommand,
             canAbort: true,
             onAbort: abort,
             onSend: () => send({ draft, mentions }),
@@ -135,6 +137,7 @@ function composerFixture(
     key: pressKey,
     send,
     abort,
+    slashCommand,
     value: () => ({ draft, mentions }),
     emitEvent: (event: "presence" | "sessions.changed") => {
       for (const listener of eventListeners) {
@@ -151,6 +154,23 @@ function composerFixture(
     },
   };
 }
+
+describe("chat inline commands with human mentions", () => {
+  it("runs an appended multi-word dashboard request and keeps the draft recipient", () => {
+    const mention = { profileId: "profile-alex-online", start: 7, end: 12 };
+    const view = composerFixture("chat", "Review @Alex", [mention]);
+
+    view.edit("Review @Alex /dashboard release health");
+    view.key("Enter");
+
+    expect(view.slashCommand).toHaveBeenCalledExactlyOnceWith("/dashboard release health");
+    expect(view.send).not.toHaveBeenCalled();
+    expect(view.value()).toEqual({
+      draft: "Review @Alex ",
+      mentions: [mention],
+    });
+  });
+});
 
 describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
   it("keeps the current typed query selectable during ordinary Gateway event traffic", async () => {
