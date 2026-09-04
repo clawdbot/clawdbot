@@ -11,7 +11,6 @@ import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protoc
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
@@ -36,10 +35,8 @@ import type {
   WorkerEnvironmentAbandonment,
   WorkerProviderLifecycleInputOptions,
 } from "./provider-lifecycle.types.js";
-import {
-  createSkillResourceAllocationCoordinator,
-  type SkillResourceAllocationCoordinator,
-} from "./skill-resource-allocation-coordinator.js";
+import type { SkillResourceAllocationCoordinator } from "./skill-resource-allocation-coordinator.js";
+import { createSkillResourceAllocationService } from "./skill-resource-allocation-service.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
@@ -151,8 +148,6 @@ type WorkerEnvironmentReconcileGuard = (
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
   const { store } = options;
   const warn = (message: string) => options.logger?.warn(message);
-  const skillResourceAllocations =
-    options.skillResourceAllocationCoordinator ?? createSkillResourceAllocationCoordinator();
   const operations = new KeyedAsyncQueue();
   const providerOperations = new KeyedAsyncQueue();
   const activeOperations = new Set<Promise<unknown>>();
@@ -370,6 +365,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     serviceError,
     withLock,
   });
+  const skillResources = createSkillResourceAllocationService({
+    coordinator: options.skillResourceAllocationCoordinator,
+    store,
+    startTunnel: environmentAccess.startTunnel,
+    warn,
+  });
+  const skillResourceAllocations = skillResources.coordinator;
 
   const turnRpc = createWorkerTurnRpc({
     store,
@@ -473,31 +475,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (environmentId !== undefined) {
       return;
     }
-    let terminalPruneSafe = true;
-    try {
-      await skillResourceAllocations.recover({
-        getEnvironment: store.get,
-        startTunnel: environmentAccess.startTunnel,
-        onEnvironmentCleanupDeferred: () => {
-          terminalPruneSafe = false;
-        },
-        warn,
-      });
-    } catch {
-      terminalPruneSafe = false;
-      warn("Skill resource allocation cleanup failed; cleanup will retry");
-    }
-    if (terminalPruneSafe) {
-      try {
-        store.pruneTerminalEnvironments();
-      } catch (error) {
-        // Pruning is opportunistic and retries on the next sweep; lock contention must not
-        // turn a healthy worker reconciliation into a startup or periodic-reconcile failure.
-        if (!isSqliteLockError(error)) {
-          throw error;
-        }
-      }
-    }
+    await skillResources.recoverAndPrune();
   };
 
   const reconcileOnce = (environmentId?: string) => {
@@ -605,8 +583,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     } catch (error) {
       shutdownError ??= error;
     }
-    if (shutdownError) {
+    if (shutdownError instanceof Error) {
       throw shutdownError;
+    }
+    if (shutdownError !== undefined) {
+      throw new Error("Worker environment shutdown failed", { cause: shutdownError });
     }
   };
 
@@ -739,19 +720,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
     skillResourceAllocations,
-    startTunnel: async (request: Parameters<typeof environmentAccess.startTunnel>[0]) => {
-      const tunnel = await environmentAccess.startTunnel(request);
-      void skillResourceAllocations
-        .recover({
-          getEnvironment: store.get,
-          startTunnel: environmentAccess.startTunnel,
-          warn,
-        })
-        .catch(() =>
-          warn("Skill resource allocation reconnect cleanup failed; cleanup will retry"),
-        );
-      return tunnel;
-    },
+    startTunnel: skillResources.startTunnel,
     stopTunnel: async (environmentId: string, ownerEpoch?: number) => {
       await Promise.all([
         environmentAccess.stopTunnel(environmentId, ownerEpoch),
