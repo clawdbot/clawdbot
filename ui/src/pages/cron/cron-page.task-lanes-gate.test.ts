@@ -34,6 +34,21 @@ describe("CronPage task-lanes capability gate", () => {
     expect(page.cron.taskLanes).toBeNull();
   });
 
+  it("fails closed when the capability signal is absent from cron.status", async () => {
+    // No taskLanesConfigured field at all (legacy or unresolved capability):
+    // an absent signal is not permission, so zero lane requests may fire.
+    const request = createRequest();
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+    await waitForCronPage(() => expect(page.cron.cronStatus).toMatchObject({ enabled: true }));
+    await page.updateComplete;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(request.mock.calls.filter(([method]) => method === "taskLanes.list")).toHaveLength(0);
+    expect(page.cron.taskLanes).toBeNull();
+  });
+
   it("requests task lanes once providers are configured", async () => {
     const request = createRequest({
       enabled: true,

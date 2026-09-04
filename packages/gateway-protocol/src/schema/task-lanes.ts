@@ -36,6 +36,9 @@ export const TaskLaneItemSchema = closedObject({
 export const TaskLaneSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
+  // Snapshot assembly scopes lane ids by provider; the field is optional on
+  // the wire so older snapshots stay valid, but the registry always sets it.
+  providerId: Type.Optional(Type.String({ pattern: PROVIDER_ID_PATTERN })),
   items: Type.Array(TaskLaneItemSchema),
 });
 

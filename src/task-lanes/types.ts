@@ -44,6 +44,8 @@ export type TaskLane = {
   id: string;
   label: string;
   items: TaskLaneItem[];
+  /** Set by snapshot assembly; provider-authored lanes omit it. */
+  providerId?: string;
 };
 
 export type TaskLaneProviderDiagnostic =

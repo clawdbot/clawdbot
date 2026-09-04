@@ -105,7 +105,10 @@ export async function loadTaskLaneSnapshot(
     laneItems.push({ ...item, state: normalizeTaskLaneItemState(item.state) });
   }
   return {
+    // Lane identity is provider-scoped (two providers may share a lane id), so
+    // every returned lane keeps its provider id instead of flattening it away.
     lanes: lanes.map(({ providerId, id, label }) => ({
+      providerId,
       id,
       label,
       items: itemsByLane.get(`${providerId} ${id}`) ?? [],

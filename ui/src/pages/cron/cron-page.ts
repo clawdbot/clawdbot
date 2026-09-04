@@ -193,11 +193,11 @@ class CronPage extends OpenClawLightDomElement {
 
   private taskLanesReloadTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Absent capability stays absent: an unconfigured install never requests
-  // lane data and never renders an empty panel. `taskLanesConfigured` is
-  // undefined on older gateways, which keeps the request path enabled.
+  // Fail closed: only a gateway that explicitly reports the capability
+  // configured gets lane requests. An absent signal (unconfigured install or
+  // an unresolved/legacy cron.status) must not be read as permission.
   private taskLanesRequestAllowed() {
-    return this.cron.cronStatus?.taskLanesConfigured !== false;
+    return this.cron.cronStatus?.taskLanesConfigured === true;
   }
 
   // Task lanes reflect cron mutations (a run adds lane items); coalesce

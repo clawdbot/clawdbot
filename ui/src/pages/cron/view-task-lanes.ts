@@ -17,12 +17,23 @@ type TaskLane = TaskLaneSnapshotPayload["lanes"][number];
 type TaskLaneItem = TaskLane["items"][number];
 type TaskLaneDiagnostic = TaskLaneSnapshotPayload["diagnostics"][number];
 
-/** Lanes sort by id; items render newest-first (startedAtMs desc, missing last). */
+/** Lanes sort by provider-then-id; items render newest-first (startedAtMs desc, missing last). */
 function sortTaskLaneSnapshot(snapshot: TaskLaneSnapshotPayload): TaskLaneSnapshotPayload {
   return {
     lanes: snapshot.lanes
-      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .toSorted((a, b) =>
+        a.providerId === b.providerId
+          ? a.id < b.id
+            ? -1
+            : a.id > b.id
+              ? 1
+              : 0
+          : (a.providerId ?? "") < (b.providerId ?? "")
+            ? -1
+            : 1,
+      )
       .map((lane) => ({
+        providerId: lane.providerId,
         id: lane.id,
         label: lane.label,
         items: lane.items.toSorted((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0)),
@@ -121,7 +132,9 @@ export function renderTaskLanesPanel(props: TaskLanesSectionProps) {
           (lane) => html`
             <details class="cron-task-lanes__lane">
               <summary class="cron-task-lanes__lane-summary">
-                <span class="cron-task-lanes__lane-label">${lane.label}</span>
+                <span class="cron-task-lanes__lane-label">
+                  ${lane.providerId ? `${lane.providerId} · ${lane.label}` : lane.label}
+                </span>
                 <span class="cron-task-lanes__lane-count">${lane.items.length}</span>
               </summary>
               <div class="cron-task-lanes__items">${lane.items.map(renderLaneItem)}</div>

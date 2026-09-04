@@ -42,6 +42,9 @@ describe("task-lane registry", () => {
     registerTaskLaneProvider(registry, provider("alpha"));
     const snapshot = await loadTaskLaneSnapshot(registry);
     expect(snapshot.lanes.map((entry) => entry.id)).toEqual(["alpha", "zeta"]);
+    // Each returned lane keeps its provider identity: lane ids are only
+    // unique within a provider, so the response must stay provider-scoped.
+    expect(snapshot.lanes.map((entry) => entry.providerId)).toEqual(["alpha", "zeta"]);
     expect(snapshot.diagnostics).toEqual([
       { providerId: "alpha", ok: true, laneCount: 1, itemCount: 0 },
       { providerId: "zeta", ok: true, laneCount: 1, itemCount: 1 },
