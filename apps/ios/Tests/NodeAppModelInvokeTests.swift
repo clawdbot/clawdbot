@@ -881,9 +881,26 @@ private final class WatchMessageSendGate {
     private(set) var commandIDs: [String] = []
     private var continuation: CheckedContinuation<Void, Never>?
     private var released = false
+    private let firstSend = AsyncStream<String>.makeStream(bufferingPolicy: .bufferingNewest(1))
+
+    func waitForFirstSend() async throws -> String? {
+        if let commandID = self.commandIDs.first { return commandID }
+        let stream = self.firstSend.stream
+        return try await AsyncTimeout.withTimeout(
+            seconds: 2,
+            onTimeout: { URLError(.timedOut) })
+        {
+            var iterator = stream.makeAsyncIterator()
+            return await iterator.next()
+        }
+    }
 
     func holdFirstSend(commandID: String) async -> Int {
         self.commandIDs.append(commandID)
+        if self.commandIDs.count == 1 {
+            self.firstSend.continuation.yield(commandID)
+            self.firstSend.continuation.finish()
+        }
         let attempt = self.commandIDs.count { $0 == commandID }
         if self.commandIDs.count == 1, !self.released {
             await withCheckedContinuation { self.continuation = $0 }
@@ -6538,7 +6555,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 let first = fixture.command(id: "first-watch-send", body: body)
                 let second = fixture.command(id: "second-watch-send", body: body)
                 try await coordinator.admit(first)
-                try #require(await waitForMainActorWork { gate.commandIDs == [first.commandId] })
+                // Admission starts transport work asynchronously; observe entry before inspecting its held claim.
+                try #require(try await gate.waitForFirstSend() == first.commandId)
+                #expect(gate.commandIDs == [first.commandId])
                 let firstClaim = try #require(try await fixture.journal.entries().first {
                     $0.commandId == first.commandId
                 })
