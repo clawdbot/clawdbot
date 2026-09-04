@@ -288,19 +288,7 @@ class MessageImageResourceDirective extends AsyncDirective {
   }
 
   protected override disconnected() {
-    const retained = this.retained;
-    const settled =
-      retained?.status === "retaining" &&
-      this.element?.getAttribute("src") !== retained.previewUrl &&
-      this.element?.complete === true &&
-      this.element.naturalWidth > 0;
-    if (retained?.status === "retaining" && !settled) {
-      // A pending native handoff has no decoded pixels to retain across
-      // disconnect; a completed decode may only be waiting on its load task.
-      this.failRetainedImage();
-    } else {
-      this.releaseRetainedImage();
-    }
+    this.releaseRetainedImage();
     this.element = undefined;
     this.pendingPreview = undefined;
     this.presentationKey = Symbol("image-presentation");
