@@ -12,7 +12,7 @@ export type HtmlNode = { start: number; end: number } & (
   | { kind: "element"; name: string; raw: string; children: HtmlNode[]; closed: boolean }
 );
 
-export const VOID_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
+const VOID_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
 
 const INLINE_STYLE_TAGS: Record<
   string,
