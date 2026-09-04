@@ -20,6 +20,10 @@ import {
 } from "../harness/host-private-capabilities.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import {
+  isAskUserPromptPending as readAskUserPromptPending,
+  waitForAskUserPromptDelivery,
+} from "./ask-user-prompt-pending.js";
+import {
   ASK_USER_RPC_GRACE_MS,
   readAskUserQuestionStatusBeforeExpiry,
 } from "./ask-user-prompt-readiness.js";
@@ -36,7 +40,6 @@ import {
 } from "./gateway-question-lifecycle.js";
 import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
 
-const ASK_USER_PROMPT_RECHECK_MS = 50;
 const ASK_USER_EXPIRED_RETENTION_MS = ASK_USER_RPC_GRACE_MS;
 
 const AskUserToolSchema = Type.Object(
@@ -199,25 +202,6 @@ function expireAskUserQuestion(questionId: string, state: AskUserQuestionState):
   cleanupTimer.unref?.();
 }
 
-async function waitForQuestionChange(
-  state: AskUserQuestionState,
-  signal?: AbortSignal,
-): Promise<void> {
-  signal?.throwIfAborted();
-  await new Promise<void>((resolve, reject) => {
-    const wake = () => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    };
-    const onAbort = () => {
-      state.waiters.delete(wake);
-      reject(signal?.reason instanceof Error ? signal.reason : new Error("ask_user aborted"));
-    };
-    state.waiters.add(wake);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 /** Reserves one visible ask_user prompt slot before subscriber delivery. */
 export function reserveAskUserPromptDelivery(params: {
   toolCallId: string;
@@ -371,55 +355,11 @@ export async function isAskUserPromptPending(
   questionId: string,
   gatewayCall: GatewayQuestionCall = resolveAgentQuestionGatewayCall(),
 ): Promise<boolean> {
-  const state = askUserQuestions.get(questionId);
-  if (!state) {
-    return false;
-  }
-  while (askUserQuestions.get(questionId) === state) {
-    if (
-      state.phase.kind === "expired" ||
-      state.phase.kind === "resolving" ||
-      state.phase.kind === "prompt-failed"
-    ) {
-      return false;
-    }
-    const read = await readAskUserQuestionStatusBeforeExpiry(
-      questionId,
-      state.expiresAtMs,
-      gatewayCall,
-    );
-    if (read.kind === "expired") {
-      return false;
-    }
-    // Cancellation can win while the Gateway request is in flight. Recheck local
-    // ownership before trusting an older remote `pending` snapshot.
-    const currentState = askUserQuestions.get(questionId);
-    if (
-      currentState !== state ||
-      currentState.phase.kind === "resolving" ||
-      currentState.phase.kind === "prompt-failed"
-    ) {
-      return false;
-    }
-    if (read.kind === "status" && read.status === "pending") {
-      return true;
-    }
-    if (read.kind === "status" && typeof read.status === "string") {
-      return false;
-    }
-    if (read.kind === "error") {
-      // Keep the prompt private until Gateway state is authoritative again.
-      // Failing open here can expose a stale question after remote terminalization.
-    }
-    const remainingMs = state.expiresAtMs - Date.now();
-    if (remainingMs <= 0) {
-      return false;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, Math.min(ASK_USER_PROMPT_RECHECK_MS, remainingMs));
-    });
-  }
-  return false;
+  return await readAskUserPromptPending(
+    questionId,
+    () => askUserQuestions.get(questionId),
+    gatewayCall,
+  );
 }
 
 /** Releases a tool-start reservation when policy rejects execution. */
@@ -448,22 +388,6 @@ function noAnswerResult(status: Exclude<QuestionWaitAnswerResult["status"], "ans
       ? "The question was cancelled; proceed with best judgment."
       : "No answer arrived; proceed with best judgment.";
   return textResult(`${note}\n\n${JSON.stringify(payload, null, 2)}`, payload);
-}
-
-async function waitForPromptDelivery(
-  state: AskUserQuestionState,
-  signal?: AbortSignal,
-): Promise<{ error?: unknown }> {
-  while (askUserQuestions.get(state.questionId) === state) {
-    if (state.phase.kind === "answerable" || state.phase.kind === "resolving") {
-      return {};
-    }
-    if (state.phase.kind === "prompt-failed") {
-      return { error: state.phase.error };
-    }
-    await waitForQuestionChange(state, signal);
-  }
-  return { error: new Error("ask_user prompt is no longer active") };
 }
 
 /** Shares question ownership and prompt delivery without installing a plaintext answer claim. */
@@ -524,7 +448,11 @@ export function beginAskUserPromptDelivery(params: {
       transitionAskUserQuestion(state, { kind: "answerable" });
     },
     waitForDelivery(signal?: AbortSignal) {
-      return waitForPromptDelivery(state, signal);
+      return waitForAskUserPromptDelivery(
+        state,
+        () => askUserQuestions.get(questionId) === state,
+        signal,
+      );
     },
     release() {
       if (askUserQuestions.get(questionId) === state) {
@@ -736,7 +664,11 @@ export function createAskUserTool(params: {
               }),
             );
           }
-          const promptDeliveryPromise = waitForPromptDelivery(state, signal);
+          const promptDeliveryPromise = waitForAskUserPromptDelivery(
+            state,
+            () => askUserQuestions.get(questionId) === state,
+            signal,
+          );
           const first = await Promise.race([
             promptDeliveryPromise.then((result) => ({
               kind: "delivery" as const,
