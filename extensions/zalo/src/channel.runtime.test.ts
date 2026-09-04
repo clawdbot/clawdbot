@@ -89,4 +89,34 @@ describe("notifyZaloPairingApproval", () => {
     );
     expect(sendMessageZalo).not.toHaveBeenCalled();
   });
+
+  it("sends with the token and proxy from the pairing approval account", async () => {
+    await notifyZaloPairingApproval({
+      cfg: {
+        channels: {
+          zalo: {
+            defaultAccount: "default",
+            accounts: {
+              default: {
+                botToken: "default-token",
+                proxy: "http://default-proxy.invalid",
+              },
+              work: {
+                botToken: "work-token",
+                proxy: "http://work-proxy.invalid",
+              },
+            },
+          },
+        },
+      },
+      id: "sender-id",
+      accountId: "work",
+    });
+
+    expect(sendMessageZalo).toHaveBeenCalledOnce();
+    expect(sendMessageZalo).toHaveBeenCalledWith("sender-id", expect.any(String), {
+      token: "work-token",
+      proxy: "http://work-proxy.invalid",
+    });
+  });
 });

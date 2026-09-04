@@ -26,6 +26,7 @@ export async function notifyZaloPairingApproval(params: {
   }
   await sendMessageZalo(params.id, PAIRING_APPROVED_MESSAGE, {
     token: account.token,
+    proxy: account.config.proxy,
   });
 }
 
