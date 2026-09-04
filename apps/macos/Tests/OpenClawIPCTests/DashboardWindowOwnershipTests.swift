@@ -543,68 +543,70 @@ struct DashboardWindowOwnershipTests {
 
     @Test(arguments: ["closed-success", "closed-failure", "reopened", "auxiliary"])
     func `window close retires only its pending browser identity presentation`(_ scenario: String) async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let state = AppStateStore.shared
-        let previousMode = state.connectionMode
-        state.connectionMode = .remote
-        defer { state.connectionMode = previousMode }
-        let requests = DashboardWindowOwnershipPresentationGate(released: true)
-        let staleLookup = DashboardWindowOwnershipPresentationGate()
-        let endpointURL = server.websocketURL()
-        let identityURL = server.url("/identity")
-        let manager = DashboardManager._testMake(
-            browserIdentityURLProvider: { _, _ in
-                if await requests.waitForRelease() == 2 {
-                    await staleLookup.waitForRelease()
-                    if scenario == "closed-failure" || scenario == "reopened" {
-                        throw DashboardWindowOwnershipEndpointFailure()
+        try await TestIsolation.withIsolatedState {
+            let server = try await DashboardHTTPFixture.start()
+            defer { server.stop() }
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .remote
+            defer { state.connectionMode = previousMode }
+            let requests = DashboardWindowOwnershipPresentationGate(released: true)
+            let staleLookup = DashboardWindowOwnershipPresentationGate()
+            let endpointURL = server.websocketURL()
+            let identityURL = server.url("/identity")
+            let manager = DashboardManager._testMake(
+                browserIdentityURLProvider: { _, _ in
+                    if await requests.waitForRelease() == 2 {
+                        await staleLookup.waitForRelease()
+                        if scenario == "closed-failure" || scenario == "reopened" {
+                            throw DashboardWindowOwnershipEndpointFailure()
+                        }
+                        return identityURL
                     }
-                    return identityURL
-                }
-                return nil
-            },
-            primaryEndpointProvider: { _ in
-                GatewayConnection.EndpointSnapshot(
-                    config: (url: endpointURL, token: "synthetic", password: nil), routeAuthority: nil)
-            },
-            gatewayEntriesProvider: { [Self.primaryGateway] })
-        defer { manager.close() }
-        try await manager.show()
-        let original = try #require(manager._testController())
-        let window = try #require(original.window)
-        let pending = Task { @MainActor in try await manager.show() }
-        await staleLookup.waitUntilRequested()
+                    return nil
+                },
+                primaryEndpointProvider: { _ in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: endpointURL, token: "synthetic", password: nil), routeAuthority: nil)
+                },
+                gatewayEntriesProvider: { [Self.primaryGateway] })
+            defer { manager.close() }
+            try await manager.show()
+            let original = try #require(manager._testController())
+            let window = try #require(original.window)
+            let pending = Task { @MainActor in try await manager.show() }
+            await staleLookup.waitUntilRequested()
 
-        do {
+            do {
+                if scenario == "auxiliary" {
+                    await manager._testOpenWindow(for: .primary)
+                    let auxiliary = try #require(manager._testAuxiliaryWindows().first?.controller)
+                    auxiliary.window?.performClose(nil)
+                } else {
+                    window.performClose(nil)
+                }
+                let reopened = scenario == "reopened" ? Task { @MainActor in try await manager.show() } : nil
+                if reopened != nil {
+                    let deadline = ContinuousClock.now + .seconds(5)
+                    while await requests.numberOfRequests() < 3, ContinuousClock.now < deadline {
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                    #expect(await requests.numberOfRequests() == 3)
+                }
+                await staleLookup.release()
+                try await pending.value
+                try await reopened?.value
+            } catch {
+                await staleLookup.release()
+                _ = try? await pending.value
+                Issue.record("A closed presentation reported a stale lookup failure: \(error)")
+            }
+
+            #expect(manager._testController()?.window === window)
+            #expect(window.isVisible == (scenario == "reopened" || scenario == "auxiliary"))
             if scenario == "auxiliary" {
-                await manager._testOpenWindow(for: .primary)
-                let auxiliary = try #require(manager._testAuxiliaryWindows().first?.controller)
-                auxiliary.window?.performClose(nil)
-            } else {
-                window.performClose(nil)
+                #expect(manager._testController()?.currentURL == identityURL)
             }
-            let reopened = scenario == "reopened" ? Task { @MainActor in try await manager.show() } : nil
-            if reopened != nil {
-                let deadline = ContinuousClock.now + .seconds(5)
-                while await requests.numberOfRequests() < 3, ContinuousClock.now < deadline {
-                    try await Task.sleep(for: .milliseconds(10))
-                }
-                #expect(await requests.numberOfRequests() == 3)
-            }
-            await staleLookup.release()
-            try await pending.value
-            try await reopened?.value
-        } catch {
-            await staleLookup.release()
-            _ = try? await pending.value
-            Issue.record("A closed presentation reported a stale lookup failure: \(error)")
-        }
-
-        #expect(manager._testController()?.window === window)
-        #expect(window.isVisible == (scenario == "reopened" || scenario == "auxiliary"))
-        if scenario == "auxiliary" {
-            #expect(manager._testController()?.currentURL == identityURL)
         }
     }
 

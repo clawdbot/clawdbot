@@ -192,47 +192,49 @@ struct DashboardReconnectTests {
     }
 
     @Test func `reopening personal sign in does not inherit the native websocket TLS policy`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let state = AppStateStore.shared
-        let originalMode = state.connectionMode
-        state.connectionMode = .remote
-        defer { state.connectionMode = originalMode }
-        let identityURL = server.url("/dashboard/")
-        let nativeURL = try #require(URL(string: "wss://native.example.test:443/"))
-        let nativeTLS = GatewayTLSParams(
-            required: true,
-            expectedFingerprint: String(repeating: "a", count: 64),
-            allowTOFU: false,
-            storeKey: "fixture-native")
-        let manager = DashboardManager._testMake(
-            browserIdentityURLProvider: { _, _ in identityURL },
-            primaryEndpointProvider: { _ in
-                GatewayConnection.EndpointSnapshot(
-                    config: (nativeURL, "native-owner-token", nil),
-                    tls: GatewayTLSRoute(params: nativeTLS, allowsTrustedPinReplacement: false),
-                    routeAuthority: 1,
-                    revision: 1)
-            })
-        defer { manager.close() }
-        try await manager.show()
-        let first = try #require(manager._testController())
-        let loginURL = server.url("/login")
-        first.webView.load(URLRequest(url: loginURL))
-        let deadline = ContinuousClock.now + .seconds(10)
-        while !first.canDeliverNativeCommands || first.webView.isLoading || first.webView.url != loginURL,
-              ContinuousClock.now < deadline
-        {
-            try await Task.sleep(for: .milliseconds(20))
+        try await TestIsolation.withIsolatedState {
+            let server = try await DashboardHTTPFixture.start()
+            defer { server.stop() }
+            let state = AppStateStore.shared
+            let originalMode = state.connectionMode
+            state.connectionMode = .remote
+            defer { state.connectionMode = originalMode }
+            let identityURL = server.url("/dashboard/")
+            let nativeURL = try #require(URL(string: "wss://native.example.test:443/"))
+            let nativeTLS = GatewayTLSParams(
+                required: true,
+                expectedFingerprint: String(repeating: "a", count: 64),
+                allowTOFU: false,
+                storeKey: "fixture-native")
+            let manager = DashboardManager._testMake(
+                browserIdentityURLProvider: { _, _ in identityURL },
+                primaryEndpointProvider: { _ in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (nativeURL, "native-owner-token", nil),
+                        tls: GatewayTLSRoute(params: nativeTLS, allowsTrustedPinReplacement: false),
+                        routeAuthority: 1,
+                        revision: 1)
+                })
+            defer { manager.close() }
+            try await manager.show()
+            let first = try #require(manager._testController())
+            let loginURL = server.url("/login")
+            first.webView.load(URLRequest(url: loginURL))
+            let deadline = ContinuousClock.now + .seconds(10)
+            while !first.canDeliverNativeCommands || first.webView.isLoading || first.webView.url != loginURL,
+                  ContinuousClock.now < deadline
+            {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(first.webView.url == loginURL)
+            #expect(!first.webView.isLoading)
+            try await manager.show()
+            let reopened = try #require(manager._testController())
+            #expect(reopened === first)
+            #expect(reopened.webView.url == loginURL)
+            #expect(reopened.hasTLSParams(nil))
+            #expect(reopened.auth.usesBrowserIdentity)
         }
-        #expect(first.webView.url == loginURL)
-        #expect(!first.webView.isLoading)
-        try await manager.show()
-        let reopened = try #require(manager._testController())
-        #expect(reopened === first)
-        #expect(reopened.webView.url == loginURL)
-        #expect(reopened.hasTLSParams(nil))
-        #expect(reopened.auth.usesBrowserIdentity)
     }
 
     @Test func `remote dashboard uses verified browser identity across tunnel reconnects`() async throws {
