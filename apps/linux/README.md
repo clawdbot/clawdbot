@@ -164,11 +164,14 @@ requests touching `apps/linux/**` and on manual dispatch.
 
 ## Releases
 
-The `Linux App Release` workflow (manual dispatch, release operators) builds
-the bundles from an existing stable release tag (prerelease tags are
-rejected: their semver suffix breaks Debian upgrade ordering) and attaches them to that tag's
-GitHub release with a `SHA256SUMS.linux-app.txt` checksum file. The tag commit
-must be reachable from `main` or its matching `release/YYYY.M.PATCH` branch;
-numeric correction tags use the base version's release branch. Dispatch from
-`main` or an exact protected `release-publish/<sha-prefix>-<serial>` tooling tag
-whose commit is contained in `main`. Builds use the validated release tag SHA.
+Manually dispatch `Linux App Release Request` from `main`. Provide the existing
+stable release tag in `tag`; prerelease tags are rejected because their semver
+suffix breaks Debian upgrade ordering. Enable the optional
+`desktop-test-bundles` input only when unsigned macOS and Windows test bundles
+are needed.
+
+A successful request automatically triggers `Linux App Release`. It builds from
+the validated release tag SHA and attaches the bundles to that tag's GitHub
+release with a `SHA256SUMS.linux-app.txt` checksum file. The tag commit must be
+reachable from `main` or its matching `release/YYYY.M.PATCH` branch; numeric
+correction tags use the base version's release branch.

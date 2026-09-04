@@ -15849,6 +15849,15 @@ it("pins simple release admission owners before selected checkout and preserves 
       types: ["completed"],
     },
   });
+  const releaseDocs = expectDefined(
+    readFileSync("apps/linux/README.md", "utf8").split("## Releases\n")[1],
+    "Linux release documentation",
+  );
+  expect(releaseDocs).toMatch(/dispatch `Linux App Release Request` from `main`/u);
+  expect(releaseDocs).toContain("stable release tag in `tag`");
+  expect(releaseDocs).toMatch(/optional\s+`desktop-test-bundles` input/u);
+  expect(releaseDocs).toMatch(/successful request automatically triggers `Linux App Release`/u);
+  expect(releaseDocs).not.toContain("release-publish/");
   expect(linux.permissions).toEqual({});
   expect(linux.jobs.validate_release.if).toContain(
     "github.event.workflow_run.repository.full_name == 'openclaw/openclaw'",
