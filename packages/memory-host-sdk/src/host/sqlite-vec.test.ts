@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 
 function mockMissingSqliteVecPackage(): void {
   vi.doMock("sqlite-vec", () => {
@@ -76,8 +77,8 @@ function isMissingModuleError(err: unknown): boolean {
 
 describe("loadSqliteVecExtension", () => {
   it("rejects a connection revoked while the native module imports", async () => {
-    const started = Promise.withResolvers<void>();
-    const imported = Promise.withResolvers<void>();
+    const started = createDeferred();
+    const imported = createDeferred();
     vi.doMock("sqlite-vec", async () => {
       started.resolve();
       await imported.promise;
