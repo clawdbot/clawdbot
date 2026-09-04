@@ -1,0 +1,135 @@
+title: Fresh session reset keeps the next turn working
+
+scenario:
+  id: session-reset-fresh-session-header
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+    secondary:
+      - channels.qa-channel-final-reply
+  objective: Verify a QA-channel session whose first inbound message is `/new` still answers the following user message.
+  successCriteria:
+    - The direct conversation has no session entry before `/new` arrives.
+    - The `/new` command is acknowledged with the new-session reply.
+    - The persisted transcript holds one user message and ends on the assistant reply.
+    - The next user message reaches the mock provider and the visible reply carries the requested marker.
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/reference/session-management-compaction.md
+  codeRefs:
+    - src/gateway/session-reset-service.ts
+    - src/config/sessions/session-accessor.sqlite-reset-boundary.ts
+    - src/agents/sessions/session-manager.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    suiteIsolation: isolated
+    isolationReason: Depends on a conversation that has never had a session entry, so it must not share a worker that already seeded QA sessions.
+    summary: Send `/new` as the first message of a fresh QA-channel conversation through an ephemeral Gateway, then send a normal turn and inspect the persisted transcript.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-session-reset-fresh
+      senderId: qa-fresh-reset-operator
+      replyMarker: QA-FRESH-RESET-OK
+
+flow:
+  steps:
+    - name: first-message /new still allows the next turn
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this transcript proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: 'default', peer: { kind: 'direct', id: config.conversationId }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - call: readRawQaSessionStore
+          saveAs: storeBefore
+          args:
+            - ref: env
+        - assert:
+            expr: "!storeBefore[sessionKey]"
+            message:
+              expr: "`conversation already had a session entry: ${sessionKey}`"
+        - set: resetOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Fresh Reset Operator
+            text: /new
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            sinceIndex:
+              ref: resetOutboundIndex
+            textIncludes: New session started
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: resetReply
+        - call: readRawQaSessionStore
+          saveAs: storeAfterReset
+          args:
+            - ref: env
+        - set: resetSession
+          value:
+            expr: "storeAfterReset[sessionKey]"
+        - assert:
+            expr: "Boolean(resetSession?.sessionId)"
+            message:
+              expr: "`session entry missing after /new: ${JSON.stringify({ sessionKey, storeKeys: Object.keys(storeAfterReset) })}`"
+        - set: turnOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Fresh Reset Operator
+            text:
+              expr: "`Reply exactly: ${config.replyMarker}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            sinceIndex:
+              ref: turnOutboundIndex
+            textIncludes: ""
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: turnReply
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - assert:
+            expr: "turnReply.text.includes(config.replyMarker)"
+            message:
+              expr: "`turn after fresh /new did not answer: ${turnReply.text}`"
+        - assert:
+            expr: "transcript.userMessageCount === 1 && transcript.lastMessageRole === 'assistant'"
+            message:
+              expr: "`transcript after the turn is not user+assistant: ${JSON.stringify({ userMessageCount: transcript.userMessageCount, lastMessageRole: transcript.lastMessageRole, eventCursor: transcript.eventCursor })}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', scenario: 'session-reset-fresh-session-header', channel: 'qa-channel', provider: env.providerMode, gateway: 'ephemeral-child', sessionKey, sessionId: resetSession.sessionId, transcript: { events: transcript.eventCursor, userMessageCount: transcript.userMessageCount, lastMessageRole: transcript.lastMessageRole }, messages: { inbound: ['/new', `Reply exactly: ${config.replyMarker}`], outbound: [resetReply.text, turnReply.text] }, tempRoot: env.gateway.tempRoot })"
