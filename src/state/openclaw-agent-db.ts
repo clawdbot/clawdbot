@@ -785,9 +785,13 @@ export function withAgentDatabaseMaintenanceLease<T>(
   );
 }
 
-/** Close cached agent handles and clear terminal failure latches for test isolation. */
-export function closeOpenClawAgentDatabasesForTest(): void {
-  closeOpenClawAgentDatabases();
-  cache.validatedPaths.clear();
-  cache.terminal.clearAll();
+/** Release fixture handles and pathname trust before a test root is recreated. */
+export function closeOpenClawAgentDatabasesForTest(rootPath?: string): void {
+  closeOpenClawAgentDatabases(rootPath);
+  for (const pathname of cache.validatedPaths.keys()) {
+    if (rootPath === undefined || isPathInside(rootPath, pathname)) {
+      cache.validatedPaths.delete(pathname);
+    }
+  }
+  cache.terminal.clearAll(rootPath);
 }
