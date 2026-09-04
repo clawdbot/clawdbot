@@ -17,6 +17,7 @@ export type ResponsesContinuationRequest = Record<string, unknown> & {
   input?: Array<ResponseInput[number] | ResponsesConfigurationUpdate>;
   previous_response_id?: string;
 };
+export type ResponsesSteeringContinuationMode = "automatic" | "required-input";
 export type ResponsesContinuationState = {
   lastRequest: ResponsesContinuationRequest;
   lastResponseId: string;
@@ -91,7 +92,7 @@ function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse =
 export function resolveResponsesContinuationRequest(
   continuation: ResponsesContinuationState | undefined,
   request: ResponsesContinuationRequest,
-  options?: { allowNewReasoningUpdate?: boolean },
+  steering?: ResponsesSteeringContinuationMode,
 ): {
   request: ResponsesContinuationRequest;
   fullRequest?: ResponsesContinuationRequest;
@@ -107,9 +108,12 @@ export function resolveResponsesContinuationRequest(
     continuation.lastRequest,
     request,
     continuation.lastResponseItems.length,
-    options,
+    steering,
   );
+  // Required input creates a new response with current settings. The same
+  // history validation below still binds it to the accepted steering's parent.
   if (
+    steering !== "required-input" &&
     !jsonValuesEqual(requestWithoutInput(prepared), requestWithoutInput(continuation.lastRequest))
   ) {
     return { request, continuationStatus: "request_changed" };

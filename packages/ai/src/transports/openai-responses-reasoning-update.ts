@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ResponsesContinuationRequest } from "./openai-responses-continuation.js";
+import type {
+  ResponsesContinuationRequest,
+  ResponsesSteeringContinuationMode,
+} from "./openai-responses-continuation.js";
 
 // Public Responses input item; the installed SDK predates configuration updates.
 export type ResponsesConfigurationUpdate = {
@@ -34,14 +37,12 @@ export function replayResponsesReasoningUpdates(
   previous: ResponsesContinuationRequest,
   request: ResponsesContinuationRequest,
   previousOutputLength: number,
-  options?: { allowNewReasoningUpdate?: boolean },
+  steering?: ResponsesSteeringContinuationMode,
 ): ResponsesContinuationRequest {
   if (
-    !supportsResponsesReasoningUpdate(previous) ||
-    !supportsResponsesReasoningUpdate(request) ||
-    !isRecord(previous.reasoning) ||
-    !isRecord(request.reasoning) ||
-    typeof request.reasoning.effort !== "string" ||
+    (steering !== "required-input" &&
+      (!supportsResponsesReasoningUpdate(previous) ||
+        !supportsResponsesReasoningUpdate(request))) ||
     !Array.isArray(previous.input) ||
     !Array.isArray(request.input) ||
     request.input.some(isConfigurationUpdate)
@@ -49,14 +50,26 @@ export function replayResponsesReasoningUpdates(
     return request;
   }
   const input = [...request.input];
-  let activeEffort = previous.reasoning.effort;
+  let activeEffort = isRecord(previous.reasoning) ? previous.reasoning.effort : undefined;
   for (const [index, item] of previous.input.entries()) {
     if (isConfigurationUpdate(item)) {
       input.splice(index, 0, item);
       activeEffort = item.reasoning.effort;
     }
   }
-  if (activeEffort !== request.reasoning.effort && options?.allowNewReasoningUpdate !== false) {
+  if (steering === "required-input") {
+    // The explicit create owns its settings. Only restore historical controls;
+    // a new control here would follow the user already queued on the server.
+    return input.length === request.input.length ? request : { ...request, input };
+  }
+  if (
+    !isRecord(previous.reasoning) ||
+    !isRecord(request.reasoning) ||
+    typeof request.reasoning.effort !== "string"
+  ) {
+    return request;
+  }
+  if (activeEffort !== request.reasoning.effort && steering !== "automatic") {
     const baselineLength = previous.input.length + previousOutputLength;
     const nextUser = input.findIndex(
       (item, index) => index >= baselineLength && "role" in item && item.role === "user",

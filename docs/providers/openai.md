@@ -122,7 +122,11 @@ Responses endpoint. Configure the existing model settings:
   the next user turn. OpenClaw preserves the original request-level effort
   and places a `configuration_update` at the new turn. This optimization
   works across matching session history over SSE or cached WebSockets.
-  A continuation for an already accepted steering message keeps its inherited effort.
+  Automatic steering continuations keep their inherited settings. If steering
+  waits for a tool result or approval, the explicit continuation uses current
+  request settings, including output limits and reasoning settings, without
+  repeating accepted steering. Earlier `configuration_update` items retain
+  their effect; a changed request-level effort does not replace those controls.
 
 The example disables automatic server compaction because OpenAI cannot combine
 it with configuration updates. Cache-preserving effort changes also exclude
