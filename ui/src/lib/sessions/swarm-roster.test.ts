@@ -145,22 +145,29 @@ describe("SwarmRosterHydrator", () => {
     vi.useFakeTimers();
     const running = { ...row(0), status: "running" as const, updatedAt: 5 };
     const done = { ...row(0), status: "done" as const, updatedAt: 5 };
+    let currentRows: GatewaySessionRow[] = [running];
     const hydrator = new SwarmRosterHydrator();
     const sessions = {
       canonicalListRevision: 0,
       list: vi.fn(async () => result([done], 0, 1)),
     } as unknown as SessionCapability;
 
-    hydrator.update({
+    const params = {
       sessions,
       parentKey: "agent:main:parent",
       sourceEpoch: 1,
-      currentRows: () => [running],
+      currentRows: () => currentRows,
       onRows: () => undefined,
-    });
+    };
+    hydrator.update(params);
     await vi.runAllTimersAsync();
 
     expect(hydrator.rows).toEqual([expect.objectContaining({ status: "done" })]);
+    hydrator.update(params);
+    expect(hydrator.rows).toEqual([expect.objectContaining({ status: "done" })]);
+    currentRows = [{ ...running, status: "failed" }];
+    hydrator.update(params);
+    expect(hydrator.rows).toEqual([expect.objectContaining({ status: "failed" })]);
     hydrator.dispose();
   });
 

@@ -1,6 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
@@ -46,6 +47,11 @@ const BUILD = {
 } as const;
 const WORKER_GATEWAY_PATH = "/__openclaw__/worker";
 const RESOLVED_AUTH: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+
+type PayloadLimited = {
+  _maxPayload: number;
+  _extensions: Record<string, PayloadLimited>;
+};
 
 type RejectedWorker = {
   response: unknown;
@@ -152,7 +158,17 @@ class PublicWorkerHarness {
   readonly workerService: WorkerConnectionService;
   readonly clients = new Set<GatewayWsClient>();
   readonly connectionWork = new GatewayConnectionWork();
-  readonly wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+  // Mirrors the production server options so a client that offers
+  // permessage-deflate negotiates it here too (server-runtime-state.ts).
+  readonly wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: 64 * 1024,
+    perMessageDeflate: {
+      serverNoContextTakeover: true,
+      clientNoContextTakeover: true,
+      threshold: 4 * 1024,
+    },
+  });
   readonly preauthBudget: ReturnType<typeof createPreauthConnectionBudget>;
   readonly publicRateLimiter: ReturnType<typeof createAuthRateLimiter>;
   readonly logWsControl = createGatewayWsTestLogger();
@@ -318,6 +334,51 @@ describe("public worker ingress", () => {
       expect(harness.publicRateLimiter.size()).toBe(0);
     });
   });
+
+  it.each([
+    ["receiver", (receiver: PayloadLimited) => receiver],
+    [
+      "negotiated deflate",
+      (receiver: PayloadLimited) =>
+        expectDefined(receiver["_extensions"]["permessage-deflate"], "negotiated deflate"),
+    ],
+  ])(
+    "rejects an admitted worker before hello when the %s payload limit is unusable",
+    async (_label, selectLimit) => {
+      await withHarness({}, async (harness) => {
+        // The Gateway's own connection listener runs first; freezing the limit
+        // afterwards still precedes the connect frame that admits the worker.
+        harness.wss.on("connection", (socket) => {
+          const receiver = (socket as WebSocket & { _receiver: PayloadLimited })["_receiver"];
+          const limit = selectLimit(receiver);
+          Object.defineProperty(limit, "_maxPayload", {
+            value: limit["_maxPayload"],
+            writable: false,
+          });
+        });
+
+        const rejected = await rejectWorker(harness.url(), workerConnect(harness.credential));
+
+        expect(rejected).toEqual({
+          response: {
+            type: "res",
+            id: "connect-1",
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "unsupported Gateway WebSocket receiver",
+              details: { reason: "gateway-unavailable" },
+            },
+          },
+          close: { code: 1011, reason: "gateway-unavailable" },
+        });
+        expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+          "worker admission rejected reason=unsupported-websocket-receiver",
+        );
+        expect(harness.clients.size).toBe(0);
+      });
+    },
+  );
 
   it("returns one opaque failure while retaining precise server reasons", async () => {
     await withHarness({}, async (harness) => {

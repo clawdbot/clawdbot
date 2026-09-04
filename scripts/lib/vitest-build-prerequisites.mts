@@ -89,11 +89,13 @@ export function resolveVitestRuntimeCliSelections(
   args: string[],
   env: NodeJS.ProcessEnv,
 ): TestSelection[] {
+  // Consumer aliases describe other ways to select it, not sibling projects
+  // admitted by this invocation. Keep the actual config through preparation.
   return runtimeConsumers
     .filter((consumer) =>
       consumer.configs.some((candidate) => includesRuntimeConfig([config], candidate)),
     )
-    .map((consumer) => ({ configs: consumer.configs, cli: { args, dir: consumer.dir, env } }));
+    .map((consumer) => ({ configs: [config], cli: { args, dir: consumer.dir, env } }));
 }
 
 /**

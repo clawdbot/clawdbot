@@ -14,6 +14,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
@@ -246,6 +247,7 @@ describe("plugin HTTP suspension admission", () => {
       getSuspensionBlockerCount: vi.fn(() => 0),
     };
     const context = {
+      trackExecution: trackAsyncWork,
       cron,
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),

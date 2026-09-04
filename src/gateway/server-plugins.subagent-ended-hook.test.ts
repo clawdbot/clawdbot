@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 type HandleGatewayRequestOptions = GatewayRequestOptions & {
@@ -42,6 +43,7 @@ function createTestCfg(): OpenClawConfig {
 function createTestContext(label: string, cfg: OpenClawConfig): GatewayRequestContext {
   return {
     label,
+    trackExecution: trackAsyncWork,
     getRuntimeConfig: () => cfg,
     createAgentTurnFacade: (options: InternalAgentTurnFacadeOptions) => {
       internalAgentTurnFacade.create(options);

@@ -120,45 +120,24 @@ export function resolveSkillStatusEntry(
 function selectPreferredInstallSpec(
   install: SkillInstallSpec[],
   prefs: SkillsInstallPreferences,
-): { spec: SkillInstallSpec; index: number } | undefined {
-  if (install.length === 0) {
-    return undefined;
-  }
-
-  const indexed = install.map((spec, index) => ({ spec, index }));
-  const findKind = (kind: SkillInstallSpec["kind"]) =>
-    indexed.find((item) => item.spec.kind === kind);
+): SkillInstallSpec | undefined {
+  const findKind = (kind: SkillInstallSpec["kind"]) => install.find((spec) => spec.kind === kind);
 
   const brewSpec = findKind("brew");
-  const nodeSpec = findKind("node");
-  const goSpec = findKind("go");
-  const uvSpec = findKind("uv");
-  const downloadSpec = findKind("download");
-  const brewAvailable = hasBinary("brew");
-
-  // Table-driven preference chain; first match wins.
-  const pickers: Array<() => { spec: SkillInstallSpec; index: number } | undefined> = [
-    () => (prefs.preferBrew && brewAvailable ? brewSpec : undefined),
-    () => uvSpec,
-    () => nodeSpec,
+  const brewAvailable = brewSpec && hasBinary("brew");
+  return (
+    (prefs.preferBrew && brewAvailable ? brewSpec : undefined) ??
+    findKind("uv") ??
+    findKind("node") ??
     // Only prefer brew when available to avoid guaranteed failure on Linux/Docker.
-    () => (brewAvailable ? brewSpec : undefined),
-    () => goSpec,
+    (brewAvailable ? brewSpec : undefined) ??
+    findKind("go") ??
     // Prefer download over an unavailable brew spec.
-    () => downloadSpec,
+    findKind("download") ??
     // Last resort: surface descriptive brew-missing error instead of "no installer found".
-    () => brewSpec,
-    () => indexed[0],
-  ];
-
-  for (const pick of pickers) {
-    const selected = pick();
-    if (selected) {
-      return selected;
-    }
-  }
-
-  return undefined;
+    brewSpec ??
+    install[0]
+  );
 }
 
 function normalizeInstallOptions(
@@ -178,10 +157,11 @@ function normalizeInstallOptions(
   }
 
   const platform = process.platform;
-  const filtered = install.filter((spec) => {
+  const supportsPlatform = (spec: SkillInstallSpec) => {
     const osList = spec.os ?? [];
     return osList.length === 0 || osList.includes(platform);
-  });
+  };
+  const filtered = install.filter(supportsPlatform);
   if (filtered.length === 0) {
     return [];
   }
@@ -215,14 +195,21 @@ function normalizeInstallOptions(
 
   const allDownloads = filtered.every((spec) => spec.kind === "download");
   if (allDownloads) {
-    return filtered.map((spec, index) => toOption(spec, index));
+    const options: SkillInstallOption[] = [];
+    for (const [index, spec] of install.entries()) {
+      if (supportsPlatform(spec)) {
+        options.push(toOption(spec, index));
+      }
+    }
+    return options;
   }
 
   const preferred = selectPreferredInstallSpec(filtered, prefs);
   if (!preferred) {
     return [];
   }
-  return [toOption(preferred.spec, preferred.index)];
+  // installSkill resolves implicit IDs in the original metadata list, before OS filtering.
+  return [toOption(preferred, install.indexOf(preferred))];
 }
 
 type BuildSkillStatusContext = {

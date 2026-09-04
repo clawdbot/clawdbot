@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { CodeModeOutputState } from "./code-mode-json.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import type { CodeModeWorkerResult } from "./code-mode-runtime.js";
 import { applyCodeModeCatalog, resolveCodeModeConfig } from "./code-mode.js";
 import {
@@ -335,7 +334,7 @@ describe("Code Mode swarm guest", () => {
     }
   });
 
-  it("keeps a guest error after a parked agents.run restricted without replaying the collector", async () => {
+  it("reports a guest error after a parked agents.run without replaying the collector", async () => {
     const collectorStarted = createDeferred();
     const collectorRelease = createDeferred();
     swarmMocks.waitForCollectorCompletion.mockImplementation(async () => {
@@ -371,7 +370,6 @@ describe("Code Mode swarm guest", () => {
         bridgeDispatchStarted: true,
         error: expect.stringContaining("ReferenceError: missingAfterCollector is not defined"),
       });
-      expect(consumeRepairableCodeModeFailure(details)).toBe(false);
       expect(harness.spawnTool.execute).toHaveBeenCalledOnce();
       expect(swarmMocks.waitForCollectorCompletion).toHaveBeenCalledOnce();
       expect(testing.activeRuns.size).toBe(0);

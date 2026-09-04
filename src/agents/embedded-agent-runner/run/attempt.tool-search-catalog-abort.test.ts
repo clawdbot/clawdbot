@@ -12,6 +12,7 @@ import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-ca
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
 import { Agent, type AgentTool } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
+import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
@@ -83,13 +84,13 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       code: 'return await agents_wait({ ids: ["child"] });',
     },
     {
-      mode: "joined Code Mode",
+      mode: "hidden joined Code Mode",
       toolName: "sessions_spawn",
-      code: 'return await agents.run("inspect");',
+      code: "return typeof agents;",
     },
   ])(
     "does not enter the original preparer or action through denied $mode",
-    async ({ toolName, code }) => {
+    async ({ mode, toolName, code }) => {
       const execute = vi.fn(async () => ({ content: [], details: {} }));
       const prepare = vi.fn(async (args: unknown) => args);
       const native =
@@ -191,8 +192,26 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
         },
       });
       expect(observed.length).toBeGreaterThanOrEqual(1);
+      const result = code
+        ? expect.objectContaining({
+            details: expect.objectContaining(
+              mode === "hidden joined Code Mode"
+                ? { status: "completed", value: "undefined" }
+                : {
+                    status: "failed",
+                    error: expect.stringContaining(TOOL_EXECUTION_GATED_MESSAGE),
+                  },
+            ),
+          })
+        : expect.objectContaining({
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                text: expect.stringContaining(TOOL_EXECUTION_GATED_MESSAGE),
+              }),
+            ]),
+          });
       expect(outcomes).toContainEqual(
-        expect.objectContaining({ toolName: code ? "exec" : toolName, isError: true }),
+        expect.objectContaining({ toolName: code ? "exec" : toolName, isError: !code, result }),
       );
       expect(prepare).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();

@@ -70,6 +70,7 @@ function normalizeMockProviderId(providerId?: string): string {
 type SessionManagerMocks = {
   getSessionTarget: Mock<() => undefined>;
   getLeafId: Mock<() => string | null>;
+  getAppendParentId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
   getEntry: UnknownMock;
   getBoundaryCount: UnknownMock;
@@ -78,6 +79,7 @@ type SessionManagerMocks = {
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
   appendThinkingLevelChange: UnknownMock;
   appendModelChange: UnknownMock;
+  appendMessage: UnknownMock;
   appendCustomEntry: UnknownMock;
   appendSessionInfo: UnknownMock;
   appendLabelChange: UnknownMock;
@@ -278,6 +280,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const sessionManager = {
     getSessionTarget: vi.fn(() => undefined),
     getLeafId: vi.fn<() => string | null>(() => null),
+    getAppendParentId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
     getEntry: vi.fn(() => undefined),
     getBoundaryCount: vi.fn(() => 0),
@@ -286,6 +289,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
     appendThinkingLevelChange: vi.fn(),
     appendModelChange: vi.fn(),
+    appendMessage: vi.fn(),
     appendCustomEntry: vi.fn(),
     appendSessionInfo: vi.fn(),
     appendLabelChange: vi.fn(),
@@ -1153,6 +1157,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.trajectoryEvents.length = 0;
   hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.getAppendParentId.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
@@ -1164,6 +1169,7 @@ export function resetEmbeddedAttemptHarness(
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
   hoisted.sessionManager.appendThinkingLevelChange.mockReset();
   hoisted.sessionManager.appendModelChange.mockReset();
+  hoisted.sessionManager.appendMessage.mockReset();
   hoisted.sessionManager.appendCustomEntry.mockReset();
   hoisted.sessionManager.appendSessionInfo.mockReset();
   hoisted.sessionManager.appendLabelChange.mockReset();

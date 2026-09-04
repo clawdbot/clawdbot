@@ -131,6 +131,20 @@ describe("test runtime prerequisites", () => {
     }
   });
 
+  it.each([
+    ["gateway-core", "gateway-*.test.ts", undefined],
+    ["gateway-server", "server-sidecar-retention.test.ts", undefined],
+    ["gateway", "gateway-*.test.ts", "runtime"],
+    ["gateway", "server-*.test.ts", "runtime"],
+  ] as const)("keeps %s selection scoped after excluding %s", (project, exclude, expected) => {
+    const selections = resolveVitestRuntimeCliSelections(
+      `test/vitest/vitest.${project}.config.ts`,
+      ["run", "--exclude", exclude],
+      {},
+    );
+    expect(resolveVitestPretestBuildMode(selections)).toBe(expected);
+  });
+
   it("combines private QA and runtime readers into one private build", () => {
     expect(
       resolveVitestPretestBuildMode([

@@ -11,6 +11,7 @@ import type {
   GatewayRequestHandlers,
 } from "../../gateway/server-methods/types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDashboardTool } from "./dashboard-tool.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
@@ -60,6 +61,7 @@ function createGatewayAffinityHarness(revision: number) {
     }),
   );
   const context = {
+    trackExecution: trackAsyncWork,
     broadcastToConnIds,
     getClientConnIds: () => new Set([`control-ui-${revision}`]),
     getGatewayMethodRegistry: () => methodRegistry,

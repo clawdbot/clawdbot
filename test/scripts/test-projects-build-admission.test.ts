@@ -94,6 +94,15 @@ describe("CLI runtime admission", () => {
       "Gateway scoped exclusion",
       ["--config", "test/vitest/vitest.gateway-core.config.ts", "--exclude", "gateway-*.test.ts"],
     ],
+    [
+      "Gateway server scoped exclusion",
+      [
+        "--config",
+        "test/vitest/vitest.gateway-server.config.ts",
+        "--exclude",
+        "server-sidecar-retention.test.ts",
+      ],
+    ],
     ["scoped exclusion", ["--exclude", lifecycle.replace("extensions/", "")]],
     ["absolute exclusion", ["--exclude", path.resolve(lifecycle)]],
     ["alternate root", ["--root", "."]],
@@ -206,6 +215,12 @@ syncBuiltinESMExports();\n`,
       "Gateway umbrella",
       "scripts/run-vitest.mts",
       ["run", "--config", "test/vitest/vitest.gateway.config.ts"],
+      "runtime",
+    ],
+    [
+      "Gateway umbrella with core consumers excluded",
+      "scripts/run-vitest.mts",
+      ["run", "--config", "test/vitest/vitest.gateway.config.ts", "--exclude", "gateway-*.test.ts"],
       "runtime",
     ],
     [

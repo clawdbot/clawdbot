@@ -3,6 +3,10 @@
 export const MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 export const MAX_BUFFERED_BYTES = 50 * 1024 * 1024; // per-connection send buffer limit (2x max payload)
 export const MAX_PREAUTH_PAYLOAD_BYTES = 64 * 1024;
+// permessage-deflate applies from this frame size up. Streaming deltas and acks stay
+// raw (zlib round trips cost more than they save); transcript and roster payloads
+// compress 5-8x, which is what keeps chat.startup off the cold-load critical path.
+export const WS_COMPRESSION_THRESHOLD_BYTES = 4 * 1024;
 export const WEBSOCKET_OPEN_READY_STATE = 1;
 export const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 
