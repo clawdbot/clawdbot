@@ -1,4 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isTerminalCodexTurnNotificationForTurn } from "./attempt-notification-state.js";
 import {
   isCodexTurnAbortMarkerNotification,
@@ -26,7 +27,7 @@ export function createCodexAttemptNotificationController(
   const { prompt, state: resourceState, projectorRef, registerNativeSubagentMonitor } = resources;
   const { context, turnState } = prompt;
   const { attemptTools, runtime } = context;
-  const { appServer, runAbortController } = runtime.connection;
+  const { appServer, bindingIdentity, bindingStore, runAbortController } = runtime.connection;
   const { allocateCodexToolOutcomeOrdinal } = attemptTools;
   const {
     state,
@@ -56,6 +57,26 @@ export function createCodexAttemptNotificationController(
   const handleNotification = async (notification: CodexServerNotification) => {
     if (state.projectionClosed) {
       return;
+    }
+    if (notification.method === "thread/settings/updated" && isRecord(notification.params)) {
+      const threadId = notification.params.threadId;
+      const settings = notification.params.threadSettings;
+      const reasoningEffort = isRecord(settings) ? settings.effort : undefined;
+      if (
+        threadId === resourceState.thread.threadId &&
+        (typeof reasoningEffort === "string" || reasoningEffort === null)
+      ) {
+        // Settings updates may arrive before turn/start returns a turn id. The
+        // durable owner fences stale generations before their live fact can move.
+        const updated = await bindingStore.mutate(bindingIdentity, {
+          kind: "patch",
+          threadId,
+          patch: { reasoningEffort },
+        });
+        if (updated) {
+          resourceState.thread.reasoningEffort = reasoningEffort;
+        }
+      }
     }
     const projector = projectorRef.current;
     const turnId = turnIdRef.current;

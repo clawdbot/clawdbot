@@ -27,6 +27,7 @@ import {
 } from "./protocol-validators.js";
 import { isCodexThreadReadMissingError } from "./rpc-error.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import { resolveCodexBindingReasoningEffort } from "./session-binding.js";
 import {
   fingerprintCodexThreadConfig,
   readActiveCodexTurnIdsFromResume,
@@ -218,6 +219,10 @@ export async function resumeExistingCodexThread(
       modelProvider: normalizeBindingModelProvider(
         authProfileId,
         response.modelProvider ?? requestModelProvider ?? startModelProvider,
+      ),
+      reasoningEffort: resolveCodexBindingReasoningEffort(
+        response.reasoningEffort,
+        resumeBinding.reasoningEffort,
       ),
       dynamicToolsFingerprint,
       dynamicToolsContainDeferred,
@@ -536,6 +541,7 @@ export async function startFreshCodexThread(
       agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
       model: response.model ?? startParams.model ?? params.params.modelId,
       modelProvider: bindingModelProvider,
+      reasoningEffort: response.reasoningEffort,
       dynamicToolsFingerprint,
       dynamicToolsContainDeferred,
       webSearchThreadConfigFingerprint,

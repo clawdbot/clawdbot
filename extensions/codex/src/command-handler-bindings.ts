@@ -22,6 +22,7 @@ import {
   assertCodexBindingMayBeReplaced,
   createCodexSessionGenerationSupersededError,
   normalizeCodexAppServerBindingModelProvider,
+  resolveCodexBindingReasoningEffort,
   reclaimCurrentCodexSessionGeneration,
   sessionBindingIdentity,
 } from "./app-server/session-binding.js";
@@ -431,6 +432,10 @@ export async function resumeThread(
                   pendingResumeConfiguration: pendingResumeConfiguration ? true : undefined,
                   authProfileId,
                   model: response.model,
+                  reasoningEffort: resolveCodexBindingReasoningEffort(
+                    response.reasoningEffort,
+                    bindingBeforeCommit?.reasoningEffort,
+                  ),
                   modelProvider,
                   historyCoveredThrough: new Date().toISOString(),
                 },

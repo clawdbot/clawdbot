@@ -5777,6 +5777,81 @@ describe("runCodexAppServerAttempt", () => {
     },
   );
 
+  it("persists native reasoning settings emitted before turn/start returns", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: "[]",
+      reasoningEffort: "low",
+    });
+    const harness: ReturnType<typeof createAppServerHarness> = createAppServerHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return threadStartResult("thread-existing");
+        }
+        if (method === "turn/start") {
+          await harness.notify({
+            method: "thread/settings/updated",
+            params: {
+              threadId: "thread-existing",
+              threadSettings: { effort: "high" },
+            },
+          });
+          await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+          return turnStartResult("turn-1", "completed");
+        }
+        return {};
+      },
+      { persistedThreads: ["thread-existing"] },
+    );
+
+    await runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-existing",
+      reasoningEffort: "high",
+    });
+  });
+
+  it("rejects a pre-turn reasoning update after durable ownership changes", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const mutate = testCodexAppServerBindingStore.mutate.bind(testCodexAppServerBindingStore);
+    const bindingStore: typeof testCodexAppServerBindingStore = {
+      ...testCodexAppServerBindingStore,
+      mutate: async (identity, mutation) =>
+        mutation.kind === "patch" && mutation.patch.reasoningEffort === "high"
+          ? false
+          : await mutate(identity, mutation),
+    };
+    const harness: ReturnType<typeof createAppServerHarness> = createAppServerHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return threadStartResult("thread-existing");
+        }
+        if (method === "turn/start") {
+          await harness.notify({
+            method: "thread/settings/updated",
+            params: {
+              threadId: "thread-existing",
+              threadSettings: { effort: "high" },
+            },
+          });
+          await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+          return turnStartResult("turn-1", "completed");
+        }
+        return {};
+      },
+      { persistedThreads: ["thread-existing"] },
+    );
+
+    await runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), { bindingStore });
+
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-existing",
+      reasoningEffort: null,
+    });
+  });
+
   it("does not fail when a buffered terminal notification is followed by client close", async () => {
     let resolveBufferedTerminal!: () => void;
     const bufferedTerminal = new Promise<void>((resolve) => {

@@ -309,6 +309,20 @@ function resolveCodexHarnessExpectedAppServerEffort(modelId: string): string | n
   return configuredEffort;
 }
 
+function resolveCodexHarnessExpectedNativeEffort(modelId: string): string | null {
+  const configured = process.env.OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT;
+  if (configured?.trim()) {
+    const expected = resolveCodexHarnessThinkingLevel(configured);
+    return expected === "off" ? "none" : expected;
+  }
+  const requestEffort = resolveCodexHarnessExpectedAppServerEffort(modelId);
+  return CODEX_HARNESS_THINKING === "off"
+    ? "none"
+    : CODEX_HARNESS_THINKING === "ultra" && requestEffort === "max"
+      ? "ultra"
+      : requestEffort;
+}
+
 function logCodexLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CODEX_HARNESS_DEBUG) {
     return;
@@ -780,6 +794,13 @@ function recordCodexAttemptIdentity(params: {
     typeof threadId === "string" && threadId.trim().length > 0,
     `expected Codex thread_ready identity for ${params.sessionKey}; events=${JSON.stringify(events)}`,
   ).toBe(true);
+  if (observedCodexThreadIds.get(params.sessionKey) === threadId) {
+    // Codex persists the accepted turn setting on the thread. Preparing that
+    // same thread again must report the authoritative native setting.
+    expect(threadReady?.data?.reasoningEffort ?? null).toBe(
+      resolveCodexHarnessExpectedNativeEffort(expectedModel),
+    );
+  }
   observedCodexThreadIds.set(params.sessionKey, threadId as string);
   const clientId = threadReady?.data?.clientId;
   expect(
@@ -1985,7 +2006,6 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
       text,
     )}; events=${JSON.stringify(events)}; tasks=${JSON.stringify(codexNativeTasks)}`,
   ).toBeDefined();
-
   const parentControlledChild = events.some(
     (event) => event.stream === "codex_app_server.item" && event.data?.type === "subAgentActivity",
   );
@@ -2114,6 +2134,11 @@ async function verifyCodexSessionDeletion(params: {
     key: sessionKey,
   });
   expect(deletion.deleted).toBe(true);
+  // Deleting the OpenClaw session also deletes its binding. A later explicit
+  // native-thread attachment is a new session observation, not a warm reuse.
+  observedCodexThreadIds.delete(sessionKey);
+  observedCodexClientIds.delete(sessionKey);
+  observedCodexThreadActions.delete(sessionKey);
   expect(readBindings().some((row) => row.key === before?.key)).toBe(false);
   expect(readBindings().find((row) => row.key === siblingBinding?.key)).toEqual(siblingBinding);
   await requestAgentText({

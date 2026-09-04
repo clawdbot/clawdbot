@@ -1332,4 +1332,12 @@ export function normalizeCodexAppServerBindingModelProvider(params: {
   return modelProvider;
 }
 
+/** Preserves the last observed native effort when Codex omits the optional response field. */
+export function resolveCodexBindingReasoningEffort(
+  responseEffort: string | null | undefined,
+  previousEffort: string | null | undefined,
+): string | null | undefined {
+  return responseEffort === undefined ? previousEffort : responseEffort;
+}
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

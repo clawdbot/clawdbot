@@ -281,6 +281,7 @@ export async function materializePendingSupervisionBranch(
     await trackPendingSupervisionArtifacts([finalThreadId]);
     params.throwIfAborted();
     const startResponse = assertCodexThreadStartResponse(rawStartResponse);
+    const { reasoningEffort = probeResponse.reasoningEffort } = startResponse;
     assertExactSupervisionModelSelection(startResponse, {
       model: nativeModel,
       modelProvider: nativeModelProvider,
@@ -351,6 +352,7 @@ export async function materializePendingSupervisionBranch(
           ...params.bindingPatch,
           model: nativeModel,
           modelProvider: bindingModelProvider,
+          reasoningEffort,
           historyCoveredThrough,
         },
       });
@@ -411,6 +413,7 @@ export async function materializePendingSupervisionBranch(
       pendingSupervisionBranch: undefined,
       model: nativeModel,
       modelProvider: bindingModelProvider,
+      reasoningEffort,
       historyCoveredThrough,
       lifecycle: { action: "forked" },
     };

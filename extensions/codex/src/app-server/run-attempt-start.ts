@@ -216,6 +216,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
         threadId: state.thread.threadId,
         action: state.thread.lifecycle.action,
         clientId: state.client.getInstanceId(),
+        reasoningEffort: state.thread.reasoningEffort ?? null,
       },
     });
     if (applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)) {

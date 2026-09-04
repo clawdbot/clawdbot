@@ -60,6 +60,7 @@ export function buildStartedCodexThreadBinding(input: {
     agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? input.startModelProvider ?? input.modelProvider,
+    reasoningEffort: response.reasoningEffort,
     dynamicToolsFingerprint: context.dynamicToolsFingerprint,
     dynamicToolsContainDeferred: context.dynamicToolsContainDeferred,
     nativeSkillIsolationFingerprint: context.nativeSkillIsolationFingerprint,

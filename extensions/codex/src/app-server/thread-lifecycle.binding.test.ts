@@ -592,6 +592,51 @@ async function createLeasedLifecycleWireClient(
 }
 
 describe("Codex app-server thread lifecycle bindings", () => {
+  it("preserves the stored reasoning effort when resume omits it", async () => {
+    const sessionFile = path.join(tempDir, "session-effort.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-effort");
+    const threadId = "thread-effort";
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent-effort"),
+      respond: async (method) => {
+        const response = threadStartResult(threadId);
+        if (method === "thread/start") {
+          return { ...response, reasoningEffort: "high" };
+        }
+        if (method === "thread/resume") {
+          const { reasoningEffort: _reasoningEffort, ...withoutReasoningEffort } = response;
+          return withoutReasoningEffort;
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    });
+    const common = {
+      client: fixture.client,
+      params: {
+        ...createParams(sessionFile, workspaceDir),
+        agentDir: path.join(tempDir, "agent-effort"),
+      },
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+
+    await startOrResumeThread(common);
+    await fixture.endTurn(threadId);
+    await startOrResumeThread(common);
+
+    expect(
+      fixture.request.mock.calls
+        .map(([method]) => method)
+        .filter((method) => method === "thread/start" || method === "thread/resume"),
+    ).toEqual(["thread/start", "thread/resume"]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId,
+      reasoningEffort: "high",
+    });
+  });
+
   it.each([false, true])(
     "resumes idle A with current policy while B stays active and catalog leases come and go (native model: %s)",
     async (nativeModelOwned) => {

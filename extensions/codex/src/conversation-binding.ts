@@ -78,6 +78,7 @@ import {
   assertCodexBindingMayBeReplaced,
   isCodexAppServerNativeAuthProfile,
   normalizeCodexAppServerBindingModelProvider,
+  resolveCodexBindingReasoningEffort,
   sessionBindingIdentity,
   type CodexAppServerAuthProfileLookup,
   type CodexAppServerBindingIdentity,
@@ -671,6 +672,10 @@ async function writeThreadBindingFromResponse(
           cwd: resolved.workspaceDir,
           authProfileId: params.authProfileId,
           model: response.model ?? resolved.model ?? params.model,
+          reasoningEffort: resolveCodexBindingReasoningEffort(
+            response.reasoningEffort,
+            current?.reasoningEffort,
+          ),
           modelProvider: normalizeCodexAppServerBindingModelProvider({
             authProfileId: params.authProfileId,
             modelProvider: response.modelProvider ?? resolved.modelProvider ?? params.modelProvider,
@@ -941,6 +946,10 @@ async function runBoundTurn(params: {
               cwd: response.thread.cwd ?? workspaceDir,
               authProfileId: binding.authProfileId,
               model: response.model ?? modelSelection?.model ?? binding.model,
+              reasoningEffort: resolveCodexBindingReasoningEffort(
+                response.reasoningEffort,
+                binding.reasoningEffort,
+              ),
               modelProvider: normalizeCodexAppServerBindingModelProvider({
                 authProfileId: binding.authProfileId,
                 modelProvider:
@@ -1010,6 +1019,10 @@ async function runBoundTurn(params: {
               clientId: client.getInstanceId(),
               cwd: response.thread.cwd ?? binding.cwd,
               model: response.model ?? modelSelection?.model ?? binding.model,
+              reasoningEffort: resolveCodexBindingReasoningEffort(
+                response.reasoningEffort,
+                binding.reasoningEffort,
+              ),
               modelProvider: normalizeCodexAppServerBindingModelProvider({
                 authProfileId: binding.authProfileId,
                 modelProvider:
