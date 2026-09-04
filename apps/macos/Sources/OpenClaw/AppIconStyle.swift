@@ -5,6 +5,8 @@ enum AppIconStyle: String, CaseIterable, Identifiable {
     case heritage
     case clawmark
     case origami
+    case pincer
+    case openC
 
     var id: String {
         rawValue
@@ -16,6 +18,8 @@ enum AppIconStyle: String, CaseIterable, Identifiable {
         case .heritage: String(localized: "Heritage")
         case .clawmark: String(localized: "Clawmark")
         case .origami: String(localized: "Origami")
+        case .pincer: String(localized: "Pincer")
+        case .openC: String(localized: "Open C")
         }
     }
 

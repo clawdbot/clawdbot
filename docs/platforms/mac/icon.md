@@ -17,6 +17,8 @@ Choose a Dock icon in **Settings → General → Dock icon**:
 - **Heritage**: the legacy README lobster with its raised claw.
 - **Clawmark**: a bold, sculpted lobster pincer.
 - **Origami**: a folded, faceted Molty.
+- **Pincer**: a single claw silhouette with a rounded, flowing wrist.
+- **Open C**: a circular claw with two opposing pincer tips.
 
 Each design has light and dark artwork, shown together in the picker.
 On macOS 26 and later, Original uses native icon styling, including the setting in
@@ -35,7 +37,7 @@ Original's source is `apps/macos/Icon.icon`; other vector designs are in
 `apps/macos/AppIconDesigns`. After editing them, regenerate the pairs with
 `bash scripts/generate-mac-app-icons.sh` and verify them with
 `bash scripts/generate-mac-app-icons.sh --check`. The generator owns custom dark
-backgrounds, and Apple's asset compiler supplies the macOS mask and padding.
+backgrounds and monochrome foreground colors, and Apple's asset compiler supplies the macOS mask and padding.
 Packaging also compiles the primary Icon Composer document for native styling.
 
 ## States

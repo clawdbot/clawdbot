@@ -17,14 +17,17 @@ mkdir -p "$OUTPUT_DIR"
 import json
 import shutil
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 root, work = map(Path, sys.argv[1:])
-for name, (source, dark_fill) in {
-    "paper": ("Icon.icon", {"linear-gradient": ["srgb:0.19200,0.19200,0.19200,1.00000", "srgb:0.07800,0.07800,0.07800,1.00000"]}),
-    "heritage": ("AppIconDesigns/Heritage.icon", {"solid": "srgb:0.13333,0.13333,0.13333,1.00000"}),
-    "clawmark": ("AppIconDesigns/Clawmark.icon", {"solid": "srgb:0.10196,0.10980,0.12157,1.00000"}),
-    "origami": ("AppIconDesigns/Origami.icon", {"solid": "srgb:0.07451,0.12549,0.20000,1.00000"}),
+for name, (source, dark_fill, dark_foreground) in {
+    "paper": ("Icon.icon", {"linear-gradient": ["srgb:0.19200,0.19200,0.19200,1.00000", "srgb:0.07800,0.07800,0.07800,1.00000"]}, None),
+    "heritage": ("AppIconDesigns/Heritage.icon", {"solid": "srgb:0.13333,0.13333,0.13333,1.00000"}, None),
+    "clawmark": ("AppIconDesigns/Clawmark.icon", {"solid": "srgb:0.10196,0.10980,0.12157,1.00000"}, None),
+    "origami": ("AppIconDesigns/Origami.icon", {"solid": "srgb:0.07451,0.12549,0.20000,1.00000"}, None),
+    "pincer": ("AppIconDesigns/Pincer.icon", {"solid": "srgb:0.16863,0.18039,0.18824,1.00000"}, "#f8f5ec"),
+    "openC": ("AppIconDesigns/OpenC.icon", {"solid": "srgb:0.16863,0.18039,0.18824,1.00000"}, "#f8f5ec"),
 }.items():
     for appearance in ("light", "dark"):
         icon = work / f"{name}-{appearance}" / "Icon.icon"
@@ -33,9 +36,16 @@ for name, (source, dark_fill) in {
             document = json.loads((icon / "icon.json").read_text())
             document["fill"] = dark_fill
             (icon / "icon.json").write_text(json.dumps(document, indent=2) + "\n")
+            if dark_foreground:
+                # Monochrome pairs invert the glyph as well as the tile.
+                ET.register_namespace("", "http://www.w3.org/2000/svg")
+                artwork = icon / "Assets" / "molty.svg"
+                tree = ET.parse(artwork)
+                tree.getroot().set("fill", dark_foreground)
+                tree.write(artwork, encoding="unicode")
 PY
 
-for style in paper-light paper-dark heritage-light heritage-dark clawmark-light clawmark-dark origami-light origami-dark; do
+for style in paper-light paper-dark heritage-light heritage-dark clawmark-light clawmark-dark origami-light origami-dark pincer-light pincer-dark openC-light openC-dark; do
   mkdir "$WORK_DIR/$style/compiled"
   xcrun actool "$WORK_DIR/$style/Icon.icon" \
     --compile "$WORK_DIR/$style/compiled" \
