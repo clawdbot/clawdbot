@@ -61,6 +61,23 @@ export function getSubagentSessionRuntimeMs(
   return Math.max(0, accumulatedRuntimeMs + Math.max(0, currentRunEndedAt - startedAt));
 }
 
+/**
+ * True when this row's `timeout` outcome recorded only that a wait deadline
+ * elapsed, with nothing ever observed to stop the child.
+ *
+ * The single derivation of that predicate for the whole codebase: the registry's
+ * `shouldDeferTerminalCleanupForUnconfirmedChild` delegates here, and so do the
+ * read-side status projections below. It lives in this leaf module because the
+ * display and liveness paths must be able to ask the question without importing
+ * the cleanup layer.
+ */
+export function isSubagentChildStopUnconfirmed(
+  entry: Pick<SubagentSessionStatusRecord, "execution"> | null | undefined,
+): boolean {
+  const outcome = entry?.execution.outcome;
+  return outcome?.status === "timeout" && outcome.timeoutDisposition === "child-unconfirmed";
+}
+
 /** Maps persisted run outcome fields to the compact session status shown in tools/UI. */
 export function resolveSubagentSessionStatus(
   entry: SubagentSessionStatusRecord | null | undefined,
@@ -73,6 +90,15 @@ export function resolveSubagentSessionStatus(
   }
   if (entry.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
     return "killed";
+  }
+  if (isSubagentChildStopUnconfirmed(entry)) {
+    // `endedAt` on this row is the end of the PARENT'S WAIT, not of the child's
+    // run. Reporting `timeout` here would file a possibly-live child under a
+    // terminal death in every reader of this function — including the session
+    // rows a parent consults before deciding whether to replace it — while its
+    // detached task is still `running`. Report the only thing that is known: the
+    // child has not been observed to stop.
+    return "running";
   }
   const status = entry.execution.outcome?.status;
   if (status === "error") {
@@ -89,12 +115,19 @@ export function resolveSubagentDisplayStatus(
   entry: SubagentSessionStatusRecord,
   pendingDescendants = 0,
 ): string {
-  const status = resolveSubagentSessionStatus(entry) ?? "done";
+  // A bare `running` would hide that this row's wait already ended, so the
+  // display form says both halves out loud. It is deliberately not the word
+  // `timeout`: the tool output a parent reads must never contradict the
+  // completion warning that told it the child may still be working.
+  const status = isSubagentChildStopUnconfirmed(entry)
+    ? "running (wait expired; child stop unconfirmed)"
+    : (resolveSubagentSessionStatus(entry) ?? "done");
   const pending = Math.max(0, pendingDescendants);
   if (pending > 0) {
     const childLabel = pending === 1 ? "child" : "children";
     const waiting = `waiting on ${pending} ${childLabel}`;
-    // Pending descendants keep the row active without hiding a terminal failure.
+    // Pending descendants keep the row active without hiding a terminal failure,
+    // and must not collapse an unconfirmed stop into a plain `active` either.
     return status === "running" || status === "done"
       ? `active (${waiting})`
       : `${status} (${waiting})`;

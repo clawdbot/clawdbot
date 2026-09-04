@@ -23,6 +23,10 @@ import {
   hasRetainedRequiredCompletionDelivery,
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import {
+  shouldDeferTerminalCleanupForUnconfirmedChild,
+  shouldDeleteSubagentAttachments,
+} from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -199,6 +203,16 @@ function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
 
 /** Best-effort async removal for a subagent attachment directory. */
 export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
+  // Fail closed at the destructive call itself, not only at each caller's policy
+  // check. Attachment removal is the one terminal effect a later promotion can
+  // never undo, and eight call sites reach this function; a caller that forgets
+  // the guard (as the suspended-delivery expiry path did) silently destroys a
+  // possibly-live child's output. Returning false means "not removed", so the
+  // callers that treat it as a completion signal retain the row and retry once
+  // observed stop evidence promotes it.
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    return false;
+  }
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return true;
   }
@@ -236,6 +250,12 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
 }
 
 function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
+  // Same fail-closed rule as the async remover, restated at the destructive
+  // call rather than trusted from the caller: attachment removal is the effect
+  // a later promotion can never undo.
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    return;
+  }
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return;
   }
@@ -277,12 +297,33 @@ export function reconcileOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(params.entry)) {
+    // Every orphan reason this function is called with is derived from the
+    // child's *best-effort* session entry, and the dominant one —
+    // `missing-session-entry` — also fires when that store is simply
+    // unreadable or already pruned. Deleting the row on that evidence is the
+    // one irreversible move in this lifecycle: the map entry is the only thing
+    // a later authoritative stop can promote, so removing it converts "we never
+    // observed the child stop" into "the child is gone" exactly where this
+    // branch says it must not. Restore, resume and the sweeper's stale-active
+    // path all funnel here, so the guard lives on the shared owner rather than
+    // at three call sites that would each have to remember it.
+    //
+    // Trade-off, stated where it is taken: a row whose child never produces
+    // stop evidence is now retained indefinitely, holding its registry row and
+    // any swarm slot. That is deliberate — the sweeper re-reads the child's own
+    // session entry on every pass (`settleSubagentRunFromSessionStore`) and
+    // promotes the row the moment that entry turns terminal — but it is an
+    // availability trade-off a maintainer may want bounded instead.
+    return false;
+  }
   if (hasRetainedRequiredCompletionDelivery(params.entry)) {
     return false;
   }
-  const shouldDeleteAttachments =
-    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
-  if (shouldDeleteAttachments) {
+  // The third copy of this condition; now the one owner. The sync remover is
+  // reached only from here, so the guard rides the shared decision rather than
+  // being duplicated inside it.
+  if (shouldDeleteSubagentAttachments(params.entry)) {
     safeRemoveAttachmentsDirSync(params.entry);
   }
   const removed = params.runs.delete(params.runId);
@@ -364,6 +405,13 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
 
 /** Arms retention only after the run or its waitable collector result has completed. */
 export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    if (entry.archiveAtMs === undefined) {
+      return false;
+    }
+    delete entry.archiveAtMs;
+    return true;
+  }
   const endedAt =
     typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
       ? entry.execution.endedAt

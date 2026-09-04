@@ -10,6 +10,8 @@ import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-term
 import { waitForAgentRun } from "../../run-wait.js";
 import {
   type SubagentRunOutcome,
+  type SubagentTimeoutDisposition,
+  waitObservedRunStop,
   withSubagentOutcomeTiming,
 } from "../announce/subagent-announce-output.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
@@ -318,10 +320,14 @@ export class SubagentWaitManager {
               childSessionKey: entry.childSessionKey,
               notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
             });
-      const completeAsRunTimeout = async (endedAt?: number, startedAt?: number) => {
+      const completeAsRunTimeout = async (
+        disposition: SubagentTimeoutDisposition,
+        endedAt?: number,
+        startedAt?: number,
+      ) => {
         const timeoutCompletion: Parameters<typeof this.options.completeSubagentRun>[0] = {
           runId,
-          outcome: { status: "timeout" },
+          outcome: { status: "timeout", timeoutDisposition: disposition },
           reason: SUBAGENT_ENDED_REASON_COMPLETE,
           sendFarewell: true,
           accountId: entry.requesterOrigin?.accountId,
@@ -338,10 +344,7 @@ export class SubagentWaitManager {
         await this.options.completeSubagentRun(completionForRetry);
       };
       if (waitStatus === "timeout") {
-        const isTerminalWaitTimeout =
-          typeof wait.endedAt === "number" ||
-          typeof wait.stopReason === "string" ||
-          typeof wait.livenessState === "string";
+        const isTerminalWaitTimeout = waitObservedRunStop(wait);
         const now = Date.now();
         // A plain agent.wait timeout has no terminal snapshot. For explicit
         // subagent run timeouts, the stored run deadline is the completion
@@ -362,7 +365,14 @@ export class SubagentWaitManager {
             now,
           });
           if (completionAfterDeadline !== undefined) {
-            await completeAsRunTimeout(completionAfterDeadline, completionStartedAt);
+            // Session reconciliation found the child's own terminal record, so
+            // the stop is observed even though its timing is clamped back to
+            // the run deadline.
+            await completeAsRunTimeout(
+              "child-stopped",
+              completionAfterDeadline,
+              completionStartedAt,
+            );
             return;
           }
           completionForRetry = {
@@ -390,7 +400,15 @@ export class SubagentWaitManager {
           if (timeoutAfterDeadline !== undefined) {
             timeoutEndedAt = timeoutAfterDeadline;
           }
-          await completeAsRunTimeout(timeoutEndedAt, observedStartedAt);
+          // Reaching here on the stored run deadline alone means nothing was
+          // ever observed to stop: `resolveHardRunTimeoutEndedAt` only compares
+          // clocks. The run is completed anyway so the parent is woken rather
+          // than retried forever, but the outcome must not claim the child died.
+          await completeAsRunTimeout(
+            isTerminalWaitTimeout ? "child-stopped" : "child-unconfirmed",
+            timeoutEndedAt,
+            observedStartedAt,
+          );
           return;
         }
         if (observedStartedAt !== undefined && entry.execution.startedAt !== observedStartedAt) {
@@ -413,7 +431,9 @@ export class SubagentWaitManager {
         now: Date.now(),
       });
       if (completionAfterDeadline !== undefined) {
-        await completeAsRunTimeout(completionAfterDeadline, observedStartedAt);
+        // The wait returned a real terminal status here (not a timeout), so the
+        // child is known to have stopped; only its end time is clamped.
+        await completeAsRunTimeout("child-stopped", completionAfterDeadline, observedStartedAt);
         return;
       }
       const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();

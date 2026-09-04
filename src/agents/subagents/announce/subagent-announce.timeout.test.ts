@@ -528,6 +528,74 @@ describe("subagent announce timeout config", () => {
     expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
   });
 
+  // Regression: openclaw-kkv1. A wait that expired without observing the child
+  // stop was announced identically to a child that really died ("timed out",
+  // "(no output)"), so a parent read it as death and spawned a successor into
+  // the still-live child's git worktree. These pin the two apart.
+  it("announces an unobserved child stop as an expired wait, not as a death", async () => {
+    await runAnnounceFlowForTest("run-timeout-wait-expiry", {
+      outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      roundOneReply: undefined,
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        status?: string;
+        statusLabel?: string;
+        result?: string;
+        replyInstruction?: string;
+      }>) ?? [];
+    const event = internalEvents[0];
+    expect(event?.status).toBe("timeout");
+    expect(event?.statusLabel).toContain("wait expired");
+    expect(event?.statusLabel).toContain("may still be running");
+    // The old wording is what read as death; it must not survive here.
+    expect(event?.statusLabel).not.toBe("timed out");
+    expect(event?.result).not.toBe("(no output)");
+    expect(event?.result).toContain("may still be working");
+    // The successor-spawn is the damaging move, so the instruction says so.
+    expect(event?.replyInstruction).toContain("successor");
+    expect(event?.replyInstruction).not.toContain("A completed");
+  });
+
+  it("still announces an observed child run timeout as terminal", async () => {
+    await runAnnounceFlowForTest("run-timeout-child-stopped", {
+      outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+      roundOneReply: undefined,
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        status?: string;
+        statusLabel?: string;
+        result?: string;
+        replyInstruction?: string;
+      }>) ?? [];
+    const event = internalEvents[0];
+    expect(event?.status).toBe("timeout");
+    expect(event?.statusLabel).toBe("timed out");
+    expect(event?.result).toBe("(no output)");
+    expect(event?.replyInstruction).not.toContain("successor");
+  });
+
+  it("keeps a real child reply as the result when only the wait expired", async () => {
+    await runAnnounceFlowForTest("run-timeout-wait-expiry-with-output", {
+      outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      roundOneReply: "partial progress so far",
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        statusLabel?: string;
+        result?: string;
+      }>) ?? [];
+    expect(internalEvents[0]?.result).toBe("partial progress so far");
+    expect(internalEvents[0]?.statusLabel).toContain("wait expired");
+  });
+
   it("keeps delete-mode timeout retryable while the embedded child request is still active", async () => {
     sessionStore["agent:main:subagent:worker"] = {
       sessionId: "child-session",

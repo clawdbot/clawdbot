@@ -23,7 +23,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 export type SubagentSessionStoreCache = Map<string, Record<string, SessionEntry>>;
@@ -239,6 +239,68 @@ export function resolveSubagentSessionCompletion(params: {
     params.fallbackEndedAt,
     { notBeforeMs: params.notBeforeMs },
   );
+}
+
+/**
+ * Settle a registry row from its persisted child session entry.
+ *
+ * This is the only liveness re-observation available without a live agent run
+ * context: the session store is written by the child itself, so a terminal
+ * status there is authoritative stop evidence and a `running` status is
+ * authoritative evidence that the child is still alive. Callers relying on that
+ * must not first overwrite the entry with their own derived status.
+ *
+ * Returns what the child's own record says:
+ * - `settled` — terminal there, so the stop is observed and this completion has
+ *   been submitted through the ordinary lifecycle path.
+ * - `live` — the entry exists and is still running. Terminal effects must not
+ *   run against it.
+ * - `absent` — no usable session entry, so there is nothing to reconcile from.
+ *   This is the absence of evidence, not evidence of a stop: the entry is
+ *   best-effort and also reads absent when the store is unreadable or has not
+ *   been written yet. Callers deciding whether a child may still be alive must
+ *   fail closed on it rather than treat it as `settled`.
+ */
+export async function settleSubagentRunFromSessionStore(
+  completeSubagentRunWithRecovery: (
+    completion: SubagentCompletionRequest,
+    source: string,
+  ) => Promise<void>,
+  args: {
+    runId: string;
+    entry: SubagentRunRecord;
+    now: number;
+    storeCache?: SubagentSessionStoreCache;
+    source: string;
+  },
+): Promise<"settled" | "live" | "absent"> {
+  const sessionEntry = loadSubagentSessionEntry({
+    childSessionKey: args.entry.childSessionKey,
+    storeCache: args.storeCache,
+  });
+  if (!sessionEntry) {
+    return "absent";
+  }
+  const completion = resolveCompletionFromSessionEntry(sessionEntry, args.now, {
+    notBeforeMs: args.entry.execution.startedAt ?? args.entry.createdAt,
+  });
+  if (!completion) {
+    return "live";
+  }
+  await completeSubagentRunWithRecovery(
+    {
+      runId: args.runId,
+      startedAt: completion.startedAt,
+      endedAt: completion.endedAt,
+      outcome: completion.outcome,
+      reason: completion.reason,
+      sendFarewell: true,
+      accountId: args.entry.requesterOrigin?.accountId,
+      triggerCleanup: true,
+    },
+    args.source,
+  );
+  return "settled";
 }
 
 /** Resolve a fresh child session start time for lifecycle reconciliation. */

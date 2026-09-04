@@ -18,6 +18,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import { completeTerminalEffects } from "./subagent-registry-lifecycle-cleanup.js";
@@ -54,6 +55,13 @@ function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunR
     params.entry.execution.outcome?.status !== "timeout" ||
     typeof params.entry.execution.endedAt !== "number"
   ) {
+    return false;
+  }
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(params.entry)) {
+    // A published `child-unconfirmed` timeout records that nothing was ever
+    // observed to stop the child. It is provisional by construction, so a later
+    // lifecycle callback carrying real stop evidence must be able to settle it;
+    // preserving it here is what would leave the row permanently unpromotable.
     return false;
   }
   const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
@@ -233,10 +241,18 @@ export async function completeSubagentRunAttempt(
       entry.killIntent === undefined &&
       entry.endedReason !== undefined &&
       entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED &&
-      entry.execution.outcome !== undefined
+      entry.execution.outcome !== undefined &&
+      !shouldDeferTerminalCleanupForUnconfirmedChild(entry)
     ) {
       // Any finalized provider outcome is canonical. A delayed abort listener
-      // must not replace success, failure, or timeout with a killed marker.
+      // must not replace success, failure, or a settled timeout with a killed marker.
+      // An unconfirmed timeout is the one exception, and the timestamp is not part
+      // of the test: a killed lifecycle end IS the stop evidence this row is
+      // waiting for, whether the abort is recorded after the deadline or at/before
+      // it (a hard run-timeout kill lands exactly ON the deadline). Rejecting it
+      // by timestamp left the row `child-unconfirmed` forever whenever the child's
+      // session record was absent or unreadable, deferring cleanup, hooks and task
+      // finalization permanently even though cancellation proved the child stopped.
       return;
     }
     let requestedEndedAt =
@@ -301,8 +317,49 @@ export async function completeSubagentRunAttempt(
         });
     if (expiredDeadlineMs !== undefined) {
       endedAt = expiredDeadlineMs;
-      completionOutcome = { status: "timeout" };
+      completionOutcome = {
+        status: "timeout",
+        // This caller observed an end past the stored deadline, so only its
+        // timing is clamped back — the stop itself is evidence. An already
+        // unconfirmed disposition stays unconfirmed; nothing here observed it.
+        timeoutDisposition:
+          completionOutcome.status === "timeout"
+            ? (completionOutcome.timeoutDisposition ?? "child-stopped")
+            : "child-stopped",
+      };
       completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
+    }
+    if (
+      shouldDeferTerminalCleanupForUnconfirmedChild(entry) &&
+      !(
+        completionOutcome.status === "timeout" &&
+        completionOutcome.timeoutDisposition === "child-unconfirmed"
+      )
+    ) {
+      // Authoritative stop evidence promotes this row out of the deferred,
+      // non-terminal cleanup state. Reopen cleanup so the terminal effects that
+      // were withheld while the child might still have been running can run now.
+      entry.cleanupHandled = false;
+      entry.cleanupCompletedAt = undefined;
+      // The provisional completion capture goes with it. `freezeRunResultAtCompletion`
+      // is first-write-wins on `resultText`, so whatever partial text (or `null`)
+      // was captured when the WAIT expired would survive this promotion and be
+      // published as the finished run's result — a successful task exposing
+      // pre-expiry output. Clearing it here is what lets the ordinary capture
+      // below run again against the child's settled transcript. Producer-owned
+      // evidence is untouched: `terminalReply`, and any `completionSnapshot` or
+      // `terminalReply` carried by this promotion, are applied after this point
+      // and outrank the recapture.
+      const provisionalCompletion = entry.completion;
+      if (
+        provisionalCompletion &&
+        (provisionalCompletion.resultText !== undefined ||
+          provisionalCompletion.capturedAt !== undefined)
+      ) {
+        provisionalCompletion.resultText = undefined;
+        provisionalCompletion.capturedAt = undefined;
+      }
+      mutated = true;
     }
     const killIntent = entry.killIntent;
     if (killIntent) {
@@ -584,6 +641,13 @@ export async function completeSubagentRunAttempt(
         if (opaqueTaskArbitration) {
           // The optional lookup cannot prove cancellation. Let the legacy
           // runtime's own finalizer decide whether provider completion won.
+          return;
+        }
+        if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+          // Not a failed projection: the shared boundary deliberately withheld
+          // it because nothing observed this child stop. A completion that
+          // observed nothing cannot arbitrate the kill tombstone either, so
+          // leave the kill tail live for an owner that has real evidence.
           return;
         }
         const latestTaskResolution = params.resolveSubagentTask(provisionalKillSnapshot);

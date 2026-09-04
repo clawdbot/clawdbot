@@ -325,6 +325,72 @@ describe("task-executor", () => {
     });
   });
 
+  it("rejects timed_out to succeeded but accepts the same promotion from a nonterminal run", async () => {
+    await withTaskExecutorStateDir(async () => {
+      // Regression (openclaw-odqn round 5, finding 1): this asymmetry is the
+      // entire reason a deadline-only subagent wait expiry must not publish
+      // `timed_out`. A subagent deadline is a clock comparison, not an
+      // observation, but `shouldApplyRunScopedStatusUpdate` treats `timed_out`
+      // as durable — so the child's later observed success is dropped and a
+      // still-running child's task stays timed out forever. The registry side
+      // keeps the row nonterminal until an observed stop; this pins the
+      // invariant that makes that necessary rather than merely tidy, in the
+      // module that owns the transition rules.
+      const published = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:timeout-published",
+        runId: "run-timeout-published",
+        task: "deadline expired while the child kept working",
+        startedAt: 10,
+      });
+      failTaskRunByRunId({
+        runId: "run-timeout-published",
+        status: "timed_out",
+        endedAt: 40,
+        lastEventAt: 40,
+      });
+      expect(getTaskById(published.taskId)?.status).toBe("timed_out");
+      // The child finishes successfully after the deadline. The promotion is
+      // silently dropped: no rows updated, status unchanged.
+      expect(
+        completeTaskRunByRunId({
+          runId: "run-timeout-published",
+          endedAt: 60,
+          lastEventAt: 60,
+          progressSummary: "child finished after its deadline",
+        }),
+      ).toEqual([]);
+      expect(getTaskById(published.taskId)?.status).toBe("timed_out");
+
+      // Same runtime, same shape, left nonterminal the way the fixed subagent
+      // deferral leaves it. The identical promotion now lands — so the rejection
+      // above is the terminal status, not the call.
+      const deferred = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:timeout-deferred",
+        runId: "run-timeout-deferred",
+        task: "deadline expired while the child kept working",
+        startedAt: 10,
+      });
+      expect(
+        completeTaskRunByRunId({
+          runId: "run-timeout-deferred",
+          endedAt: 60,
+          lastEventAt: 60,
+          progressSummary: "child finished after its deadline",
+        }),
+      ).toHaveLength(1);
+      expect(getTaskById(deferred.taskId)?.status).toBe("succeeded");
+      expect(getTaskById(deferred.taskId)?.progressSummary).toBe(
+        "child finished after its deadline",
+      );
+    });
+  });
+
   it("persists explicit task kind metadata on created runs", async () => {
     await withTaskExecutorStateDir(async () => {
       const created = createRunningTaskRun({

@@ -112,6 +112,8 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  /** The wait ended without observing the child stop; it may still be running. */
+  childStopUnconfirmed?: boolean;
   modelRouteChange?: string;
   preserveModelRouteNotice: boolean;
 }): string {
@@ -120,6 +122,9 @@ function buildAnnounceReplyInstruction(params: {
     : params.preserveModelRouteNotice
       ? " Preserve any runtime-authored model-route change notice in your update."
       : " Keep runtime-authored model-route change notices internal on this shared surface.";
+  if (params.childStopUnconfirmed) {
+    return `This ${params.announceType} is NOT known to have finished: the wait for it expired without observing it stop, so it may still be running. Do not treat this as a completed result, and do not start a replacement or successor for it — a second worker on the same files or working directory can corrupt what the first one is mid-edit on. Re-check whether it is still live before acting, and keep waiting or harvest its own output when it lands.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} if there is nothing to say to the user about this yet.`;
+  }
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
@@ -464,14 +469,23 @@ export async function runSubagentAnnounceFlow(params: {
       outcome = params.outcome ?? { status: "unknown" };
     }
 
-    // Build status label
+    // Build status label. A `timeout` whose disposition is `child-unconfirmed`
+    // records the end of this wait, not the end of the child's work, so it must
+    // not read as a death: a parent that treats it as one can spawn a successor
+    // into state the still-live child is mid-edit on.
+    const childStopUnconfirmed =
+      outcome.status === "timeout" && outcome.timeoutDisposition === "child-unconfirmed";
     const statusLabel =
       outcome.status === "ok"
         ? "completed; ready for parent review"
         : outcome.status === "timeout"
-          ? outcome.error
-            ? `timed out: ${outcome.error}`
-            : "timed out"
+          ? childStopUnconfirmed
+            ? outcome.error
+              ? `wait expired; child stop NOT observed — it may still be running (${outcome.error})`
+              : "wait expired; child stop NOT observed — it may still be running"
+            : outcome.error
+              ? `timed out: ${outcome.error}`
+              : "timed out"
           : outcome.status === "error"
             ? `failed: ${outcome.error || "unknown error"}`
             : "finished with unknown status";
@@ -480,7 +494,12 @@ export async function runSubagentAnnounceFlow(params: {
     const announceSessionId = childSessionEffectsAllowed()
       ? childSessionId || "unknown"
       : "unknown";
-    const findings = childCompletionFindings || reply || "(no output)";
+    const findings =
+      childCompletionFindings ||
+      reply ||
+      (childStopUnconfirmed
+        ? "(no output observed before this wait expired; the child may still be working — re-check before acting on this)"
+        : "(no output)");
 
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
@@ -553,6 +572,7 @@ export async function runSubagentAnnounceFlow(params: {
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      childStopUnconfirmed,
       modelRouteChange,
       // Nested and local operator parents may report the route fact. External
       // channel parents receive it only as private orchestration context.

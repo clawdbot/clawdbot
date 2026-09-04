@@ -4,6 +4,10 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import {
+  resolveEffectiveCleanupMode,
+  shouldDeleteSubagentAttachments,
+} from "./subagent-registry-cleanup.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -57,7 +61,14 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     params.completeCleanupBookkeeping({
       runId,
       entry,
-      cleanup: entry.cleanup,
+      // Retention expiry legitimately owns abandoning the stale *delivery*, but a
+      // seven-day clock is not evidence that the child stopped. Resolve the mode
+      // the same way every other cleanup owner does: an unconfirmed child
+      // downgrades to `keep`, which is what keeps `retireAfterSettle` from
+      // running `runs.delete(runId)` on this row. Retiring it would be worse than
+      // the attachment loss — promotion resolves the run by id, so a retired row
+      // can never be promoted by a later observed stop at all.
+      cleanup: resolveEffectiveCleanupMode(entry),
       completedAt: now,
       skipRequesterSettleWake: true,
     });
@@ -80,7 +91,11 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: entry.requesterSessionKey,
   });
-  if (entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
+  // Same decision, one owner: the hand-rolled copy of this condition was how
+  // this path escaped the provisional-child guard. A live child may still be
+  // writing here, and a later promotion can reopen bookkeeping but cannot
+  // recreate a removed directory.
+  if (shouldDeleteSubagentAttachments(entry)) {
     await safeRemoveAttachmentsDir(entry);
   }
   if (

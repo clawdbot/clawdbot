@@ -76,6 +76,59 @@ describe("updateSubagentArchiveAtMs", () => {
     }
   });
 
+  it("keeps every retention clock disabled for an unconfirmed child", () => {
+    // Regression (openclaw-odqn round 2, finding 2): zero is the documented
+    // no-auto-archive opt-out. Round 1 substituted the default 60-minute window
+    // for a `child-unconfirmed` row so the deferred deletion would have an
+    // owner, which turned that opt-out into a blind deletion timer for a child
+    // nothing had observed stop. Observed stop evidence owns the deletion now,
+    // so zero must survive untouched — including for this disposition.
+    const disabled = { agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } } };
+    const unconfirmed = createRunEntry({
+      cleanup: "delete",
+      execution: {
+        status: "terminal",
+        startedAt: 1_000,
+        endedAt: 602_000,
+        outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      },
+    });
+
+    expect(updateSubagentArchiveAtMs(unconfirmed, disabled)).toBe(false);
+    expect(unconfirmed.archiveAtMs).toBeUndefined();
+
+    // A positive configured window is still only a clock, not stop evidence.
+    const configured = createRunEntry({
+      cleanup: "delete",
+      execution: {
+        status: "terminal",
+        startedAt: 1_000,
+        endedAt: 602_000,
+        outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      },
+    });
+    expect(updateSubagentArchiveAtMs(configured, cfg)).toBe(false);
+    expect(configured.archiveAtMs).toBeUndefined();
+  });
+
+  it("does not freeze an unconfirmed collector or arm group archival", () => {
+    const entry = createRunEntry({
+      collect: true,
+      archiveAtMs: 302_000,
+      collectorCompletion: { status: "timeout" },
+      execution: {
+        status: "terminal",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      },
+    });
+
+    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
+    expect(entry.collectorCompletion).toBeUndefined();
+    expect(entry.archiveAtMs).toBeUndefined();
+  });
+
   it("starts ordinary delete-mode retention at execution completion", () => {
     const entry = createRunEntry({
       cleanup: "delete",
@@ -259,6 +312,46 @@ describe("reconcileOrphanedRestoredRuns", () => {
       expect(resumedRuns.has(entry.runId)).toBe(true);
     },
   );
+
+  // Regression: openclaw-kkv1 round 2. A restored `child-unconfirmed` row whose
+  // best-effort child session entry is absent produced `missing-session-entry`
+  // and was deleted here — the one move a later authoritative stop can never
+  // undo, since the map entry is what promotion needs to find.
+  it("keeps a restored unconfirmed child whose session entry is gone", () => {
+    const entry = createRunEntry({
+      execution: {
+        status: "terminal",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const resumedRuns = new Set([entry.runId]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns })).toBe(false);
+    expect(runs.get(entry.runId)).toBe(entry);
+    expect(resumedRuns.has(entry.runId)).toBe(true);
+  });
+
+  // Anti-vacuity control: the same absent session entry still prunes a run whose
+  // child WAS observed to stop, so the test above pins the disposition and not a
+  // blanket refusal to reconcile.
+  it("still prunes a restored run whose child stop was observed", () => {
+    const entry = createRunEntry({
+      execution: {
+        status: "terminal",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+      },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const resumedRuns = new Set([entry.runId]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns })).toBe(true);
+    expect(runs.has(entry.runId)).toBe(false);
+  });
 });
 
 describe("safeRemoveAttachmentsDir", () => {
@@ -275,6 +368,62 @@ describe("safeRemoveAttachmentsDir", () => {
         }),
       ),
     ).resolves.toBe(false);
+
+    realpathSpy.mockRestore();
+  });
+
+  it("refuses to remove attachments while the child stop is unconfirmed", async () => {
+    // The backstop lives inside the destructive call, not only in each caller's
+    // policy check: attachment removal is the one terminal effect a later
+    // observed promotion can never undo, and a caller that forgets the guard
+    // would silently destroy a possibly-live child's output.
+    const realpathSpy = vi.spyOn(fs, "realpath");
+
+    await expect(
+      safeRemoveAttachmentsDir(
+        createRunEntry({
+          cleanup: "delete",
+          attachmentsDir: "/tmp/openclaw-child-attachments",
+          attachmentsRootDir: "/tmp/openclaw-attachments",
+          execution: {
+            status: "terminal",
+            startedAt: 1_000,
+            endedAt: 2_000,
+            outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+          },
+        }),
+      ),
+    ).resolves.toBe(false);
+    // Not even a realpath probe: the decision is made before touching the disk.
+    expect(realpathSpy).not.toHaveBeenCalled();
+
+    realpathSpy.mockRestore();
+  });
+
+  it("removes attachments once an observed stop promotes the run", async () => {
+    // Anti-vacuity control for the case above: the same delete-mode row with an
+    // observed disposition does reach the removal, so the refusal is the guard
+    // and not an unrelated early return.
+    const realpathSpy = vi
+      .spyOn(fs, "realpath")
+      .mockRejectedValue(Object.assign(new Error("probe reached"), { code: "EACCES" }));
+
+    await expect(
+      safeRemoveAttachmentsDir(
+        createRunEntry({
+          cleanup: "delete",
+          attachmentsDir: "/tmp/openclaw-child-attachments",
+          attachmentsRootDir: "/tmp/openclaw-attachments",
+          execution: {
+            status: "terminal",
+            startedAt: 1_000,
+            endedAt: 2_000,
+            outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+          },
+        }),
+      ),
+    ).resolves.toBe(false);
+    expect(realpathSpy).toHaveBeenCalled();
 
     realpathSpy.mockRestore();
   });
@@ -411,6 +560,53 @@ describe("reconcileOrphanedRun", () => {
     ).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
   });
+  // Regression: openclaw-kkv1 round 2. Restore and resume share this owner, so
+  // both sources are pinned here, and the row must survive intact for the later
+  // authoritative stop to have something to promote.
+  it.each(["restore", "resume"] as const)(
+    "keeps an unconfirmed child on %s so a later observed stop can promote it",
+    (source) => {
+      const entry = createRunEntry({
+        execution: {
+          status: "terminal",
+          startedAt: 1_000,
+          endedAt: 2_000,
+          outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+        },
+      });
+      const runs = new Map([[entry.runId, entry]]);
+      const resumedRuns = new Set([entry.runId]);
+
+      expect(
+        reconcileOrphanedRun({
+          runId: entry.runId,
+          entry,
+          reason: "missing-session-entry",
+          source,
+          runs,
+          resumedRuns,
+        }),
+      ).toBe(false);
+      expect(runs.get(entry.runId)).toBe(entry);
+      expect(resumedRuns.has(entry.runId)).toBe(true);
+
+      // The child's own terminal record finally lands; the row is still here to
+      // receive it, and only now may the ordinary owner retire the run.
+      entry.execution.outcome = { status: "timeout", timeoutDisposition: "child-stopped" };
+
+      expect(
+        reconcileOrphanedRun({
+          runId: entry.runId,
+          entry,
+          reason: "missing-session-entry",
+          source,
+          runs,
+          resumedRuns,
+        }),
+      ).toBe(true);
+      expect(runs.has(entry.runId)).toBe(false);
+    },
+  );
 });
 
 describe("logAnnounceGiveUp", () => {

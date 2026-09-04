@@ -15,6 +15,7 @@ import { blockSubagentCompletionDelivery } from "../completion/subagent-completi
 import { ensureDeliveryState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import { shouldDeferTerminalCleanupForUnconfirmedChild } from "./subagent-registry-cleanup.js";
 import type {
   CleanupBookkeepingParams,
   SubagentLifecycleWakeContext,
@@ -436,7 +437,11 @@ export function completeCleanupBookkeeping(
       return (
         rowOwnershipMatches &&
         !context.newerGenerationOwnsSession(cleanupParams.entry) &&
-        !shouldSuppressSubagentRecoverySessionEffects(cleanupParams.entry)
+        !shouldSuppressSubagentRecoverySessionEffects(cleanupParams.entry) &&
+        // Every tail below retires a resource the child owns. A deadline alone
+        // is not evidence it stopped, so none of them may run until an observed
+        // stop promotes the row out of `child-unconfirmed`.
+        !shouldDeferTerminalCleanupForUnconfirmedChild(cleanupParams.entry)
       );
     };
     if (postBookkeepingEffectsAllowed() && !cleanupParams.preserveTranscript) {

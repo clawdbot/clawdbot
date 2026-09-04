@@ -38,6 +38,7 @@ type SubagentRunReadSqliteRow = Pick<
   cleanup_completed_at: number | null;
   generation: number | null;
   outcome_status: string | null;
+  outcome_timeout_disposition: string | null;
   delivery_status: string | null;
   delivery_suspended_at: number | null;
   requester_agent_id: string | null;
@@ -266,6 +267,13 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         subagentPayloadJsonValue<number | null>("$.cleanupCompletedAt").as("cleanup_completed_at"),
         subagentPayloadJsonValue<number | null>("$.generation").as("generation"),
         subagentPayloadJsonValue<string | null>("$.execution.outcome.status").as("outcome_status"),
+        // Read straight out of the retained payload like every column above it,
+        // so the lean session-list projection reports the same liveness the full
+        // record does. Dropping it here made a cross-process reader see a
+        // deadline-only expiry as an ordinary timeout.
+        subagentPayloadJsonValue<string | null>("$.execution.outcome.timeoutDisposition").as(
+          "outcome_timeout_disposition",
+        ),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
         subagentPayloadJsonValue<string | null>("$.requesterAgentId").as("requester_agent_id"),
         subagentPayloadJsonValue<number | null>("$.delivery.suspendedAt").as(
@@ -294,6 +302,12 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
     row.outcome_status === "unknown"
       ? row.outcome_status
       : undefined;
+  const timeoutDisposition =
+    outcomeStatus === "timeout" &&
+    (row.outcome_timeout_disposition === "child-stopped" ||
+      row.outcome_timeout_disposition === "child-unconfirmed")
+      ? row.outcome_timeout_disposition
+      : undefined;
   const deliveryStatus = DELIVERY_STATUSES.has(row.delivery_status ?? "")
     ? (row.delivery_status as NonNullable<SubagentRunRecord["delivery"]>["status"])
     : undefined;
@@ -313,7 +327,14 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
         status: row.execution_status,
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(endedAt !== undefined ? { endedAt } : {}),
-        ...(outcomeStatus ? { outcome: { status: outcomeStatus } } : {}),
+        ...(outcomeStatus
+          ? {
+              outcome: {
+                status: outcomeStatus,
+                ...(timeoutDisposition ? { timeoutDisposition } : {}),
+              },
+            }
+          : {}),
       },
       sessionStartedAt: normalizeFiniteNumber(row.session_started_at),
       accumulatedRuntimeMs: normalizeFiniteNumber(row.accumulated_runtime_ms),

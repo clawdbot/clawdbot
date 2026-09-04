@@ -87,13 +87,42 @@ type AgentWaitResult = {
   providerStarted?: boolean;
 };
 
+/**
+ * Which of the two events a `timeout` outcome actually records.
+ *
+ * `child-stopped` — the gateway reported the child run itself settled, so the
+ * outcome is terminal and its timing describes the child.
+ * `child-unconfirmed` — only a deadline elapsed (this waiter's budget, or the
+ * stored run deadline). No stop was observed, so the child may still be
+ * running and the outcome describes the end of the WAIT, not of the run.
+ */
+export type SubagentTimeoutDisposition = "child-stopped" | "child-unconfirmed";
+
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
   error?: string;
+  /** Only meaningful when `status` is `timeout`. */
+  timeoutDisposition?: SubagentTimeoutDisposition;
   startedAt?: number;
   endedAt?: number;
   elapsedMs?: number;
 };
+
+/**
+ * True when an `agent.wait` result carries evidence that the child run itself
+ * settled. The gateway attaches these fields only from a terminal snapshot; a
+ * plain wait expiry comes back as a bare `status: "timeout"`, which is why a
+ * timeout status alone can never be read as the child having stopped.
+ */
+export function waitObservedRunStop(
+  wait: Pick<AgentWaitResult, "endedAt" | "stopReason" | "livenessState"> | undefined,
+): boolean {
+  return (
+    typeof wait?.endedAt === "number" ||
+    typeof wait?.stopReason === "string" ||
+    typeof wait?.livenessState === "string"
+  );
+}
 
 export function withSubagentOutcomeTiming(
   outcome: SubagentRunOutcome,
@@ -342,22 +371,44 @@ export function applySubagentWaitOutcome(params: {
     // provider timeouts through (openclaw#125407).
     switch (classifySubagentTerminalOutcome(terminalOutcome)) {
       case "timeout": {
-        // A run that failed inside the lifecycle error retry grace window is
+        // Two orthogonal facts, both kept.
+        //
+        // (1) A run that failed inside the lifecycle error retry grace window is
         // surfaced to waiters as a timeout carrying the failure text and
-        // `pendingError: true` (see createPendingErrorTimeoutSnapshot). Keep
-        // that cause so the announce can report why the child died instead of
-        // a bare "timed out". Genuine budget timeouts have no pendingError and
-        // stay unchanged.
+        // `pendingError: true` (see createPendingErrorTimeoutSnapshot). Keep that
+        // cause so the announce reports why the child died, not a bare "timed out".
+        //
+        // (2) A bare `status: "timeout"` snapshot is a wait expiry, not a stop, so
+        // classifying it as terminal would lose a distinction a caller may already
+        // have established. A pendingError timeout still carries a disposition.
         const pendingErrorText =
           params.wait?.pendingError === true ? (terminalOutcome.error ?? waitError) : undefined;
+        const priorDisposition =
+          params.outcome?.status === "timeout" ? params.outcome.timeoutDisposition : undefined;
+        const timeoutDisposition = waitObservedRunStop(params.wait)
+          ? ("child-stopped" as const)
+          : (priorDisposition ?? ("child-unconfirmed" as const));
         outcome = pendingErrorText
-          ? { status: "timeout", error: pendingErrorText }
-          : { status: "timeout" };
+          ? { status: "timeout", error: pendingErrorText, timeoutDisposition }
+          : { status: "timeout", timeoutDisposition };
         break;
       }
-      case "cancellation":
-        outcome = { status: "error", error: "subagent run terminated" };
+      case "cancellation": {
+        // An explicit restart/aborted stop reason normally owns the outcome
+        // (openclaw#125407). One exception: when it lands on an already-published
+        // `child-unconfirmed` timeout, it IS the authoritative stop evidence that
+        // state was waiting for. Promoting keeps the run a timeout — the parent
+        // still learns its deadline elapsed and the work may be incomplete —
+        // while re-arming the terminal cleanup that `child-unconfirmed` defers.
+        // Reporting "terminated" instead would discard the deadline fact and read
+        // to an orchestrator as a child that died before doing anything.
+        outcome =
+          params.outcome?.status === "timeout" &&
+          params.outcome.timeoutDisposition === "child-unconfirmed"
+            ? { ...params.outcome, timeoutDisposition: "child-stopped" as const }
+            : { status: "error", error: "subagent run terminated" };
         break;
+      }
       case "failure":
         outcome = { status: "error", error: terminalOutcome.error ?? waitError };
         break;

@@ -1,6 +1,7 @@
 /** Canonical ordering and visibility for numbered subagent lists and targets. */
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
+import { isSubagentChildStopUnconfirmed } from "./subagent-session-metrics.js";
 
 export function sortSubagentRuns(runs: readonly SubagentRunRecord[]): SubagentRunRecord[] {
   return runs.toSorted((a, b) => {
@@ -32,6 +33,12 @@ export function buildSubagentRunView(params: {
     latest.push(entry);
     if (
       isLiveUnendedSubagentRun(entry, now) ||
+      // A row whose wait expired without observing the child stop has an
+      // `endedAt`, so the unended test above rejects it — which would file a
+      // possibly-live child under "recent" alongside genuinely finished runs.
+      // The listing a parent reads before deciding whether to spawn a
+      // replacement has to keep it visible as live work.
+      isSubagentChildStopUnconfirmed(entry) ||
       params.countPendingDescendantRuns(entry.childSessionKey) > 0
     ) {
       active.push(entry);

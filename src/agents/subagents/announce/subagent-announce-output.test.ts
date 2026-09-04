@@ -954,6 +954,9 @@ describe("applySubagentWaitOutcome", () => {
 
     expect(applied.outcome).toEqual({
       status: "timeout",
+      // The provider ended the run and the snapshot carries endedAt +
+      // livenessState, so this stop is observed rather than merely assumed.
+      timeoutDisposition: "child-stopped",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,
@@ -982,6 +985,38 @@ describe("applySubagentWaitOutcome", () => {
       });
     },
   );
+
+  // Regression (openclaw-kkv1): a wait expiry and a dead child both arrived as
+  // a bare `status: "timeout"`, so the announce layer could only report one
+  // wording for both. The disposition is what keeps them apart downstream.
+  it("records an unconfirmed stop when a timeout snapshot carries no terminal evidence", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: { status: "timeout", startedAt: 100 },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome?.status).toBe("timeout");
+    expect(applied.outcome?.timeoutDisposition).toBe("child-unconfirmed");
+  });
+
+  it("records an observed stop when a timeout snapshot carries terminal evidence", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: { status: "timeout", startedAt: 100, endedAt: 150 },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome?.status).toBe("timeout");
+    expect(applied.outcome?.timeoutDisposition).toBe("child-stopped");
+  });
+
+  it("does not downgrade an already-observed stop when a later wait expiry has no evidence", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: { status: "timeout" },
+      outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+    });
+
+    expect(applied.outcome?.timeoutDisposition).toBe("child-stopped");
+  });
 
   it("treats aborted ok wait snapshots as terminated subagent errors", () => {
     const applied = applySubagentWaitOutcome({
@@ -1046,6 +1081,7 @@ describe("applySubagentWaitOutcome", () => {
     expect(applied.outcome).toEqual({
       status: "timeout",
       error: "model returned an unrecoverable tool-call sequence",
+      timeoutDisposition: "child-stopped",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,
@@ -1064,6 +1100,7 @@ describe("applySubagentWaitOutcome", () => {
 
     expect(applied.outcome).toEqual({
       status: "timeout",
+      timeoutDisposition: "child-stopped",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,
@@ -1083,6 +1120,7 @@ describe("applySubagentWaitOutcome", () => {
 
     expect(applied.outcome).toEqual({
       status: "timeout",
+      timeoutDisposition: "child-stopped",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,
