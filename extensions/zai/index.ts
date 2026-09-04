@@ -31,6 +31,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildZaiClaudeAgentSdkBackend } from "./cli-backend.js";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
@@ -386,6 +387,7 @@ export default defineSingleProviderPluginEntry({
     isCacheTtlEligible: () => true,
   },
   register(api) {
+    api.registerCliBackend(buildZaiClaudeAgentSdkBackend());
     api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
   },
 });

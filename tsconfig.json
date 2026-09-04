@@ -285,6 +285,10 @@
       "@openclaw/net-policy/url-protocol": ["./packages/net-policy/src/url-protocol.ts"],
       "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
       "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
+      "@openclaw/anthropic-provider/api": ["./extensions/anthropic/api.ts"],
+      "@openclaw/anthropic-provider/agent-sdk-backend-api": [
+        "./extensions/anthropic/agent-sdk-backend-api.ts"
+      ],
       "@openclaw/sdk": ["./packages/sdk/src/index.ts"],
       "@openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"],

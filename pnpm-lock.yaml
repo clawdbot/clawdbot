@@ -2291,6 +2291,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/zai:
+    dependencies:
+      '@openclaw/anthropic-provider':
+        specifier: workspace:*
+        version: link:../anthropic
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

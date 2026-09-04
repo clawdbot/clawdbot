@@ -4,10 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  capturePluginRegistration,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
+import {
+  buildZaiClaudeAgentSdkBackend,
+  ZAI_ANTHROPIC_BASE_URL,
+  ZAI_CLAUDE_AGENT_SDK_BACKEND_ID,
+} from "./cli-backend.js";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -51,6 +59,48 @@ function expectModelFields(
 }
 
 describe("zai provider plugin", () => {
+  it("registers an explicit Agent SDK backend without changing native Claude routing", () => {
+    const captured = capturePluginRegistration({ register: plugin.register });
+    expect(captured.cliBackends.map((entry) => entry.id)).toContain(
+      ZAI_CLAUDE_AGENT_SDK_BACKEND_ID,
+    );
+
+    const backend = buildZaiClaudeAgentSdkBackend();
+
+    expect(backend).toMatchObject({
+      id: ZAI_CLAUDE_AGENT_SDK_BACKEND_ID,
+      modelProvider: "zai",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      ownsNativeCompaction: true,
+      subscriptionAuthDispatch: false,
+      config: {
+        command: "claude",
+        clearEnv: expect.arrayContaining(["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"]),
+      },
+    });
+
+    const prepared = backend.prepareExecution?.({
+      provider: "zai",
+      modelId: "glm-4.7",
+      workspaceDir: "/tmp/openclaw-zai-agent-sdk",
+      executionMode: "agent",
+      authCredential: { type: "api_key", key: "zai-test-key" },
+    } as never);
+    expect(prepared).toBeDefined();
+    return Promise.resolve(prepared).then((execution) => {
+      expect(execution).toMatchObject({
+        env: {
+          ANTHROPIC_BASE_URL: ZAI_ANTHROPIC_BASE_URL,
+          CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+        },
+      });
+      expect(execution?.execute).toBeTypeOf("function");
+      return execution?.cleanup?.();
+    });
+  });
+
   it("preserves all regional auth choices and the exact manifest-owned static catalog", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

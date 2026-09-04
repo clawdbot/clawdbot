@@ -3,6 +3,9 @@
   "version": "2026.8.1",
   "description": "OpenClaw Z.AI provider plugin",
   "type": "module",
+  "dependencies": {
+    "@openclaw/anthropic-provider": "workspace:*"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
