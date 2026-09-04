@@ -3696,6 +3696,7 @@
     "native.apple.b8b79ae74c5aa5ca": "不足: %@",
     "native.apple.b8fd3263920a001e": "OpenClaw",
     "native.apple.b91e73168d5caf0e": "セットアップリンク",
+    "native.apple.b9352e761c5eaa0d": "Gateway に再接続して、ダッシュボードのサインインアドレスを確認してください。",
     "native.apple.b940eaefc5520666": "文字起こし",
     "native.apple.b9549ad2d7f5a356": "非アクティブ",
     "native.apple.b95d58469e82b376": "OpenClawは、音声による起動、プッシュツートーク、会話モード、クイックチャットの音声入力にApple Speechを使用します。音声による起動の処理はデバイス内で完結します。",
