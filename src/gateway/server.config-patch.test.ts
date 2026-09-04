@@ -40,8 +40,9 @@ function requireClient(): GatewayClient {
   return client;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Gateway test RPC helper lets callers ascribe response payload shape.
 async function rpcReq<T extends Record<string, unknown>>(
-  client: GatewayClient,
+  gatewayClient: GatewayClient,
   method: string,
   params?: unknown,
   timeoutMs = 10_000,
@@ -51,7 +52,7 @@ async function rpcReq<T extends Record<string, unknown>>(
   error?: { message?: string; code?: string; details?: unknown };
 }> {
   try {
-    return { ok: true, payload: await client.request<T>(method, params, { timeoutMs }) };
+    return { ok: true, payload: await gatewayClient.request<T>(method, params, { timeoutMs }) };
   } catch (error) {
     if (!(error instanceof GatewayClientRequestError)) {
       throw error;
@@ -96,7 +97,7 @@ beforeEach(async () => {
     controlUiEnabled: true,
     hotReloadRecovery,
   });
-  const connected = createDeferredCore<void>();
+  const connected = createDeferredCore();
   client = new GatewayClient({
     url: `ws://127.0.0.1:${port}`,
     token: GATEWAY_TOKEN,
