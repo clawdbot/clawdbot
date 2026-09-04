@@ -655,23 +655,19 @@ export class Agent {
     try {
       await executor(abortController.signal);
     } catch (error) {
-      await this.handleRunFailure(error, abortController.signal);
+      await this.handleRunFailure(error, abortController.signal.aborted);
     } finally {
       this.finishRun();
     }
   }
 
-  private async handleRunFailure(error: unknown, signal: AbortSignal): Promise<void> {
-    const aborted = signal.aborted;
-    const failureMessage = createFailureMessage(this.mutableState.model, error, aborted, {
-      signal,
-      origin: "runtime",
-    });
+  private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
+    const failureMessage = createFailureMessage(this.mutableState.model, error, aborted);
     await this.processEvents({ type: "message_start", message: failureMessage });
     await this.processEvents({ type: "message_end", message: failureMessage });
     await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });
     const messages: AgentMessage[] = [failureMessage];
-    if (aborted && !isTurnHandoffAbort(signal)) {
+    if (aborted && !isTurnHandoffAbort(this.signal)) {
       await appendInterruptedTurnMessage(messages, (event) => this.processEvents(event));
     }
     await this.processEvents({ type: "agent_end", messages });

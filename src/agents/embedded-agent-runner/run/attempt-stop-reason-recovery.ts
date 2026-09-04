@@ -44,8 +44,6 @@ function patchUnhandledStopReasonInAssistantMessage(message: unknown): void {
 function buildUnhandledStopReasonErrorStream(
   model: Parameters<StreamFn>[0],
   errorMessage: string,
-  error: unknown,
-  signal?: AbortSignal,
 ): MutableAssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
@@ -53,10 +51,12 @@ function buildUnhandledStopReasonErrorStream(
       type: "error",
       reason: "error",
       error: buildStreamErrorAssistantMessage({
-        model,
+        model: {
+          api: model.api,
+          provider: model.provider,
+          id: model.id,
+        },
         errorMessage,
-        error,
-        signal,
       }),
     });
     stream.end();
@@ -67,7 +67,6 @@ function buildUnhandledStopReasonErrorStream(
 function wrapStreamHandleUnhandledStopReason(
   model: Parameters<StreamFn>[0],
   stream: MutableAssistantMessageEventStream,
-  signal?: AbortSignal,
 ): MutableAssistantMessageEventStream {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
@@ -81,10 +80,12 @@ function wrapStreamHandleUnhandledStopReason(
         throw err;
       }
       return buildStreamErrorAssistantMessage({
-        model,
+        model: {
+          api: model.api,
+          provider: model.provider,
+          id: model.id,
+        },
         errorMessage: normalizedMessage,
-        error: err,
-        signal,
       });
     }
   };
@@ -123,10 +124,12 @@ function wrapStreamHandleUnhandledStopReason(
                 type: "error" as const,
                 reason: "error" as const,
                 error: buildStreamErrorAssistantMessage({
-                  model,
+                  model: {
+                    api: model.api,
+                    provider: model.provider,
+                    id: model.id,
+                  },
                   errorMessage: normalizedMessage,
-                  error: err,
-                  signal,
                 }),
               },
             };
@@ -149,28 +152,23 @@ export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamF
       const maybeStream = baseFn(model, context, options);
       if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
         return Promise.resolve(maybeStream).then(
-          (stream) => wrapStreamHandleUnhandledStopReason(model, stream, options?.signal),
+          (stream) => wrapStreamHandleUnhandledStopReason(model, stream),
           (err: unknown) => {
             const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
             if (!normalizedMessage) {
               throw err;
             }
-            return buildUnhandledStopReasonErrorStream(
-              model,
-              normalizedMessage,
-              err,
-              options?.signal,
-            );
+            return buildUnhandledStopReasonErrorStream(model, normalizedMessage);
           },
         );
       }
-      return wrapStreamHandleUnhandledStopReason(model, maybeStream, options?.signal);
+      return wrapStreamHandleUnhandledStopReason(model, maybeStream);
     } catch (err) {
       const normalizedMessage = normalizeUnhandledStopReasonMessage(formatErrorMessage(err));
       if (!normalizedMessage) {
         throw err;
       }
-      return buildUnhandledStopReasonErrorStream(model, normalizedMessage, err, options?.signal);
+      return buildUnhandledStopReasonErrorStream(model, normalizedMessage);
     }
   };
 }

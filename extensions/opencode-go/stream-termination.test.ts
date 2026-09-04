@@ -1,6 +1,5 @@
 // Opencode Go stream termination wrapper tests cover provider-owned raw SSE
 // boundary behavior for stalled OpenAI-compatible streams.
-import { withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 import type {
   AssistantMessageEvent,
   AssistantMessageEventStreamContract,
@@ -166,41 +165,6 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it.each(["runtime", "provider"] as const)(
-    "preserves %s provenance from rejected stream creation",
-    async (origin) => {
-      const failure = withRunFailureOrigin(new Error("HTTP 401: stream setup failed"), origin);
-      const { downstream } = await createStreamHarness({ source: Promise.reject(failure) });
-      const result = await downstream!.result();
-      expect(result.errorMessage).toBe(failure.message);
-      expect(result.diagnostics ?? []).toEqual(
-        origin === "runtime"
-          ? [{ type: "synthesized_run_failure", timestamp: result.timestamp }]
-          : [],
-      );
-    },
-  );
-
-  it("preserves the runtime abort origin when an iterator replaces it after partial output", async () => {
-    const caller = new AbortController();
-    const partial = { role: "assistant", content: [], timestamp: 42 };
-    const source = {
-      ...createFakeBaseStream().stream,
-      async *[Symbol.asyncIterator]() {
-        yield asProviderEvent({ type: "start", partial });
-        caller.abort(withRunFailureOrigin(new Error("runtime tool batch failed"), "runtime"));
-        throw new Error("Request was aborted");
-      },
-    };
-    const { downstream } = await createStreamHarness({
-      source,
-      callOptions: { signal: caller.signal },
-    });
-    const result = await downstream!.result();
-    expect(result.errorMessage).toBe("Request was aborted");
-    expect(result.diagnostics).toEqual([{ type: "synthesized_run_failure", timestamp: 42 }]);
   });
 
   it("aborts underlying stream when progress stalls after first delta (raw SSE boundary)", async () => {

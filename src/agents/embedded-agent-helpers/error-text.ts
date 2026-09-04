@@ -1,6 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { diagnosticErrorFailureKind } from "../../infra/diagnostic-error-metadata.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -339,24 +338,7 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
-  return resolveAssistantErrorPresentation(msg, opts).text;
-}
-
-/** One presentation decision for reply text and public lifecycle diagnostics. */
-export function resolveAssistantErrorPresentation(
-  msg: AssistantMessage,
-  opts?: AssistantErrorTextOptions,
-): { text: string; attribution: "provider" | "runtime" } {
   const rawError = msg.errorMessage?.trim();
-  // Keep local remediation while rejecting provider attribution inferred from runtime text.
-  if (msg.diagnostics?.some((diagnostic) => diagnostic.type === "synthesized_run_failure")) {
-    const text =
-      formatDiskSpaceErrorCopy(rawError ?? "") ??
-      (diagnosticErrorFailureKind(rawError) === "timeout"
-        ? SYNTHESIZED_TIMEOUT_ERROR_TEXT
-        : GENERIC_ASSISTANT_ERROR_TEXT);
-    return { text, attribution: "runtime" };
-  }
   const facts = classifyAssistantErrorFacts(msg, opts);
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
@@ -376,10 +358,7 @@ export function resolveAssistantErrorPresentation(
           : undefined
         : friendlyError;
   if (safeFriendlyError) {
-    return { text: safeFriendlyError.trim(), attribution: "provider" };
+    return safeFriendlyError.trim();
   }
-  return {
-    text: renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT,
-    attribution: "provider",
-  };
+  return renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT;
 }

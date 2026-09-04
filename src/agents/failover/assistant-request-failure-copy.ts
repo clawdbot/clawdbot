@@ -46,8 +46,8 @@ export function renderAssistantRequestFailureCopy(
     httpStatus <= 599
       ? `HTTP ${httpStatus}`
       : undefined;
-  if (!target && !reason && !status) {
-    return undefined;
+  if (!reason && !status) {
+    return target ? `⚠️ Agent run failed (${model ? "model" : "provider"}: ${target}).` : undefined;
   }
   const details = [reason, status].filter(Boolean);
   const summary = `⚠️ ${target ? `${target} request failed` : "LLM request failed"}${details.length > 0 ? ` (${details.join(", ")})` : ""}.`;

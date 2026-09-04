@@ -5,15 +5,10 @@ import type {
   Context,
   ToolResultMessage,
 } from "@openclaw/llm-core";
-import {
-  appendRuntimeFailureDiagnostic,
-  withRunFailureOrigin,
-} from "@openclaw/llm-core/diagnostics";
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { uuidv7 } from "./harness/session/uuid.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import { createStreamSteering } from "./stream-steering.js";
-import { normalizeCoreContextMessages, startRunProviderStream } from "./turn-interruption.js";
+import { normalizeCoreContextMessages } from "./turn-interruption.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -103,28 +98,6 @@ function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
   }
   // message_end persists this local identity before any tool can execute.
   return { ...message, turnId: uuidv7() };
-}
-
-// Preserve synchronous payload replacement while tagging asynchronous callback rejections
-// before a provider can convert them into its own terminal error message.
-function wrapRuntimeCallback<Args extends unknown[], T>(
-  callback: ((...args: Args) => T | Promise<T>) | undefined,
-) {
-  return (
-    callback &&
-    function (this: unknown, ...args: Args) {
-      try {
-        const result = callback.apply(this, args);
-        return isPromiseLike<T>(result)
-          ? Promise.resolve(result).catch((error: unknown) => {
-              throw withRunFailureOrigin(error, "runtime");
-            })
-          : result;
-      } catch (error) {
-        throw withRunFailureOrigin(error, "runtime");
-      }
-    }
-  );
 }
 
 export async function streamAgentResponse(
@@ -233,36 +206,24 @@ export async function streamAgentResponse(
         });
         batches.push(batch);
         if (batch.fatal || batch.terminateRun) {
-          executionAbort.abort(
-            withRunFailureOrigin(
-              batch.fatal?.error ?? new Error("Tool batch terminated"),
-              "runtime",
-            ),
-          );
+          executionAbort.abort(batch.fatal?.error ?? new Error("Tool batch terminated"));
         }
       })
       .catch((error: unknown) => {
-        const failure = withRunFailureOrigin(error, "runtime");
-        executionFailure ??= { error: failure };
-        executionAbort.abort(failure);
+        executionFailure ??= { error };
+        executionAbort.abort(error);
       })
       .finally(releaseAdmission);
     executions = Promise.all([previousExecutions, execution]).then(() => {});
   };
   try {
-    const response = await startRunProviderStream(
-      () =>
-        streamFunction(config.model, llmContext, {
-          ...config,
-          apiKey: resolvedApiKey,
-          signal: executionSignal,
-          onActiveResponse: steering.onActiveResponse,
-          onPayload: wrapRuntimeCallback(config.onPayload),
-          onResponse: wrapRuntimeCallback(config.onResponse),
-          asyncToolExecution: true,
-        }),
-      executionSignal,
-    );
+    const response = await streamFunction(config.model, llmContext, {
+      ...config,
+      apiKey: resolvedApiKey,
+      signal: executionSignal,
+      onActiveResponse: steering.onActiveResponse,
+      asyncToolExecution: true,
+    });
 
     let partialMessage: AssistantMessage | null = null;
     let partialIndex: number | undefined;
@@ -400,7 +361,6 @@ export async function streamAgentResponse(
           }),
         ),
       );
-      appendRuntimeFailureDiagnostic(finalMessage, undefined, executionSignal);
       await commitFragment(finalMessage);
       if (executedIds.size > 0) {
         enqueueTools(finalMessage);

@@ -88,12 +88,6 @@ CLI logs render these diagnostics automatically; successful runs remain quiet.
 Native RPC error messages retain their original text; `agent.wait` renders the
 supplemental diagnostic at its terminal result boundary.
 
-Bundled provider adapters use `appendRuntimeFailureDiagnostic(message, error, signal)` from
-`openclaw/plugin-sdk/llm` when converting an exception to a
-message. The tagged error already carries message text. Use `unwrapRunFailure(error)`
-only when provider fields or SDK exception identity are needed, and guard foreign-object
-inspection. Pass the original error and first abort signal to the diagnostic helper.
-
 Channel plugins must admit authenticated agent turns through their injected
 `api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
 accepts owner authority only from the exact active, trusted plugin registered for

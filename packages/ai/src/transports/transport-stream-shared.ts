@@ -10,7 +10,6 @@ import type {
   StreamOptions,
   Usage,
 } from "@openclaw/llm-core";
-import { appendRuntimeFailureDiagnostic, unwrapRunFailure } from "@openclaw/llm-core/diagnostics";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   appendAssistantMessageDiagnostic,
@@ -169,15 +168,10 @@ export function createWritableTransportEventStream() {
  * already emits rather than churning it.
  */
 export function transportAbortError(signal?: AbortSignal): Error {
-  try {
-    const reason = unwrapRunFailure(signal?.reason);
-    if (reason instanceof Error && typeof (reason as { code?: unknown }).code === "string") {
-      return reason;
-    }
-  } catch {
-    // Foreign cause inspection must not replace the recorded abort with a new failure.
-  }
-  return new Error("Request was aborted");
+  const reason: unknown = signal?.reason;
+  return reason instanceof Error && typeof (reason as { code?: unknown }).code === "string"
+    ? reason
+    : new Error("Request was aborted");
 }
 
 export type ProviderAcceptance =
@@ -426,12 +420,9 @@ export function assignTransportErrorDetails(
   output: AssistantMessage,
   error: unknown,
   signal?: AbortSignal,
-  sourceError: unknown = error,
 ): ProviderErrorProjection {
-  const projection = projectProviderError(unwrapRunFailure(error), signal);
+  const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
-  // Cancellation can replace displayed details without changing the caught failure's origin.
-  appendRuntimeFailureDiagnostic(output, sourceError, signal);
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&

@@ -470,7 +470,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       }
     }
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
-    assignTransportErrorDetails(output, failure, options?.signal, error);
+    assignTransportErrorDetails(output, failure, options?.signal);
     stream.push({
       type: "error",
       reason: output.stopReason === "aborted" ? "aborted" : "error",

@@ -1,9 +1,7 @@
 // Coverage for converting sensitive/unhandled stop reasons into assistant errors.
-import { withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
-  type AssistantMessage,
   type Context,
   type Model,
 } from "openclaw/plugin-sdk/llm";
@@ -60,7 +58,6 @@ describe("wrapStreamFnHandleSensitiveStopReason", () => {
     expect(result.errorMessage).toBe(
       "The model stopped because the provider returned an unhandled stop reason: sensitive. Please rephrase and try again.",
     );
-    expect(result.diagnostics).toBeUndefined();
   });
 
   it("includes the extracted stop reason when converting synchronous throws", async () => {
@@ -78,55 +75,5 @@ describe("wrapStreamFnHandleSensitiveStopReason", () => {
     expect(result.errorMessage).toBe(
       "The model stopped because the provider returned an unhandled stop reason: refusal_policy. Please rephrase and try again.",
     );
-    expect(result.diagnostics).toBeUndefined();
   });
-
-  it.each(["sync creation", "async creation", "iterator", "result", "signal replacement"])(
-    "preserves runtime origin when recovering %s",
-    async (boundary) => {
-      const cause = new Error("Unhandled stop reason: runtime_callback");
-      const marked = withRunFailureOrigin(cause, "runtime");
-      const failure = boundary === "signal replacement" ? cause : marked;
-      const signal = boundary === "signal replacement" ? AbortSignal.abort(marked) : undefined;
-      const baseStreamFn: StreamFn = () => {
-        if (boundary === "async creation") {
-          return Promise.reject(failure);
-        }
-        if (boundary === "sync creation" || boundary === "signal replacement") {
-          throw failure;
-        }
-        return {
-          async *[Symbol.asyncIterator]() {
-            yield* [];
-            if (boundary === "iterator") {
-              throw failure;
-            }
-          },
-          result: async () => {
-            throw failure;
-          },
-        };
-      };
-      const stream = await wrapStreamFnHandleSensitiveStopReason(baseStreamFn)(
-        anthropicModel,
-        { messages: [] },
-        { signal },
-      );
-      const messages: AssistantMessage[] = [];
-      for await (const event of stream) {
-        expect(event.type).toBe("error");
-        if (event.type === "error") {
-          messages.push(event.error);
-        }
-      }
-      messages.push(await stream.result());
-      expect(messages).toHaveLength(boundary === "result" ? 1 : 2);
-      for (const message of messages) {
-        expect(message).toMatchObject({
-          stopReason: "error",
-          diagnostics: [{ type: "synthesized_run_failure", timestamp: expect.any(Number) }],
-        });
-      }
-    },
-  );
 });

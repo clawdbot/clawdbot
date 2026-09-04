@@ -59,5 +59,3 @@ export {
 } from "../../packages/llm-core/src/utils/event-stream.js";
 export { createHttpProxyAgentsForTarget } from "../llm/utils/node-http-proxy.js";
 export { validateToolArguments, validateToolCall } from "../../packages/llm-core/src/validation.js";
-
-export { appendRuntimeFailureDiagnostic, unwrapRunFailure } from "@openclaw/llm-core/diagnostics";

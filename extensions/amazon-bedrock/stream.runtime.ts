@@ -30,7 +30,6 @@ import type { DocumentType } from "@smithy/types";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   adjustMaxTokensForThinking,
-  appendRuntimeFailureDiagnostic,
   AssistantMessageEventStream,
   buildBaseOptions,
   calculateCost,
@@ -39,7 +38,6 @@ import {
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
-  unwrapRunFailure,
   type Api,
   type AssistantMessage,
   type AssistantMessageEvent,
@@ -406,7 +404,6 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       }
       output.stopReason = options.signal?.aborted ? "aborted" : "error";
       output.errorMessage = formatBedrockError(error);
-      appendRuntimeFailureDiagnostic(output, error, options.signal);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
     } finally {
@@ -441,14 +438,9 @@ const BEDROCK_ERROR_PREFIXES: Record<string, string> = {
  */
 function formatBedrockError(error: unknown): string {
   const message = error instanceof Error ? error.message : JSON.stringify(error);
-  try {
-    const cause = unwrapRunFailure(error);
-    if (cause instanceof BedrockRuntimeServiceException) {
-      const prefix = BEDROCK_ERROR_PREFIXES[cause.name] ?? cause.name;
-      return `${prefix}: ${message}`;
-    }
-  } catch {
-    // A tagged error retains safe text when its foreign cause cannot be inspected.
+  if (error instanceof BedrockRuntimeServiceException) {
+    const prefix = BEDROCK_ERROR_PREFIXES[error.name] ?? error.name;
+    return `${prefix}: ${message}`;
   }
   return message;
 }

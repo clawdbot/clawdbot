@@ -1,6 +1,5 @@
 // Stream message tests lock down the sanitized assistant message emitted when a
 // provider stream fails mid-response.
-import { withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 import { describe, expect, it } from "vitest";
 import {
   STREAM_ERROR_FALLBACK_TEXT,
@@ -15,29 +14,10 @@ const model = {
 };
 
 describe("buildStreamErrorAssistantMessage", () => {
-  it("settles a tagged failure without inspecting its hostile cause", () => {
-    const cause = new Proxy(
-      { message: "opaque runtime failure" },
-      {
-        getPrototypeOf() {
-          throw new Error("cause prototype must not be inspected");
-        },
-      },
-    );
-    const message = buildStreamErrorAssistantMessage({
-      model,
-      error: withRunFailureOrigin(cause, "runtime"),
-    });
-    expect(message.errorMessage).toBe("opaque runtime failure");
-    expect(message.diagnostics).toEqual([
-      { type: "synthesized_run_failure", timestamp: message.timestamp },
-    ]);
-  });
-
   it("never returns an empty content array", () => {
     const message = buildStreamErrorAssistantMessage({
       model,
-      error: "stream aborted by upstream host=internal.example.com",
+      errorMessage: "stream aborted by upstream host=internal.example.com",
     });
     expect(message.content).toStrictEqual([{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }]);
   });
@@ -45,7 +25,7 @@ describe("buildStreamErrorAssistantMessage", () => {
   it("places only the sentinel in content and never echoes the raw error text", () => {
     const message = buildStreamErrorAssistantMessage({
       model,
-      error: "stream aborted by upstream host=internal.example.com",
+      errorMessage: "stream aborted by upstream host=internal.example.com",
     });
     // Replay-visible content must be the canonical sentinel — replaying raw
     // provider error strings could leak hostnames/metadata to the model and
@@ -58,7 +38,7 @@ describe("buildStreamErrorAssistantMessage", () => {
   });
 
   it("uses the same sentinel when errorMessage is blank", () => {
-    const message = buildStreamErrorAssistantMessage({ model, error: "   " });
+    const message = buildStreamErrorAssistantMessage({ model, errorMessage: "   " });
     expect(message.content).toEqual([{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }]);
     // Original errorMessage is preserved verbatim for clients that surface it.
     expect(message.errorMessage).toBe("   ");

@@ -35,11 +35,12 @@ import {
   sanitizeAssistantVisibleText,
 } from "../../../shared/text/assistant-visible-text.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
-import { normalizeTextForComparison } from "../../embedded-agent-helpers.js";
 import {
-  resolveAssistantErrorPresentation,
-  SYNTHESIZED_TIMEOUT_ERROR_TEXT,
-} from "../../embedded-agent-helpers/error-text.js";
+  formatAssistantErrorText,
+  formatUserFacingAssistantErrorText,
+  normalizeTextForComparison,
+} from "../../embedded-agent-helpers.js";
+import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -212,30 +213,35 @@ export function buildEmbeddedRunPayloads(params: {
   const rawErrorMessage = lastAssistantNeedsErrorSurface
     ? normalizeOptionalString(assistantForPayload?.errorMessage)
     : undefined;
-  const presentation =
-    !suppressFailureArtifacts && assistantForPayload && lastAssistantNeedsErrorSurface
-      ? resolveAssistantErrorPresentation(assistantForPayload, {
-          cfg: params.config,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          provider: params.provider,
-          providerOwner: params.providerOwner,
-          model: params.model,
-          authMode: params.authMode,
-        })
-      : undefined;
-  const oauthRefreshFailure =
-    presentation?.attribution === "provider" && rawErrorMessage
-      ? classifyOAuthRefreshFailure(rawErrorMessage)
-      : null;
+  const oauthRefreshFailure = rawErrorMessage ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
   const codexLoginRecovery = buildCodexLoginRecovery({
     provider: oauthRefreshFailure?.provider ?? params.provider,
     oauthReason: oauthRefreshFailure?.reason,
   });
   const errorText =
-    presentation &&
-    (presentation.attribution === "runtime" || lastAssistantErrored || rawErrorMessage)
-      ? (codexLoginRecovery?.hint ?? presentation.text)
+    assistantForPayload && lastAssistantNeedsErrorSurface
+      ? suppressFailureArtifacts
+        ? undefined
+        : lastAssistantErrored || rawErrorMessage
+          ? (codexLoginRecovery?.hint ??
+            formatUserFacingAssistantErrorText(assistantForPayload, {
+              cfg: params.config,
+              sessionKey: params.sessionKey,
+              agentId: params.agentId,
+              provider: params.provider,
+              providerOwner: params.providerOwner,
+              model: params.model,
+              authMode: params.authMode,
+            }))
+          : formatAssistantErrorText(assistantForPayload, {
+              cfg: params.config,
+              sessionKey: params.sessionKey,
+              agentId: params.agentId,
+              provider: params.provider,
+              providerOwner: params.providerOwner,
+              model: params.model,
+              authMode: params.authMode,
+            })
       : undefined;
   const deferAssistantTimeoutError =
     params.deferAssistantTimeoutError === true &&

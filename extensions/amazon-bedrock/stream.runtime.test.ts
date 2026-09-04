@@ -1,11 +1,9 @@
 // Amazon Bedrock tests cover stream plugin behavior.
 import {
   BedrockRuntimeClient,
-  BedrockRuntimeServiceException,
   ConversationRole,
   StopReason as BedrockStopReason,
 } from "@aws-sdk/client-bedrock-runtime";
-import { withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
@@ -296,52 +294,6 @@ describe("Bedrock profile endpoint resolution", () => {
 });
 
 describe("Bedrock stop reasons", () => {
-  it.each([
-    { origin: "runtime", replaceAfterAbort: false },
-    { origin: "provider", replaceAfterAbort: false },
-    { origin: "runtime", replaceAfterAbort: true },
-  ] as const)(
-    "preserves $origin failure provenance (replacement=$replaceAfterAbort)",
-    async ({ origin, replaceAfterAbort }) => {
-      const cause =
-        origin === "provider"
-          ? new BedrockRuntimeServiceException({
-              name: "ThrottlingException",
-              $fault: "client",
-              $metadata: {},
-              message: "Slow down",
-            })
-          : new Error("HTTP 401: payload callback failed");
-      const failure = withRunFailureOrigin(cause, origin);
-      const controller = new AbortController();
-      const send = vi.spyOn(BedrockRuntimeClient.prototype, "send");
-      const result = await streamBedrockForTest(
-        bedrockModel({}),
-        { messages: [] },
-        {
-          signal: controller.signal,
-          onPayload: () => {
-            if (replaceAfterAbort) {
-              controller.abort(failure);
-              throw new Error("Request was aborted");
-            }
-            throw failure;
-          },
-        },
-      ).result();
-      expect(send).not.toHaveBeenCalled();
-      if (origin === "provider") {
-        expect(result.errorMessage).toBe("Throttling error: Slow down");
-      }
-      expect(result.stopReason).toBe(replaceAfterAbort ? "aborted" : "error");
-      expect(result.diagnostics ?? []).toEqual(
-        origin === "runtime"
-          ? [{ type: "synthesized_run_failure", timestamp: result.timestamp }]
-          : [],
-      );
-    },
-  );
-
   it("rejects malformed terminal tool JSON before completing any sibling call", async () => {
     vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
       $metadata: { httpStatusCode: 200 },

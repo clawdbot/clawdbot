@@ -214,10 +214,7 @@ function pushLoopFailure(
   signal: AbortSignal | undefined,
 ): void {
   const aborted = signal?.aborted === true;
-  const failureMessage = createFailureMessage(config.model, error, aborted, {
-    signal,
-    origin: "runtime",
-  });
+  const failureMessage = createFailureMessage(config.model, error, aborted);
   stream.push({ type: "message_start", message: failureMessage });
   stream.push({ type: "message_end", message: failureMessage });
   stream.push({ type: "turn_end", message: failureMessage, toolResults: [] });
@@ -440,9 +437,11 @@ async function runLoop(
       }
       if (executedToolBatch?.terminateRun) {
         const terminalMessage = {
-          ...createFailureMessage(config.model, TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE, false, {
-            origin: "runtime",
-          }),
+          ...createFailureMessage(
+            config.model,
+            new Error(TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE),
+            false,
+          ),
           content: [{ type: "text" as const, text: TOOL_LOOP_RECOVERY_TERMINATED_MESSAGE }],
         };
         state.context.messages.push(terminalMessage);

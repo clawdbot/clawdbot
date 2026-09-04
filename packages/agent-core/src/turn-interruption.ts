@@ -1,8 +1,4 @@
-import type { AssistantMessage, Model, StreamFn } from "@openclaw/llm-core";
-import {
-  appendRuntimeFailureDiagnostic,
-  withRunFailureOrigin,
-} from "@openclaw/llm-core/diagnostics";
+import type { AssistantMessage, Model } from "@openclaw/llm-core";
 import type { AgentEvent, AgentMessage } from "./types.js";
 
 /** Canonical empty aborted/error assistant recorded when a run ends without output. */
@@ -10,9 +6,8 @@ export function createFailureMessage(
   model: Model,
   error: unknown,
   aborted: boolean,
-  options?: { signal?: AbortSignal; origin?: "runtime" },
 ): AssistantMessage {
-  const message: AssistantMessage = {
+  return {
     role: "assistant",
     content: [{ type: "text", text: "" }],
     api: model.api,
@@ -30,8 +25,6 @@ export function createFailureMessage(
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
   };
-  appendRuntimeFailureDiagnostic(message, error, options?.signal, options?.origin);
-  return message;
 }
 
 // Not re-exported from the package barrel on purpose: these helpers are
@@ -92,33 +85,4 @@ export function normalizeCoreContextMessages(messages: AgentMessage[]): AgentMes
       timestamp: message.timestamp,
     };
   });
-}
-
-/** Preserve provider failures while runtime callbacks consume the stream. */
-export async function startRunProviderStream(
-  start: () => ReturnType<StreamFn>,
-  signal?: AbortSignal,
-) {
-  let response: Awaited<ReturnType<StreamFn>>;
-  try {
-    response = await start();
-  } catch (error) {
-    throw withRunFailureOrigin(error, "provider", signal);
-  }
-  return {
-    async *[Symbol.asyncIterator]() {
-      try {
-        yield* response;
-      } catch (error) {
-        throw withRunFailureOrigin(error, "provider", signal);
-      }
-    },
-    async result() {
-      try {
-        return await response.result();
-      } catch (error) {
-        throw withRunFailureOrigin(error, "provider", signal);
-      }
-    },
-  };
 }

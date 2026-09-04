@@ -8,7 +8,6 @@ import {
   type GenerateContentResponse,
   type Part,
 } from "@google/genai";
-import { withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 import { describe, expect, it, vi } from "vitest";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Model } from "../types.js";
@@ -891,28 +890,6 @@ describe("runGoogleGenerateContentLifecycle", () => {
       errorMessage: "Google run restarted",
     });
     expect(output.errorCode).toBe("GATEWAY_RESTART");
-  });
-
-  it("retains callback origin when cancellation replaces the thrown error", async () => {
-    const controller = new AbortController();
-    const generateContentStream = vi.fn();
-    const { result } = await runGoogleFixture([], {
-      generateContentStream,
-      options: {
-        signal: controller.signal,
-        onPayload: () => {
-          controller.abort();
-          throw withRunFailureOrigin(new Error("payload callback failed"), "runtime");
-        },
-      },
-    });
-
-    expect(generateContentStream).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      stopReason: "aborted",
-      errorMessage: "Request was aborted",
-      diagnostics: [{ type: "synthesized_run_failure", timestamp: expect.any(Number) }],
-    });
   });
 
   it.each([429, 503])("preserves the official Google SDK's %s API error status", async (status) => {

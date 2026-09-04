@@ -1,5 +1,4 @@
 import type { StreamOptions, UserMessage } from "@openclaw/llm-core";
-import { withRunFailureOrigin } from "@openclaw/llm-core/diagnostics";
 import { getInternalSteeringQueueObserver } from "./internal-hooks.js";
 import type { AgentLoopConfig } from "./types.js";
 
@@ -9,13 +8,6 @@ export function createStreamSteering(
   signal: AbortSignal | undefined,
   convertSteering: AgentLoopConfig["convertToLlm"],
 ) {
-  const invoke = <T>(origin: "runtime" | "provider", call: () => T): T => {
-    try {
-      return call();
-    } catch (error) {
-      throw withRunFailureOrigin(error, origin, origin === "provider" ? signal : undefined);
-    }
-  };
   const observer = getInternalSteeringQueueObserver(config.getSteeringMessages);
   let open = true;
   let cleanup: (() => void) | undefined;
@@ -34,19 +26,8 @@ export function createStreamSteering(
     if (!open || signal?.aborted) {
       return undefined;
     }
-    const continuation = control.needsContinuation;
-    // Provider controls retain their origin even when invoked inside a runtime callback.
-    const observed: typeof control = {
-      steer: (messages) =>
-        invoke("provider", () => control.steer(messages)).catch((error: unknown) => {
-          throw withRunFailureOrigin(error, "provider", signal);
-        }),
-      ...(continuation
-        ? { needsContinuation: () => invoke("provider", () => continuation.call(control)) }
-        : {}),
-    };
-    needsContinuation = observed.needsContinuation;
-    const outerCleanup = invoke("runtime", () => config.onActiveResponse?.(observed));
+    needsContinuation = control.needsContinuation;
+    const outerCleanup = config.onActiveResponse?.(control);
     const forward = () => {
       if (!open || signal?.aborted || failure || !observer || submitted) {
         return;
@@ -83,7 +64,7 @@ export function createStreamSteering(
             return;
           }
           dispatched = true;
-          if (!(await observed.steer(userMessages))) {
+          if (!(await control.steer(userMessages))) {
             release();
             stop();
           }
@@ -92,13 +73,13 @@ export function createStreamSteering(
           if (!dispatched) {
             release();
           }
-          failure ??= { error: withRunFailureOrigin(error, "runtime") };
+          failure ??= { error };
         });
     };
     const unsubscribe = observer?.subscribe(forward);
     cleanup = () => {
       unsubscribe?.();
-      invoke("runtime", () => outerCleanup?.());
+      outerCleanup?.();
     };
     forward();
     return stop;
