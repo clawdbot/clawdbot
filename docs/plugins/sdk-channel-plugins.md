@@ -1139,12 +1139,13 @@ unrelated inbound runtime helpers.
     `openclaw/plugin-sdk/plugin-command-runtime`. Create one runtime while
     planning the catalog, merge its candidates with built-in and skill entries,
     and retain the winning candidate object in the registered handler closure.
-    Once the provider catalog is finalized, call
-    `retainNativeCatalog(provider)` when at least one plugin candidate remains;
-    if listener registration can fail synchronously, call it after those
-    listeners are installed. This records the current channel-account lifecycle
-    so a registry reload restarts only accounts whose handlers retain that
-    registry generation.
+    A plugin registry replacement drains and restarts loaded channel accounts
+    so their handlers, command catalogs, and routes use the new generation.
+    Manually stopped accounts stay stopped. Ordinary channel config changes
+    still restart only the affected channel or accounts.
+    `retainNativeCatalog(provider)` is deprecated and will be removed in the
+    next breaking SDK release; existing calls only assert that the captured
+    registry generation is still active.
     Call `prepareDispatch(rawArgs)` only on that winner and execute the returned
     dispatch with `dispatch.execute(context)`. Carry an explicit
     `{ kind: "non-plugin" }` decision for retained built-in and skill winners.

@@ -221,6 +221,22 @@ describe("run-tsgo sparse guard", () => {
     `);
   });
 
+  it.each([
+    "tsconfig.ui.json",
+    "test/tsconfig/tsconfig.core.test.json",
+    "test/tsconfig/tsconfig.core.test.ui-other.json",
+  ])("does not require plugin browser sources for %s", (project) => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+    const options = {
+      cwd,
+      fileExists: () => true,
+      isSparseCheckoutEnabled: () => true,
+      sparseCheckoutPatterns: ["/packages/", "/src/", "/ui/config/", "/ui/src/"],
+    };
+
+    expect(getSparseTsgoGuardError(["-p", project], options)).toBeNull();
+  });
+
   it("returns a helpful message for sparse core-test worktrees missing ui and packages files", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
 

@@ -328,9 +328,10 @@ function queueMatrixCellHtml(
   const disconnected = runtime === "disconnected";
   const editing = variant === "editing";
   const steerMode = mode === "steer";
-  const badge = steerMode
-    ? `<span class="chat-queue__badge chat-queue__badge--steered">Steer</span>`
-    : "";
+  const badge =
+    steerMode && runtime === "connected-idle" && !editing
+      ? `<span class="chat-queue__badge chat-queue__badge--steered">Steer</span>`
+      : "";
   const state = disconnected ? '<span class="chat-queue__state">Waiting for reconnect</span>' : "";
   const copy = editing
     ? `<textarea class="chat-queue__edit-input">Edit ${mode} message</textarea>`

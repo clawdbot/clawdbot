@@ -15,8 +15,10 @@ import {
   createdSessionListResult,
   expectDecodedThumbnail,
   installMockGateway,
+  navigateInApp,
   pastePng,
   pollLocatorText,
+  waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
@@ -633,21 +635,41 @@ suite.define(() => {
   });
 
   it("releases a completed file when the rest of its pasted batch is aborted", async () => {
+    type PasteProof = {
+      reads: number;
+      loaded: number;
+      aborts: number;
+      created: number;
+      revoked: number;
+    };
     await withNewSessionPage(async (page) => {
       await page.addInitScript(() => {
-        const readAsDataUrl = Object.getOwnPropertyDescriptor(FileReader.prototype, "readAsDataURL")
-          ?.value as FileReader["readAsDataURL"];
-        let readCount = 0;
+        const readAsDataUrl = Reflect.get(
+          FileReader.prototype,
+          "readAsDataURL",
+        ) as FileReader["readAsDataURL"];
+        const abort = Reflect.get(FileReader.prototype, "abort") as FileReader["abort"];
+        const createObjectURL = URL.createObjectURL.bind(URL);
+        const revokeObjectURL = URL.revokeObjectURL.bind(URL);
+        const proof: PasteProof = { reads: 0, loaded: 0, aborts: 0, created: 0, revoked: 0 };
+        (globalThis as unknown as { partialPasteProof: PasteProof }).partialPasteProof = proof;
         FileReader.prototype.readAsDataURL = function (blob: Blob) {
-          readCount += 1;
-          if (readCount === 1) {
+          proof.reads += 1;
+          if (proof.reads === 1) {
+            this.addEventListener(
+              "load",
+              () => {
+                proof.loaded += 1;
+              },
+              { once: true },
+            );
             readAsDataUrl.call(this, blob);
           }
         };
-        const createObjectURL = URL.createObjectURL.bind(URL);
-        const revokeObjectURL = URL.revokeObjectURL.bind(URL);
-        const proof = { created: 0, revoked: 0 };
-        (globalThis as unknown as { attachmentUrlProof: typeof proof }).attachmentUrlProof = proof;
+        FileReader.prototype.abort = function () {
+          proof.aborts += 1;
+          abort.call(this);
+        };
         URL.createObjectURL = (blob: Blob) => {
           proof.created += 1;
           return createObjectURL(blob);
@@ -657,36 +679,28 @@ suite.define(() => {
           revokeObjectURL(url);
         };
       });
-      await installMockGateway(page);
+      const gateway = await installMockGateway(page);
+      const readProof = () =>
+        page.evaluate(
+          () => (globalThis as unknown as { partialPasteProof: PasteProof }).partialPasteProof,
+        );
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
       await pastePng(composer, 2);
       await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (globalThis as unknown as { attachmentUrlProof: { created: number } })
-                .attachmentUrlProof.created,
-          ),
-        )
-        .toBe(1);
+        .poll(readProof)
+        .toEqual({ reads: 2, loaded: 1, aborts: 0, created: 0, revoked: 0 });
+      expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
 
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: { navigate: (routeId: string) => void } };
-        };
-        app.runtime?.context.navigate("chat");
-      });
-      await page.waitForURL((url) => url.pathname.endsWith("/chat"));
+      await navigateInApp(page, "chat");
+      await waitForCommittedChatRoute(page);
       await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (globalThis as unknown as { attachmentUrlProof: { revoked: number } })
-                .attachmentUrlProof.revoked,
-          ),
-        )
-        .toBe(1);
+        .poll(readProof)
+        .toEqual({ reads: 2, loaded: 1, aborts: 1, created: 0, revoked: 0 });
+      await navigateInApp(page, "new-session");
+      await composer.waitFor();
+      expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     });
   });
 

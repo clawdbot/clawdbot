@@ -25,6 +25,8 @@ Bare package specs still install from npm during the launch cutover. Use the
 
 ## Requirements
 
+- All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
+  Pin your OpenClaw host version and test each version you declare compatible.
 - Node 22.22.3+, Node 24.15+, or Node 25.9+, and `npm` or `pnpm`.
 - TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
@@ -45,6 +47,9 @@ Bare package specs still install from npm during the launch cutover. Use the
   </Card>
   <Card title="Tool plugin" icon="wrench" href="/plugins/tool-plugins">
     Register agent tools.
+  </Card>
+  <Card title="Feature plugin" icon="panels-top-left" href="/plugins/feature-plugins">
+    Build typed operations, native pages, and Control UI replacements.
   </Card>
 </CardGroup>
 

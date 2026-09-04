@@ -183,7 +183,7 @@ describe("AppSidebar agent chip", () => {
     const setSessionKey = vi.fn();
     (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
       setSessionKey;
-    const { sidebar } = await mountSidebar(
+    const { sidebar, context } = await mountSidebar(
       gatewayHarness.gateway,
       createSessions("main", ["agent:main:main"]),
       "panel",
@@ -245,6 +245,10 @@ describe("AppSidebar agent chip", () => {
     );
     await sidebar.updateComplete;
 
+    expect(context.agentSelection.state).toEqual({ selectedId: "research", scopeId: "research" });
+    expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent?.trim()).toBe(
+      "research",
+    );
     // No cached sessions for the other agent: resume falls back to its main key, and
     // the uncached face is a guess, so navigation is marked for gateway re-derivation.
     expect(setSessionKey).toHaveBeenCalledWith("agent:research:main");
