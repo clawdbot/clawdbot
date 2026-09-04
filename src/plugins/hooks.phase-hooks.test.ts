@@ -7,8 +7,11 @@ import { addStaticTestHooks } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
+  PluginHookAgentContext,
   PluginHookBeforeModelResolveResult,
+  PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
+  PluginHookToolAuthority,
 } from "./types.js";
 
 describe("phase hooks merger", () => {
@@ -246,8 +249,21 @@ describe("phase hooks merger", () => {
 
   it("dispatches authorized enrichment only after the host supplies the final tool surface", async () => {
     const enrichment = vi.fn((_event, ctx) => {
-      expect(ctx.toolAuthority?.allows("memory_search")).toBe(false);
-      expect(ctx.toolAuthority?.allows("message")).toBe(true);
+      const authority = ctx.toolAuthority;
+      expect(authority).toBeDefined();
+      expect(authority?.list).toBeTypeOf("function");
+      const activeToolNames = authority?.list?.() ?? [];
+
+      expect(activeToolNames).toEqual(["memory_search", "message", "web_search"]);
+      expect(Object.isFrozen(activeToolNames)).toBe(true);
+      expect(() => (activeToolNames as string[]).push("exec")).toThrow(TypeError);
+      const mutableCopy = [...activeToolNames];
+      mutableCopy.push("exec");
+      expect(authority?.list?.()).toEqual(["memory_search", "message", "web_search"]);
+      for (const toolName of activeToolNames) {
+        expect(authority?.allows(toolName)).toBe(true);
+      }
+      expect(authority?.allows("exec")).toBe(false);
       return { prependContext: "authorized context", systemPrompt: "ignored override" };
     });
     registry.typedHooks.push(
@@ -278,7 +294,7 @@ describe("phase hooks merger", () => {
       {},
       {
         toolAuthorityFingerprint: "turn-authority",
-        activeToolNames: ["message"],
+        activeToolNames: [" Web_Search ", "message", "memory_search", "message", ""],
         assertHostActive: () => undefined,
       },
     );
@@ -286,6 +302,50 @@ describe("phase hooks merger", () => {
 
     expect(result).toEqual({ prependContext: "authorized context" });
     expect(() => retainedAuthority?.assertActive()).toThrow("no longer active");
+    expect(() => retainedAuthority?.list?.()).toThrow("no longer active");
+  });
+
+  it("rejects retained tool enumeration after an authorized handler times out", async () => {
+    vi.useFakeTimers();
+    try {
+      let retainedAuthority: PluginHookToolAuthority | undefined;
+      registry.typedHooks.push({
+        pluginId: "slow-enricher",
+        hookName: "before_prompt_build",
+        handler: (_event: PluginHookBeforePromptBuildEvent, ctx: PluginHookAgentContext) => {
+          retainedAuthority = ctx.toolAuthority;
+          return new Promise<PluginHookBeforePromptBuildResult>(() => {});
+        },
+        requiresToolAuthority: true,
+        timeoutMs: 5,
+        source: "test",
+      });
+      const runner = createHookRunner(registry, {
+        logger: {
+          error: vi.fn(),
+          warn: vi.fn(),
+          debug: vi.fn(),
+        },
+      });
+
+      const resultPromise = runner.runAuthorizedPromptBuild(
+        { prompt: "test", messages: [] },
+        {},
+        {
+          toolAuthorityFingerprint: "turn-authority",
+          activeToolNames: ["message"],
+          assertHostActive: () => undefined,
+        },
+      );
+      expect(retainedAuthority?.list?.()).toEqual(["message"]);
+
+      await vi.advanceTimersByTimeAsync(5);
+
+      await expect(resultPromise).resolves.toBeUndefined();
+      expect(() => retainedAuthority?.list?.()).toThrow("no longer active");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects enrichment that finishes after the host authority closes", async () => {
@@ -295,7 +355,9 @@ describe("phase hooks merger", () => {
     const enrichmentGate = new Promise<void>((resolve) => {
       releaseEnrichment = resolve;
     });
-    const enrichment = vi.fn(async () => {
+    let retainedAuthority: PluginHookToolAuthority | undefined;
+    const enrichment = vi.fn(async (_event, ctx) => {
+      retainedAuthority = ctx.toolAuthority;
       await enrichmentGate;
       return { prependContext: "stale authorized context" };
     });
@@ -326,6 +388,7 @@ describe("phase hooks merger", () => {
     });
 
     hostActive = false;
+    expect(() => retainedAuthority?.list?.()).toThrow("host turn authority is no longer active");
     releaseEnrichment();
 
     await expect(run).rejects.toThrow("host turn authority is no longer active");

@@ -813,6 +813,10 @@ Treat `toolAuthority` as an ephemeral capability:
 
 - `allows(toolName)` checks a canonical tool id against the finalized surface
   and also verifies that the capability is still active.
+- When available, `list()` returns a frozen snapshot of the same canonical tool
+  ids, normalized, deduplicated, and sorted. It exposes names only and also
+  verifies that the capability is still active. Feature-detect it for hosts that
+  predate tool enumeration.
 - `assertActive()` rejects after abort, cancellation, run replacement,
   lifecycle rotation, or hook dispatch completion. Call it after awaited work
   and before committing plugin-owned side effects.
