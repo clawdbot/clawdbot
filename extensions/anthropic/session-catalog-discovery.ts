@@ -75,7 +75,11 @@ const catalogDiscoveryCache = new Map<string, CatalogDiscoveryCacheEntry>();
 // CLI scans are root-scoped and bounded; Desktop overlay expiry never invalidates their records.
 const claudeSessionScanCache = new Map<string, ClaudeSessionScanCacheEntry>();
 
-type ClaudeCliScan = Awaited<ReturnType<typeof scanClaudeSessions>>;
+type ClaudeCliScan = Omit<Awaited<ReturnType<typeof scanClaudeSessions>>, "budget"> & {
+  // The cached scan must not retain the aggregate budget object that Desktop overlay reads mutate.
+  // Keep only the CLI accounting snapshot; each assembled request owns its fresh mutable budget.
+  budget: Readonly<CatalogJsonReadBudget>;
+};
 const mergedScans = new WeakMap<ClaudeCliScan, WeakMap<DesktopOverlay, Promise<CatalogRecord[]>>>();
 
 function cacheCatalogDiscovery(filePath: string, entry: CatalogDiscoveryCacheEntry): void {
@@ -536,6 +540,20 @@ async function mergeClaudeSessions(
   });
 }
 
+function applyCachedCliBudget(
+  budget: CatalogJsonReadBudget | undefined,
+  cliBudget: Readonly<CatalogJsonReadBudget>,
+): void {
+  if (!budget) {
+    return;
+  }
+  // A warm CLI scan still consumed its original share of the aggregate budget. Reapply that
+  // immutable accounting to this request before Desktop metadata is admitted.
+  budget.remainingBytes = Math.min(budget.remainingBytes, cliBudget.remainingBytes);
+  budget.skippedFiles += cliBudget.skippedFiles;
+  budget.racedFiles += cliBudget.racedFiles;
+}
+
 async function readCliScan(
   treeSnapshot: ClaudeProjectsTreeSnapshot,
   forceRefresh?: boolean,
@@ -551,12 +569,18 @@ async function readCliScan(
       cached,
       MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES,
     );
-    return cached.records;
+    const result = await cached.records;
+    applyCachedCliBudget(budget, result.budget);
+    return result;
   }
   const entry = {
     treeStamp: treeSnapshot.treeStamp,
     hardExpiresAt: now + CLAUDE_SESSION_SCAN_HARD_TTL_MS,
-    records: scanClaudeSessions(treeSnapshot, budget),
+    records: scanClaudeSessions(treeSnapshot, budget).then((result) => ({
+      ...result,
+      // Freeze the CLI-only accounting before the shared request budget is used for Desktop.
+      budget: Object.freeze({ ...result.budget }),
+    })),
   };
   setBoundedCache(claudeSessionScanCache, cacheKey, entry, MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES);
   try {

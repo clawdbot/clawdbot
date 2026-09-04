@@ -2726,6 +2726,34 @@ describe("Claude session catalog", () => {
     ]);
   });
 
+  it("clears a cached partial status after Desktop metadata recovers", async () => {
+    const home = await createHome();
+    await writeDesktopMetadata(home, "recovered", {
+      cliSessionId: "desktop-recovered-session",
+      sessionId: "local-recovered-session",
+      title: "x".repeat(MAX_CATALOG_JSON_FILE_BYTES),
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [],
+      error: {
+        code: "LOCAL_CATALOG_PARTIAL",
+        message: expect.stringContaining("1 file"),
+      },
+    });
+
+    await writeDesktopMetadata(home, "recovered", {
+      cliSessionId: "desktop-recovered-session",
+      sessionId: "local-recovered-session",
+      title: "Recovered Desktop metadata",
+    });
+
+    await expectClaudeCatalogEventually(home, (page) => {
+      expect(page).toMatchObject({ sessions: [] });
+      expect(page.error).toBeUndefined();
+    });
+  });
+
   it("bounds aggregate catalog JSON bytes and weights the parse cache", async () => {
     const home = await createHome();
     const smallSessionId = "small-catalog-session";
