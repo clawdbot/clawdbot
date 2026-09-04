@@ -22,6 +22,7 @@ import {
   ensureManagedLlamaServerForChat,
   inspectLlamaServerRuntime,
   prepareManagedLlamaServer,
+  reconcileManagedLlamaServer,
 } from "./managed-server.js";
 
 const servers: http.Server[] = [];
@@ -116,7 +117,35 @@ async function withHuggingFaceMetadataFixture(
   }
 }
 
+async function listen(server: http.Server, port = 0): Promise<number> {
+  await new Promise<void>((resolve) => {
+    server.listen(port, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("missing test server address");
+  }
+  return address.port;
+}
+
+async function createPresetFixture(label: string) {
+  const tempRoot = tempDirs.make(`llama-server-${label}-`);
+  const presetPath = path.join(tempRoot, "models.ini");
+  const asset = selectLlamaServerAsset("darwin", "arm64");
+  installMocks.ensureLlamaServerInstalled.mockResolvedValue({
+    command: path.join(tempRoot, "llama-server"),
+    asset,
+  });
+  installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
+    installDir: tempRoot,
+    command: path.join(tempRoot, "llama-server"),
+    presetPath,
+  });
+  return { tempRoot, presetPath };
+}
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   await Promise.all(
     servers.splice(0).map(
@@ -389,6 +418,213 @@ describe("managed llama-server", () => {
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it("retains the chat inventory across A to B to A and reapplies changed limits", async () => {
+    const { tempRoot, presetPath } = await createPresetFixture("chat-transitions");
+    const firstPath = path.join(tempRoot, "first.gguf");
+    const secondPath = path.join(tempRoot, "second.gguf");
+    const first = {
+      id: "first",
+      params: { modelPath: firstPath, contextSize: 16_384 },
+      maxTokens: 1024,
+    };
+    const second = {
+      id: "second",
+      params: { modelPath: secondPath, contextSize: 32_768 },
+      maxTokens: 2048,
+    };
+    const provider = {
+      baseUrl: "http://127.0.0.1:29432/v1",
+      localService: { command: path.join(tempRoot, "llama-server"), args: [] },
+      models: [first, second],
+      params: { modelCacheDir: tempRoot },
+    };
+    await Promise.all([fs.writeFile(firstPath, "GGUF"), fs.writeFile(secondPath, "GGUF")]);
+    for (const model of [
+      first,
+      second,
+      { ...first, params: { ...first.params, contextSize: 32_768 }, maxTokens: 4096 },
+    ]) {
+      await ensureManagedLlamaServerForChat({ provider, model });
+    }
+    const preset = await fs.readFile(presetPath, "utf8");
+    expect(preset).toContain(
+      `[first]\nmodel = ${firstPath}\nctx-size = 32768\nn-predict = 4096\njinja = true`,
+    );
+    expect(preset).toContain(
+      `[second]\nmodel = ${secondPath}\nctx-size = 32768\nn-predict = 2048\njinja = true`,
+    );
+    expect(preset.indexOf("[first]")).toBeLessThan(preset.indexOf("[second]"));
+  });
+
+  it("prunes and orders sections without rewriting or reloading unchanged bytes", async () => {
+    const { presetPath } = await createPresetFixture("chat-prune");
+    let reloads = 0;
+    const server = http.createServer((req, res) => {
+      reloads += Number(req.url === "/models?reload=1");
+      res.end("{}");
+    });
+    servers.push(server);
+    const port = await listen(server);
+    const rename = vi.spyOn(fs, "rename");
+    const params = {
+      chatModel: { mode: "preserve" as const },
+      configuredChatModelIds: ["zeta", "alpha"],
+      port,
+    };
+    await fs.writeFile(
+      presetPath,
+      [
+        "version = 1",
+        "",
+        "[stale]",
+        "model = /models/stale.gguf",
+        "",
+        "[zeta]",
+        "model = /models/zeta.gguf",
+        "",
+        "[alpha]",
+        "model = /models/alpha.gguf",
+        "",
+        "[embeddinggemma-300m-qat-q8_0]",
+        "model = /models/embedding.gguf",
+        "embedding = true",
+        "",
+      ].join("\n"),
+    );
+    await prepareManagedLlamaServer(params);
+    await prepareManagedLlamaServer(params);
+    const baseUrl = `http://127.0.0.1:${port}/v1`;
+    await reconcileManagedLlamaServer({ baseUrl });
+    await reconcileManagedLlamaServer({ baseUrl });
+    expect(await fs.readFile(presetPath, "utf8")).toBe(
+      [
+        "version = 1",
+        "",
+        "[alpha]",
+        "model = /models/alpha.gguf",
+        "",
+        "[zeta]",
+        "model = /models/zeta.gguf",
+        "",
+        "[embeddinggemma-300m-qat-q8_0]",
+        "model = /models/embedding.gguf",
+        "embedding = true",
+        "",
+      ].join("\n"),
+    );
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(reloads).toBe(1);
+  });
+
+  it("reloads an unchanged preset when the managed origin changes and changes back", async () => {
+    await createPresetFixture("origin-transition");
+    const reloads = [0, 0];
+    const createReloadServer = (index: number) =>
+      http.createServer((req, res) => {
+        reloads[index]! += Number(req.url === "/models?reload=1");
+        res.end("{}");
+      });
+    const firstServer = createReloadServer(0);
+    const secondServer = createReloadServer(1);
+    servers.push(firstServer, secondServer);
+    const firstPort = await listen(firstServer);
+    const secondPort = await listen(secondServer);
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
+      embeddingModelPath: "/models/embedding.gguf",
+      port: firstPort,
+    });
+    const firstBaseUrl = `http://127.0.0.1:${firstPort}/v1`;
+    const secondBaseUrl = `http://127.0.0.1:${secondPort}/v1`;
+
+    await reconcileManagedLlamaServer({ baseUrl: firstBaseUrl });
+    await reconcileManagedLlamaServer({ baseUrl: secondBaseUrl });
+    await reconcileManagedLlamaServer({ baseUrl: firstBaseUrl });
+
+    expect(reloads).toEqual([2, 1]);
+  });
+
+  it("retains a failed reload revision for the next reconciliation", async () => {
+    await createPresetFixture("reload-failure");
+    let status = 500;
+    let reloads = 0;
+    const server = http.createServer((_req, res) => {
+      reloads += 1;
+      res.statusCode = status;
+      res.end("{}");
+    });
+    servers.push(server);
+    const port = await listen(server);
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
+      embeddingModelPath: "/models/embedding.gguf",
+      port,
+    });
+    await expect(
+      reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` }),
+    ).rejects.toThrow("llama.cpp preset reload failed: HTTP 500");
+    const controller = new AbortController();
+    controller.abort(new Error("reload aborted"));
+    await expect(
+      reconcileManagedLlamaServer({
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(controller.signal.reason);
+    status = 200;
+    await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
+    expect(reloads).toBe(2);
+  });
+
+  it("reconciles a mutation after the child reads the preset but before it listens", async () => {
+    const { presetPath } = await createPresetFixture("startup-race");
+    const probe = http.createServer();
+    const port = await listen(probe);
+    await new Promise<void>((resolve) => {
+      probe.close(() => {
+        resolve();
+      });
+    });
+    const prepare = async (contextSize: number) =>
+      await prepareManagedLlamaServer({
+        chatModel: {
+          mode: "configure",
+          id: "chat",
+          path: "/models/chat.gguf",
+          contextSize,
+          maxTokens: 2048,
+        },
+        configuredChatModelIds: ["chat"],
+        defaultEmbeddingModelPath: "/models/embedding.gguf",
+        port,
+      });
+    await prepare(8192);
+    let loadedPreset = await fs.readFile(presetPath, "utf8");
+    await prepare(16_384);
+
+    let reloads = 0;
+    const server = http.createServer((req, res) => {
+      if (req.url === "/models?reload=1") {
+        reloads += 1;
+        void fs.readFile(presetPath, "utf8").then((contents) => {
+          loadedPreset = contents;
+          res.end("{}");
+        });
+        return;
+      }
+      res.end("{}");
+    });
+    servers.push(server);
+    await listen(server, port);
+    await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
+    await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
+
+    expect(reloads).toBe(1);
+    expect(loadedPreset).toContain("ctx-size = 16384");
   });
 
   it("reports a missing local GGUF with the setup repair path", async () => {

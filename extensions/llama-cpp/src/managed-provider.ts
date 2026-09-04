@@ -1,6 +1,7 @@
 import type {
   OpenClawPluginApi,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
@@ -31,8 +32,27 @@ import {
   validateLlamaServerNonInteractive,
 } from "./external-server/setup.js";
 import { wrapLlamaServerStream } from "./external-server/stream.js";
-import { ensureManagedLlamaServerForChat } from "./managed-server.js";
+import { ensureManagedLlamaServerForChat, reconcileManagedLlamaServer } from "./managed-server.js";
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
+
+function wrapManagedLlamaCppStream(ctx: ProviderWrapStreamFnContext) {
+  const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (!providerConfig?.localService) {
+    return undefined;
+  }
+  const inner = ctx.streamFn;
+  const selectedModel = ctx.model;
+  if (!inner || !selectedModel) {
+    return undefined;
+  }
+  return async (model, context, options) => {
+    await ensureManagedLlamaServerForChat({
+      provider: providerConfig,
+      model: selectedModel,
+    });
+    return inner(model, context, options);
+  };
+}
 
 export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
   api.registerProvider({
@@ -127,24 +147,12 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
       ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.localService
         ? undefined
         : await prepareLlamaServerDynamicModel(ctx),
-    wrapStreamFn: (ctx) => {
-      const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-      const inner = wrapLlamaServerStream(ctx);
-      if (!providerConfig?.localService) {
-        return inner;
-      }
-      const selectedModel = ctx.model;
-      if (!selectedModel) {
-        return undefined;
-      }
-      return async (model, context, options) => {
-        await ensureManagedLlamaServerForChat({
-          provider: providerConfig,
-          model: selectedModel,
-        });
-        return inner(model, context, options);
-      };
-    },
+    reconcileLocalService: reconcileManagedLlamaServer,
+    wrapSimpleCompletionStreamFn: wrapManagedLlamaCppStream,
+    wrapStreamFn: (ctx) =>
+      ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.localService
+        ? wrapManagedLlamaCppStream(ctx)
+        : wrapLlamaServerStream(ctx),
     ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
     wizard: {
       modelPicker: {

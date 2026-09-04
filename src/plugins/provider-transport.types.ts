@@ -33,6 +33,12 @@ export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
   streamFn?: StreamFn;
 };
 
+/** Healthy local service boundary before the provider request is sent. */
+export type ProviderReconcileLocalServiceContext = {
+  baseUrl: string;
+  signal?: AbortSignal;
+};
+
 /**
  * Provider-owned WebSocket session policy.
  */
