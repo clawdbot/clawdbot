@@ -464,9 +464,11 @@ export async function add(
 export async function removeStaleJobFamily(
   state: CronServiceState,
   family: { declarationKey: string; name: string; ownerPluginTag: string },
+  opts?: { commitGuard?: () => void },
 ): Promise<number> {
   return await locked(state, async () => {
     await ensureLoadedForOperation(state);
+    opts?.commitGuard?.();
     return removeStaleCronJobFamilyRows(state.deps.storePath, family);
   });
 }

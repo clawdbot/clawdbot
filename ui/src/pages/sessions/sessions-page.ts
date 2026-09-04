@@ -13,7 +13,6 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
@@ -31,7 +30,6 @@ import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
-import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedSessionPullRequestKey,
@@ -67,11 +65,13 @@ import {
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../../lib/toast.ts";
-import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
-import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  pluginSessionMenuActions,
+  runControlUiPluginAction,
+} from "../../plugins/control-ui-actions.ts";
 import { sessionAgentIdentityById, sessionAgentIds } from "./agent-scope.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
@@ -86,7 +86,6 @@ type SessionsPageRequestScope = {
   context: ApplicationContext;
   gateway: ApplicationContext["gateway"];
   sessions: ApplicationContext["sessions"];
-  workboard: ApplicationContext["workboard"];
   client: GatewayBrowserClient;
 };
 
@@ -128,7 +127,9 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private page = 0;
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
-  @state() private sessionMenu: { key: string; x: number; y: number } | null = null;
+  @state() private sessionMenu:
+    | (Pick<GatewaySessionRow, "key" | "sessionId"> & { x: number; y: number })
+    | null = null;
   @state() private sessionMenuWork: SessionMenuWork | null = null;
   @state() private expandedSessionKey: string | null = null;
   // Route deep-link target (?session=...); unlike expandedSessionKey it also
@@ -142,6 +143,7 @@ class SessionsPage extends OpenClawLightDomElement {
   // Async completions belong to one context/capability/connection epoch. Bump
   // before releasing locks so stale finally blocks cannot clear newer work.
   private pageEpoch = 0;
+  private pluginActionLifetime = new AbortController();
   private routeDataEnabled = true;
   private appliedRouteData?: SessionsRouteData;
   private sessionMutationPending = false;
@@ -179,8 +181,8 @@ class SessionsPage extends OpenClawLightDomElement {
       (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
     )
     .watch(
-      () => this.context?.workboard,
-      (workboard, notify) => workboard.subscribe(notify),
+      () => this.context?.plugins,
+      (plugins, notify) => plugins.subscribe(notify),
     );
   private readonly gatewayLifecycle = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -286,6 +288,8 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private invalidatePageWork() {
+    this.pluginActionLifetime.abort();
+    this.pluginActionLifetime = new AbortController();
     this.pageEpoch += 1;
     this.clearSearchTimer();
     this.listRequest = undefined;
@@ -329,7 +333,6 @@ class SessionsPage extends OpenClawLightDomElement {
       context,
       gateway,
       sessions: context.sessions,
-      workboard: context.workboard,
       client,
     };
   }
@@ -343,7 +346,6 @@ class SessionsPage extends OpenClawLightDomElement {
       context === scope.context &&
       gateway === scope.gateway &&
       context.sessions === scope.sessions &&
-      context.workboard === scope.workboard &&
       gateway.snapshot.phase === "connected" &&
       gateway.snapshot.client === scope.client
     );
@@ -1381,11 +1383,15 @@ class SessionsPage extends OpenClawLightDomElement {
     position: { x: number; y: number },
     trigger: HTMLElement | null,
   ) {
-    if (this.sessionMenu?.key === row.key && trigger) {
+    if (
+      this.sessionMenu?.key === row.key &&
+      this.sessionMenu.sessionId === row.sessionId &&
+      trigger
+    ) {
       this.closeSessionMenu();
       return;
     }
-    this.sessionMenu = { key: row.key, ...position };
+    this.sessionMenu = { key: row.key, sessionId: row.sessionId, ...position };
     this.sessionMenuTrigger = trigger;
     this.loadSessionMenuWork(row);
   }
@@ -1438,21 +1444,15 @@ class SessionsPage extends OpenClawLightDomElement {
   private renderSessionMenu() {
     const menu = this.sessionMenu;
     const context = this.context;
-    const row = menu ? this.result?.sessions.find((session) => session.key === menu.key) : null;
+    const row = menu
+      ? this.result?.sessions.find(
+          (session) => session.key === menu.key && session.sessionId === menu.sessionId,
+        )
+      : null;
     if (!menu || !context || !row) {
       return nothing;
     }
     const gateway = context.gateway.snapshot;
-    const canCapture =
-      isWorkboardEnabledInConfigSnapshot(context.runtimeConfig.state.configSnapshot) &&
-      hasOperatorWriteAccess(gateway.hello?.auth ?? null);
-    const workboardState = context.workboard.state;
-    const capturedSessionKeys = new Set(
-      workboardState.cards
-        .filter(isActiveWorkboardCard)
-        .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
-        .filter((key): key is string => typeof key === "string" && key.length > 0),
-    );
     const configuredMainKey = resolveUiConfiguredMainKey({
       agentsList: context.agents.state.agentsList,
       hello: gateway.hello,
@@ -1496,14 +1496,7 @@ class SessionsPage extends OpenClawLightDomElement {
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${this.knownCategories()}
         .work=${this.sessionMenuWork}
-        .workboard=${
-          canCapture && row.kind !== "global"
-            ? {
-                captured: capturedSessionKeys.has(row.key),
-                busy: workboardState.capturingSessionKeys.has(row.key),
-              }
-            : null
-        }
+        .pluginActions=${pluginSessionMenuActions(context.plugins, row)}
         .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
@@ -1548,8 +1541,8 @@ class SessionsPage extends OpenClawLightDomElement {
             case "fork":
               void this.forkSession(row.key, row.hasActiveRun === true);
               break;
-            case "workboard":
-              void this.addToWorkboard(row);
+            case "plugin":
+              void this.runPluginAction(action.id, menu);
               break;
             case "move-to-group":
               this.assignCategory(row.key, action.category);
@@ -1775,25 +1768,22 @@ class SessionsPage extends OpenClawLightDomElement {
     `;
   }
 
-  private async addToWorkboard(session: GatewaySessionRow) {
+  private async runPluginAction(id: string, target: Pick<GatewaySessionRow, "key" | "sessionId">) {
     const scope = this.captureRequestScope();
     if (!scope) {
       return;
     }
     try {
-      await captureSessionToWorkboard({
-        host: scope.workboard,
-        client: scope.client,
-        session,
-        requestUpdate: () => {
-          if (this.isRequestScopeCurrent(scope)) {
-            scope.workboard.notify();
-          }
-        },
+      await runControlUiPluginAction({
+        runtime: scope.context.plugins,
+        id,
+        placement: "session",
+        sessionKey: target.key,
+        session: this.result?.sessions.find(
+          (row) => row.key === target.key && row.sessionId === target.sessionId,
+        ),
+        signal: this.pluginActionLifetime.signal,
       });
-      if (this.isRequestScopeCurrent(scope)) {
-        scope.context.navigate("workboard");
-      }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
         this.error = formatUiError(error);

@@ -779,85 +779,96 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(capturedRuntimeConfig).toBe(resolvedRunConfig);
   });
 
-  it("does not let a source-less pinned config snapshot override explicit plugin tool config", () => {
-    const pinnedRuntimeConfig = {
-      plugins: {
-        allow: ["old-plugin"],
-      },
-    } as OpenClawConfig;
-    const explicitConfig = {
-      plugins: {
-        allow: ["browser"],
-      },
-      tools: {
-        updatePlan: true,
-      },
-    } as OpenClawConfig;
-    let capturedRuntimeConfig: OpenClawConfig | undefined;
-    let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
-    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-      const context = (
-        params as {
-          context?: {
-            runtimeConfig?: OpenClawConfig;
-            getRuntimeConfig?: () => OpenClawConfig | undefined;
-          };
-        }
-      ).context;
-      capturedRuntimeConfig = context?.runtimeConfig;
-      getRuntimeConfig = context?.getRuntimeConfig;
-      return [];
-    });
-    setRuntimeConfigSnapshot(pinnedRuntimeConfig);
+  it.each(["custom", "source-less", "absent"] as const)(
+    "keeps explicit plugin tool config isolated from an initially %s runtime",
+    (initialRuntime) => {
+      const pinnedRuntimeConfig: OpenClawConfig = { plugins: { allow: ["old-plugin"] } };
+      const explicitConfig: OpenClawConfig = {
+        plugins: { allow: ["browser"] },
+        tools: { updatePlan: true },
+      };
+      let capturedRuntimeConfig: OpenClawConfig | undefined;
+      let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
+      hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+        const context = (
+          params as {
+            context?: {
+              runtimeConfig?: OpenClawConfig;
+              getRuntimeConfig?: () => OpenClawConfig | undefined;
+            };
+          }
+        ).context;
+        capturedRuntimeConfig = context?.runtimeConfig;
+        getRuntimeConfig = context?.getRuntimeConfig;
+        return [];
+      });
+      if (initialRuntime !== "absent") {
+        setRuntimeConfigSnapshot(
+          pinnedRuntimeConfig,
+          initialRuntime === "custom" ? pinnedRuntimeConfig : undefined,
+        );
+      }
 
-    resolveOpenClawPluginToolsForOptions({
-      options: { config: explicitConfig },
-      resolvedConfig: explicitConfig,
-    });
+      resolveOpenClawPluginToolsForOptions({
+        options: { config: explicitConfig },
+        resolvedConfig: explicitConfig,
+      });
 
-    expect(capturedRuntimeConfig).toBe(explicitConfig);
-    expect(getRuntimeConfig?.()).toBe(explicitConfig);
-  });
+      expect(capturedRuntimeConfig).toBe(explicitConfig);
+      expect(getRuntimeConfig?.()).toBe(explicitConfig);
+      setRuntimeConfigSnapshot({ ...explicitConfig, tools: { updatePlan: false } }, explicitConfig);
+      expect(getRuntimeConfig?.()).toBe(explicitConfig);
+    },
+  );
 
-  it("exposes a live runtime config getter to plugin tool factories", () => {
-    const sourceConfig = {
-      plugins: {
-        allow: ["memory-core"],
-      },
-    } as OpenClawConfig;
-    const firstRuntimeConfig = {
-      plugins: {
-        allow: ["memory-core"],
-        entries: { "memory-core": { enabled: true } },
-      },
-    } as OpenClawConfig;
-    const nextRuntimeConfig = {
-      plugins: {
-        allow: ["memory-core"],
-        entries: { "memory-core": { enabled: false } },
-      },
-    } as OpenClawConfig;
-    let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
-    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
-      getRuntimeConfig = (
-        params as { context?: { getRuntimeConfig?: () => OpenClawConfig | undefined } }
-      ).context?.getRuntimeConfig;
-      return [];
-    });
-    setRuntimeConfigSnapshot(firstRuntimeConfig, sourceConfig);
+  it.each(["source", "runtime", "ambient"] as const)(
+    "keeps the plugin tool getter live across authored reloads for %s config",
+    (inputKind) => {
+      const sourceConfig: OpenClawConfig = {
+        gateway: { publicOrigin: "https://first.example" },
+        plugins: { allow: ["memory-core"] },
+      };
+      const firstRuntimeConfig: OpenClawConfig = {
+        ...sourceConfig,
+        plugins: {
+          ...sourceConfig.plugins,
+          entries: { "memory-core": { enabled: true } },
+        },
+      };
+      const nextSourceConfig: OpenClawConfig = {
+        ...sourceConfig,
+        gateway: { publicOrigin: "https://second.example" },
+      };
+      const nextRuntimeConfig: OpenClawConfig = {
+        ...firstRuntimeConfig,
+        ...nextSourceConfig,
+      };
+      let getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined;
+      hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+        getRuntimeConfig = (
+          params as { context?: { getRuntimeConfig?: () => OpenClawConfig | undefined } }
+        ).context?.getRuntimeConfig;
+        return [];
+      });
+      setRuntimeConfigSnapshot(firstRuntimeConfig, sourceConfig);
+      const inputConfig =
+        inputKind === "source"
+          ? sourceConfig
+          : inputKind === "runtime"
+            ? firstRuntimeConfig
+            : undefined;
 
-    resolveOpenClawPluginToolsForOptions({
-      options: { config: sourceConfig },
-      resolvedConfig: sourceConfig,
-    });
+      resolveOpenClawPluginToolsForOptions({
+        options: { config: inputConfig },
+        resolvedConfig: inputConfig,
+      });
 
-    expect(getRuntimeConfig?.()).toStrictEqual(firstRuntimeConfig);
-
-    setRuntimeConfigSnapshot(nextRuntimeConfig, sourceConfig);
-
-    expect(getRuntimeConfig?.()).toStrictEqual(nextRuntimeConfig);
-    expect(getRuntimeConfig?.()?.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
-  });
+      expect(getRuntimeConfig?.()).toBe(firstRuntimeConfig);
+      setRuntimeConfigSnapshot(nextRuntimeConfig, nextSourceConfig);
+      expect(getRuntimeConfig?.()).toBe(nextRuntimeConfig);
+      expect(getRuntimeConfig?.()?.gateway?.publicOrigin).toBe("https://second.example");
+    },
+  );
 });
 
 function requirePluginTool(name: string, overrides?: Parameters<typeof createOpenClawTools>[0]) {

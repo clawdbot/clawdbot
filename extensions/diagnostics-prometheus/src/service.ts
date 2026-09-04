@@ -545,6 +545,20 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
+    case "gateway.event_loop.sample":
+      store.histogram(
+        "openclaw_gateway_event_loop_delay_max_seconds",
+        "Maximum event-loop delay per completed Gateway observation window in seconds.",
+        {},
+        seconds(evt.delayMaxMs),
+      );
+      store.counter(
+        "openclaw_gateway_event_loop_observed_seconds_total",
+        "Elapsed seconds covered by completed Gateway event-loop observation windows.",
+        {},
+        evt.intervalMs / 1000,
+      );
+      return;
     case "gateway.rpc": {
       const labels = { method: evt.method };
       if (evt.phase === "received") {

@@ -545,6 +545,27 @@ Liveness warnings also emit:
 - `openclaw.liveness.event_loop_utilization` (histogram, attrs: `openclaw.liveness.reason`)
 - `openclaw.liveness.cpu_core_ratio` (histogram, attrs: `openclaw.liveness.reason`)
 
+### Gateway event-loop observation windows
+
+- `openclaw.gateway.event_loop.delay_max_ms` (histogram, no attrs; maximum delay per completed health-monitor window)
+- `openclaw.gateway.event_loop.observed_ms` (counter, no attrs; elapsed milliseconds represented by completed windows)
+
+These metrics use the existing diagnostics plugin setup and require metrics to
+be active. Each accepted health-monitor window is recorded once, so a later
+healthy readiness result does not erase an earlier high-delay observation.
+Cached reads do not add samples. The process-wide observations carry no request
+trace context and create no spans or logs, including with a preloaded SDK.
+
+Windows follow existing health readers, normally completing after at least one
+second or sooner for a delay warning. Counts and quantiles describe completed
+windows and their maxima, not individual stalls or the native delay distribution's
+overall p99. Intentional monitor resets discard unfinished windows; collection
+does not backfill periods without an interested exporter. Diagnostic queue drops,
+SDK/export failures, and restarts limit coverage. Use the represented-duration
+counter and exporter/drop telemetry to assess it. Readiness and persistent
+liveness-warning behavior are unchanged. For pull metrics and example queries,
+see [Prometheus event-loop windows](/gateway/prometheus#event-loop-observation-windows).
+
 ### Harness lifecycle
 
 - `openclaw.harness.duration_ms` (histogram, attrs: `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.harness.phase` on errors)
@@ -739,6 +760,7 @@ for usage methods and request options.
 - `run.attempt` / `run.progress`
 - `run.execution_phase` (public, session-correlated embedded-runner startup milestones)
 - `diagnostic.heartbeat` (aggregate counters: webhooks/queue/session)
+- `gateway.event_loop.sample` (internal metrics-only completed window: `intervalMs`, `delayMaxMs`; no reader identity)
 
 **Harness lifecycle**
 

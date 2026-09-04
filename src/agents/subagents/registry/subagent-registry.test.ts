@@ -678,33 +678,38 @@ describe("subagent registry seam flow", () => {
     ).toHaveLength(2);
   });
 
-  it("keeps collector archive groups scoped to their requester", async () => {
-    const now = Date.now();
-    for (const [requesterSessionKey, archiveAtMs] of [
-      ["agent:main:requester-one", now - 1],
-      ["agent:main:requester-two", now + 1_000],
-    ] as const) {
-      mod.addSubagentRunForTests(
-        makeCompletedCollectorRun({
-          runId: `run-${requesterSessionKey}`,
-          childSessionKey: `${requesterSessionKey}:subagent:collector`,
-          requesterSessionKey,
-          task: "retain requester-scoped collector groups",
-          cleanup: "delete",
-          createdAt: now - 10_000,
-          endedAt: now - 5_000,
-          cleanupCompletedAt: now - 4_000,
-          archiveAtMs,
-          groupId: "swarm:shared-group-id",
-        }),
-      );
-    }
+  it.each(["session", "agent"])(
+    "keeps collector archive groups scoped to their requester %s",
+    async (scope) => {
+      const now = Date.now();
+      for (const [suffix, archiveAtMs] of [
+        ["one", now - 1],
+        ["two", now + 1_000],
+      ] as const) {
+        const requesterSessionKey = scope === "agent" ? "global" : `agent:main:requester-${suffix}`;
+        mod.addSubagentRunForTests(
+          makeCompletedCollectorRun({
+            runId: `run-${suffix}`,
+            childSessionKey: `agent:${suffix}:subagent:collector`,
+            requesterSessionKey,
+            requesterAgentId: scope === "agent" ? suffix : "main",
+            task: "retain requester-scoped collector groups",
+            cleanup: "delete",
+            createdAt: now - 10_000,
+            endedAt: now - 5_000,
+            cleanupCompletedAt: now - 4_000,
+            archiveAtMs,
+            groupId: "swarm:shared-group-id",
+          }),
+        );
+      }
 
-    await mod.testing.sweepOnceForTests();
+      await mod.testing.sweepOnceForTests();
 
-    expect(mod.getSubagentRunByRunId("run-agent:main:requester-one")).toBeUndefined();
-    expect(mod.getSubagentRunByRunId("run-agent:main:requester-two")).toBeDefined();
-  });
+      expect(mod.getSubagentRunByRunId("run-one")).toBeUndefined();
+      expect(mod.getSubagentRunByRunId("run-two")).toBeDefined();
+    },
+  );
 
   it("keeps completed collectors while any group member is incomplete", async () => {
     const now = Date.now();

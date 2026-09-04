@@ -438,6 +438,8 @@ On multi-user gateways, only admin-scope connections can create or view incognit
 
 **Browse folders** opens the Place picker's inline Gateway directory browser through `fs.listDir`. Write-scope browsing starts at the configured agent workspace and cannot navigate above it; realpath checks also reject symlinks that escape the workspace. Admin connections can browse arbitrary Gateway paths. Recent places restore only Gateway folders the current connection can submit; New Session does not browse or remember node filesystem paths. Local submission can call `sessions.create` with the first message in the same round-trip. Remote submission uses the create, dispatch, then send sequence described above. If the Gateway creates the session but rejects that first send, the chat preserves the prompt and error across reloads; **Retry** sends it through the already-created session instead of creating another one.
 
+## Settings
+
 Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts with a **Search settings** field for quickly finding settings sections.
 
 On desktop web, the expanded sidebar header places the agent identity beside the sidebar collapse toggle (⌘B), command-palette search button (⌘K), and new-session button. Clicking the identity opens the agent menu; **Home** opens the main session. When something needs action — failed or overdue cron jobs, expiring or expired model auth — compact attention chips appear above the sidebar footer and click through to the owning page. The identity shows the agent's avatar (identity image or emoji), name, optional environment pill, and unread dot; active-run status appears on the owning session row instead of beneath the agent name. Its agent-scoped menu contains the inline agent switcher (multi-agent setups), **New agent**, "What can this agent do?", and **Agent settings**. Rosters above ten agents get a filter field and list pinned agents first; pin or unpin agents from the Agents settings page, with the pinned set stored in the browser profile. Choosing an agent scopes Chat plus Usage, Automations, Tasks, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own [URL selection](/web/urls#route-table) and does not follow the shared page scope. The footer is one full-width identity card that remains available offline and shows **Reconnecting…** beneath the last-known account name. It opens the app/account menu, whose profile identity header is followed by **Settings**, **Usage**, mobile pairing, **Get the apps**, **Help** (help, Discord, Docs, and the changelog), an offline retry action when needed, the version/build chip, and the color-mode toggle. The build chip opens the About page. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma on Apple platforms or Ctrl-Shift-Comma elsewhere opens **Settings** without overriding the browser's plain Command-Comma shortcut. Collapsing the sidebar (⌘B) hides it entirely for a full-width workspace; the top-left content cluster then provides expand, search, and new-session controls — mirroring what the macOS app hosts natively in its titlebar. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title. In the macOS app the separate header row folds the titlebar clearance into a single compact strip beside the window controls, while the sidebar header retains the agent identity and right-aligned new-session button. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds a native sidebar toggle next to the window controls plus trackpad swipe gestures, with back/forward buttons at the sidebar's right edge while it is expanded and native search (command palette) and new-session buttons while it is collapsed.
@@ -453,6 +455,20 @@ When an approval appears inline in a different session, **Approval requested by 
 uses the requesting session's loaded title, not the open conversation's title. If that
 metadata is unavailable, the normal session-name fallback remains until it loads.
 This label does not change which request the approval buttons resolve.
+
+### This Mac (macOS app)
+
+Inside the [macOS app](/platforms/macos), Settings includes a **This Mac** group
+for settings on that Mac. **This Mac** (`/settings/device`) contains app behavior,
+device capabilities, browser login import and cookie sync, and developer tools.
+**Permissions** (`/settings/device/permissions`) shows macOS permission status
+and actions, location preferences, and active computer presence.
+
+**Talk** adds a **This Mac** section for Voice Wake, push-to-talk, sounds,
+microphone, and languages. **Updates** adds the app version, automatic update
+preference, and **Check for Updates**. These device settings appear only inside
+the Mac app; ordinary browsers keep the Gateway settings. Talk trigger words
+are Gateway settings and remain available in every browser.
 
 ## What it can do (today)
 
@@ -559,6 +575,24 @@ This label does not change which request the approval buttons resolve.
 
   </Accordion>
 </AccordionGroup>
+
+## Custom plugin UI
+
+**Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
+and view replacements from user-installed plugins. It defaults to off and
+writes `gateway.controlUi.experimental.customPlugins`. Restart the Gateway and
+reload connected browser tabs after changing it.
+
+Only enable it for plugin authors you trust: native UI runs in the Control UI
+origin with the signed-in operator's Gateway authority. Native UI from enabled
+bundled plugins, including Workboard, remains available with the lab off.
+Backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and
+MCP Apps are unaffected. All plugin APIs are experimental; see
+[Feature plugins](/plugins/feature-plugins) for authoring and the trust model.
+
+Authenticated native UI requires HTTPS or a browser-trusted loopback URL.
+On non-local plain HTTP, plugin pages explain how to open a supported URL;
+dashboard pairing and backend plugin operations remain available.
 
 ## Import assistant memory
 
@@ -987,6 +1021,8 @@ Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway
 ## Hosted embeds
 
 Assistant messages can render hosted web content inline with the `[embed ...]` shortcode. The iframe sandbox policy is controlled by `gateway.controlUi.embedSandbox`:
+
+Widgets created by `show_widget` load through the authenticated Gateway connection in every sandbox mode, including while settings are loading. In `strict` mode, their content remains visible but scripted interactions are disabled.
 
 The core [`show_widget`](/tools/show-widget) tool renders self-contained SVG or HTML directly from a tool call. The browser and supported native chat clients advertise the `inline-widgets` Gateway capability, and the resulting Canvas document remains available when chat history reloads. Channel plugins such as Discord Activities can register contextual presenters behind that same tool. Channel-originated runs without an eligible presenter or inline client do not receive it.
 
