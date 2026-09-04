@@ -19,7 +19,7 @@ type PlacementMutationAction = "fork" | "reset" | "restore" | "rewind" | "switch
 type Placement = WorkerSessionPlacementRecord;
 type PlacementState = Placement["state"];
 
-export class SessionWorkerPlacementMutationError extends Error {
+class SessionWorkerPlacementMutationError extends Error {
   constructor(state: PlacementState, action: PlacementMutationAction, key: string) {
     super(`Session ${key} cannot ${action} while cloud worker placement is ${state}.`);
   }

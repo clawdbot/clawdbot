@@ -763,6 +763,16 @@ describe("delivery-queue storage", () => {
         ),
       ).resolves.toEqual({ status: "not_pending" });
       expect(readStatus(id)).toBeUndefined();
+      await expect(
+        failPendingDelivery(
+          {
+            id,
+            entry: { ...entry, id: "unused-after-owner-removal" },
+            expectedPlatformSendAttemptId: "stale-claim",
+          },
+          tmpDir(),
+        ),
+      ).resolves.toEqual({ status: "not_pending" });
     });
   });
 

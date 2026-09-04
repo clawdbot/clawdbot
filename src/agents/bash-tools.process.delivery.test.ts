@@ -3,6 +3,12 @@ import { afterEach, expect, test, vi } from "vitest";
 import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import {
+  drainSystemEventEntries,
+  enqueueSystemEventEntry,
+  enqueueSystemEventWithReceipt,
+  peekSystemEventEntries,
+} from "../infra/system-events.js";
+import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
@@ -12,6 +18,7 @@ import {
   addSession,
   appendOutput,
   markExited,
+  recordNotifyOnExitRemoval,
   type ProcessSession,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
@@ -94,6 +101,84 @@ function persistResult(
 ): void {
   manager.appendMessage(toolResultMessage(toolCallId, result));
 }
+
+test.each(["finished", "waiting"])(
+  "retains a %s poll completion through failed persistence and acknowledges late receipts",
+  async (phase) => {
+    const session = createProcessSessionFixture({
+      id: `persist-notify-${phase}`,
+      backgrounded: true,
+    });
+    const sessionKey = `agent:main:${session.id}`;
+    const eventOptions = { sessionKey, contextKey: `exec:${session.id}` };
+    const unrelated = enqueueSystemEventEntry("unrelated", eventOptions);
+    const recordCompletion = () =>
+      recordNotifyOnExitRemoval(
+        session,
+        expectDefined(
+          enqueueSystemEventWithReceipt("terminal output", eventOptions, { allowDuplicate: true }),
+          "completion receipt",
+        ),
+      );
+    addSession(session);
+    const processTool = createProcessTool();
+    const turn = processTurn("persist-notify", session.id);
+    const finish = () => {
+      appendOutput(session, "stdout", "terminal output");
+      markExited(session, 0, null, "completed");
+      if (phase === "finished") {
+        recordCompletion();
+      }
+    };
+    let result: AgentToolResult<unknown>;
+    if (phase === "waiting") {
+      vi.useFakeTimers();
+      try {
+        const pending = poll(processTool, session.id, turn.toolCall.id, turn, 1_000);
+        finish();
+        await vi.advanceTimersByTimeAsync(250);
+        result = await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+    } else {
+      finish();
+      result = await poll(processTool, session.id, turn.toolCall.id, turn);
+    }
+    const manager = SessionManager.inMemory();
+    const append = manager.appendMessageWithTranscriptAnchor.bind(manager);
+    let rejectAppend = true;
+    const spy = vi
+      .spyOn(manager, "appendMessageWithTranscriptAnchor")
+      .mockImplementation((message, options) => {
+        if (message.role === "toolResult" && rejectAppend) {
+          throw new Error("result persistence failed");
+        }
+        return append(message, options);
+      });
+    try {
+      installSessionToolResultGuard(manager);
+      manager.appendMessage(turn.assistantMessage);
+      expect(() => persistResult(manager, turn.toolCall.id, result)).toThrow(
+        "result persistence failed",
+      );
+      if (phase === "waiting") {
+        recordCompletion();
+      }
+      expect(peekSystemEventEntries(sessionKey)).toHaveLength(2);
+      expect(session.terminalPollObserved).not.toBe(true);
+      rejectAppend = false;
+      persistResult(manager, turn.toolCall.id, result);
+      expect(peekSystemEventEntries(sessionKey)).toEqual([unrelated]);
+      expect(session.terminalPollObserved).toBe(true);
+      recordCompletion();
+      expect(peekSystemEventEntries(sessionKey)).toEqual([unrelated]);
+    } finally {
+      spy.mockRestore();
+      drainSystemEventEntries(sessionKey);
+    }
+  },
+);
 
 test.each(["running", "completed"] as const)(
   "replays $status poll output after transcript repair and consumes it after persistence",

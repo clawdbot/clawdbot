@@ -1,6 +1,10 @@
 // Registers plugin-related CLI commands.
 import type { Command } from "commander";
 import { getRuntimeConfigSnapshot, readConfigFileSnapshot } from "../config/config.js";
+import {
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+} from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
@@ -23,19 +27,6 @@ type RegisterPluginCliOptions = {
 };
 
 const logger = createPluginCliLogger();
-
-export const loadValidatedConfigForPluginRegistration = async (options?: {
-  skipPluginValidation?: boolean;
-  session?: PluginCliLoadSession;
-}): Promise<OpenClawConfig | null> => {
-  const read = () =>
-    readConfigFileSnapshot({ skipPluginValidation: options?.skipPluginValidation });
-  const snapshot = await (options?.session ? options.session.readConfig(read) : read());
-  if (!snapshot.valid) {
-    return null;
-  }
-  return getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
-};
 
 export async function registerPluginCliCommands(
   program: Command,
@@ -117,16 +108,16 @@ export async function registerPluginCliCommandsFromValidatedConfig(
   env?: NodeJS.ProcessEnv,
   loaderOptions?: PluginCliLoaderOptions,
   options?: RegisterPluginCliOptions,
-): Promise<OpenClawConfig | null> {
+): Promise<OpenClawConfig> {
   const session = options?.session ?? createPluginCliLoadSession(getPluginCache());
   try {
-    const config = await loadValidatedConfigForPluginRegistration({
-      session,
-      skipPluginValidation: options?.skipPluginValidation,
-    });
-    if (!config) {
-      return null;
+    const snapshot = await session.readConfig(() =>
+      readConfigFileSnapshot({ skipPluginValidation: options?.skipPluginValidation }),
+    );
+    if (!snapshot.valid) {
+      throw createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues));
     }
+    const config = getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
     await registerPluginCliCommands(program, config, env, loaderOptions, { ...options, session });
     return config;
   } finally {

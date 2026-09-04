@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { Directive, directive } from "lit/directive.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
@@ -305,7 +306,7 @@ function installWidgetSizeListener() {
   });
 }
 
-function renderPreviewFrame(params: {
+type PreviewFrameParams = {
   title: string;
   src?: string;
   frameKey?: string;
@@ -313,53 +314,71 @@ function renderPreviewFrame(params: {
   height?: number;
   sandbox?: string;
   promptCapable?: boolean;
-}) {
-  installWidgetSizeListener();
-  installWidgetThemeObserver();
-  const sandbox = params.sandbox ?? "";
-  const src = params.src ?? "";
-  const heightKey = params.frameKey || src;
-  const reportedHeight = heightKey ? widgetFrameHeightsByKey.get(heightKey) : undefined;
-  const height = reportedHeight ?? params.height;
-  if (params.promptCapable) {
-    installWidgetPromptOfferListener();
-  }
-  const handleLoad = (event: Event) => {
-    registerWidgetFrame(event);
-    if (event.currentTarget instanceof HTMLIFrameElement) {
-      const frame = event.currentTarget;
-      if (params.promptCapable) {
-        adoptWidgetPromptPort(frame);
-      }
-      postWidgetTheme(frame);
-      frame.contentWindow?.postMessage({ type: WIDGET_CHAT_HOST_MESSAGE_TYPE }, "*");
+};
+
+class WidgetFrameDirective extends Directive {
+  private frame?: HTMLIFrameElement;
+
+  render(params: PreviewFrameParams) {
+    installWidgetSizeListener();
+    installWidgetThemeObserver();
+    const sandbox = params.sandbox ?? "";
+    // HTTP error pages also fire load. Until the widget bridge is adopted,
+    // replace a stale frame; afterwards keep its document and interactive state.
+    const src =
+      this.frame && adoptedWidgetPromptFrames.has(this.frame)
+        ? this.frame.getAttribute("src")!
+        : (params.src ?? "");
+    const heightKey = params.frameKey || src;
+    const reportedHeight = heightKey ? widgetFrameHeightsByKey.get(heightKey) : undefined;
+    const height = reportedHeight ?? params.height;
+    if (params.promptCapable) {
+      installWidgetPromptOfferListener();
     }
-  };
+    const handleLoad = (event: Event) => {
+      registerWidgetFrame(event);
+      if (event.currentTarget instanceof HTMLIFrameElement) {
+        const frame = event.currentTarget;
+        if (params.promptCapable) {
+          adoptWidgetPromptPort(frame);
+        }
+        postWidgetTheme(frame);
+        frame.contentWindow?.postMessage({ type: WIDGET_CHAT_HOST_MESSAGE_TYPE }, "*");
+      }
+    };
+    return keyed(
+      src,
+      html`
+        <iframe
+          ${ref((element) => {
+            if (!(element instanceof HTMLIFrameElement)) {
+              return;
+            }
+            if (this.frame && this.frame !== element) {
+              // Retired pending frames must not retain resize or prompt ownership.
+              widgetFrameRegistry.delete(this.frame);
+            }
+            this.frame = element;
+          })}
+          src=${src || nothing}
+          data-frame-key=${heightKey || nothing}
+          class="chat-tool-card__preview-frame"
+          title=${params.title}
+          sandbox=${sandbox}
+          style=${height ? `height:${height}px;min-height:${height}px` : ""}
+          @load=${handleLoad}
+        ></iframe>
+      `,
+    );
+  }
+}
+
+const renderWidgetFrame = directive(WidgetFrameDirective);
+
+function renderPreviewFrame(params: PreviewFrameParams) {
   return keyed(
-    `${sandbox}\u0000${params.frameKey ?? ""}\u0000${src ? 1 : 0}\u0000${params.connectionGeneration ?? 0}\u0000${params.height ?? ""}`,
-    html`
-      <iframe
-        ${ref((element) => {
-          if (!(element instanceof HTMLIFrameElement)) {
-            return;
-          }
-          if (heightKey) {
-            element.setAttribute(WIDGET_FRAME_HEIGHT_KEY_ATTRIBUTE, heightKey);
-          }
-          // Assign the capability URL once per element: a rotation must not
-          // reload a mounted widget, while a fresh element always gets the
-          // current lease URL.
-          if (src && !element.hasAttribute("src")) {
-            element.setAttribute("src", src);
-          }
-        })}
-        class="chat-tool-card__preview-frame"
-        title=${params.title}
-        sandbox=${sandbox}
-        style=${height ? `height:${height}px;min-height:${height}px` : ""}
-        @load=${handleLoad}
-      ></iframe>
-    `,
+    `${params.sandbox ?? ""}\u0000${params.frameKey ?? ""}\u0000${params.src ? 1 : 0}\u0000${params.connectionGeneration ?? 0}\u0000${params.height ?? ""}`,
+    renderWidgetFrame(params),
   );
 }
 

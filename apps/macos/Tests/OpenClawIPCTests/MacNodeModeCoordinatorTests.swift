@@ -682,7 +682,7 @@ struct MacNodeModeCoordinatorTests {
                     "timeoutMs": 0,
                 ],
             ])
-            task.emitReceiveSuccessOnce(.data(invokeEvent))
+            task.emitReceiveSuccess(.data(invokeEvent))
             try await self.waitUntil("computer invoke start") {
                 await lifecycle.state().started
             }

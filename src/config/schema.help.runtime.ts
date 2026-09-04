@@ -152,8 +152,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode.maxSearchLimit":
     "Maximum number of hidden catalog search results a code-mode program can request.",
   "tools.swarm":
-    "Collector-mode subagent orchestration. Default is off; enable it to expose agents_wait and swarm spawn options.",
-  "tools.swarm.enabled": "Enables collector-mode subagents and agents_wait. Default is off.",
+    "Collector-mode subagent orchestration. Enabled by default; set false to opt out. Tool permissions still apply to agents_wait and swarm spawn options.",
+  "tools.swarm.enabled":
+    "Enables collector-mode subagents and agents_wait. Default is on; set false to opt out.",
   "tools.swarm.maxConcurrent": "Maximum concurrently running collector children per swarm group.",
   "tools.swarm.maxChildrenPerGroup": "Maximum live collector children per swarm group.",
   "tools.swarm.maxTotalPerGroup": "Maximum lifetime collector spawns per swarm group.",

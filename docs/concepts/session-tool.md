@@ -145,7 +145,12 @@ An accepted result keeps target admission separate from announcement delivery.
 `delivery.status` describes only the later announcement as `pending` or `skipped`.
 Neither field is a target-completion receipt.
 
-A waited send that finishes without visible assistant text returns `status: "no_reply"`. That is a terminal, intentional non-outcome: no announcement remains pending. Continue without waiting, or send a new message if a response is required.
+Replies come from the completed run's terminal result. When a same-session
+target has already delivered its final reply to the source conversation through
+`message`, OpenClaw skips the duplicate channel announcement. Progress messages
+and replies stored only in the internal UI do not count as external delivery.
+
+A waited send that finishes without visible assistant text returns `status: "no_reply"`; no announcement remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 
 Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread.
 

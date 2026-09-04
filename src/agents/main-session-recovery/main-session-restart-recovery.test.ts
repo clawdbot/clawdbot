@@ -189,6 +189,7 @@ vi.mock("../../config/sessions/transcript.js", async (importOriginal) => {
 });
 
 let tmpDir: string;
+const resolveGatewayContext = () => undefined;
 
 function loadSessionEntry(
   scope: Parameters<typeof loadSessionEntryRaw>[0],
@@ -531,6 +532,7 @@ describe("main-session-restart-recovery", () => {
       ownerActive = live;
     });
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns,
       isActiveRun: () => ownerActive,
@@ -585,6 +587,7 @@ describe("main-session-restart-recovery", () => {
       sessionId: "stale-session",
     });
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         activeRestartRun(),
@@ -644,6 +647,7 @@ describe("main-session-restart-recovery", () => {
     const admissions = await Promise.all(
       identities.map((group) =>
         beginSessionWorkAdmission({
+          resolveGatewayContext,
           scope: storePath,
           identities: group.map((identity) =>
             identity === "main" || identity === "sibling" ? key(identity) : identity,
@@ -658,6 +662,7 @@ describe("main-session-restart-recovery", () => {
     try {
       await expect(
         markRestartAbortedMainSessions({
+          resolveGatewayContext,
           cfg: { session: { store: otherStorePath } },
           stateDir: tmpDir,
           activeRuns: [],
@@ -720,6 +725,7 @@ describe("main-session-restart-recovery", () => {
           [sessionKey]: runningSessionEntry("custom-session"),
         });
         admission = await beginSessionWorkAdmission({
+          resolveGatewayContext,
           scope: storePath,
           identities: [sessionKey, "custom-session"],
           assertAllowed: () => undefined,
@@ -727,6 +733,7 @@ describe("main-session-restart-recovery", () => {
 
         await expect(
           markRestartAbortedMainSessions({
+            resolveGatewayContext,
             cfg: { agents: { list: [{ id: "main", default: true }] } },
             stateDir: tmpDir,
             activeRuns: [],
@@ -774,6 +781,7 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       cfg: { session: { store: storePath } },
       stateDir: tmpDir,
       activeRuns: [activeRestartRun("agent:main:issue-82433", "custom-session")],
@@ -845,6 +853,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         {
@@ -880,6 +889,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         {
@@ -954,6 +964,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         {
@@ -989,6 +1000,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         {
@@ -1026,6 +1038,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       stateDir: tmpDir,
       activeRuns: [
         {
@@ -1064,6 +1077,7 @@ describe("main-session-restart-recovery", () => {
     });
 
     const result = await markRestartAbortedMainSessions({
+      resolveGatewayContext,
       cfg: { session: { store: storePath } },
       stateDir: tmpDir,
       activeRuns: [activeRestartRun("agent:main:issue-82433", "active-custom-session")],
@@ -1103,6 +1117,7 @@ describe("main-session-restart-recovery", () => {
 
     await expect(
       markRestartAbortedMainSessions({
+        resolveGatewayContext,
         stateDir: tmpDir,
         activeRuns: [activeRestartRun(sessionKey)],
         reason: "gateway restart drain",
@@ -1174,6 +1189,7 @@ describe("main-session-restart-recovery", () => {
     await rootAdmission?.run(async () => {
       await expect(
         markRestartAbortedMainSessions({
+          resolveGatewayContext,
           stateDir: tmpDir,
           activeRuns: [{ runId, lifecycleGeneration, sessionKey, sessionId: "main-session" }],
           reason: "gateway restart drain",

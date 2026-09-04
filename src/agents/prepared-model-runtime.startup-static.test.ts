@@ -131,10 +131,6 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({
-  createPreparedModelCatalogWorkerInput: ({ agentFacts }: { agentFacts: unknown }) => ({
-    generationFingerprint: "test-generation",
-    input: (agentFacts as { input: unknown }).input,
-  }),
   createPreparedModelCatalogWorker: () => ({
     loadCatalog: async () => {
       const catalog = await mocks.runPreparedModelCatalogWorker();

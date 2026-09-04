@@ -222,6 +222,19 @@ export type AuthProfileOrderResolution = {
   hasExplicitOrder: boolean;
 };
 
+/** Session pins lead the shared order without discarding its failover candidates. */
+export function prependAuthProfilePin(
+  resolution: AuthProfileOrderResolution,
+  profileId: string | undefined,
+): AuthProfileOrderResolution {
+  return profileId
+    ? {
+        ...resolution,
+        profileIds: [profileId, ...resolution.profileIds.filter((id) => id !== profileId)],
+      }
+    : resolution;
+}
+
 /** Shares stored-over-config order precedence with CLI runtime selection. */
 export function resolveExplicitAuthOrderSelection(params: {
   storeOrder: AuthProfileStore["order"] | undefined;

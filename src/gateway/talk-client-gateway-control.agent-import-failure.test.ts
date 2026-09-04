@@ -26,7 +26,7 @@ vi.mock("../talk/agent-consult-runtime.js", () => ({
   consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
 }));
 
-import { createTalkClientAgentConsultRunner } from "./talk-client-gateway-control.js";
+import { createTalkClientAgentConsultRunner } from "./talk-client-agent-consult.js";
 
 it("does not create Talk admission when lazy core loading fails", async () => {
   mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {

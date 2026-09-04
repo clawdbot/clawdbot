@@ -55,7 +55,17 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       }
       return;
     }
+    if (event.type === "response.created") {
+      // Publish the response owner before observers can interrupt its first PCM.
+      this.outputAudioGeneration += 1;
+      this.responseActive = true;
+      this.responseCreateState = "idle";
+    }
+    const audioGeneration = this.outputAudioGeneration;
     emitServerEvent();
+    if (!this.acceptsEvent(connection)) {
+      return;
+    }
     switch (event.type) {
       case "session.created":
         return;
@@ -65,20 +75,18 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         return;
       }
 
-      case "response.created":
-        this.responseActive = true;
-        this.responseCreateInFlight = false;
-        return;
-
       case "conversation.output_audio.delta":
       case "response.audio.delta":
       case "response.output_audio.delta": {
         const audioDelta = event.delta ?? event.data;
-        if (!audioDelta) {
+        if (
+          !audioDelta ||
+          this.responseCancelInFlight ||
+          audioGeneration !== this.outputAudioGeneration
+        ) {
           return;
         }
         const audio = base64ToBuffer(audioDelta);
-        this.config.onAudio(audio);
         if (event.item_id && event.item_id !== this.assistantAudioItem?.itemId) {
           this.assistantAudioItem = {
             itemId: event.item_id,
@@ -90,7 +98,16 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
           this.assistantAudioItem.bytes += audio.byteLength;
         }
         this.responseActive = true;
-        this.sendMark();
+        const generation = this.outputAudioGeneration;
+        const markName = this.createPlaybackMark();
+        this.config.onAudio(audio, event.item_id ? { itemId: event.item_id } : undefined);
+        if (generation === this.outputAudioGeneration && this.acceptsEvent(connection)) {
+          this.config.onMark?.(markName, () => {
+            if (this.acceptsEvent(connection)) {
+              this.acknowledgeMark(markName);
+            }
+          });
+        }
         return;
       }
 
@@ -157,7 +174,7 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         // to our single pending create; an explicit id always overrides that evidence.
         const rejectedEventId =
           readRealtimeErrorEventId(event.error) ??
-          (this.responseCreateInFlight &&
+          (this.responseCreateState === "in-flight" &&
           error?.type === "invalid_request_error" &&
           typeof error.param === "string" &&
           (error.param === "response" || error.param.startsWith("response."))
@@ -173,7 +190,7 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
           detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)
         ) {
           this.responseActive = true;
-          this.responseCreateInFlight = false;
+          this.responseCreateState = "idle";
           this.manualResponseCreateEventId = null;
           this.responseCreatePending = true;
           return;

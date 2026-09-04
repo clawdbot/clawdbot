@@ -225,18 +225,23 @@ describe("createPtyAdapter", () => {
     expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
-  it("wait does not settle immediately on SIGKILL", async () => {
+  it("keeps terminal fallback distinct from unconfirmed PTY cleanup", async () => {
     vi.useFakeTimers();
     spawnMock.mockReturnValue(createStubPty());
-
+    const onSpawnCleanup = vi.fn<(cleanup: Promise<void>) => void>();
     const adapter = await createPtyAdapter({
       shell: "bash",
       args: ["-lc", "sleep 10"],
+      onSpawnCleanup,
     });
 
     await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
       adapter.kill();
     });
+    expect(onSpawnCleanup).toHaveBeenCalledOnce();
+    await expect(onSpawnCleanup.mock.calls[0]![0]).rejects.toThrow(
+      "cleanup could not be confirmed",
+    );
   });
 
   it("prefers real PTY exit over SIGKILL fallback settle", async () => {

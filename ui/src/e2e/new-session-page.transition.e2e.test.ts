@@ -24,6 +24,7 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const rosterMatch = { includeGlobal: true };
 const SESSION_KEY = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
 const RUN_ID = "transition-proof-run";
 const captureProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -215,11 +216,12 @@ suite.define(() => {
       await expect.poll(() => page.locator(".new-session-page__error").count()).toBe(0);
       await captureProof(page, "default-mock-created.png");
 
-      const listRequestsBeforeReconnect = (await gateway.getRequests("sessions.list")).length;
+      const listRequestsBeforeReconnect = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
       await gateway.closeLatest(1006, "mock reconnect");
       await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(1);
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestsBeforeReconnect);
       for (const sessionKey of sessionKeys) {
         await expect
@@ -311,14 +313,15 @@ suite.define(() => {
       const start = page.locator(".new-session-page__start-submit");
       await message.fill("keep progress moving");
       await expect.poll(() => start.isEnabled()).toBe(true);
-      await gateway.waitForRequest("sessions.list");
+      await gateway.waitForRequest("sessions.list", { match: rosterMatch });
       expect(
         await page.locator(`.sidebar-recent-session[data-session-key="${SESSION_KEY}"]`).count(),
       ).toBe(0);
-      const listRequestsBeforeSubmit = (await gateway.getRequests("sessions.list")).length;
+      const listRequestsBeforeSubmit = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
 
       await gateway.deferNext("sessions.create");
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", rosterMatch);
       await start.click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ thinkingLevel: "xhigh" });
@@ -338,7 +341,10 @@ suite.define(() => {
         runId: RUN_ID,
         runStarted: true,
       });
-      await gateway.waitForRequest("sessions.list", { after: listRequestsBeforeSubmit });
+      await gateway.waitForRequest("sessions.list", {
+        after: listRequestsBeforeSubmit,
+        match: rosterMatch,
+      });
       await expect.poll(() => chatModuleRequested).toBe(true);
 
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
@@ -415,7 +421,9 @@ suite.define(() => {
         .toBe("xhigh");
       await waitForCommittedChatRoute(page);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(listRequestsBeforeSubmit + 1);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
+        listRequestsBeforeSubmit + 1,
+      );
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
       const invalidFrames = await page.evaluate(() => {
         const frames = Reflect.get(
