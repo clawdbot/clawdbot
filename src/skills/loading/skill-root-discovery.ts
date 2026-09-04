@@ -1,11 +1,11 @@
 // Skill root discovery validates bounded filesystem candidates before loading skill records.
 import fs from "node:fs";
 import path from "node:path";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginSkillRoot } from "./plugin-skills.js";
 import { compactSkillPath } from "./skill-paths.js";
 import { findContainingAllowedSkillSymlinkTarget, tryRealpath } from "./symlink-targets.js";
 
@@ -32,6 +32,12 @@ export type CandidateSkillDir = {
   skillDirRealPath: string;
   name: string;
   skillMdRealPath: string;
+};
+
+type PluginSkillCandidate = {
+  skillDir: string;
+  skillDirRealPath: string;
+  rejectHardlinks: boolean;
 };
 
 type DiscoveredSkillCandidates = {
@@ -646,21 +652,20 @@ export function discoverSkillCandidates(params: {
   };
 }
 
-function resolvePluginSkillRootRealPaths(pluginSkillDirs: readonly string[]): string[] {
-  return uniqueStrings(
-    pluginSkillDirs.map((dir) => tryRealpath(dir)).filter((dir): dir is string => Boolean(dir)),
-  );
-}
-
 /** Discover validated generated plugin-skill symlink candidates. */
 export function discoverPluginSkills(params: {
   pluginSkillsDir: string;
-  pluginSkillDirs: readonly string[];
+  pluginSkillRoots: readonly PluginSkillRoot[];
   source: string;
   limits: ResolvedSkillDiscoveryLimits;
-}): CandidateSkillDir[] {
-  const allowedRootRealPaths = resolvePluginSkillRootRealPaths(params.pluginSkillDirs);
-  if (allowedRootRealPaths.length === 0) {
+}): PluginSkillCandidate[] {
+  // Root order owns hardlink provenance, including aliases of the same directory.
+  // Resolve once per discovery and carry the first match through the file read.
+  const allowedRoots = params.pluginSkillRoots.map(({ dir, rejectHardlinks }) => ({
+    realPath: tryRealpath(dir),
+    rejectHardlinks,
+  }));
+  if (!allowedRoots.some(({ realPath }) => realPath !== null)) {
     return [];
   }
 
@@ -678,7 +683,7 @@ export function discoverPluginSkills(params: {
     maxSkillsLoadedPerSource === 0
       ? []
       : childDirScan.dirs.toSorted().slice(0, maxCandidatesPerRoot);
-  const candidates: CandidateSkillDir[] = [];
+  const candidates: PluginSkillCandidate[] = [];
 
   for (const name of childDirs) {
     const skillDir = path.join(rootDir, name);
@@ -686,10 +691,12 @@ export function discoverPluginSkills(params: {
       continue;
     }
     const skillDirRealPath = tryRealpath(skillDir);
-    if (
-      !skillDirRealPath ||
-      findContainingAllowedSkillSymlinkTarget(allowedRootRealPaths, skillDirRealPath) === null
-    ) {
+    const pluginRoot =
+      skillDirRealPath &&
+      allowedRoots.find(
+        ({ realPath }) => realPath !== null && isPathInside(realPath, skillDirRealPath),
+      );
+    if (!skillDirRealPath || !pluginRoot) {
       if (skillDirRealPath) {
         warnEscapedSkillPath({
           source: params.source,
@@ -716,7 +723,7 @@ export function discoverPluginSkills(params: {
     if (!skillMdRealPath || !isPathInside(skillDirRealPath, skillMdRealPath)) {
       continue;
     }
-    candidates.push({ skillDir, skillDirRealPath, name, skillMdRealPath });
+    candidates.push({ skillDir, skillDirRealPath, rejectHardlinks: pluginRoot.rejectHardlinks });
   }
   return candidates;
 }
