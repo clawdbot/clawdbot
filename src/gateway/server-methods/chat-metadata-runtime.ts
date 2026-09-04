@@ -12,7 +12,7 @@ import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-run
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -180,16 +180,16 @@ function generationFactsMatch(
 
 function resolveSessionProfiles(sessionEntry: ChatMetadataSessionEntry | undefined): {
   preferredProfileId?: string;
-  lockedProfileId?: string;
+  pinnedProfileId?: string;
 } {
   const profileId = sessionEntry?.authProfileOverride?.trim();
   if (!profileId) {
     return {};
   }
-  const profileSource = resolveSessionAuthProfileOverrideSource(sessionEntry);
+  const profileSource = resolveCollapsedSessionAuthPinSource(sessionEntry);
   return {
     preferredProfileId: profileId,
-    ...(profileSource === "user" ? { lockedProfileId: profileId } : {}),
+    ...(profileSource === "user" ? { pinnedProfileId: profileId } : {}),
   };
 }
 
@@ -200,7 +200,7 @@ function sessionProjectionKey(
   return [
     normalizeAgentId(agentId),
     profiles.preferredProfileId ?? "",
-    profiles.lockedProfileId ?? "",
+    profiles.pinnedProfileId ?? "",
   ].join("\0");
 }
 
@@ -288,7 +288,7 @@ export function createGatewayChatMetadataRuntime(params: {
     assertCurrent?.();
     const profiles = resolveSessionProfiles(sessionEntry);
     const neutral =
-      profiles.preferredProfileId === undefined && profiles.lockedProfileId === undefined;
+      profiles.preferredProfileId === undefined && profiles.pinnedProfileId === undefined;
     const defaultProfileId = useRequesterDefaults ? requesterProfileId : undefined;
     // Personal selections and credentials can change without publishing a shared auth
     // generation. Keep those projections request-local, including linked session pins.

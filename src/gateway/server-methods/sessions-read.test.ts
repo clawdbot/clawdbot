@@ -3,8 +3,17 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { AgentsListResult } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionStorePathCore as resolveStorePath } from "../../config/sessions.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import * as runtimeMetadata from "../../agents/agent-runtime-metadata.js";
+import {
+  resolveSessionStorePathCore as resolveStorePath,
+  SESSION_TOTAL_TOKENS_VERSION,
+  type SessionEntry,
+} from "../../config/sessions.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordAgentProvenance } from "../../state/agent-provenance.js";
@@ -15,6 +24,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { testState } from "../test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -23,6 +33,11 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import { agentsHandlers } from "./agents.js";
+import {
+  identifiedClient,
+  listSessions,
+  requestContext,
+} from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 setupGatewaySessionsHandlerTestHarness();
@@ -224,6 +239,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   testState.agentConfig = undefined;
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
@@ -389,6 +405,15 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
     options,
   );
   expect(searched.payload?.results.map((result) => result.sessionKey)).toEqual([ownKey]);
+
+  const listed = await listSessions({
+    client,
+    context: requestContext(cfg),
+    request: { search: "direct", includePeople: true },
+  });
+  expect(listed.sessions.map((row) => row.key)).toEqual([ownKey]);
+  expect(listed).toMatchObject({ count: 1, totalCount: 1, peopleSessionCount: 1 });
+  expect(JSON.stringify(listed)).not.toMatch(/foreign-role-read|foreign-owner/);
 
   const previews = await directSessionReq<{
     previews: Array<{ key: string; status: string }>;
@@ -704,4 +729,127 @@ test("session reads do not provision missing stores for default or configured ag
       .map((entry) => entry.agentId)
       .filter((agentId) => agentId === "main" || agentId === "work"),
   ).toEqual([]);
+});
+
+test("searches rich displayed fields before selecting a page across visible agent stores", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main", default: true },
+          { id: "work", identity: { name: "Orchid Navigator" } },
+        ],
+      },
+    };
+    const client = identifiedClient("owner@example.com");
+    const context = requestContext(config);
+    const put = async (agentId: string, name: string, entry: Partial<SessionEntry>) => {
+      await upsertSessionEntryCore(
+        { agentId, sessionKey: `agent:${agentId}:${name}` },
+        {
+          sessionId: name,
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+          ...entry,
+        },
+      );
+    };
+    await put("work", "target", {
+      label: "Quasar label",
+      category: "Nebula category",
+      displayName: "Stored comet",
+      status: "done",
+      goal: {
+        schemaVersion: 1,
+        id: "goal-target",
+        tokenStart: 0,
+        continuationTurns: 0,
+        objective: "Map distant galaxies",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        tokensUsed: 12000,
+        tokenBudget: 50000,
+        lastStatusNote: "Telescope calibrated",
+      },
+    });
+    await put("work", "hidden", {
+      label: "Quasar label",
+      visibility: "draft",
+      createdActor: { type: "human", source: "profile", id: "restricted-owner@example.com" },
+    });
+    await put("work", "archived-target", { label: "Vault Orchid", archivedAt: 1 });
+    const runtime = runtimeMetadata.resolveCurrentSessionAgentRuntimeMetadata;
+    vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata").mockImplementation(
+      (params) =>
+        params.sessionKey === "agent:work:target"
+          ? { id: "custom-harness", source: "session", fallback: "portable-mode" }
+          : runtime(params),
+    );
+    for (let index = 0; index < 55; index++) {
+      await put("main", `filler-${index}`, {});
+    }
+    const first = await listSessions({ client, context, request: { limit: 50 } });
+    expect(first.sessions.map((row) => row.key)).not.toContain("agent:work:target");
+    for (const search of [
+      "Quasar label",
+      "Nebula category",
+      "Stored comet",
+      "done",
+      "Map distant galaxies",
+      "Pursuing goal (12k/50k)",
+      "Telescope calibrated",
+      "Orchid Navigator",
+      "custom-harness (fallback portable-mode)",
+    ]) {
+      const result = await listSessions({ client, context, request: { search, limit: 50 } });
+      expect
+        .soft(
+          result.sessions.map((row) => row.key),
+          search,
+        )
+        .toEqual(["agent:work:target"]);
+      expect.soft(result.totalCount, search).toBe(1);
+      expect(JSON.stringify(result)).not.toContain("restricted-owner");
+    }
+    expect(
+      (await listSessions({ client, context, request: { search: "Orchid", agentId: "main" } }))
+        .sessions,
+    ).toEqual([]);
+    expect(
+      (
+        await listSessions({ client, context, request: { search: "Orchid", archived: true } })
+      ).sessions.map((row) => row.key),
+    ).toEqual(["agent:work:archived-target"]);
+    expect(
+      (await listSessions({ client, context, request: { search: "Orchid", archived: "all" } }))
+        .totalCount,
+    ).toBe(2);
+    const targetScope = { agentId: "work", sessionKey: "agent:work:target" };
+    const target = loadSessionEntry(targetScope)!;
+    await replaceSessionEntry(targetScope, {
+      ...target,
+      totalTokens: 50000,
+      totalTokensFresh: true,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      goal: { ...target.goal!, tokenStartFresh: true },
+    });
+    const limited = await listSessions({
+      client,
+      context,
+      request: { search: "Goal unmet (50k/50k)" },
+    });
+    expect(limited.sessions).toMatchObject([
+      { key: targetScope.sessionKey, goal: { status: "budget_limited", tokensUsed: 50000 } },
+    ]);
+    const idle = await listSessions({ client, context, request: { search: "idle", limit: 50 } });
+    expect(idle).toMatchObject({ count: 50, totalCount: 56, nextOffset: 50 });
+    const later = await listSessions({
+      client,
+      context,
+      request: { search: "idle", limit: 50, offset: 50 },
+    });
+    expect(later).toMatchObject({ count: 6, totalCount: 56, nextOffset: null });
+  });
 });

@@ -634,10 +634,9 @@ suite.define(() => {
     });
   });
 
-  it("launches advertised desktop apps and keeps observe controls working", async () => {
+  it("settles desktop app launches across takeover and source changes", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
-        deferredMethods: ["desktop.launch"],
         featureMethods: ["desktop.launch", "desktop.observe", "environments.list"],
         methodResponses: {
           "sessions.list": sessionsList("active"),
@@ -729,42 +728,6 @@ suite.define(() => {
       });
       expect(stageUsesAppBackground).toBe(true);
 
-      await browserButton.click();
-      const launchRequest = await gateway.waitForRequest("desktop.launch");
-      expect(launchRequest.params).toEqual({
-        source: { kind: "environment", environmentId: "worker-desktop-1" },
-        app: "browser",
-      });
-      await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("true");
-      expect(await terminalButton.isEnabled()).toBe(true);
-      await gateway.resolveDeferred("desktop.launch", { app: "browser", status: "ready" });
-      await expect.poll(async () => await browserButton.getAttribute("aria-busy")).toBe("false");
-
-      // Pin past the first launch so a slow runner can't return it stale.
-      const launchesBeforeRetry = (await gateway.getRequests("desktop.launch")).length;
-      await gateway.deferNext("desktop.launch");
-      await browserButton.click();
-      await gateway.waitForRequest("desktop.launch", { after: launchesBeforeRetry });
-      await gateway.rejectDeferred("desktop.launch", {
-        message: "worker desktop app launch unavailable; try again",
-      });
-      await panel
-        .getByRole("alert")
-        .filter({ hasText: "worker desktop app launch unavailable; try again" })
-        .waitFor();
-      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
-      expect(await browserButton.isEnabled()).toBe(true);
-
-      await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
-      await panel.getByText("Desktop sources", { exact: true }).waitFor();
-      expect(
-        await panel
-          .getByText("worker desktop app launch unavailable; try again", { exact: true })
-          .count(),
-      ).toBe(0);
-      await panel.getByRole("button", { name: "Connect", exact: true }).click();
-      await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
-
       const takeControl = panel.getByRole("button", { name: "Take control", exact: true });
       const overlayCoversStage = await panel.evaluate((element) => {
         const stage = element.shadowRoot?.querySelector<HTMLElement>(".desktop-stage");
@@ -782,16 +745,90 @@ suite.define(() => {
         );
       });
       expect(overlayCoversStage).toBe(true);
-      await takeControl.click();
-      await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(3);
-      const observeRequests = await gateway.getRequests("desktop.observe");
-      expect(observeRequests[2]?.params).toEqual({
-        source: { kind: "environment", environmentId: "worker-desktop-1" },
-        control: true,
+      for (const outcome of ["success", "failure"] as const) {
+        const launchesBefore = (await gateway.getRequests("desktop.launch")).length;
+        await gateway.deferNext("desktop.launch");
+        await browserButton.click();
+        const launchRequest = await gateway.waitForRequest("desktop.launch", {
+          after: launchesBefore,
+        });
+        expect(launchRequest.params).toEqual({
+          source: { kind: "environment", environmentId: "worker-desktop-1" },
+          app: "browser",
+        });
+        await expect.poll(() => browserButton.getAttribute("aria-busy")).toBe("true");
+        expect(await terminalButton.isEnabled()).toBe(true);
+
+        const observationsBefore = (await gateway.getRequests("desktop.observe")).length;
+        const connectionsBefore = Number(await panel.getAttribute("data-connect-count"));
+        await gateway.deferNext("desktop.observe");
+        await takeControl.click();
+        const controlRequest = await gateway.waitForRequest("desktop.observe", {
+          after: observationsBefore,
+        });
+        expect(controlRequest.params).toEqual({
+          source: { kind: "environment", environmentId: "worker-desktop-1" },
+          control: true,
+        });
+        // Launch completion belongs to the machine while its replacement viewer is pending.
+        if (outcome === "success") {
+          await gateway.resolveDeferred("desktop.launch", { app: "browser", status: "ready" });
+        } else {
+          await gateway.rejectDeferred("desktop.launch", {
+            message: "worker desktop app launch unavailable; try again",
+          });
+        }
+        await page.screenshot({
+          path: path.join(suite.artifactDir, `desktop-launch-takeover-${outcome}.png`),
+        });
+        await expect.poll(() => browserButton.getAttribute("aria-busy")).toBe("false");
+        expect(await browserButton.isEnabled()).toBe(true);
+        if (outcome === "failure") {
+          await panel
+            .getByRole("alert")
+            .filter({ hasText: "worker desktop app launch unavailable; try again" })
+            .waitFor();
+        } else {
+          expect(await panel.getByRole("alert").count()).toBe(0);
+        }
+        await gateway.resolveDeferred("desktop.observe");
+        await expect
+          .poll(async () => Number(await panel.getAttribute("data-connect-count")))
+          .toBe(connectionsBefore + 1);
+        expect(await takeControl.count()).toBe(0);
+
+        await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
+        await panel.getByText("Desktop sources", { exact: true }).waitFor();
+        expect(await panel.getByRole("alert").count()).toBe(0);
+        await panel.getByRole("button", { name: "Connect", exact: true }).click();
+        await browserButton.waitFor();
+      }
+
+      const launchesBeforeSwitch = (await gateway.getRequests("desktop.launch")).length;
+      await gateway.deferNext("desktop.launch");
+      await browserButton.click();
+      await gateway.waitForRequest("desktop.launch", { after: launchesBeforeSwitch });
+      await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
+      await panel.getByText("Desktop sources", { exact: true }).waitFor();
+      await gateway.setMethodResponse("environments.list", {
+        environments: [{ ...workerDesktopEnvironment, id: "worker-desktop-2" }],
       });
-      expect(await panel.getByRole("button", { name: "Take control", exact: true }).count()).toBe(
-        0,
-      );
+      await gateway.setMethodResponse("desktop.observe", {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=replacement",
+        control: false,
+      });
+      await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+      await panel.getByText("worker-desktop-2", { exact: true }).waitFor();
+      await panel.getByRole("button", { name: "Connect", exact: true }).click();
+      await browserButton.waitFor();
+      await gateway.rejectDeferred("desktop.launch", { message: "stale desktop launch failure" });
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "desktop-launch-source-switch.png"),
+      });
+      expect(await panel.getByRole("alert").count()).toBe(0);
+      expect(await browserButton.getAttribute("aria-busy")).toBe("false");
+      expect(await browserButton.isEnabled()).toBe(true);
 
       await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
       await panel.getByText("Desktop sources", { exact: true }).waitFor();

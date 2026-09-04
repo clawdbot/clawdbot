@@ -131,6 +131,7 @@ jobs:
       checks_node_core_nondist_matrix: ${{ steps.manifest.outputs.checks_node_core_nondist_matrix }}
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
       run_check: ${{ steps.manifest.outputs.run_check }}
+      changed_core_test_paths_json: ${{ steps.manifest.outputs.changed_core_test_paths_json }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
       check_additional_matrix: ${{ steps.manifest.outputs.check_additional_matrix }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
@@ -212,6 +213,7 @@ jobs:
           run_owner <<'PYTHON'
           # Generated from .github/actions/git-owner/owner.py; do not edit here.
           import base64
+          import builtins
           import json
           import os
           import re
@@ -222,6 +224,7 @@ jobs:
           import sys
           import tempfile
           import time
+          from types import TracebackType
 
           linux = os.environ.get("RUNNER_OS", sys.platform) in ("Linux", "linux")
           fetch_timeout_seconds = 120 if linux else 90
@@ -720,17 +723,69 @@ jobs:
                   checkout_environment.clear()
 
 
+          def terminal_diagnostic(error, owner_code):
+              # Code identity, not a filename supplied by policy, proves source provenance.
+              codes = {id(owner_code): owner_code}
+              pending = [owner_code]
+              while pending:
+                  for value in pending.pop().co_consts:
+                      if type(value) is type(owner_code):
+                          codes[id(value)] = value
+                          pending.append(value)
+              names = {value: value.__name__ for value in vars(builtins).values()
+                       if isinstance(value, type) and issubclass(value, BaseException)}
+              names.update({FetchTimeout: "FetchTimeout", GitFailure: "GitFailure"})
+              records, seen, via = [], set(), "terminal"
+              while error is not None and id(error) not in seen and len(records) < 4:
+                  seen.add(id(error))
+                  record = {"type": names.get(type(error), "unknown"), "via": via}
+                  for field in ("errno", "winerror"):
+                      value = getattr(error, field, None)
+                      if type(value) is int and -(2 ** 31) <= value < 2 ** 32:
+                          record[field] = value
+                  frames, trace = [], error.__traceback__
+                  # Bound traversal as well as output; malformed metadata cannot stall exit.
+                  for _ in range(256):
+                      if trace is None:
+                          break
+                      if type(trace) is not TracebackType:
+                          raise TypeError
+                      frame, code = trace.tb_frame, trace.tb_frame.f_code
+                      if frame.f_globals is globals() and id(code) in codes and 0 < trace.tb_lineno < 2 ** 31:
+                          frames.append({"function": code.co_name[:64], "line": trace.tb_lineno})
+                          frames = frames[-6:]
+                      trace = trace.tb_next
+                  record["owner_frames"] = frames
+                  if trace is not None:
+                      record["traceback_truncated"] = 1
+                  records.append(record)
+                  cause = error.__cause__
+                  error, via = (cause, "cause") if cause is not None else (error.__context__, "context")
+              return records
+
+
           if __name__ == "__main__":
+              exit_code = 0
               try:
                   main()
-              except FetchTimeout:
-                  raise SystemExit(124)
-              except GitFailure as error:
-                  raise SystemExit(error.code)
+              except (FetchTimeout, GitFailure) as error:
+                  exit_code = 124 if isinstance(error, FetchTimeout) else error.code
               except Exception as error:
-                  # Do not print command arguments or environment: Git may carry credentials.
-                  print(f"::error::Git ownership/setup failed ({type(error).__name__}); refusing reuse or retry", file=sys.stderr)
-                  raise SystemExit(125)
+                  name, diagnostic = "unknown", "unavailable"
+                  try:
+                      records = terminal_diagnostic(error, sys._getframe().f_code)
+                      diagnostic = json.dumps(records, separators=(",", ":"))
+                      name = records[0]["type"]
+                  except BaseException:
+                      pass  # Diagnostics must never replace the authoritative terminal exit.
+                  try:
+                      print(f"::error::Git ownership/setup failed ({name}); refusing reuse or retry", file=sys.stderr)
+                      print(f"[ci-git-owner] diagnostic={diagnostic}", file=sys.stderr)
+                  except BaseException:
+                      pass
+                  exit_code = 125
+              # Exit outside the handler: Python 3.9 can loop while chaining cyclic contexts.
+              raise SystemExit(exit_code)
           PYTHON
 
       - name: Resolve checkout SHA
@@ -1249,6 +1304,21 @@ jobs:
           const runNodeFastOnly =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
           const runNodeFull = runNode && !runNodeFastOnly;
+          // Plain PR leaves share the local consumer selector. Empty means the
+          // existing full owners stay scheduled, including unsupported targets.
+          let changedCoreTestPaths;
+          if (eventName === "pull_request" && runNodeFull && !frozenTarget && changedPaths &&
+            existsSync("scripts/changed-lanes.mts") &&
+            [
+              ["scripts/run-tsgo-core-test-shards.mts", "--changed-paths-json"],
+              ["scripts/run-additional-boundary-checks.mts", "--core-test-boundary-owner=test-types"],
+            ].every(([file, capability]) => existsSync(file) && readFileSync(file, "utf8").includes(capability))) {
+            const lanes = await import("./scripts/changed-lanes.mts");
+            if (typeof lanes.getChangedCoreTestPaths === "function") {
+              changedCoreTestPaths = lanes.getChangedCoreTestPaths(lanes.detectChangedLanes(changedPaths));
+            }
+          }
+
           const runNodeFastPluginContracts =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS);
           const runNodeFastCiRouting =
@@ -1609,6 +1679,7 @@ jobs:
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
             run_checks_node_core_dist: runNodeCoreDist,
             run_check: runNodeFull,
+            changed_core_test_paths_json: changedCoreTestPaths ? JSON.stringify(changedCoreTestPaths) : "",
             run_check_additional: runNodeFull,
             check_additional_matrix: createMatrix(runNodeFull ? additionalChecks : []),
             run_check_docs: docsChanged && eventName !== "push",
@@ -1922,14 +1993,7 @@ jobs:
             pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: |
-          audit_exit=0
-          node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high --ci || audit_exit=$?
-          if [ "$audit_exit" -eq 2 ]; then
-            echo "::warning::npm advisory service unavailable; production dependency audit incomplete. CI is continuing without full advisory coverage."
-          else
-            exit "$audit_exit"
-          fi
+        run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
   # Prime the lockfile- and pnpm-pinned store for fork PRs, manual runs, the
   # GitHub backend, and docs-only same-repo PRs. This job restores only; the
@@ -2549,7 +2613,7 @@ jobs:
       # Populate metadata and the executable before the 30-second MCP handshake.
       - name: Pre-warm Chrome MCP
         if: matrix.task == 'browser-extension' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
-        run: npx -y chrome-devtools-mcp@1.8.0 --version
+        run: npx -y --audit=false chrome-devtools-mcp@1.8.0 --version
 
       - name: Save Chrome MCP npm cache
         if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
@@ -3464,6 +3528,7 @@ jobs:
           HOSTED_RUNNER_STRIPES: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') && 'true' || 'false' }}
           RUNNER_PROFILE: ${{ needs.preflight.outputs.runner_profile }}
           OPENCLAW_LOCAL_CHECK: "0"
+          CHANGED_CORE_TEST_PATHS_JSON: ${{ needs.preflight.outputs.changed_core_test_paths_json }}
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
@@ -3669,7 +3734,12 @@ jobs:
               # this row owns the fifth before extensions/scripts/root. Targets
               # without stripe support keep the whole lane here.
               root_covered=false
-              if [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
+              if [ -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ]; then
+                # This owner validates the complete boundary once, then checks
+                # every compiler-resolved consumer (or all graphs on ambiguity).
+                env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json "$CHANGED_CORE_TEST_PATHS_JSON" --concurrency 2
+                pnpm tsgo:extensions:test
+              elif [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
                 grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
                 # Core stripes retain their safeguards; only the existing tail
                 # inherits this step's OPENCLAW_LOCAL_CHECK=0.
@@ -3805,7 +3875,7 @@ jobs:
       contents: read
     name: check-test-types-core-${{ matrix.stripe }}
     needs: [preflight]
-    if: ${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
+    if: ${{ needs.preflight.outputs.run_check == 'true' && !needs.preflight.outputs.changed_core_test_paths_json && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
     # The 8 label delivered only 2 CPUs/8 GiB; 32 delivered 8 CPUs/31 GiB.
     # Preserve two compiler children and hosted retries; see docs/ci.md#blacksmith-runner-capacity.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
@@ -3956,6 +4026,7 @@ jobs:
       - name: Run additional check shard
         env:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
+          CHANGED_CORE_TEST_PATHS_JSON: ${{ needs.preflight.outputs.changed_core_test_paths_json }}
           COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
           OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ""
@@ -3994,6 +4065,9 @@ jobs:
                 boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)
                 if [[ ! -f scripts/run-additional-boundary-checks.mts ]]; then
                   boundary_runner=(node scripts/run-additional-boundary-checks.mjs)
+                fi
+                if [ -n "${CHANGED_CORE_TEST_PATHS_JSON:-}" ]; then
+                  boundary_runner+=(--core-test-boundary-owner=test-types)
                 fi
                 "${boundary_runner[@]}"
                 ;;
@@ -5443,7 +5517,7 @@ jobs:
             checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}|${{ needs.preflight.outputs.run_checks_node_core_nondist }}
             check-shard=${{ needs.check-shard.result }}|${{ needs.preflight.outputs.run_check }}
             check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
-            check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
+            check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && !needs.preflight.outputs.changed_core_test_paths_json && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
             check-additional-shard=${{ needs.check-additional-shard.result }}|${{ needs.preflight.outputs.run_check_additional }}
             check-docs=${{ needs.check-docs.result }}|${{ needs.preflight.outputs.run_check_docs }}
             skills-python=${{ needs.skills-python.result }}|${{ needs.preflight.outputs.run_skills_python_job }}

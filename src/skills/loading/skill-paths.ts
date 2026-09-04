@@ -35,13 +35,15 @@ function resolveCompactHomePrefixes(): string[] {
   const realHomes = resolvedHomes
     .map((home) => tryRealpath(home))
     .filter((home): home is string => Boolean(home));
-  return uniqueStrings([...resolvedHomes, ...realHomes]).toSorted((a, b) => b.length - a.length);
+  return uniqueStrings([...resolvedHomes, ...realHomes])
+    .toSorted((a, b) => b.length - a.length)
+    .flatMap(compactHomePrefixesForHome);
 }
 
 /** Compact prompt-facing skill paths while preserving managed paths that `~` cannot reach. */
 export function compactPromptSkills(skills: Skill[]): Skill[] {
-  const homes = resolveCompactHomePrefixes();
-  if (homes.length === 0) {
+  const prefixes = resolveCompactHomePrefixes();
+  if (prefixes.length === 0) {
     return skills;
   }
   const preservedRoots = resolvePreservedPromptSkillPathRoots();
@@ -50,7 +52,7 @@ export function compactPromptSkills(skills: Skill[]): Skill[] {
     ...skill,
     filePath: shouldPreservePromptSkillPath(skill.filePath, preservedRoots, tildeRoots)
       ? skill.filePath
-      : compactHomePath(skill.filePath, homes),
+      : compactHomePath(skill.filePath, prefixes),
   }));
 }
 
@@ -104,12 +106,10 @@ function shouldPreservePromptSkillPath(
   );
 }
 
-function compactHomePath(filePath: string, homes: readonly string[]): string {
-  for (const home of homes) {
-    for (const prefix of compactHomePrefixesForHome(home)) {
-      if (filePath.startsWith(prefix)) {
-        return "~/" + normalizeCompactedSkillPath(filePath.slice(prefix.length), prefix);
-      }
+function compactHomePath(filePath: string, prefixes: readonly string[]): string {
+  for (const prefix of prefixes) {
+    if (filePath.startsWith(prefix)) {
+      return "~/" + normalizeCompactedSkillPath(filePath.slice(prefix.length), prefix);
     }
   }
   return filePath;

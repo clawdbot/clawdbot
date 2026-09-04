@@ -643,7 +643,7 @@ extension DashboardWindowSmokeTests {
             persistedWidth: 400) == 400)
 
         let key = DashboardWindowLayout.linkBrowserWidthDefaultsKey
-        await TestIsolation.withUserDefaultsValues([key: nil]) {
+        try await TestIsolation.withUserDefaultsValues([key: nil]) {
             let defaults = AppDefaults.standard
             let dashboard = server.url("/control/")
             let link = readerServer.url("/reader/half-width")
@@ -671,11 +671,20 @@ extension DashboardWindowSmokeTests {
                     DashboardWindowLayout.mainBrowserMinWidth)
             #expect(controller._testLinkBrowserMaximumThickness == NSSplitViewItem.unspecifiedDimension)
 
-            defaults.set(Double(openedLinkBrowserWidth + 37), forKey: key)
-            controller._testCompleteLinkBrowserDividerDrag()
+            let window = try #require(controller.window)
+            let widerWidth = min(
+                openedLinkBrowserWidth + 80,
+                openedSplitWidth - dividerThickness - DashboardWindowLayout.mainBrowserMinWidth)
+            let narrowerWidth = max(openedLinkBrowserWidth - 80, DashboardWindowLayout.linkBrowserMinWidth)
+            for url in [link, readerServer.url("/reader/second")] {
+                controller._testOpenLinkBrowser(url)
+                for width in [widerWidth, narrowerWidth] {
+                    try Self.resizeLinkBrowser(in: window, toWidth: width)
+                    #expect(abs(controller._testLinkBrowserWidth - width) < 1)
+                }
+            }
             let resizedWidth = controller._testLinkBrowserWidth
-            #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
-            #expect(abs(CGFloat(defaults.double(forKey: key)) - openedLinkBrowserWidth - 37) >= 1)
+            defaults.set(Double(resizedWidth), forKey: key)
 
             controller._testCloseLinkBrowser()
             controller.window?.setContentSize(DashboardWindowLayout.windowMinSize)
@@ -707,6 +716,24 @@ extension DashboardWindowSmokeTests {
                 #expect(abs(controller._testLinkBrowserWidth - width) < 1)
             }
         }
+    }
+
+    private static func resizeLinkBrowser(in window: NSWindow, toWidth width: CGFloat) throws {
+        var descendants = try [#require(window.contentView)]
+        var splitView: NSSplitView?
+        while let view = descendants.popLast() {
+            if let split = view as? NSSplitView {
+                splitView = split
+                break
+            }
+            descendants.append(contentsOf: view.subviews)
+        }
+        let split = try #require(splitView)
+        split.layoutSubtreeIfNeeded()
+        // AppKit applies the same constraints as a user drag without entering
+        // a nested mouse-tracking loop inside Swift Testing's executor.
+        split.setPosition(split.bounds.width - width - split.dividerThickness, ofDividerAt: 0)
+        split.layoutSubtreeIfNeeded()
     }
 
     @Test func `dashboard link browser reorders and closes other tabs`() async throws {

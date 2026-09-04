@@ -379,6 +379,7 @@ function runCiManifestFixture(options: {
   nodeTestShards?: Record<string, unknown>[];
   changedPlannerSource?: string | null;
   changedPaths?: string[] | null;
+  changedCoreTestSupport?: boolean;
   repository?: string;
   eventName?: "pull_request" | "push" | "workflow_dispatch";
   historicalCompatibility?: boolean;
@@ -449,6 +450,24 @@ function runCiManifestFixture(options: {
         `,
       "utf8",
     );
+    if (options.changedCoreTestSupport) {
+      for (const file of [
+        "scripts/changed-lanes.mts",
+        "scripts/lib/changed-path-facts.mjs",
+        "scripts/lib/arg-utils.mts",
+        "scripts/lib/arg-utils.runtime.mjs",
+        "scripts/lib/direct-run.mjs",
+        "scripts/lib/merge-head-diff-base.mjs",
+        "scripts/lib/record-shared.mjs",
+        "packages/normalization-core/src/stable-stringify.ts",
+        "scripts/run-tsgo-core-test-shards.mts",
+        "scripts/run-additional-boundary-checks.mts",
+      ]) {
+        const target = path.join(root, file);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, readFileSync(file));
+      }
+    }
     const iosCapabilities = options.iosCapabilities ?? options.bundledPlanner;
     const iosBuildCapability = options.iosBuildCapability ?? iosCapabilities;
     const nativeI18nCapabilities = options.nativeI18nCapabilities ?? options.bundledPlanner;
@@ -1637,6 +1656,8 @@ function runCheckShardFixture(options: {
     stripeSupport?: boolean;
     hostedContract?: boolean;
     failStripe?: string;
+    changedPathsJson?: string;
+    boundary?: boolean;
   };
 }): {
   calls: string[];
@@ -1663,6 +1684,22 @@ function runCheckShardFixture(options: {
 const args = process.argv.slice(2);
 appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node " + args.join(" ")].join("\\t") + "\\n");
 if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process.exit(17);
+`,
+    );
+  }
+  if (options.types?.boundary) {
+    writeFileSync(
+      path.join(root, "scripts/run-additional-boundary-checks.mts"),
+      readFileSync("scripts/run-additional-boundary-checks.mts"),
+    );
+    for (const directory of ["scripts/lib", "packages", "node_modules"]) {
+      symlinkSync(path.resolve(directory), path.join(root, directory), "dir");
+    }
+    writeFileSync(
+      path.join(root, "scripts/check-native-state-schema-version.mjs"),
+      `
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node scripts/check-native-state-schema-version.mjs"].join("\\t") + "\\n");
 `,
     );
   }
@@ -1700,6 +1737,7 @@ if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process
     preflightOutputs: {
       compatibility_target: String(options.frozenTarget),
       run_format_check: "false",
+      changed_core_test_paths_json: options.types?.changedPathsJson ?? "",
     },
   };
   const rows: { name: string; step: WorkflowStep; matrix: Record<string, unknown> }[] = [];
@@ -1716,6 +1754,15 @@ if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process
     }
   }
   rows.push({ name: "central", step: checkShardStep, matrix: { task: options.task ?? "guards" } });
+  if (options.types?.boundary) {
+    rows.push({
+      name: "boundary",
+      step: workflow.jobs["check-additional-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run additional check shard",
+      ),
+      matrix: { group: "boundaries" },
+    });
+  }
   // Rows are independent (matrix fail-fast:false); each real Bash body owns its halt.
   const runs = rows.map((row) => {
     const resolveValue = (value: unknown) =>
@@ -2594,7 +2641,7 @@ NODE
     const nativeFinalize = workflow.jobs.finalize;
     const controlUiFinalize = controlUiWorkflow.jobs.finalize;
     const refreshStep = refresh.steps.find(
-      (step: { name?: string }) => step.name === "Refresh native locale artifact",
+      (step: { name?: string }) => step.name === "Refresh locale translations",
     );
     const nativeArtifactStep = refresh.steps.find(
       (step: { name?: string }) => step.name === "Prepare locale artifact",
@@ -2609,7 +2656,7 @@ NODE
       (step: { name?: string }) => step.name === "Open or update generated locale PR",
     );
     const controlUiRefreshStep = controlUiWorkflow.jobs.refresh.steps.find(
-      (step: { name?: string }) => step.name === "Refresh control UI locale files",
+      (step: { name?: string }) => step.name === "Refresh locale translations",
     );
     const controlUiAggregateStep = controlUiFinalize.steps.find(
       (step: { name?: string }) => step.name === "Finalize control UI generated artifacts",
@@ -2652,7 +2699,12 @@ NODE
       default: false,
       type: "boolean",
     });
-    expect(workflow.on.workflow_dispatch?.inputs).toBeUndefined();
+    for (const owner of [workflow, controlUiWorkflow]) {
+      expect(owner.on.workflow_dispatch.inputs.full_refresh).toMatchObject({
+        default: false,
+        type: "boolean",
+      });
+    }
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
@@ -2670,14 +2722,17 @@ NODE
         generatorInput,
       );
     }
-    expect(refreshStep.run).toContain("run_refresh anthropic");
-    expect(refreshStep.run).toContain("retrying with OpenAI");
-    expect(refreshStep.run).toContain("run_openai_refresh");
-    expect(refreshStep.run).toContain("repository OpenAI key");
-    expect(refreshStep.env.OPENCLAW_DOCS_I18N_OPENAI_API_KEY).toBe(
-      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
+    expect(refreshStep.env.OPENAI_API_KEY).toBe(
+      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}",
     );
-    expect(refreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(refreshStep.env.OPENCLAW_CONTROL_UI_I18N_MODEL).toBe(
+      "${{ secrets.OPENCLAW_I18N_MODEL }}",
+    );
+    expect(refreshStep.env.OPENCLAW_I18N_FALLBACK_MODEL).toBe(
+      "${{ secrets.OPENCLAW_I18N_FALLBACK_MODEL }}",
+    );
+    expect(refreshStep.env.FULL_REFRESH).toBe("${{ inputs.full_refresh || false }}");
+    expect(refreshStep.run).toContain("args+=(--force)");
     expect(nativeArtifactStep.run).toContain("git add -A apps/.i18n/native");
     expect(nativeArtifactStep.run).not.toContain("native-source.json");
     expect(nativeGeneratedStep.run).toBe(
@@ -2710,14 +2765,17 @@ NODE
       "apps/android/app/src/thirdParty",
     );
     expect(nativePublishStep.with["auto-merge"]).toBe("true");
-    expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
-    expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
-    expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
-    expect(controlUiRefreshStep.run).toContain("repository OpenAI key");
-    expect(controlUiRefreshStep.env.OPENCLAW_DOCS_I18N_OPENAI_API_KEY).toBe(
-      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
+    expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe(
+      "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}",
     );
-    expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_MODEL).toBe(
+      "${{ secrets.OPENCLAW_I18N_MODEL }}",
+    );
+    expect(controlUiRefreshStep.env.OPENCLAW_I18N_FALLBACK_MODEL).toBe(
+      "${{ secrets.OPENCLAW_I18N_FALLBACK_MODEL }}",
+    );
+    expect(controlUiRefreshStep.env.FULL_REFRESH).toBe("${{ inputs.full_refresh || false }}");
+    expect(controlUiRefreshStep.run).toContain("args+=(--force)");
     expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
     const controlUiArtifactStep = controlUiWorkflow.jobs.refresh.steps.find(
       (step: { name?: string }) => step.name === "Prepare locale artifact",
@@ -9647,6 +9705,103 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   );
 
+  it("routes eligible core test leaves to one type owner before runner allocation", () => {
+    const changedPaths = [
+      "src/commands/doctor-config-preflight.plugin-persistence.test.ts",
+      "docs/ci.md",
+    ];
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedCoreTestSupport: true,
+      eventName: "pull_request",
+      changedPaths,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.outputs.changed_core_test_paths_json).toBe(
+      JSON.stringify(changedPaths.slice(0, 1)),
+    );
+    const result = runCheckShardFixture({
+      frozenTarget: false,
+      task: "test-types",
+      scripts: ["tsgo:scripts", "tsgo:test:root"],
+      types: {
+        compose: true,
+        changedPathsJson: manifest.outputs.changed_core_test_paths_json,
+        boundary: true,
+      },
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.rows).toEqual([
+      { name: "central", status: 0 },
+      { name: "boundary", status: 0 },
+    ]);
+    expect(result.typeCalls.filter((call) => call.row === "central")).toEqual([
+      {
+        row: "central",
+        localCheck: null,
+        command: `node --changed-paths-json ${JSON.stringify(changedPaths.slice(0, 1))} --concurrency 2`,
+      },
+      ...["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"].map((command) => ({
+        row: "central",
+        localCheck: "0",
+        command: `pnpm ${command}`,
+      })),
+    ]);
+    expect(
+      result.typeCalls
+        .filter((call) => call.row === "boundary")
+        .map((call) => call.command)
+        .toSorted(),
+    ).toEqual(
+      BOUNDARY_CHECKS.filter((check) => check.label !== "lint:tmp:tsgo-core-boundary")
+        .map((check) => [check.command, ...check.args].join(" "))
+        .toSorted(),
+    );
+    const workflow = readCiWorkflow();
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["check-test-types-hosted-core-shard"].if, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerProfile: "hybrid",
+        preflightOutputs: manifest.outputs,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { changedPaths: null, invalid: true },
+    { changedPaths: [] },
+    { changedPaths: ["docs/ci.md"] },
+    { changedPaths: ["src/commands/doctor.test.ts", "package.json"] },
+    { changedPaths: ["src/commands/doctor.test.ts", "src/shared.test-support.ts"] },
+    { changedPaths: ["packages/mermaid-renderer/src/render.test.ts"] },
+    { changedPaths: ["src/gateway/gateway-acp-bind.live.test.ts"] },
+    { changedPaths: ["src/commands/doctor.test.ts"], changedCoreTestSupport: false },
+    { changedPaths: ["src/commands/doctor.test.ts"], eventName: "push" as const },
+    { changedPaths: ["src/commands/doctor.test.ts"], eventName: "workflow_dispatch" as const },
+    {
+      changedPaths: ["src/commands/doctor.test.ts"],
+      scopeEnv: { OPENCLAW_CI_CHANGED_PATHS_JSON: "invalid" },
+      invalid: true,
+    },
+  ])("retains full type owners for ineligible manifest inputs %j", (options) => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedCoreTestSupport: true,
+      eventName: "pull_request",
+      ...options,
+    });
+    if ("invalid" in options) {
+      expect(manifest.status).not.toBe(0);
+      expect(manifest.output).toContain("Current PR CI requires complete changed paths");
+      expect(manifest.outputs.changed_core_test_paths_json).toBeUndefined();
+    } else {
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.changed_core_test_paths_json).toBe("");
+    }
+  });
+
   it.each([
     ["hybrid", "pull_request", false, true, true, true],
     ["github", "workflow_dispatch", false, true, true, true],
@@ -13625,6 +13780,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expected: { "pnpm-store-warmup": true, "check-lint-hosted-core-shard": true },
     },
     {
+      label: "targeted core test PR",
+      context: {
+        eventName: "pull_request",
+        runnerProfile: "hybrid",
+        preflightOutputs: { changed_core_test_paths_json: '["src/commands/doctor.test.ts"]' },
+      },
+      expected: {
+        "check-shard": true,
+        "check-additional-shard": true,
+        "check-lint-hosted-core-shard": true,
+        "check-test-types-hosted-core-shard": false,
+      },
+    },
+    {
       label: "Blacksmith has no hosted stripes",
       context: { frozenTarget: true },
       expected: {
@@ -13765,6 +13934,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const outcome = runCiGateFixture(renderCiGateEnvironment(context, results));
     expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(0);
+    if (context.preflightOutputs?.changed_core_test_paths_json) {
+      for (const terminal of ["failure", "skipped"]) {
+        const missingOwner = runCiGateFixture(
+          renderCiGateEnvironment(context, { ...results, "check-shard": terminal }),
+        );
+        expect(missingOwner.status).not.toBe(0);
+      }
+    }
   });
 
   it("runs Node 22 compatibility only from manual CI dispatches", () => {

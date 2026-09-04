@@ -96,17 +96,20 @@ suite.define(() => {
         await page.screenshot({ path: path.join(proofDir, "02-expanded-dashboard.png") });
       }
 
-      await page.getByRole("button", { name: "Collapse", exact: true }).click();
+      await page.getByRole("button", { name: "Restore split", exact: true }).click();
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await page.locator(".chat-thread").waitFor();
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "03-split-dashboard.png") });
       }
-      await page.locator(".side-panel__minimize").click();
-      await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
-      await page.locator(".chat-thread").waitFor();
+      await page
+        .locator('[data-region-header="side"]')
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
+      await page.locator(".board-session-surface").waitFor();
+      await page.locator(".chat-thread").waitFor({ state: "hidden" });
       if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "04-chat-only.png") });
+        await page.screenshot({ path: path.join(proofDir, "04-dashboard-only.png") });
       }
 
       await page.setViewportSize({ width: 390, height: 844 });

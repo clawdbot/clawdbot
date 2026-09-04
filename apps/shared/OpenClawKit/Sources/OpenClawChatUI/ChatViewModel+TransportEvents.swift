@@ -45,6 +45,7 @@ extension OpenClawChatViewModel {
         case .chatMetadataChanged:
             let session = self.currentSessionSnapshot()
             Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
+            Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
         case let .sessionsChanged(change):
             self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):

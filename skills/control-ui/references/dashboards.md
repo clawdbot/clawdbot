@@ -25,9 +25,9 @@
 
 The Dashboard tool's focus and presentation commands need a connected Control
 UI. They can return unavailable even though board storage is healthy.
-`focus_tab` opens the side panel. `set_chat_dock` with `dock: "hidden"` expands
-it; `"left"`, `"right"`, and `"bottom"` all restore a split view using the current
-panel layout.
+`focus_tab` opens the side panel. Call `set_presentation` after focusing the tab:
+`presentation: "expanded"` expands it; `"split"` restores a split view using the
+current panel layout.
 
 ## Updating content
 

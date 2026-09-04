@@ -39,8 +39,12 @@ const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
-  const sessionKey =
-    resolveCommandTurnTargetSessionKey(ctx) || normalizeOptionalString(ctx.SessionKey) || "";
+  const commandTarget = resolveCommandTurnTargetSessionKey(ctx);
+  // One command event can target several sessions; dedupe each addressed operation.
+  if (commandTarget) {
+    return commandTarget;
+  }
+  const sessionKey = normalizeOptionalString(ctx.SessionKey) || "";
   if (!sessionKey) {
     return "";
   }

@@ -528,6 +528,13 @@ type CliBackendPluginBase = {
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   /**
+   * Maps the observed native list, intersected with the host selection, to equivalent
+   * cron capabilities: read/write/edit/apply_patch/exec/process/web_search/web_fetch.
+   * Never infer capabilities decided by unobserved model or sandbox settings.
+   * Core rejects other names before grant/capture and excludes node/tool-disabled runs.
+   */
+  projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
+  /**
    * Backend-owned JSONL line parser for provider-specific stream formats.
    *
    * Tool events report execution already performed by the backend. OpenClaw

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, realpath, rm, rmdir, writeFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
@@ -36,6 +37,13 @@ const signalHandlers = signals.map((signal) => {
   process.on(signal, handler);
   return { signal, handler };
 });
+await mkdir(resultsRoot, { recursive: true });
+// A checkout may live on a volume that rejects nested mounts. Only the mount
+// directories use Darwin's private temp storage; images and builds stay in work.
+const temporaryRoot = execFileSync("getconf", ["DARWIN_USER_TEMP_DIR"], {
+  encoding: "utf8",
+}).trim();
+const mountRoot = await mkdtemp(path.join(await realpath(temporaryRoot), "openclaw-swift-mounts-"));
 const worker = path.join(root, "scripts/lib/mac-swift-build.sh");
 const workerArgs = (operation: string, arch: string, work: string) => [
   worker,
@@ -47,9 +55,9 @@ const workerArgs = (operation: string, arch: string, work: string) => [
   peekabooCommit,
   skipMlx,
   work,
+  path.join(mountRoot, arch),
 ];
 
-await mkdir(resultsRoot, { recursive: true });
 try {
   for (let offset = 0; offset < architectures.length; offset += concurrency) {
     if (controller.signal.aborted || parentSignal) {
@@ -123,6 +131,7 @@ try {
   }
 }
 if (owned.every((owner) => owner.treeSafe)) {
+  await rmdir(mountRoot);
   await writeFile(path.join(resultsRoot, "cleanup-complete"), "verified\n", { flag: "wx" });
 }
 for (const { signal, handler } of signalHandlers) {
@@ -133,7 +142,7 @@ for (const failure of failures) {
 }
 if (owned.some((owner) => !owner.treeSafe)) {
   console.error(
-    `Swift cleanup could not be verified; retained work and ownership locks under ${resultsRoot}`,
+    `Swift cleanup could not be verified; retained work and ownership locks under ${resultsRoot}, snapshot mounts under ${mountRoot}`,
   );
   process.exitCode = 2;
 } else if (parentSignal) {

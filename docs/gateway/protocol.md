@@ -45,6 +45,11 @@ that supervise the Gateway as a child process, see
   the gateway closes or drops the frame. These events carry `surface`, byte
   sizes, limits, and a safe reason code, never message bodies, attachment
   contents, raw frame bytes, tokens, cookies, or secrets.
+- The Gateway offers `permessage-deflate`. Peers that negotiate it (browsers, `ws`
+  clients) receive frames of 4 KiB and up compressed; smaller frames such as
+  streaming deltas stay raw. Context takeover is disabled in both directions, so
+  each frame compresses independently. Peers that do not offer the extension are
+  unaffected. Payload limits apply to the inflated size.
 
 Frame shapes:
 
@@ -66,6 +71,13 @@ Authenticated operator requests share a bounded queue for starting RPC handlers.
 When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
 before the method runs; retry within the request's budget. Started requests
 complete concurrently, so responses can arrive out of order.
+
+Ordinary UI/SDK requests may outlive a socket disconnect, but cannot start a
+handler in a retiring Gateway instance. Shutdown fences new request entry and
+joins pending handler loading and authorization before releasing their runtime.
+Already-started methods retain their own shutdown behavior; shutdown does not
+wait for every RPC to finish. Exact pending node progress and result replies
+remain available during node cleanup, until transport shutdown seals entry.
 
 Clients should branch on `code` and `details.code`; `message` remains human-readable
 and can change except where a compatibility note says otherwise. Method-level

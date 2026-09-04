@@ -22,9 +22,11 @@ keys and network-touching suites, see [Testing live](/help/testing-live).
 - A user can move from an older published package to the candidate package
   without losing config, agents, sessions, workspaces, plugin allowlists, or
   channel config.
-- `openclaw doctor --fix --non-interactive` owns legacy cleanup and repair
-  paths. Startup should not grow hidden compatibility migrations for stale
-  plugin state.
+- `openclaw doctor --fix --non-interactive` owns legacy migrations and repairs,
+  including genuinely dangling plugin-runtime aliases. Package postinstall owns
+  package-local dependency debris; both preserve valid shared runtime roots that
+  another installation or profile may use. Startup should not grow hidden
+  compatibility migrations for stale plugin state.
 - Plugin installs work from local directories, git repos, npm packages, and the
   ClawHub registry path.
 - Plugin npm dependencies install in one managed npm project per plugin,
@@ -121,11 +123,10 @@ Important lanes:
   restart the Gateway before the normal probes.
 - `test:docker:update-migration` is the cleanup-heavy published-update lane. It
   installs the latest stable release by default, starts from a configured
-  Discord/Telegram-style user state, runs baseline
-  doctor so configured plugin dependencies have a chance to materialize, seeds
-  legacy plugin dependency debris for a configured packaged plugin, updates to
-  the candidate tarball, and requires post-update doctor to remove the legacy
-  dependency roots.
+  Discord/Telegram-style user state, seeds package-local plugin dependency debris
+  and shared runtime sentinels, and updates to the candidate tarball. Package
+  postinstall must remove package-local debris while update and Doctor preserve
+  the shared runtime roots.
 
 Useful published-upgrade survivor variants:
 

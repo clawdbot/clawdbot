@@ -34,6 +34,10 @@ import type { PreparedSlackMessage } from "./types.js";
 export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
   const slackClient = prepared.eventScope?.client ?? ctx.app.client;
+  const slackClientOptions = {
+    ...ctx.app.webClientOptions,
+    ...(prepared.eventScope ? { teamId: prepared.eventScope.teamId } : {}),
+  };
   const slackStreamFallbackTeamId = prepared.eventScope?.teamId ?? ctx.teamId;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
@@ -192,7 +196,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
             status: "processing",
             // Initialize new sessions with core's derived label; later title changes use rename.
             title: prepared.sessionDisplayName ?? prepared.ctxPayload.ThreadLabel,
-            route: { ...route, sessionKey: prepared.ctxPayload.SessionKey ?? route.sessionKey },
             eventScope: prepared.eventScope,
           });
         }
@@ -292,11 +295,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
         blockStreamingEnabled,
       });
 
-  const onSlackDeliveryError = (err: unknown, info: { kind: string }) => {
-    runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
-    replyPipeline.typingCallbacks?.onIdle?.();
-  };
-
   return {
     prepared,
     ctx,
@@ -304,6 +302,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     message,
     route,
     slackClient,
+    slackClientOptions,
     slackStreamFallbackTeamId,
     cfg,
     runtime,
@@ -335,7 +334,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     shouldUseDraftStream,
     disableBlockStreaming,
     useStreaming,
-    onSlackDeliveryError,
   };
 }
 

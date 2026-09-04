@@ -17,7 +17,11 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
-import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import {
+  focusChatSidePanel,
+  openChatSidePanelType,
+  restoreChatAsMain,
+} from "./chat-side-panel.test-support.ts";
 
 async function captureProof(page: Page, fileName: string): Promise<void> {
   if (!captureUiProofEnabled) {
@@ -361,14 +365,15 @@ suite.define(() => {
         await captureProof(page, "composer-with-side-chat.png");
 
         const sidePanel = visiblePane.locator(".sidebar-region__right-runtime .side-panel");
-        await sidePanel.locator(".side-panel__expand").click();
+        await focusChatSidePanel(page);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').count())
           .toBe(1);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        await sidePanel.locator(".side-panel__expand").click();
+        await sidePanel.getByRole("button", { name: "Restore split", exact: true }).click();
+        await restoreChatAsMain(page);
 
         await page.setViewportSize({ height: 900, width: 560 });
         await expect
@@ -377,8 +382,9 @@ suite.define(() => {
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="rail"]').count())
           .toBe(0);
-        await sidePanel.locator(".side-panel__minimize").click();
-        await sidePanel.waitFor({ state: "hidden" });
+        const sideHeader = sidePanel.locator('[data-region-header="side"]');
+        await sideHeader.getByRole("button", { name: "Close", exact: true }).click();
+        await sideHeader.waitFor({ state: "hidden" });
         await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
         await expect
           .poll(() => visiblePane.locator('[data-progress-card-placement="composer"]').isVisible())

@@ -422,8 +422,9 @@ export function fetchGitHubJson(
   rawUrl: string,
   fetchImpl: typeof fetch,
   token?: string,
+  maxBytes?: number,
 ): Promise<unknown> {
   return withOptionalGitHubAuth(token, async (requestToken) =>
-    readGitHubJsonResponse(await fetchGitHubApi(rawUrl, fetchImpl, requestToken)),
+    readGitHubJsonResponse(await fetchGitHubApi(rawUrl, fetchImpl, requestToken), maxBytes),
   );
 }

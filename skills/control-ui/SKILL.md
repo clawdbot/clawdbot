@@ -1,6 +1,7 @@
 ---
 name: control-ui
 description: "Operate and troubleshoot the OpenClaw Control UI: navigate connected clients, organize sessions, build session dashboards, and handle direct or Tailscale-hosted Gateways."
+user-invocable: true
 ---
 
 # Control UI
@@ -76,9 +77,9 @@ Control UI tab when possible.
 7. Call `dashboard focus_tab` to show the intended tab in the dashboard side
    panel. If no Control UI is connected, the command returns unavailable; have
    the user open the session and retry.
-8. Choose the presentation after focusing the tab. `set_chat_dock` with
-   `dock: "hidden"` expands the dashboard; `"left"`, `"right"`, and `"bottom"`
-   all show it beside chat in the current panel layout. The human can use
+8. Choose the presentation after focusing the tab. `set_presentation` with
+   `presentation: "expanded"` expands the dashboard; `"split"` shows it beside
+   chat in the current panel layout. The human can use
    **Expand side panel** for a full-width dashboard, **Collapse** to bring chat
    back, or close the panel for chat alone.
 
