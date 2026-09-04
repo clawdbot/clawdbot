@@ -11,6 +11,7 @@ import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
+import "./dashboard-preview.ts";
 
 export type DashboardsRouteData = {
   result: SessionsListResult | null;
@@ -52,17 +53,13 @@ function renderDashboardPreview(
   gatewaySnapshot: ApplicationGatewaySnapshot | undefined,
   error: string | null,
 ) {
-  return html`<div class="dashboard-preview" aria-hidden="true">
-    ${
-      error
-        ? html`<div class="dashboard-preview__error">
-            ${t("dashboardDocument.loadFailed", { error })}
-          </div>`
-        : html`<openclaw-board-document
-            .gatewaySnapshot=${gatewaySnapshot}
-            .sessionKey=${row.key}
-          ></openclaw-board-document>`
-    }
+  return html`<div class="dashboard-preview" aria-hidden="true" inert>
+    <openclaw-dashboard-preview
+      .gatewaySnapshot=${gatewaySnapshot}
+      .sessionKey=${row.key}
+      .agentId=${row.agentId}
+      .error=${error}
+    ></openclaw-dashboard-preview>
   </div>`;
 }
 

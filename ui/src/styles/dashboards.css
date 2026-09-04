@@ -151,7 +151,8 @@
   pointer-events: none;
 }
 
-.dashboard-preview > openclaw-board-document {
+.dashboard-preview > openclaw-dashboard-preview,
+.dashboard-preview openclaw-board-document {
   position: absolute;
   inset: 0;
   display: block;

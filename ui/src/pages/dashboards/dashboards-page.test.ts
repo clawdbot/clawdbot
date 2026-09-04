@@ -272,6 +272,7 @@ describe("DashboardsPage", () => {
     await element.updateComplete;
 
     expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(3);
+    expect(element.querySelector(".dashboard-preview")?.hasAttribute("inert")).toBe(true);
 
     const search = element.querySelector<HTMLInputElement>('input[type="search"]');
     expect(search).not.toBeNull();

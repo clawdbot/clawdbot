@@ -17,6 +17,12 @@ const dashboardRows = [
   ["agent:main:dashboard:ci-signal", "CI signal", "peter", "Peter", 42_000, "done"],
   ["agent:main:dashboard:community-pulse", "Community pulse", "mira", "Mira", 75_000, "done"],
   ["agent:main:dashboard:gateway-fleet", "Gateway fleet", "peter", "Peter", 130_000, "done"],
+  ["agent:main:dashboard:deployments", "Deployments", "mira", "Mira", 160_000, "done"],
+  ["agent:main:dashboard:incidents", "Incidents", "peter", "Peter", 190_000, "done"],
+  ["agent:main:dashboard:traffic", "Traffic", "mira", "Mira", 220_000, "done"],
+  ["agent:main:dashboard:queues", "Queues", "peter", "Peter", 250_000, "done"],
+  ["agent:main:dashboard:workers", "Workers", "mira", "Mira", 280_000, "done"],
+  ["agent:main:dashboard:capacity", "Capacity", "peter", "Peter", 310_000, "done"],
 ].map(([key, displayName, actorId, actorLabel, age, status]) => ({
   key: String(key),
   kind: "direct",
@@ -104,12 +110,26 @@ suite.define(() => {
         hasText: "Release health",
       });
       await releaseCard.waitFor();
-      expect(await gallery.locator("[data-dashboard-session]").count()).toBe(6);
-      expect(await gallery.getByText("By Mira", { exact: true }).count()).toBe(3);
-      await releaseCard.locator('iframe[title="Live Gateway Pulse"]').waitFor();
-      await expect
-        .poll(() => gateway.getRequests("board.get"))
-        .toSatisfy((requests) => requests.length >= dashboardRows.length);
+      expect(await gallery.locator("[data-dashboard-session]").count()).toBe(12);
+      expect(await gallery.getByText("By Mira", { exact: true }).count()).toBe(6);
+      const previewFrame = releaseCard.locator('iframe[title="Live Gateway Pulse"]');
+      await previewFrame.waitFor();
+      await previewFrame.contentFrame().getByText("All systems nominal", { exact: true }).waitFor();
+      const capacityKey = "agent:main:dashboard:capacity";
+      const capacityRequested = async () =>
+        (await gateway.getRequests("board.get")).some(
+          (request) => request.params.sessionKey === capacityKey,
+        );
+      expect(await capacityRequested()).toBe(false);
+      const capacityCard = gallery.locator(`[data-dashboard-session="${capacityKey}"]`);
+      await capacityCard.scrollIntoViewIfNeeded();
+      await expect.poll(capacityRequested).toBe(true);
+      const capacityFrame = capacityCard.locator('iframe[title="Live Gateway Pulse"]');
+      await capacityFrame.waitFor();
+      await capacityFrame
+        .contentFrame()
+        .getByText("All systems nominal", { exact: true })
+        .waitFor();
       expect(await releaseCard.locator("a").getAttribute("href")).toBe(
         "/chat/main/release-health-12345678?dashboard=expanded",
       );
