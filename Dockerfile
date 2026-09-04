@@ -335,6 +335,9 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 # Must run after node_modules COPY so playwright-core is available.
+# chown the parent .cache dir, not just ms-playwright: mkdir -p creates
+# /home/node/.cache as root:root, and the gateway (USER node) needs to create
+# /home/node/.cache/openclaw-<uid> at runtime. Mirrors the #85968 .config fix.
 ARG OPENCLAW_INSTALL_BROWSER=""
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
@@ -344,7 +347,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
       mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \
+      chown -R node:node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
+      stat -c '%U:%G %a' "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" | grep -qx 'node:node 755'; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.
