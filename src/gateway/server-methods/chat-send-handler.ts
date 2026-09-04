@@ -13,6 +13,7 @@ import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/tr
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import { renderInboundDocumentContext } from "../../media-understanding/apply.js";
 import {
   recordSessionCreated,
   recordSessionGoalChanged,
@@ -382,6 +383,14 @@ async function handleChatSendWithOptions(
         client?.internal?.syntheticClient ? undefined : client?.authenticatedUserProfile?.profileId,
       );
     }
+    // Steer targets never reach reply dispatch, so document attachments would
+    // otherwise reach the active run as bare media facts. Render their context
+    // up front; read-only on ctx, so a rejected injection falls back to reply
+    // dispatch and extracts exactly once through the full pipeline.
+    const steerDocumentContextText =
+      messageInjectionTarget && !isInternalTextSlashCommandTurn
+        ? await renderInboundDocumentContext({ ctx, cfg: preparedSession.value.cfg })
+        : undefined;
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,
       request: normalizedRequest.value,
@@ -389,6 +398,7 @@ async function handleChatSendWithOptions(
       admittedSessionSettings: admitted.value.admittedSessionSettings,
       turn: preparedUserTurn,
       imageOrder,
+      documentContextText: steerDocumentContextText,
       userTurnTranscriptRecorder: userTurnRecorder,
     });
     const preAckReplyContextPromise =

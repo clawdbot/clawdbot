@@ -599,3 +599,48 @@ export async function applyMediaUnderstanding(params: {
     await cache.cleanup();
   }
 }
+
+/**
+ * Renders document-attachment context for steer injections, which bypass reply
+ * dispatch and therefore never reach `applyMediaUnderstanding`. Read-only on
+ * `ctx`: the caller appends the returned text to the injected prompt, so a
+ * fallback to full reply dispatch can still run the complete pipeline exactly
+ * once. Image/audio/video attachments stay out of the blocks — their model
+ * input is owned by the images/audio channels of the injected turn.
+ */
+export async function renderInboundDocumentContext(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+}): Promise<string> {
+  const attachments = normalizeMediaAttachments(params.ctx);
+  if (!attachments || attachments.length === 0) {
+    return "";
+  }
+  const cache = createMediaAttachmentCache(attachments, {
+    localPathRoots: resolveMediaAttachmentLocalRoots({
+      cfg: params.cfg,
+      ctx: params.ctx,
+      workspaceDir: params.workspaceDir,
+    }),
+    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+    workspaceDir: params.workspaceDir,
+  });
+  try {
+    const fileContext = await extractFileContext({
+      attachments,
+      cache,
+      cfg: params.cfg,
+      limits: resolveFileExtractionLimits(params.cfg),
+      // Placement is the caller's fact; mirror the reply-dispatch default so a
+      // wrong self-serve path cannot leak into the injected prompt (#122411).
+      selfServePathsEnabled: false,
+    });
+    return appendFileBlocks(
+      undefined,
+      fileContext.blocks.map((block) => block.text),
+    );
+  } finally {
+    await cache.cleanup();
+  }
+}

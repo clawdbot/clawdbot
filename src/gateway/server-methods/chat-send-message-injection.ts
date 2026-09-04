@@ -37,6 +37,9 @@ export function createChatSendMessageInjectionStarter(params: {
   admittedSessionSettings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">>;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
+  /** Document-attachment context rendered before the fork: the active run never
+   * reaches reply dispatch, so its prompt would otherwise see bare media facts. */
+  documentContextText?: string;
   userTurnTranscriptRecorder: NonNullable<
     ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
   >;
@@ -54,7 +57,13 @@ export function createChatSendMessageInjectionStarter(params: {
       sessionEntry: entry,
       inlineMode: p.queueMode,
     });
-    const text = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
+    const baseText = ctx.BodyForAgent ?? ctx.Body ?? rawMessage;
+    const documentContext = params.documentContextText?.trim();
+    let text = baseText;
+    if (documentContext) {
+      const base = baseText?.trim();
+      text = base ? `${baseText?.trimEnd()}\n\n${documentContext}` : documentContext;
+    }
     const authorization = resolveCommandAuthorization({
       ctx,
       cfg,

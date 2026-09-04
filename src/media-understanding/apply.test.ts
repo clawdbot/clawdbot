@@ -2603,5 +2603,54 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("<file");
     expect(ctx.Body).toContain("vendor-json");
   });
+
+  describe("renderInboundDocumentContext", () => {
+    it("renders a document attachment without mutating ctx", async () => {
+      const { renderInboundDocumentContext } = await import("./apply.js");
+      const mediaPath = await createTempMediaFile({
+        fileName: "steer-note.txt",
+        content: "document body for the steered run",
+      });
+      const ctx: MsgContext = {
+        Body: "see attached",
+        media: [{ path: mediaPath, contentType: "text/plain" }],
+      };
+
+      const text = await renderInboundDocumentContext({ ctx, cfg: {} as OpenClawConfig });
+
+      expect(text).toContain('<file name="steer-note.txt" mime="text/plain">');
+      expect(text).toContain("document body for the steered run");
+      // Read-only on ctx: a rejected steer falls back to reply dispatch, which
+      // must extract exactly once through the full pipeline.
+      expect(ctx.Body).toBe("see attached");
+      expect(ctx.media?.[0]?.path).toBe(mediaPath);
+    });
+
+    it("returns empty for image attachments owned by the injected images channel", async () => {
+      const { renderInboundDocumentContext } = await import("./apply.js");
+      const mediaPath = await createTempMediaFile({
+        fileName: "steer.png",
+        content: createSafeAudioFixtureBuffer(16),
+      });
+      const ctx: MsgContext = {
+        Body: "see attached",
+        media: [{ path: mediaPath, contentType: "image/png" }],
+      };
+
+      const text = await renderInboundDocumentContext({ ctx, cfg: {} as OpenClawConfig });
+
+      expect(text).toBe("");
+      expect(ctx.Body).toBe("see attached");
+    });
+
+    it("returns empty when the steer carries no attachments", async () => {
+      const { renderInboundDocumentContext } = await import("./apply.js");
+      const text = await renderInboundDocumentContext({
+        ctx: { Body: "plain steer" } as MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+      expect(text).toBe("");
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2238,6 +2238,62 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("hands steered document attachments to the active run as extracted file context", async () => {
+    const { send } = await createSqliteChatRequest("openclaw-chat-send-steer-document-");
+    mockState.hasMessageReceivedHooks = true;
+    const documentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-steer-doc-"));
+    const documentPath = path.join(documentDir, "notes.txt");
+    fs.writeFileSync(documentPath, "steered document body");
+    setSavedMediaResults([documentPath, "text/plain"]);
+    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      await options?.userTurnTranscriptRecorder?.persistApproved();
+    });
+    const operation = beginMessageInjectionOperation({
+      originatingLeafEntryId: null,
+      runId: "active-run",
+      supportsQueueMessageImages: true,
+      taskSuggestionDeliveryMode: "gateway",
+      queueMessage,
+    });
+
+    try {
+      await send({
+        idempotencyKey: "idem-steer-document",
+        requestParams: {
+          queueMode: "steer",
+          attachments: [
+            createFileAttachment(
+              "notes.txt",
+              "text/plain",
+              Buffer.from("steered document body", "utf8").toString("base64"),
+            ),
+          ],
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              version: "dev",
+              platform: "web",
+            },
+            caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+            scopes: ["operator.admin"],
+          },
+        },
+      });
+    } finally {
+      operation.complete();
+    }
+
+    expect(queueMessage).toHaveBeenCalledOnce();
+    const [injectedText] = vi.mocked(queueMessage).mock.calls[0];
+    // The active run never reaches reply dispatch, so the injection text must
+    // already carry the extracted document context.
+    expect(injectedText).toContain('<file name="notes.txt" mime="text/plain">');
+    expect(injectedText).toContain("steered document body");
+  });
+
   it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-reply-steer-",
