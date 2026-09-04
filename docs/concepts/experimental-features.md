@@ -14,6 +14,10 @@ Experimental features are preview surfaces controlled by config flags. They need
 - Prefer a stable path when one already exists.
 - Roll out broadly only after testing in a smaller environment first.
 
+All [plugin APIs](/plugins/sdk-overview#api-stability) are also experimental.
+That stability label does not require a Labs switch for ordinary plugins; the
+Custom plugin UI flag below controls user-installed native browser code only.
+
 ## Currently documented flags
 
 | Surface             | Key                                                                                           | Use it when                                                                                                                       | More                                                                                   |
@@ -22,6 +26,7 @@ Experimental features are preview surfaces controlled by config flags. They need
 | Codex harness       | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer`                       | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
 | Code Mode           | `tools.codeMode.enabled`                                                                      | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
 | Cloud workers       | `cloudWorkers.desktop`                                                                        | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
+| Custom plugin UI    | `gateway.controlUi.experimental.customPlugins`                                                | You want trusted user-installed plugins to add native Control UI views or replace built-in views                                  | [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui)                    |
 | Swarm               | `tools.swarm.enabled`                                                                         | You want Code Mode scripts to orchestrate bounded groups of sub-agents in parallel                                                | [Swarm](/tools/swarm)                                                                  |
 
 ## Control UI Labs
@@ -31,11 +36,17 @@ Control UI switch. Enabling or disabling a lab patches the canonical Gateway
 config immediately; the page shows a restart hint only when a feature requires
 one.
 
-The currently shipped Labs entries are Code Mode, Swarm, Tool Search,
+Labs includes Code Mode, Swarm, Tool Search, Custom plugin UI,
 Tool-loop detection, Lean tools for local models, Message audit metadata, and
-Cloud Worker Desktop. Message audit metadata and Cloud Worker Desktop require a
-Gateway restart; the other switches normally take effect for future agent runs
-without restarting.
+Cloud Worker Desktop. Message audit metadata, Cloud Worker Desktop, and Custom
+plugin UI require a Gateway restart. Custom plugin UI also requires reloading
+connected browser tabs; the other listed switches normally take effect for
+future agent runs without restarting.
+
+Custom plugin UI is off by default. Enabled bundled plugins, including
+Workboard, retain their native UI with the setting off. Backend APIs and
+ordinary plugins remain available, and installing or approving a plugin
+artifact does not enable the lab.
 
 Code Mode remains disabled until you turn on its Labs switch or explicitly set
 `tools.codeMode` to `true` or `"auto"`. The Labs switch writes `"auto"`, so it

@@ -1,6 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { isRecord } from "../utils.js";
 import type {
   OpenClawPackageManifest,
   PackageExtensionResolution,
@@ -23,6 +23,20 @@ export function getPackageManifestMetadata(
     return undefined;
   }
   return manifest[MANIFEST_KEY];
+}
+
+/** Package authoring metadata names source; the runtime manifest names only built assets. */
+export function controlUiSource(packageManifest: Record<string, unknown>): string | undefined {
+  const source = isRecord(packageManifest.openclaw)
+    ? packageManifest.openclaw.controlUi
+    : undefined;
+  if (source === undefined) {
+    return undefined;
+  }
+  if (typeof source !== "string" || !source.trim()) {
+    throw new Error("package.json openclaw.controlUi must name a browser source entrypoint.");
+  }
+  return source;
 }
 
 export function resolvePackageExtensionEntries(

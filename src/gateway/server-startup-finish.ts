@@ -8,7 +8,6 @@ import {
 import { isNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { resolveGatewayAuth } from "./auth.js";
@@ -299,8 +298,7 @@ export async function finishGatewayStartup(params: {
           startupState.pendingReason = "startup-sidecars";
           await refreshAttachedGatewayDiscovery(loaded.pluginRegistry, startupPluginRuntimeClaim);
         },
-        getCronService: () =>
-          runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
+        getCronService: () => runtimeState.cronState.cron,
         onChannelsStarted: () => {
           releaseStartupAccountStarts();
         },

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   findTsgoCoreTestShardViolations,
@@ -87,6 +88,68 @@ describe("tsgo core test shards", () => {
     );
   });
 
+  it("keeps plugin browser source and tests in the extension type graphs", () => {
+    const root = lifetime.createTempDir("openclaw-browser-type-graphs-");
+    const coreConfigs = [
+      "tsconfig.ui.json",
+      "test/tsconfig/tsconfig.core.test.json",
+      "test/tsconfig/tsconfig.core.test.ui-other.json",
+    ];
+    const write = (file: string, content: string) => {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+    };
+    for (const config of [
+      "tsconfig.json",
+      "tsconfig.extensions.json",
+      "test/tsconfig/tsconfig.test.json",
+      "test/tsconfig/tsconfig.extensions.test.json",
+      "test/tsconfig/tsconfig.core.test.shard.json",
+      ...coreConfigs,
+    ]) {
+      write(config, fs.readFileSync(config, "utf8"));
+    }
+    const browserSource = "extensions/fixture/browser/index.ts";
+    const browserTest = "extensions/fixture/browser/index.test.ts";
+    for (const file of [
+      browserSource,
+      browserTest,
+      "extensions/fixture/index.ts",
+      "extensions/fixture/index.test.ts",
+      "ui/src/main.ts",
+      "ui/src/fixture.test.ts",
+    ]) {
+      write(file, "export {};\n");
+    }
+    const roots = (config: string) => {
+      const parsed = ts.getParsedCommandLineOfConfigFile(
+        path.join(root, config),
+        {},
+        {
+          ...ts.sys,
+          onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+          },
+        },
+      );
+      if (!parsed) {
+        throw new Error(`Could not parse ${config}`);
+      }
+      expect(parsed.errors, config).toEqual([]);
+      return parsed.fileNames.map((file) => path.relative(root, file).replaceAll(path.sep, "/"));
+    };
+
+    expect(roots("tsconfig.extensions.json")).toContain(browserSource);
+    expect(roots("test/tsconfig/tsconfig.extensions.test.json")).toContain(browserTest);
+    for (const config of coreConfigs) {
+      expect(
+        roots(config).filter((file) => file.startsWith("extensions/")),
+        config,
+      ).toEqual([]);
+    }
+  });
+
   it("routes aggregate package aliases through bounded processes", () => {
     const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
@@ -115,6 +178,15 @@ describe("changed core test graph selection", () => {
       "agents-other",
       "agents-tools",
     ]);
+  });
+
+  it("rejects a plugin browser test even when the inventory claims core ownership", () => {
+    const pluginTest = "extensions/example/browser/page.test.ts";
+    const graphs = inventory();
+    const uiGraph = graphs.find((graph) => graph.name === "core-test-ui-other")!;
+    uiGraph.roots = [pluginTest];
+    uiGraph.files = [pluginTest];
+    expect(selectChangedTsgoCoreTestShards([pluginTest], graphs)).toBeUndefined();
   });
 
   it.for([

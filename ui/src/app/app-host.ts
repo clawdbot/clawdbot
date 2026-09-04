@@ -11,12 +11,6 @@ import {
 import "../components/resizable-divider.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, type RouteId } from "../app-routes.ts";
-import {
-  EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT,
-  type SidebarWorkboardRenderers,
-  type SidebarWorkboardRuntime,
-  type SidebarWorkboardRuntimeFactory,
-} from "../components/app-sidebar-workboard.ts";
 import type {
   CommandPaletteElement,
   CommandPaletteTargetDetail,
@@ -28,7 +22,6 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-store.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { invalidateModelCatalogCache } from "../lib/model-catalog-store.ts";
-import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   isUiGlobalSessionKey,
@@ -53,7 +46,6 @@ import {
 } from "./app-shell-gateway.ts";
 import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navigation.ts";
 import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts";
-import { ShellWorkboardOwner, type ShellWorkboardHost } from "./app-shell-workboard.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
@@ -83,9 +75,6 @@ import {
 } from "./stale-chunk-reload.ts";
 
 const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
-// Stable references so the sidebar's enabledRouteIds property does not churn
-// on every shell render.
-const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
 const APP_SIDEBAR_ELEMENT = {
   tagName: APP_SIDEBAR_TAG,
   label: APP_SIDEBAR_TAG,
@@ -118,12 +107,7 @@ function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState):
 
 class OpenClawShell
   extends OpenClawLightDomElement
-  implements
-    ShellChromeHost,
-    ShellGatewayHost,
-    ShellNavigationHost,
-    ShellViewHost,
-    ShellWorkboardHost
+  implements ShellChromeHost, ShellGatewayHost, ShellNavigationHost, ShellViewHost
 {
   @property({ attribute: false }) runtime: ApplicationRuntime | undefined;
   @property({ attribute: false }) onboarding = false;
@@ -175,12 +159,6 @@ class OpenClawShell
   runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   lastLocalePrefSignature: string | null = null;
   previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
-  sidebarWorkboardSnapshot = EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT;
-  sidebarWorkboardRuntime: SidebarWorkboardRuntime | null = null;
-  sidebarWorkboardHost: ApplicationContext["workboard"] | null = null;
-  sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
-  sidebarWorkboardRuntimeLoad: Promise<SidebarWorkboardRuntimeFactory> | null = null;
-  sidebarWorkboardEpoch = 0;
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
   private outboxStoreUnsubscribe: (() => void) | null = null;
@@ -264,7 +242,6 @@ class OpenClawShell
   }
   private readonly subscriptions = new SubscriptionsController(this);
   private readonly shellNavigation = new ShellNavigationOwner(this);
-  private readonly shellWorkboard = new ShellWorkboardOwner(this);
   private readonly shellChrome = new ShellChromeOwner(this);
   private readonly shellGateway = new ShellGatewayOwner(this);
 
@@ -336,8 +313,16 @@ class OpenClawShell
         },
       )
       .watch(
+        () => this.context?.nativeDeviceSettings,
+        (settings, notify) => settings.subscribe(notify),
+      )
+      .watch(
         () => this.context?.navigation,
         (navigation, notify) => navigation.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.plugins,
+        (plugins, notify) => plugins.subscribe(notify),
       )
       .watch(
         () => this.context?.agentSelection,
@@ -398,7 +383,6 @@ class OpenClawShell
         (runtimeConfig, notify) =>
           runtimeConfig.subscribe(() => {
             this.reconcileServerUiPrefs(runtimeConfig);
-            this.syncSidebarWorkboard();
             notify();
           }),
         (runtimeConfig) => {
@@ -407,7 +391,6 @@ class OpenClawShell
             this.ensureRuntimeConfig(snapshot, runtimeConfig);
           }
           this.reconcileServerUiPrefs(runtimeConfig);
-          this.syncSidebarWorkboard();
         },
       );
   }
@@ -499,7 +482,6 @@ class OpenClawShell
     this.commandPaletteTarget = undefined;
     this.lastDeletedSessions = null;
     this.shellGateway.reset();
-    this.disposeSidebarWorkboard();
     for (const timer of this.settingsPreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
@@ -700,14 +682,6 @@ class OpenClawShell
     this.shellGateway.synchronizeGateway(snapshot);
   }
 
-  syncSidebarWorkboard() {
-    this.shellWorkboard.syncSidebarWorkboard();
-  }
-
-  private disposeSidebarWorkboard() {
-    this.shellWorkboard.disposeSidebarWorkboard();
-  }
-
   private ensureRuntimeConfig(
     snapshot: ApplicationContext["gateway"]["snapshot"],
     runtimeConfig = this.context?.runtimeConfig,
@@ -716,9 +690,7 @@ class OpenClawShell
   }
 
   enabledRouteIds(): readonly RouteId[] {
-    return isWorkboardEnabledInConfigSnapshot(this.context?.runtimeConfig.state.configSnapshot)
-      ? APP_ROUTE_IDS
-      : ROUTE_IDS_WITHOUT_WORKBOARD;
+    return APP_ROUTE_IDS;
   }
 
   /** Agent targeted by the open new-session route, keyed off its ?agent param. */
