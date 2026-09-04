@@ -132,10 +132,10 @@ describe("agent exec strict result classification", () => {
       meta: {
         durationMs: 1000,
         aborted: true,
-        error: { kind: "provider_error", message: "provider socket closed" },
+        error: { kind: "retry_limit", message: "provider socket closed" },
       },
     });
-    expect(envelope.error).toEqual({ kind: "provider_error", message: "provider socket closed" });
+    expect(envelope.error).toEqual({ kind: "retry_limit", message: "provider socket closed" });
   });
 
   it("classifies terminal timeouts separately", () => {
