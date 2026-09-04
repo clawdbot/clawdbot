@@ -10,7 +10,6 @@ import {
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
-  hashRuntimeConfigValue,
 } from "../config/runtime-snapshot.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,9 +36,12 @@ import {
   NON_ENV_SECRETREF_MARKER,
   SECRETREF_ENV_HEADER_MARKER_PREFIX,
 } from "./model-auth-markers.js";
+import { providerConfigMatchesRuntimeSnapshot } from "./model-auth-provider-config-compare.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { isLocalProviderBaseUrl } from "./model-provider-local.js";
 import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
+
+export { providerConfigMatchesRuntimeSnapshot };
 
 const MODEL_AUTH_LOCAL_HOST_ALIASES = new Set([
   "docker.orb.internal",
@@ -641,25 +643,6 @@ export function hasSecretRefProviderApiKey(
     typeof apiKey === "string" &&
     (isManagedSecretRefApiKeyMarker(apiKey) ||
       apiKey.trim().startsWith(SECRETREF_ENV_HEADER_MARKER_PREFIX))
-  );
-}
-
-export function providerConfigMatchesRuntimeSnapshot(params: {
-  inputConfig: OpenClawConfig | undefined;
-  runtimeConfig: OpenClawConfig | null;
-  provider: string;
-}): boolean {
-  const inputProvider = resolveProviderConfig(params.inputConfig, params.provider);
-  const runtimeProvider = resolveProviderConfig(params.runtimeConfig ?? undefined, params.provider);
-  if (!inputProvider || !runtimeProvider) {
-    return false;
-  }
-  const toComparableConfig = (providerConfig: ModelProviderConfig): OpenClawConfig => ({
-    models: { providers: { [params.provider]: providerConfig } },
-  });
-  return (
-    hashRuntimeConfigValue(toComparableConfig(inputProvider)) ===
-    hashRuntimeConfigValue(toComparableConfig(runtimeProvider))
   );
 }
 
