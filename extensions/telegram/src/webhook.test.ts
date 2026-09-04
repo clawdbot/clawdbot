@@ -11,6 +11,15 @@ import {
   createChannelIngressQueueForTests as createChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { DEFAULT_INGRESS_ADOPTION_STALL_MS } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  onDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  logWebhookReceived,
+  startDiagnosticHeartbeat,
+  stopDiagnosticHeartbeat,
+} from "openclaw/plugin-sdk/logging-core";
 // Telegram tests cover webhook plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "openclaw/plugin-sdk/webhook-ingress";
@@ -615,6 +624,42 @@ async function runNearLimitPayloadTestAndExpectUpdate(
 }
 
 describe("startTelegramWebhook", () => {
+  it.each([false, true])(
+    "uses host diagnostics and preserves its heartbeat after closing (captured enabled=%s)",
+    async (enabled) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const events: string[] = [];
+      const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+      startDiagnosticHeartbeat({}, { sampleLiveness: () => null });
+      try {
+        await withStartedWebhook(
+          {
+            secret: TELEGRAM_SECRET,
+            path: TELEGRAM_WEBHOOK_PATH,
+            config: { diagnostics: { enabled } },
+          },
+          async ({ port, server }) => {
+            const response = await postWebhookJson({
+              url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+              payload: "{}",
+            });
+            expect(response.status).toBe(401);
+            await waitForDiagnosticEventsDrained();
+            expect(events.filter((event) => event === "webhook.received")).toHaveLength(1);
+            expect(server.listening).toBe(true);
+            expect(initSpy).toHaveBeenCalledOnce();
+          },
+        );
+        logWebhookReceived({ channel: "host" });
+        await vi.advanceTimersByTimeAsync(30_000);
+        await waitForDiagnosticEventsDrained();
+        expect(events.filter((event) => event === "diagnostic.heartbeat")).toHaveLength(1);
+      } finally {
+        stopDiagnosticHeartbeat();
+        unsubscribe();
+      }
+    },
+  );
   it("starts server, registers webhook, and serves health", async () => {
     initSpy.mockClear();
     createTelegramBotSpy.mockClear();

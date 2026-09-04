@@ -530,6 +530,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       return "applied-restart-required";
     }
 
+    if (!plan.reloadPlugins && plan.restartServices?.size) {
+      try {
+        if (!params.reloadPluginServices) {
+          throw new Error("Plugin service reload owner is unavailable");
+        }
+        await params.reloadPluginServices(nextConfig, plan.restartServices);
+      } catch (err) {
+        scheduleRecoveryRestart("plugin services reload", err);
+        return "applied-restart-required";
+      }
+    }
+
     try {
       await mrReload.refreshModelRuntimeAfterHotReload({
         config: nextConfig,

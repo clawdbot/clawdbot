@@ -5,13 +5,10 @@ import net from "node:net";
 import { InputFile } from "grammy";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   logWebhookError,
   logWebhookProcessed,
   logWebhookReceived,
-  startDiagnosticHeartbeat,
-  stopDiagnosticHeartbeat,
 } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { BackoffPolicy, RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -337,12 +334,10 @@ export async function startTelegramWebhook(opts: {
   status.noteWebhookStart();
   const webhookRegistrationRetryPolicy =
     opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
-  const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const spoolDir = opts.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: opts.accountId });
   let shutDown = false;
   let ownedServer: ReturnType<typeof createServer> | undefined = undefined;
   let webhookIngressMonitor: ReturnType<typeof createTelegramTransportIngressMonitor> | undefined;
-  let diagnosticsStarted = false;
   const shutdownAbortController = new AbortController();
   const telegramAccountConfig = opts.config
     ? mergeTelegramAccountConfig(opts.config, opts.accountId ?? "default")
@@ -408,9 +403,6 @@ export async function startTelegramWebhook(opts: {
     await runShutdownPhase("transport close", closeTransportOnce);
     await runShutdownPhase("ingress drain", () => waitForWebhookIngressStop(ingressStopTask));
     await runShutdownPhase("status update", () => status.noteWebhookStop());
-    if (diagnosticsStarted) {
-      await runShutdownPhase("diagnostics stop", () => stopDiagnosticHeartbeat());
-    }
   };
   const runStartupPhase = async <T>(run: () => T | Promise<T>): Promise<T> => {
     try {
@@ -441,10 +433,6 @@ export async function startTelegramWebhook(opts: {
     maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
     maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
   });
-  if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat(opts.config);
-    diagnosticsStarted = true;
-  }
 
   const log = (line: string) => runtime.log?.(line);
   const startWebhookSpoolDrain = () => {
@@ -491,9 +479,7 @@ export async function startTelegramWebhook(opts: {
       return;
     }
     const startTime = Date.now();
-    if (diagnosticsEnabled) {
-      logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
-    }
+    logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
     const secretHeader = resolveSingleHeaderValue(req.headers["x-telegram-bot-api-secret-token"]);
     if (!hasValidTelegramWebhookSecret(secretHeader, secret)) {
       // Authenticated Telegram delivery must not consume the abuse budget. Only
@@ -550,22 +536,18 @@ export async function startTelegramWebhook(opts: {
       res.setHeader(TELEGRAM_WEBHOOK_ACCEPTED_HEADER, TELEGRAM_WEBHOOK_ACCEPTED_VALUE);
       respondText(200);
       status.noteWebhookUpdateReceived();
-      if (diagnosticsEnabled) {
-        logWebhookProcessed({
-          channel: "telegram",
-          updateType: "telegram-post",
-          durationMs: Date.now() - startTime,
-        });
-      }
+      logWebhookProcessed({
+        channel: "telegram",
+        updateType: "telegram-post",
+        durationMs: Date.now() - startTime,
+      });
     })().catch((err: unknown) => {
       const errMsg = formatErrorMessage(err);
-      if (diagnosticsEnabled) {
-        logWebhookError({
-          channel: "telegram",
-          updateType: "telegram-post",
-          error: errMsg,
-        });
-      }
+      logWebhookError({
+        channel: "telegram",
+        updateType: "telegram-post",
+        error: errMsg,
+      });
       runtime.log?.(`webhook request failed: ${errMsg}`);
       respondText(500);
     });

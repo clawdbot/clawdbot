@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type { PluginHookGatewayContext, PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
@@ -31,7 +32,7 @@ type PluginHookGatewayStartEvent = Parameters<PluginHookHandlerMap["gateway_star
 
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn<typeof import("../plugins/services.js").startPluginServices>(
-    async () => ({ stop: async () => {} }),
+    async () => ({ reload: async () => {}, stop: async () => {} }),
   );
   const startGmailWatcherWithLogs = vi.fn(async () => {});
   const commitInternalHooks = vi.fn(() => true);
@@ -2270,7 +2271,10 @@ describe("startGatewayPostAttachRuntime", () => {
       async () => {
         let releaseChannels: (() => void) | undefined;
         const events: string[] = [];
-        const pluginServices: PluginServicesHandle = { stop: vi.fn(async () => {}) };
+        const pluginServices: PluginServicesHandle = {
+          reload: vi.fn(async () => {}),
+          stop: vi.fn(async () => {}),
+        };
         const onPluginServices = vi.fn();
         const onSidecarsReady = vi.fn();
         const startChannels = vi.fn(
@@ -2325,6 +2329,14 @@ describe("startGatewayPostAttachRuntime", () => {
           "plugin-services",
         ]);
         expect(onPluginServices).toHaveBeenCalledTimes(1);
+        const owner: PluginServicesHandle = onPluginServices.mock.calls[0]?.[0];
+        const config: OpenClawConfig = { diagnostics: { otel: { enabled: true } } };
+        const selected = new Set(["exporter"]);
+        await owner.reload(config, selected);
+        expect(pluginServices.reload).toHaveBeenCalledExactlyOnceWith(config, selected);
+        await owner.stop();
+        await expect(owner.reload(config, selected)).rejects.toThrow("stopping");
+        expect(pluginServices.reload).toHaveBeenCalledOnce();
       },
     );
   });
@@ -2641,7 +2653,7 @@ describe("startGatewayPostAttachRuntime", () => {
         }
         return cleanup.promise;
       });
-      const startedServices = { stop: serviceStop };
+      const startedServices = { reload: vi.fn(async () => {}), stop: serviceStop };
       const publishedOwner: { current: PluginServicesHandle | null } = { current: null };
       hoisted.startPluginServices.mockImplementationOnce(async (params) => {
         params.onHandle?.(startedServices);
@@ -3990,7 +4002,10 @@ describe("startGatewayPostAttachRuntime", () => {
     const recoveryLoadStarted = new Promise<void>((resolve) => {
       markRecoveryLoadStarted = resolve;
     });
-    const pluginServices = { stop: vi.fn(async () => {}) } as PluginServicesHandle;
+    const pluginServices: PluginServicesHandle = {
+      reload: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
     const postReadySidecar = { stop: vi.fn(async () => {}) };
     const workerSidecar = { stop: vi.fn(async () => {}) };
     const unlockStartupMethods = vi.fn();

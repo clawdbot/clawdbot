@@ -737,6 +737,13 @@ export async function startGatewaySidecars(params: {
   if (shouldStartPluginServices) {
     const ownedPluginServices = createDeferredCore<PluginServicesHandle | null>();
     const pluginServicesOwner: PluginServicesHandle = {
+      reload: async (config, serviceIds) => {
+        const handle = await ownedPluginServices.promise;
+        if (pluginServicesStopRequested || !handle) {
+          throw new Error("Plugin services are stopping");
+        }
+        await handle.reload(config, serviceIds);
+      },
       stop: (options) => {
         pluginServicesStopRequested = true;
         // Share the service owner, never a caller's expired replacement deadline.

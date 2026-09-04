@@ -147,6 +147,7 @@ export type GatewayReloadHandlerParams = {
   pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelKind>) => void;
   getChannelAutostartSuppression?: GatewayChannelManager["getAutostartSuppression"];
   stopPostReadySidecars?: () => Promise<void> | void;
+  reloadPluginServices?: (config: OpenClawConfig, serviceIds: ReadonlySet<string>) => Promise<void>;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
