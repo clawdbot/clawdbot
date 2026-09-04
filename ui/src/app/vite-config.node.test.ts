@@ -526,10 +526,14 @@ describe("Control UI Vite config", () => {
     }
     const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
     const memoryPath = path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl");
+    const healthText = flattenTranslations(en).get("common.health");
+    if (typeof healthText !== "string") {
+      throw new Error("Expected English health source");
+    }
     const healthEntry = [...loadControlUiTranslationMemory(memoryPath).values()].find(
       (entry) =>
         (entry.segment_id === "common.health" || entry.segment_ids?.includes("common.health")) &&
-        entry.text_hash === hashControlUiTranslationText(en.common.health),
+        entry.text_hash === hashControlUiTranslationText(healthText),
     );
     expect(healthEntry).toBeDefined();
     expect(catalog.common.health).toBe(healthEntry?.translated);
