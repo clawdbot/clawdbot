@@ -430,6 +430,19 @@ describe("IMAP watcher protocol boundary", () => {
     expect(server.sockets.size).toBe(0);
   });
 
+  it("passes an explicit delivery route to the isolated hook dispatch", async () => {
+    const delivery = { channel: "telegram", to: "chat-123", accountId: "work" };
+    const { server, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
+      account: { deliver: true, delivery },
+    });
+    server.append("From: trusted@example.com\r\nSubject: Routed\r\n\r\nDeliver explicitly");
+    await waitForCursor(2);
+
+    expect(dispatchHookAgentTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ deliver: true, delivery }),
+    );
+  });
+
   it("sweeps a pushed message through the real IMAP connection into one isolated hook dispatch", async () => {
     const connected = createDeferred<void>();
     const greeting = createDeferred<void>();

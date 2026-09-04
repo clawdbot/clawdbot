@@ -406,6 +406,11 @@ export type PluginRuntimeCore = {
       message: string;
       externalContentSource: "email";
       deliver: boolean;
+      delivery?: {
+        channel: string;
+        to: string;
+        accountId?: string;
+      };
       model?: string;
       thinking?: import("../../auto-reply/thinking.js").ThinkLevel;
       timeoutSeconds?: number;

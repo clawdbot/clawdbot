@@ -27,6 +27,7 @@ export type ImapAccountConfig = {
   addressTokens: Array<{ token: string; senders: string[] }>;
   agentId: string;
   deliver: boolean;
+  delivery?: NonNullable<Parameters<HookDispatch>[0]["delivery"]>;
   includeBody: boolean;
   maxBytes: number;
   model?: string;
@@ -71,6 +72,25 @@ export function resolveImapConfig(
     }
     const watch = asNonArrayRecord(account.watch);
     const senderAuth = asNonArrayRecord(account.senderAuth);
+    const delivery = asNonArrayRecord(account.delivery);
+    const deliveryChannel = typeof delivery?.channel === "string" ? delivery.channel.trim() : "";
+    const deliveryTo = typeof delivery?.to === "string" ? delivery.to.trim() : "";
+    const deliveryAccountId =
+      typeof delivery?.accountId === "string" ? delivery.accountId.trim() : "";
+    const deliveryRoute =
+      deliveryChannel && deliveryTo
+        ? {
+            channel: deliveryChannel,
+            to: deliveryTo,
+            ...(deliveryAccountId ? { accountId: deliveryAccountId } : {}),
+          }
+        : undefined;
+    const deliver = account.deliver === true;
+    if (deliver && !deliveryRoute) {
+      throw new Error(
+        `IMAP account ${accountId} requires delivery.channel and delivery.to when deliver is true`,
+      );
+    }
     const mode = watch?.mode;
     const min = senderAuth?.min;
     const thinking = [
@@ -116,7 +136,8 @@ export function resolveImapConfig(
               : [];
           })
         : [],
-      deliver: account.deliver === true,
+      deliver,
+      ...(deliveryRoute ? { delivery: deliveryRoute } : {}),
       includeBody: account.includeBody !== false,
       maxBytes: typeof account.maxBytes === "number" ? account.maxBytes : 20_000,
       ...(typeof account.model === "string" ? { model: account.model } : {}),
