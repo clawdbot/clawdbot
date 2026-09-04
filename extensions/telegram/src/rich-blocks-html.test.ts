@@ -479,6 +479,27 @@ describe("block HTML islands", () => {
     expect(plain).toContain("oops");
   });
 
+  it("does not use an unclosed summary as a disclosure title", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      "<details><summary>Unclosed</details>",
+    );
+    expect(blocks).toMatchObject([
+      {
+        type: "details",
+        summary: "Details",
+        blocks: [{ type: "paragraph" }],
+      },
+    ]);
+    expect(plainText).toContain("<summary>Unclosed");
+  });
+
+  it.each(["ul", "table"])("keeps an unclosed child of <%s> literal", (tag) => {
+    const child = tag === "ul" ? "<li>Unclosed" : "<tr><td>Unclosed";
+    const { blocks, plainText } = markdownToTelegramRichBlocks(`<${tag}>${child}</${tag}>`);
+    expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
+    expect(plainText).toContain(child);
+  });
+
   it("keeps unclosed inline tags literal instead of restyling trailing text", () => {
     const blocks = blocksFor("value is <sup>oops and more text");
     const serialized = JSON.stringify(blocks);

@@ -47,7 +47,7 @@ type HtmlContentRenderer = (nodes: readonly HtmlNode[]) => InputRichBlock[];
 // such islands stay literal instead of silently dropping the stray content.
 function hasStrayContent(nodes: readonly HtmlNode[], allowed: ReadonlySet<string>): boolean {
   return nodes.some((node) =>
-    node.kind === "text" ? node.text.trim() !== "" : !allowed.has(node.name),
+    node.kind === "text" ? node.text.trim() !== "" : !node.closed || !allowed.has(node.name),
   );
 }
 
@@ -107,7 +107,7 @@ function captionFromFigcaption(nodes: readonly HtmlNode[]): RichBlockCaption | u
   }
   const cite = figcaption.children.find(
     (node): node is Extract<HtmlNode, { kind: "element" }> =>
-      node.kind === "element" && node.name === "cite",
+      node.kind === "element" && node.closed && node.name === "cite",
   );
   const textNodes = figcaption.children.filter((node) => node !== cite);
   const text = htmlNodesToRichText(textNodes);
@@ -268,6 +268,10 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
         stray ||= child.text.trim() !== "";
         continue;
       }
+      if (!child.closed) {
+        stray = true;
+        continue;
+      }
       if (child.name === "caption") {
         const text = htmlNodesToRichText(child.children);
         if (text !== "") {
@@ -411,7 +415,7 @@ function elementToBlock(
     case "details": {
       const summary = node.children.find(
         (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.name === "summary",
+          child.kind === "element" && child.closed && child.name === "summary",
       );
       const bodyNodes = node.children.filter((child) => child !== summary);
       const blocks = renderContent(bodyNodes);
@@ -436,7 +440,7 @@ function elementToBlock(
     case "blockquote": {
       const cite = node.children.find(
         (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.name === "cite",
+          child.kind === "element" && child.closed && child.name === "cite",
       );
       const blocks = renderContent(node.children.filter((child) => child !== cite));
       if (blocks.length === 0) {
@@ -450,7 +454,7 @@ function elementToBlock(
     case "aside": {
       const cite = node.children.find(
         (child): child is Extract<HtmlNode, { kind: "element" }> =>
-          child.kind === "element" && child.name === "cite",
+          child.kind === "element" && child.closed && child.name === "cite",
       );
       const text = htmlNodesToRichText(node.children.filter((child) => child !== cite));
       if (text === "") {

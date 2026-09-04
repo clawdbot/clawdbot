@@ -120,7 +120,9 @@ export function parseHtmlFragment(
 export function nodeText(nodes: readonly HtmlNode[]): string {
   return nodes
     .map((node) =>
-      node.kind === "text" ? decodeTelegramHtmlEntities(node.text) : nodeText(node.children),
+      node.kind === "text"
+        ? decodeTelegramHtmlEntities(node.text)
+        : `${node.closed ? "" : decodeTelegramHtmlEntities(node.raw)}${nodeText(node.children)}`,
     )
     .join("");
 }
@@ -156,7 +158,7 @@ export function htmlNodesToRichText(nodes: readonly HtmlNode[]): RichText {
       continue;
     }
     if (!node.closed) {
-      parts.push(serializeHtmlNodes([node]));
+      parts.push(node.raw, htmlNodesToRichText(node.children));
       continue;
     }
     const style = Object.hasOwn(INLINE_STYLE_TAGS, node.name) && INLINE_STYLE_TAGS[node.name];
@@ -228,8 +230,9 @@ export function parseInlineHtmlIslands(leaf: string): RichText {
     return leaf;
   }
   const nodes = parseHtmlFragment(leaf);
-  const hasElement = nodes.some((node) => node.kind === "element");
-  if (!hasElement) {
+  const hasElement = (children: readonly HtmlNode[]): boolean =>
+    children.some((node) => node.kind === "element" && (node.closed || hasElement(node.children)));
+  if (!hasElement(nodes)) {
     return leaf;
   }
   // Preserve raw whitespace when no islands parse; only island-bearing leaves
