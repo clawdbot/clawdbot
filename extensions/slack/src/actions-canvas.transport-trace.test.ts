@@ -205,14 +205,15 @@ if (!handleAction) {
 function actionContext(
   cfg: OpenClawConfig,
   params: Record<string, unknown>,
+  accountId: string = "default",
 ): ChannelMessageActionContext {
   return {
     channel: "slack",
     action: "canvas",
     cfg,
     params,
-    accountId: "default",
-    requesterAccountId: "default",
+    accountId,
+    requesterAccountId: accountId,
     conversationReadOrigin: "delegated",
     toolContext: {
       currentChannelProvider: "slack",
@@ -224,12 +225,13 @@ function actionContext(
 async function runCanvasScenario(
   params: Record<string, unknown>,
   cfg: OpenClawConfig = slackConfig(),
+  accountId: string = "default",
 ): Promise<{ result?: AgentToolResult<unknown>; calls: WireCall[]; error?: Error }> {
   const calls: WireCall[] = [];
   const server = await startTransportServer(calls);
   process.env.SLACK_API_URL = server.apiUrl;
   try {
-    const result = await handleAction(actionContext(cfg, params));
+    const result = await handleAction(actionContext(cfg, params, accountId));
     return { result, calls: [...calls], error: undefined };
   } catch (error) {
     return { result: undefined, calls: [...calls], error: error as Error };
@@ -474,7 +476,57 @@ describe("Slack canvas action real-transport trace", () => {
         ],
       });
       expect(error?.message).toBe(
-        'Slack canvas "F0TRACE001" is bound to a different conversation than the one this request targets and cannot be acted on.',
+        'Slack canvas "F0TRACE001" is bound to a different conversation or Slack account than the one this request targets and cannot be acted on.',
+      );
+      expect(calls).toEqual([]);
+    });
+  });
+
+  it("rejects acting on a canvas created by a different configured Slack account", async () => {
+    await withRealCanvasBindingStore(async () => {
+      // Two configured Slack accounts can both address the allowlisted channel
+      // C123 (no channel allowlist, so both pass the read-target gate). The
+      // binding stores the exact account that created the canvas, so a request
+      // going through the second account's own credential must be denied before
+      // any Canvas HTTP call even though the channel matches.
+      const twoAccountCfg = slackConfig({
+        accounts: {
+          default: { botToken: "xoxb-transport-trace" },
+          second: { botToken: "xoxb-transport-trace-second" },
+        },
+      });
+      const created = await runCanvasScenario(
+        {
+          op: "create",
+          channelId: "C123",
+          title: "Owned",
+          documentContent: { type: "markdown", markdown: "# Owned" },
+        },
+        twoAccountCfg,
+        "default",
+      );
+      expect(created.error).toBeUndefined();
+      expect(created.result?.details).toMatchObject({
+        ok: true,
+        canvas: { canvasId: "F0TRACE001" },
+      });
+
+      // Same channel, same allowed target, but a different selected account:
+      // only the account-ownership check can explain the rejection.
+      const { calls, error } = await runCanvasScenario(
+        {
+          op: "edit",
+          channelId: "C123",
+          canvasId: "F0TRACE001",
+          changes: [
+            { operation: "insert_at_end", documentContent: { type: "markdown", markdown: "x" } },
+          ],
+        },
+        twoAccountCfg,
+        "second",
+      );
+      expect(error?.message).toBe(
+        'Slack canvas "F0TRACE001" is bound to a different conversation or Slack account than the one this request targets and cannot be acted on.',
       );
       expect(calls).toEqual([]);
     });

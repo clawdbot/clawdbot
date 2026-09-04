@@ -1178,10 +1178,16 @@ export async function handleSlackAction(
       // the canvas as unbound, so a persistence failure must not be swallowed —
       // the create reports failure and the orphan canvas is cleaned up below.
       try {
+        // Bind to the resolved account (not the raw optional request `accountId`,
+        // which is undefined for the default account). The binding is the
+        // authorization authority for later edit/delete/sections, which send only
+        // canvas_id, so it must name the exact account that owns the document —
+        // otherwise a second configured account that can address the same channel
+        // could reuse this binding through its own credential.
         await recordSlackCanvasBinding(canvas.canvasId, {
           channelId,
           teamId: target.teamId,
-          accountId,
+          accountId: account.accountId,
           recordedAt: Date.now(),
         });
       } catch (bindingError) {
@@ -1222,10 +1228,15 @@ export async function handleSlackAction(
       binding.channelId !== channelId ||
       (binding.teamId !== undefined &&
         target.teamId !== undefined &&
-        binding.teamId !== target.teamId)
+        binding.teamId !== target.teamId) ||
+      // The binding also records the exact account that created the canvas; a
+      // second configured account that can address the same channel must not be
+      // able to act on the document through its own credential. Reject any
+      // binding whose account differs from the resolved account for this request.
+      (binding.accountId !== undefined && binding.accountId !== account.accountId)
     ) {
       throw new Error(
-        `Slack canvas "${canvasId}" is bound to a different conversation than the one this request targets and cannot be acted on.`,
+        `Slack canvas "${canvasId}" is bound to a different conversation or Slack account than the one this request targets and cannot be acted on.`,
       );
     }
     await assertReadTargetAllowed(target);
