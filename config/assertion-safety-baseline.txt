@@ -576,7 +576,7 @@ extensions/inworld/tts.ts	2
 extensions/irc/src/channel.ts	5
 extensions/irc/src/inbound.ts	6
 extensions/irc/src/irc-ingress.ts	9
-extensions/irc/src/message-adapter.ts	2
+extensions/irc/src/message-adapter.ts	1
 extensions/irc/src/monitor.ts	1
 extensions/irc/src/send.ts	1
 extensions/irc/src/setup-core.ts	6
@@ -2015,7 +2015,7 @@ src/agents/tool-search-transcript.ts	1
 src/agents/tool-search.ts	1
 src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
-src/agents/tools/agent-step.ts	6
+src/agents/tools/agent-step.ts	2
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool-normalization.ts	3
 src/agents/tools/ask-user-tool.ts	8
@@ -2949,7 +2949,6 @@ src/gateway/server/ws-connection/authenticated-request-dispatch.ts	1
 src/gateway/server/ws-connection/connect-device-metadata.ts	1
 src/gateway/server/ws-connection/connect-node-session.ts	1
 src/gateway/server/ws-connection/message-handler.ts	10
-src/gateway/server/ws-connection/worker-connection.ts	2
 src/gateway/session-compaction-checkpoints.ts	7
 src/gateway/session-companion-context.ts	6
 src/gateway/session-companion-rpc.ts	3

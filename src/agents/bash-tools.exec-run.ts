@@ -593,8 +593,6 @@ export function createExecTool(
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
           agentId,
-          mainKey: defaults?.mainKey,
-          sessionScope: defaults?.sessionScope,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,

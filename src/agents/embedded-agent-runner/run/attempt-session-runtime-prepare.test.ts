@@ -168,7 +168,6 @@ function createFixture() {
     effectiveWorkspace: "/workspace",
     initialSystemPrompt: "initial prompt",
     isRawModelRun: false,
-    nestedToolActivities: [],
     sessionManager: {
       replayAllowedToolNames: new Set(["read"]),
       resolveActiveContextEnginePluginId: vi.fn(),

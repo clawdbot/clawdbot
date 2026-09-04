@@ -6515,7 +6515,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     default:
                         return
                     }
-                    try socket.emitReceiveSuccessOnce(.data(JSONSerialization.data(withJSONObject: response)))
+                    try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: response)))
                 }, receiveHook: { socket, index in
                     if index == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
                     return .data(GatewayWebSocketTestSupport.connectOkData(
@@ -6655,7 +6655,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     default:
                         return
                     }
-                    try socket.emitReceiveSuccessOnce(.data(JSONSerialization.data(withJSONObject: [
+                    try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
                         "type": "res", "id": requestID, "ok": true, "payload": payload,
                     ])))
                 }, receiveHook: { socket, index in
@@ -6765,7 +6765,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                         Issue.record("Accepted recovery unexpectedly requested \(method)")
                         return
                     }
-                    try socket.emitReceiveSuccessOnce(.data(JSONSerialization.data(withJSONObject: [
+                    try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
                         "type": "res", "id": #require(frame["id"] as? String), "ok": true, "payload": payload,
                     ])))
                 }, receiveHook: { socket, index in
@@ -8661,38 +8661,14 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test
-    func `one shot frames survive receive registration gaps`() async throws {
-        let socket = GatewayTestWebSocketTask()
-        socket.resume()
-        let (events, continuation) = AsyncStream<Result<URLSessionWebSocketTask.Message, Error>>.makeStream()
-        socket.emitReceiveSuccessOnce(.string("before-receive"))
-        socket.receive { continuation.yield($0) }
-        socket.emitReceiveSuccessOnce(.string("between-receives-1"))
-        socket.emitReceiveSuccessOnce(.string("between-receives-2"))
-        socket.receive { continuation.yield($0) }
-        socket.receive { continuation.yield($0) }
-        continuation.finish()
-        var received: [String] = []
-        for await result in events {
-            guard case let .string(text) = try result.get() else {
-                Issue.record("Expected the exact text frame")
-                continue
-            }
-            received.append(text)
-        }
-        #expect(received == ["before-receive", "between-receives-1", "between-receives-2"])
-        socket.cancel(with: .normalClosure, reason: nil)
-    }
-
-    @Test
     func `cancellation retires queued and late one shot frames`() async {
         let socket = GatewayTestWebSocketTask()
         socket.resume()
-        socket.emitReceiveSuccessOnce(.string("queued-before-cancellation"))
+        socket.emitReceiveSuccess(.string("queued-before-cancellation"))
         socket.cancel(with: .normalClosure, reason: nil)
         let (events, continuation) = AsyncStream<Result<URLSessionWebSocketTask.Message, Error>>.makeStream()
         socket.receive { continuation.yield($0) }
-        socket.emitReceiveSuccessOnce(.string("late-after-cancellation"))
+        socket.emitReceiveSuccess(.string("late-after-cancellation"))
         continuation.finish()
         var errors: [URLError.Code] = []
         for await result in events {

@@ -23,6 +23,7 @@ import {
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const rosterMatch = { includeGlobal: true };
 
 function sessionActionPresentation(button: Locator) {
   return button.evaluate((element) => {
@@ -464,7 +465,7 @@ suite.define(() => {
       await expect.poll(() => pinnedEntry.count()).toBe(1);
       const sidebarRows = page.locator(".sidebar-recent-session");
       await expect.poll(() => sidebarRows.count()).toBe(3);
-      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
 
       const socketsBefore = await gateway.getSocketCount();
       await gateway.setOnline(false);
@@ -494,7 +495,9 @@ suite.define(() => {
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length, {
+          timeout: 15_000,
+        })
         .toBeGreaterThan(initialListCount);
       await sidebarRow.waitFor({ state: "visible" });
       expect(await sidebarRows.count()).toBe(3);
@@ -504,7 +507,8 @@ suite.define(() => {
           .waitFor({ state: "visible" });
       }
 
-      const firstReconnectListCount = (await gateway.getRequests("sessions.list")).length;
+      const firstReconnectListCount = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
       const refreshedResponse = sessionsListResponse([
         sessionRow(sessionKey, "Reconnect refreshed", Date.parse("2026-07-01T16:01:00.000Z")),
         sessionRow(otherSessionKeys[0], "Other A", Date.parse("2026-07-01T15:59:00.000Z")),
@@ -513,7 +517,13 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.list", refreshedResponse);
       await expect.poll(() => sidebarRow.textContent()).toContain("Reconnect refreshed");
       await expect.poll(() => sidebarRows.count()).toBe(3);
-      await expectRequestCountStable(gateway, "sessions.list", firstReconnectListCount);
+      await expectRequestCountStable(
+        gateway,
+        "sessions.list",
+        firstReconnectListCount,
+        500,
+        rosterMatch,
+      );
     } finally {
       await context.close();
     }
@@ -552,7 +562,7 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
       await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
       const initialObserverCount = (await gateway.getRequests("sessions.subscribe")).length;
-      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+      const initialListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
 
       const socketsBefore = await gateway.getSocketCount();
       await gateway.setOnline(false);
@@ -583,7 +593,7 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.subscribe", { subscribed: true });
       await expect
         .poll(async () =>
-          (await gateway.getRequests("sessions.list"))
+          (await gateway.getRequests("sessions.list", rosterMatch))
             .slice(initialListCount)
             .some((request) => requireRecord(request.params).includeLastMessage === true),
         )
@@ -841,14 +851,14 @@ suite.define(() => {
         .toBeGreaterThan(0);
       // Add work metadata only after first layout so the WebKit overlap
       // regression still exercises in-place row growth.
-      const listRequests = (await gateway.getRequests("sessions.list")).length;
+      const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.setSessionsListResponse(sessionsListResponse(rows(true)));
       await gateway.emitGatewayEvent("sessions.changed", {
         reason: "update",
         sessionKey: "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6e",
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequests);
       const codingToggle = page.locator(
         '[data-session-section="work"] .sidebar-session-group-toggle',

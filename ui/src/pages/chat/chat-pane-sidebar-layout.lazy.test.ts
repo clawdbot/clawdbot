@@ -45,7 +45,6 @@ describe("chat pane lazy sidebar failures", () => {
             appendComposerText: vi.fn(),
             reorderPanel: vi.fn(),
             resizePanel: vi.fn(),
-            setDock: vi.fn(),
             setExpanded: vi.fn(),
             setOpen: vi.fn(),
           },

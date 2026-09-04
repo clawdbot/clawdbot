@@ -363,10 +363,12 @@ export function estimateUsageCost(params: {
 }
 
 /** Preserve summed per-call costs; aggregate tokens cannot reconstruct request tiers. */
-export function estimateAggregateUsageCost(params: {
-  usage?: NormalizedUsage | null;
-  cost?: ModelCostConfig;
-}): number | undefined {
+export function estimateAggregateUsageCost(
+  params: Parameters<typeof resolveModelCostConfig>[0] & {
+    usage?: NormalizedUsage | null;
+    cost?: ModelCostConfig;
+  },
+): number | undefined {
   const usage = params.usage;
   if (usage?.cost !== undefined) {
     return usage.cost.total;
@@ -376,9 +378,12 @@ export function estimateAggregateUsageCost(params: {
     [usage.input, usage.output, usage.cacheRead, usage.cacheWrite].some(
       (value) => value !== undefined,
     );
-  return !hasBillableBuckets || params.cost?.tieredPricing?.length
-    ? undefined
-    : estimateUsageCost(params);
+  if (!hasBillableBuckets) {
+    return undefined;
+  }
+  // Recorded totals own billing; discover fallback prices only for unpriced usage.
+  const cost = params.cost ?? resolveModelCostConfig(params);
+  return cost?.tieredPricing?.length ? undefined : estimateUsageCost({ usage, cost });
 }
 
 export function resetUsageFormatCachesForTest(): void {

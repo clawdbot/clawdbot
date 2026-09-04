@@ -172,8 +172,10 @@ async function requestTrajectoryExportApproval(
       sessionKey: params.sessionKey,
       sessionId: params.sessionEntry?.sessionId,
       sessionStore: params.cfg.session?.store,
-      mainKey: params.cfg.session?.mainKey,
-      sessionScope: params.cfg.session?.scope,
+      eventRouting: {
+        mainKey: params.cfg.session?.mainKey,
+        sessionScope: params.cfg.session?.scope,
+      },
       ...resolveCommandExecApprovalRoute({
         commandParams: params,
         privateApprovalTarget: options.privateApprovalTarget,
