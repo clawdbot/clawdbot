@@ -1495,6 +1495,78 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("keeps the current call connected when playback drain acknowledgement times out", async () => {
+    let callbacks: RealtimeBridgeRequest | undefined;
+    const closeBridge = vi.fn();
+    const submitToolResult = vi.fn();
+    const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+      callbacks = request;
+      return makeBridge({ close: closeBridge, submitToolResult });
+    });
+    const call = makeCallRecord("CA-end-timeout");
+    const endCall = vi.fn(async (_callId: string) => ({ success: true }));
+    const handler = makeHandler(undefined, {
+      manager: {
+        endCall,
+        getCallByProviderCallId: vi.fn(() => call),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+    const ws = await connectWs(server.url);
+    const outboundMessages: Array<Record<string, unknown>> = [];
+    ws.on("message", (data) => outboundMessages.push(parseWebSocketMessage(data)));
+
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: "MZ-end-timeout", callSid: "CA-end-timeout" },
+        }),
+      );
+      await waitForRealtimeTest(() => expect(createBridge).toHaveBeenCalledOnce());
+
+      vi.useFakeTimers();
+      callbacks?.onToolCall?.({
+        itemId: "item-end-timeout",
+        callId: "provider-end-timeout",
+        name: "openclaw_end_call",
+        args: {},
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await waitForRealtimeTest(() => {
+        expect(submitToolResult).toHaveBeenCalledWith(
+          "provider-end-timeout",
+          {
+            message:
+              "Farewell playback could not be confirmed before the timeout. Keep the phone call connected and continue with the caller.",
+            status: "cancelled",
+          },
+          { suppressResponse: true },
+        );
+      });
+      expect(endCall).not.toHaveBeenCalled();
+      expect(closeBridge).not.toHaveBeenCalled();
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+
+      callbacks?.onAudio?.(Buffer.alloc(160, 0x44));
+      await waitForRealtimeTest(() => {
+        expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
+      });
+      expect(recentTalkEvents(call)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "tool.result" })]),
+      );
+    } finally {
+      vi.useRealTimers();
+      if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+        ws.close();
+      }
+      await handler.close();
+      await server.close();
+    }
+  });
+
   it("reports an actionable end-call failure while leaving the current call connected", async () => {
     let callbacks: RealtimeBridgeRequest | undefined;
     const closeBridge = vi.fn();

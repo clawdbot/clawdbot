@@ -1791,16 +1791,18 @@ export class RealtimeCallHandler {
     ) {
       return;
     }
-    if (drainResult === "timed-out") {
-      console.warn(
-        `[voice-call] realtime end-call playback mark timed out callId=${params.callId}`,
-      );
-    }
-    if (drainResult === "interrupted") {
+    if (drainResult !== "played") {
+      if (drainResult === "timed-out") {
+        console.warn(
+          `[voice-call] realtime end-call playback mark timed out callId=${params.callId}`,
+        );
+      }
       binding.resumeAfterTerminalDrain();
-      const toolResult = buildRealtimeVoiceAgentCancelProviderResult(
-        "The farewell was interrupted before playback completed. Keep the phone call connected and continue with the caller's latest request.",
-      );
+      const detail =
+        drainResult === "timed-out"
+          ? "Farewell playback could not be confirmed before the timeout. Keep the phone call connected and continue with the caller."
+          : "The farewell was interrupted before playback completed. Keep the phone call connected and continue with the caller's latest request.";
+      const toolResult = buildRealtimeVoiceAgentCancelProviderResult(detail);
       await params.bridge.submitToolResult(
         params.bridgeCallId,
         toolResult,

@@ -322,11 +322,13 @@ phone connection from remaining open after its voice session has finished.
 The realtime model can also call `openclaw_end_call` when the caller asks to
 hang up. The model must speak any final words before calling the tool: a
 successful call waits for the carrier to confirm that buffered speech finished
-playing, then ends the current provider session and phone connection. The wait
-has a bounded timeout, and no later reply is spoken. If playback is interrupted,
-for example by caller barge-in, the hangup is cancelled and the bridge stays
-connected. If the carrier cannot end the call, the bridge also stays connected
-and the model receives an error it can explain to the caller. Configured
+playing, then ends the current provider session and phone connection. If the
+carrier does not confirm playback before the bounded timeout, or playback is
+interrupted by caller barge-in, the hangup is cancelled and the bridge stays
+connected so the model can continue. After confirmed playback, no later reply
+is spoken once the carrier call ends successfully. If the carrier cannot end
+the call, the bridge also stays connected and the model receives an error it
+can explain to the caller. Configured
 `realtime.tools` cannot replace this built-in by name.
 
 For inbound Twilio numbers, also configure a Status Callback using `POST` to
