@@ -197,10 +197,17 @@ async function isPluginConfigured(
 async function listConfiguredMessageChannelPlugins(
   cfg: OpenClawConfig,
   accountResolution: AccountResolutionMode = "strict",
+  action?: ChannelMessageActionName,
 ): Promise<ChannelPlugin[]> {
   const plugins: ChannelPlugin[] = [];
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
-    if (!resolveOutboundChannelPlugin({ channel: plugin.id, cfg })) {
+    if (
+      !resolveOutboundChannelPlugin({
+        channel: plugin.id,
+        cfg,
+        ...(action ? { requiredAction: action } : {}),
+      })
+    ) {
       continue;
     }
     if (await isPluginConfigured(plugin, cfg, accountResolution)) {
@@ -211,8 +218,13 @@ async function listConfiguredMessageChannelPlugins(
 }
 
 /** Lists deliverable channels with at least one enabled, configured account. */
-export async function listConfiguredMessageChannels(cfg: OpenClawConfig): Promise<string[]> {
-  return (await listConfiguredMessageChannelPlugins(cfg)).map((plugin) => plugin.id);
+export async function listConfiguredMessageChannels(
+  cfg: OpenClawConfig,
+  action?: ChannelMessageActionName,
+): Promise<string[]> {
+  return (await listConfiguredMessageChannelPlugins(cfg, "strict", action)).map(
+    (plugin) => plugin.id,
+  );
 }
 
 /** Resolves the message action channel from explicit input, context fallback, or config. */
@@ -294,6 +306,7 @@ export async function resolveMessageChannelSelection(params: {
   const configuredPlugins = await listConfiguredMessageChannelPlugins(
     params.cfg,
     params.accountResolution,
+    params.action,
   );
   const configured = configuredPlugins.map((plugin) => plugin.id);
   if (configuredPlugins.length === 1) {

@@ -81,7 +81,7 @@ async function hasConfiguredCurrentSourceChannel(
   ) {
     return false;
   }
-  const configuredChannels = await listConfiguredMessageChannels(input.cfg);
+  const configuredChannels = await listConfiguredMessageChannels(input.cfg, "send");
   return configuredChannels.some((channel) => channel === provider);
 }
 

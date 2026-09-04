@@ -257,6 +257,22 @@ describe("listConfiguredMessageChannels", () => {
 
     await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual([]);
   });
+
+  it("passes the requested action to configured-channel capability checks", async () => {
+    const plugin = makePlugin({ id: "alpha", resolveAccount: () => ({ enabled: true }) });
+    mocks.listRuntimeVisibleChannelPlugins.mockReturnValue([plugin]);
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, requiredAction }: { channel: string; requiredAction?: string }) =>
+        channel === "alpha" && requiredAction === "send" ? { id: channel } : undefined,
+    );
+
+    await expect(listConfiguredMessageChannels({} as never, "send")).resolves.toEqual(["alpha"]);
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "alpha",
+      cfg: {},
+      requiredAction: "send",
+    });
+  });
 });
 
 describe("resolveMessageChannelSelection", () => {
@@ -340,6 +356,24 @@ describe("resolveMessageChannelSelection", () => {
     const setupResult = setup?.();
     await expect(expectResolvedSelection(params)).resolves.toMatchObject(expected);
     verify?.(setupResult as never);
+  });
+
+  it("passes the action when selecting among configured channels", async () => {
+    const plugin = makePlugin({ id: "alpha", resolveAccount: () => ({ enabled: true }) });
+    mocks.listRuntimeVisibleChannelPlugins.mockReturnValue([plugin]);
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel, requiredAction }: { channel: string; requiredAction?: string }) =>
+        channel === "alpha" && requiredAction === "send" ? { id: channel } : undefined,
+    );
+
+    await expect(
+      resolveMessageChannelSelection({ cfg: {} as never, action: "send" }),
+    ).resolves.toMatchObject({ channel: "alpha", source: "single-configured" });
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "alpha",
+      cfg: {},
+      requiredAction: "send",
+    });
   });
 
   it("returns the exact bootstrapped plugin used to prove availability", async () => {
