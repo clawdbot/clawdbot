@@ -153,6 +153,7 @@ export {
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
   loadExactSessionEntryCandidates,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,

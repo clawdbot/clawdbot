@@ -416,7 +416,9 @@ function renderWidgetContent(
 ) {
   switch (kind) {
     case "canvas-html": {
-      if (sandbox.includes("allow-scripts") && isManagedCanvasDocumentPreview(preview)) {
+      // The authenticated view RPC serves scripted widget documents;
+      // explicit strict document previews keep their hosted artifact path.
+      if (preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(preview)) {
         void ensureCustomElementDefined("openclaw-canvas-widget-view", loadCanvasWidgetView).catch(
           (error: unknown) => console.error("[openclaw] failed to load widget view", error),
         );
@@ -428,6 +430,7 @@ function renderWidgetContent(
               .sessionKey=${options?.sessionKey ?? ""}
               .title=${preview.title?.trim() || t("chat.toolCards.canvas")}
               .preferredHeight=${preview.preferredHeight}
+              .allowScripts=${sandbox.includes("allow-scripts")}
               .connectionGeneration=${getCanvasWidgetFrameConnectionGeneration()}
             ></openclaw-canvas-widget-view>
           `,
