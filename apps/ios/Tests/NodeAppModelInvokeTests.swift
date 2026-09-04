@@ -8667,3 +8667,52 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             .appendingPathComponent("Sources/Model/NodeAppModel.swift")
     }
 }
+
+@Suite(.serialized)
+struct GatewayWebSocketDeliveryTests {
+    @Test
+    func `one shot frames survive receive registration gaps`() async throws {
+        let socket = GatewayTestWebSocketTask()
+        socket.resume()
+        let (events, continuation) = AsyncStream<Result<URLSessionWebSocketTask.Message, Error>>.makeStream()
+        socket.emitReceiveSuccessOnce(.string("before-receive"))
+        socket.receive { continuation.yield($0) }
+        socket.emitReceiveSuccessOnce(.string("between-receives-1"))
+        socket.emitReceiveSuccessOnce(.string("between-receives-2"))
+        socket.receive { continuation.yield($0) }
+        socket.receive { continuation.yield($0) }
+        continuation.finish()
+        var received: [String] = []
+        for await result in events {
+            guard case let .string(text) = try result.get() else {
+                Issue.record("Expected the exact text frame")
+                continue
+            }
+            received.append(text)
+        }
+        #expect(received == ["before-receive", "between-receives-1", "between-receives-2"])
+        socket.cancel(with: .normalClosure, reason: nil)
+    }
+
+    @Test
+    func `cancellation retires queued and late one shot frames`() async {
+        let socket = GatewayTestWebSocketTask()
+        socket.resume()
+        socket.emitReceiveSuccessOnce(.string("queued-before-cancellation"))
+        socket.cancel(with: .normalClosure, reason: nil)
+        let (events, continuation) = AsyncStream<Result<URLSessionWebSocketTask.Message, Error>>.makeStream()
+        socket.receive { continuation.yield($0) }
+        socket.emitReceiveSuccessOnce(.string("late-after-cancellation"))
+        continuation.finish()
+        var errors: [URLError.Code] = []
+        for await result in events {
+            switch result {
+            case .success:
+                Issue.record("Canceled sockets must not deliver queued or late frames")
+            case let .failure(error):
+                errors.append((error as? URLError)?.code ?? .unknown)
+            }
+        }
+        #expect(errors == [.cancelled])
+    }
+}

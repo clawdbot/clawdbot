@@ -195,6 +195,8 @@ extension NSLock {
 final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     typealias SendHook = @Sendable (GatewayTestWebSocketTask, URLSessionWebSocketTask.Message, Int) async throws -> Void
     typealias ReceiveHook = @Sendable (GatewayTestWebSocketTask, Int) async throws -> URLSessionWebSocketTask.Message
+    private typealias ReceiveResult = Result<URLSessionWebSocketTask.Message, Error>
+    private typealias ReceiveHandler = @Sendable (ReceiveResult) -> Void
 
     private let lock = NSLock()
     private let sendHook: SendHook?
@@ -205,7 +207,8 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private var receiveCount = 0
     private var callbackReceiveCount = 0
     private var cancelCount = 0
-    private var pendingReceiveHandler: (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
+    private var pendingReceiveHandler: ReceiveHandler?
+    private var queuedReceiveMessages: [URLSessionWebSocketTask.Message] = []
 
     init(sendHook: SendHook? = nil, receiveHook: ReceiveHook? = nil) {
         self.sendHook = sendHook
@@ -239,12 +242,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         _ = (closeCode, reason)
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
+        let handler = self.lock.withLock { () -> ReceiveHandler? in
             self._state = .canceling
             self.cancelCount += 1
+            self.queuedReceiveMessages.removeAll()
             defer { self.pendingReceiveHandler = nil }
             return self.pendingReceiveHandler
         }
@@ -282,10 +283,18 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     func receive(
         completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
     {
-        self.lock.withLock {
+        let result = self.lock.withLock { () -> ReceiveResult? in
             self.callbackReceiveCount += 1
+            guard self._state != .canceling, self._state != .completed else {
+                return .failure(URLError(.cancelled))
+            }
+            if !self.queuedReceiveMessages.isEmpty {
+                return .success(self.queuedReceiveMessages.removeFirst())
+            }
             self.pendingReceiveHandler = completionHandler
+            return nil
         }
+        if let result { completionHandler(result) }
     }
 
     func emitReceiveSuccess(_ message: URLSessionWebSocketTask.Message) {
@@ -294,12 +303,16 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     }
 
     func emitReceiveSuccessOnce(_ message: URLSessionWebSocketTask.Message) {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
+        let handler = self.lock.withLock { () -> ReceiveHandler? in
+            guard self._state != .canceling, self._state != .completed else { return nil }
+            guard let handler = self.pendingReceiveHandler else {
+                // URLSession retains frames while its consumer handles the previous message.
+                // Fast synthetic replies must survive the same receive-registration gap.
+                self.queuedReceiveMessages.append(message)
+                return nil
+            }
+            self.pendingReceiveHandler = nil
+            return handler
         }
         handler?(Result<URLSessionWebSocketTask.Message, Error>.success(message))
     }
