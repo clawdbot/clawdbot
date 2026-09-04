@@ -72,10 +72,10 @@ function channelEntryCanSend(
     return true;
   }
   const actions = entry?.plugin?.actions;
-  return Boolean(
-    requiredAction &&
-    actions?.handleAction &&
-    (!actions.supportsAction || actions.supportsAction({ action: requiredAction })),
+  return (
+    requiredAction !== undefined &&
+    typeof actions?.handleAction === "function" &&
+    (!actions.supportsAction || actions.supportsAction({ action: requiredAction }))
   );
 }
 

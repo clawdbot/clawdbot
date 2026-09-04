@@ -168,7 +168,7 @@ describe("runMessageAction send validation", () => {
             messaging: {
               targetResolver: {
                 looksLikeId: () => true,
-                resolveTarget: async ({ input }) => ({
+                resolveTarget: async ({ input }: { input: string }) => ({
                   to: input,
                   kind: "group" as const,
                   source: "normalized" as const,
@@ -177,7 +177,7 @@ describe("runMessageAction send validation", () => {
             },
             actions: {
               describeMessageTool: () => ({ actions: ["send"] }),
-              supportsAction: ({ action }) => action === "send",
+              supportsAction: ({ action }: { action: string }) => action === "send",
               handleAction,
             },
           },
