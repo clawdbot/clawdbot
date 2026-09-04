@@ -279,6 +279,51 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
     expect(result).toMatchObject({ resolvedElevatedLevel: "on" });
   });
 
+  it.each([
+    {
+      field: "username",
+      allowEntry: "username:trusted_user",
+      senderIdentity: { senderUsername: "trusted_user" },
+    },
+    {
+      field: "name",
+      allowEntry: "name:Trusted User",
+      senderIdentity: { senderName: "Trusted User" },
+    },
+    {
+      field: "tag",
+      allowEntry: "tag:trusted_user#0042",
+      senderIdentity: { senderTag: "trusted_user#0042" },
+    },
+  ])(
+    "uses the Discord sender $field for elevated policy",
+    async ({ allowEntry, senderIdentity }) => {
+      loadSessionEntry.mockReturnValue({
+        cfg: { tools: { elevated: { allowFrom: { discord: [allowEntry] } } } },
+        canonicalKey: "main",
+        entry: { sessionId: "sess-main" },
+        store: {},
+        storePath: "/tmp/sessions.sqlite",
+      });
+      const request = {
+        cfg: {},
+        sessionKey: "main",
+        channel: "discord",
+        accountId: "primary",
+        senderId: "discord-user-id",
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        isGroup: false,
+        defaultGroupActivation: () => "always" as const,
+        ...senderIdentity,
+      };
+
+      const result = await resolveDirectStatusReplyForSessionCore(request);
+
+      expect(result).toMatchObject({ resolvedElevatedLevel: "on" });
+    },
+  );
+
   it("uses the peer policy key when a direct main-session peer requires sandboxing", async () => {
     const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
     const storePath = path.join(tempDirs.make("openclaw-direct-status-policy-"), "sessions.sqlite");

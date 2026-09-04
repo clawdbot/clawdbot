@@ -22,6 +22,10 @@ export type ResolveDirectStatusReplyForSessionParams = {
   channel: string;
   /** Optional sender id for command-context rendering and audit output. */
   senderId?: string;
+  /** Trusted channel sender fields used by explicit elevated allowlist matchers. */
+  senderName?: string;
+  senderUsername?: string;
+  senderTag?: string;
   /** Channel account used to normalize sender identity for elevated policy. */
   accountId?: string;
   /** Whether the requester is an owner and may see owner-only session state. */
@@ -99,6 +103,9 @@ export async function resolveDirectStatusReplyForSessionCore(
     Provider: params.channel,
     Surface: params.channel,
     SenderId: params.senderId,
+    SenderName: params.senderName,
+    SenderUsername: params.senderUsername,
+    SenderTag: params.senderTag,
     From: params.senderId,
     AccountId: params.accountId,
     ChatType: params.isGroup ? "group" : "direct",
