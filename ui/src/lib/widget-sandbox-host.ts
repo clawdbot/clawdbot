@@ -1,3 +1,5 @@
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+
 export const WIDGET_LOAD_TIMEOUT_MS = 10_000;
 
 type WidgetSandboxHostOptions = {
@@ -172,7 +174,7 @@ export class WidgetSandboxHost {
     this.activeLoad = load;
     let rejectAborted!: () => void;
     const aborted = new Promise<never>((_resolve, reject) => {
-      rejectAborted = () => reject(controller.signal.reason);
+      rejectAborted = () => reject(toStringifiedError(controller.signal.reason));
       controller.signal.addEventListener("abort", rejectAborted, { once: true });
     });
     try {

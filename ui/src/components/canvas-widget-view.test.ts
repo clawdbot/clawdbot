@@ -205,18 +205,20 @@ describe("Canvas widget view", () => {
     });
     await Promise.resolve();
     let onMessage!: (event: MessageEvent) => void;
+    const postMessage = vi.fn();
+    const close = vi.fn();
     const port = {
       addEventListener: vi.fn((_type, handler) => {
         onMessage = handler;
       }),
       start: vi.fn(),
-      postMessage: vi.fn(),
-      close: vi.fn(),
+      postMessage,
+      close,
     } as unknown as MessagePort;
     const received = vi.fn();
     view.addEventListener(WIDGET_PROMPT_EVENT, received);
     message(frame, { type: "openclaw:widget-prompt-offer" }, [port]);
-    expect(port.postMessage).toHaveBeenCalledWith({ type: "openclaw:widget-prompt-host-ready" });
+    expect(postMessage).toHaveBeenCalledWith({ type: "openclaw:widget-prompt-host-ready" });
     onMessage(
       new MessageEvent("message", {
         data: { type: "openclaw:widget-prompt", prompt: "Background" },
@@ -241,6 +243,6 @@ describe("Canvas widget view", () => {
       }),
     );
     expect(received).toHaveBeenCalledOnce();
-    expect(port.close).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
   });
 });

@@ -122,13 +122,20 @@ describe("canvas.document.view", () => {
       readDocument.mockReturnValue(document.promise);
       const controller = new AbortController();
       const pending = invoke(undefined, { signal: controller.signal });
-      if (boundary === "gateway") context.resolveGatewayContext = () => undefined;
-      if (boundary === "client") client.invalidated = true;
-      if (boundary === "signal") controller.abort();
-      if (boundary === "configuration")
+      if (boundary === "gateway") {
+        context.resolveGatewayContext = () => undefined;
+      }
+      if (boundary === "client") {
+        client.invalidated = true;
+      }
+      if (boundary === "signal") {
+        controller.abort();
+      }
+      if (boundary === "configuration") {
         context.getRuntimeConfig = () => ({
           plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
         });
+      }
       document.resolve({ html: "<p>Private widget</p>", cspSandbox: "scripts" });
       const respond = await pending;
       expect(respond.mock.calls[0]?.[0]).toBe(false);

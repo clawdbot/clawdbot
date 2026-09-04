@@ -148,8 +148,11 @@ describe("MCP App sandbox HTTP origin", () => {
         async (origin) => {
           const response = fetch(`${origin}/__openclaw__/renderer/app.js`);
           await started.promise;
-          if (change === "replacement") registry = publicResourceRegistry(async () => undefined);
-          else markPluginRegistryRetired(registry);
+          if (change === "replacement") {
+            registry = publicResourceRegistry(async () => undefined);
+          } else {
+            markPluginRegistryRetired(registry);
+          }
           result.resolve({ body: Buffer.from("stale"), contentType: "application/javascript" });
           const denied = await response;
           expect(denied.status).toBe(404);

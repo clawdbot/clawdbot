@@ -114,11 +114,16 @@ export function installWidgetThemeObserver(): void {
     for (const frame of document.querySelectorAll<HTMLIFrameElement>(
       ".chat-tool-card__preview-frame, .board-widget__frame",
     )) {
-      if (!registered?.has(frame)) postWidgetTheme(frame);
+      if (!registered?.has(frame)) {
+        postWidgetTheme(frame);
+      }
     }
     for (const [frame, origin] of registered ?? []) {
-      if (frame.isConnected) postWidgetTheme(frame, origin);
-      else registered?.delete(frame);
+      if (frame.isConnected) {
+        postWidgetTheme(frame, origin);
+      } else {
+        registered?.delete(frame);
+      }
     }
   }).observe(root, {
     attributes: true,
