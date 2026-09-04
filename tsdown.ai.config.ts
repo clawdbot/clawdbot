@@ -1,6 +1,7 @@
 // Builds the reusable AI package separately to keep provider bundling out of
 // the already-parallel main package graph.
 import type { UserConfig } from "tsdown";
+import { splitTsdownPackageConfig } from "./scripts/lib/tsdown-package-config.mts";
 
 const externalDependencies = [
   "@anthropic-ai/sdk",
@@ -12,7 +13,6 @@ const externalDependencies = [
 
 const config = {
   clean: true,
-  dts: process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1",
   entry: {
     index: "packages/ai/src/index.ts",
     providers: "packages/ai/src/providers.ts",
@@ -43,4 +43,7 @@ const config = {
   },
 } satisfies UserConfig;
 
-export default config;
+export default splitTsdownPackageConfig(
+  config,
+  process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1",
+);

@@ -17,11 +17,13 @@ import {
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { importFreshModule } from "../../src/plugin-sdk/test-helpers/import-fresh.js";
+import aiBuildConfigs from "../../tsdown.ai.config.ts";
 import buildConfigs from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
+const aiConfigs = Array.isArray(aiBuildConfigs) ? aiBuildConfigs : [aiBuildConfigs];
 const { createTempDir } = createScriptTestHarness();
 afterEach(() => vi.unstubAllEnvs());
 
@@ -598,7 +600,32 @@ describe("tsdown config", () => {
     );
 
     expect(packageConfigs).not.toHaveLength(0);
-    expect(packageConfigs.map((entry) => entry.dts)).toEqual(packageConfigs.map(() => true));
+    for (const outDir of new Set(packageConfigs.map((entry) => entry.outDir))) {
+      const pair = packageConfigs.filter((entry) => entry.outDir === outDir);
+      const runtime = pair.find((entry) => entry.dts === false);
+      const declarations = pair.find(
+        (entry) =>
+          typeof entry.dts === "object" && entry.dts !== null && entry.dts.emitDtsOnly === true,
+      );
+      expect(pair).toHaveLength(2);
+      expect(runtime).toBeDefined();
+      expect(declarations).toBeDefined();
+      expect(declarations?.entry).toEqual(runtime?.entry);
+      expect(declarations?.name).toBe(runtime?.name);
+      expect(declarations?.outDir).toBe(runtime?.outDir);
+      expect(declarations?.sourcemap).toBe(runtime?.sourcemap);
+    }
+    expect(aiConfigs).toHaveLength(2);
+    expect(aiConfigs.find((entry) => entry.dts === false)).toBeDefined();
+    expect(
+      aiConfigs.find(
+        (entry) =>
+          typeof entry.dts === "object" && entry.dts !== null && entry.dts.emitDtsOnly === true,
+      ),
+    ).toMatchObject({
+      entry: aiConfigs[0]?.entry,
+      outDir: aiConfigs[0]?.outDir,
+    });
     expect(unifiedRuntimeConfig?.dts).toBe(false);
     expect(unifiedDeclarationConfigs.every(Boolean)).toBe(true);
     for (const declarationConfig of unifiedDeclarationConfigs) {
@@ -607,6 +634,19 @@ describe("tsdown config", () => {
         Object.keys(unifiedRuntimeConfig?.entry ?? {}),
       );
     }
+  });
+
+  it("keeps source maps aligned across package runtime and declaration graphs", async () => {
+    vi.stubEnv("OUTPUT_SOURCE_MAPS", "1");
+    const { default: sourceMapBuildConfigs } = await importFreshModule<
+      typeof import("../../tsdown.config.ts")
+    >(import.meta.url, "../../tsdown.config.ts?source-maps");
+    const packageConfigs = sourceMapBuildConfigs.filter(
+      (entry) => entry.name === TSDOWN_PACKAGE_CONFIG_GROUP,
+    );
+
+    expect(packageConfigs).not.toHaveLength(0);
+    expect(packageConfigs.every((entry) => entry.sourcemap === true)).toBe(true);
   });
 
   it("keeps excluded plugins out of the unified graph without dropping host helpers", () => {

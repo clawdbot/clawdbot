@@ -10,10 +10,19 @@ import {
   declarationInputs,
   expectStagingClean,
   runFixture,
+  runPackageCacheBuild,
   runUnifiedBuild,
   runUnifiedWriter,
   treeHashes,
 } from "./tsdown-declaration-fixture.js";
+
+function runtimeHashes(root: string, packageName: string) {
+  return Object.fromEntries(
+    Object.entries(treeHashes(path.join(root, "packages", packageName, "dist"))).filter(([name]) =>
+      /\.[cm]?js(?:\.map)?$/u.test(name),
+    ),
+  );
+}
 
 describe("write-unified-entry-dts", () => {
   it("owns the executable generator closure without unrelated CI planning code", () => {
@@ -302,6 +311,78 @@ describe("write-unified-entry-dts", () => {
       (cold.stdout + cold.stderr).match(/\[tsdown-build\] invocation \d\/6 finished/gu),
     ).toHaveLength(6);
     expect(treeHashes(path.join(root, "dist"))).toEqual(mixedGeneration);
+    expectStagingClean(root);
+  });
+
+  it("reuses declarations after AI and workspace runtime graphs rebuild", () => {
+    const { root, write } = createFixture(TSDOWN_NON_SDK_DTS_CONFIG_GROUPS);
+    for (const [packageName, entryNames] of [
+      ["ai", ["index", "providers"]],
+      ["llm-core", ["index", "types"]],
+    ] as const) {
+      write(
+        `packages/${packageName}/src/internal/cache-shared.ts`,
+        `export const cacheIdentity = ${JSON.stringify(packageName)};\n`,
+      );
+      for (const entryName of entryNames) {
+        write(
+          `packages/${packageName}/src/${entryName}.ts`,
+          [
+            `export * as cacheNamespace from "./internal/cache-shared.js";`,
+            `export const loadCacheNamespace = () => import("./internal/cache-shared.js");`,
+          ].join("\n"),
+        );
+      }
+    }
+
+    const initial = runPackageCacheBuild(root);
+    expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+    const expectedRuntime = {
+      ai: runtimeHashes(root, "ai"),
+      packages: runtimeHashes(root, "llm-core"),
+    };
+    expect(Object.keys(expectedRuntime.ai).some((name) => name.includes("cache-shared-"))).toBe(
+      true,
+    );
+    expect(
+      Object.keys(expectedRuntime.packages).some((name) => name.includes("cache-shared-")),
+    ).toBe(true);
+
+    const expectReuse = (result: ReturnType<typeof runPackageCacheBuild>) => {
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const output = result.stdout + result.stderr;
+      for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+        expect.soft(output).toContain(`[tsdown-unified] ${group}: cache hit (fresh-cache)`);
+      }
+      expect.soft(runtimeHashes(root, "ai")).toEqual(expectedRuntime.ai);
+      expect.soft(runtimeHashes(root, "llm-core")).toEqual(expectedRuntime.packages);
+    };
+
+    expectReuse(runPackageCacheBuild(root));
+
+    fs.rmSync(path.join(root, ".artifacts/build-all-cache/tsdown-ai"), {
+      force: true,
+      recursive: true,
+    });
+    const aiMiss = runPackageCacheBuild(root);
+    expect(aiMiss.stderr).not.toContain("[build-all] tsdown-ai (cache restored)");
+    expect(aiMiss.stderr).toContain("[build-all] tsdown-packages (cache restored)");
+    expectReuse(aiMiss);
+
+    fs.rmSync(path.join(root, ".artifacts/build-all-cache/tsdown-packages"), {
+      force: true,
+      recursive: true,
+    });
+    const packageMiss = runPackageCacheBuild(root);
+    expect(packageMiss.stderr).toContain("[build-all] tsdown-ai (cache restored)");
+    expect(packageMiss.stderr).not.toContain("[build-all] tsdown-packages (cache restored)");
+    expectReuse(packageMiss);
+
+    const uncached = runPackageCacheBuild(root, ["tsdown-ai", "tsdown-packages"], {
+      OPENCLAW_BUILD_CACHE: "0",
+    });
+    expect(uncached.status, uncached.stdout + uncached.stderr).toBe(0);
+    expectReuse(runPackageCacheBuild(root, ["write-unified-entry-dts"]));
     expectStagingClean(root);
   });
 

@@ -7,6 +7,7 @@ import { expect } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
+  TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -64,6 +65,7 @@ function readConfigEntries(
   privateQa: boolean,
   groups: readonly string[],
 ): ConfigEntries {
+  const includePackageInputs = groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS;
   const result = runFixture(
     root,
     [
@@ -74,14 +76,23 @@ function readConfigEntries(
       `
 import path from "node:path";
 import configs from ${JSON.stringify(pathToFileURL(path.join(root, "tsdown.config.ts")).href)};
+${
+  includePackageInputs
+    ? `import aiConfig from ${JSON.stringify(pathToFileURL(path.join(root, "tsdown.ai.config.ts")).href)};`
+    : ""
+}
 const groups = configs.filter(config => ${JSON.stringify(groups)}.includes(config.name));
 if (groups.length !== ${groups.length}) throw new Error("Missing canonical declaration groups");
 const selected = Object.fromEntries(groups.flatMap(config =>
   Object.entries(config.entry).filter(([, source]) => config.dts.entry.some(entry => path.resolve(entry) === path.resolve(source)))
 ));
 const declarations = Object.fromEntries(groups.map(config => [config.name, config.dts.entry]));
-const inputs = configs.filter(config => config.name === "openclaw-unified")
-  .flatMap(config => Object.values(config.entry));
+const inputs = ${
+        includePackageInputs
+          ? `[...configs.filter(config => config.name === "openclaw-unified" || config.name === ${JSON.stringify(TSDOWN_PACKAGE_CONFIG_GROUP)}), ...(Array.isArray(aiConfig) ? aiConfig : [aiConfig])]`
+          : `configs.filter(config => config.name === "openclaw-unified")`
+      }
+  .flatMap(config => Object.values(config.entry ?? {}));
 process.stdout.write(JSON.stringify({ inputs, selected, declarations }));
 `,
     ],
@@ -143,8 +154,15 @@ export function createFixture(
     "package.json",
     '{"name":"sdk-declaration-fixture","version":"0.0.0","private":true,"type":"module"}',
   );
+  write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
   write("pnpm-workspace.yaml", "packages: []\n");
   write("tsdown.config.ts", fs.readFileSync(path.join(sourceRoot, "tsdown.config.ts"), "utf8"));
+  if (groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+    write(
+      "tsdown.ai.config.ts",
+      fs.readFileSync(path.join(sourceRoot, "tsdown.ai.config.ts"), "utf8"),
+    );
+  }
   fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
   fs.mkdirSync(path.join(root, "extensions"));
   fs.mkdirSync(path.join(root, "scripts/lib"));
@@ -180,6 +198,13 @@ export function createFixture(
     const metadata = path.join(sourceRoot, "packages", entry.name, "package.json");
     if (entry.isDirectory() && fs.existsSync(metadata)) {
       write(`packages/${entry.name}/package.json`, fs.readFileSync(metadata, "utf8"));
+    }
+  }
+  if (groups === TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+    for (const packageName of ["ai", "llm-core"]) {
+      const alias = path.join(root, "examples/ai-chat/node_modules/@openclaw", packageName);
+      fs.mkdirSync(path.dirname(alias), { recursive: true });
+      fs.symlinkSync(path.join(root, "packages", packageName), alias, "junction");
     }
   }
   // The full config resolves these runtime inputs before selecting declaration groups.
@@ -324,6 +349,34 @@ await withDistArtifactOwnership(process.cwd(), async () => {
 });
 `,
   ]);
+}
+
+export function runPackageCacheBuild(
+  root: string,
+  labels: readonly string[] = ["tsdown-ai", "tsdown-packages", "write-unified-entry-dts"],
+  env: NodeJS.ProcessEnv = {},
+) {
+  return runFixture(
+    root,
+    [
+      "--import",
+      loader,
+      "--input-type=module",
+      "--eval",
+      `
+import { resolveBuildAllSteps, runBuildAllSteps } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/build-all.mts")).href)};
+import { withDistArtifactOwnership } from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/dist-artifact-ownership.mts")).href)};
+const selected = new Set(${JSON.stringify(labels)});
+await withDistArtifactOwnership(process.cwd(), async () => {
+  const steps = resolveBuildAllSteps("full").filter(step => selected.has(step.label));
+  const result = await runBuildAllSteps("full", { steps });
+  process.exitCode = result.exitCode;
+});
+`,
+    ],
+    false,
+    env,
+  );
 }
 
 export function runUnifiedWriter(root: string, env: NodeJS.ProcessEnv = {}) {

@@ -1374,6 +1374,54 @@ describe("resolveBuildStepCacheState", () => {
     }
   });
 
+  it("invalidates both workspace declaration caches when their shared config helper changes", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tsdown-helper-cache-"));
+    const steps = [getBuildAllStep("tsdown-ai"), getBuildAllStep("tsdown-packages")];
+    const writeFixture = (relativePath: string, contents = "fixture\n") => {
+      const filePath = path.join(rootDir, relativePath);
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, contents);
+    };
+
+    try {
+      for (const step of steps) {
+        for (const input of step.cache?.inputs ?? []) {
+          if (typeof input !== "string" || fs.existsSync(path.join(rootDir, input))) {
+            continue;
+          }
+          writeFixture(input, input.endsWith(".json") ? "{}\n" : "fixture\n");
+        }
+      }
+      writeFixture("packages/ai/src/index.ts", "export const ai = 1;\n");
+      writeFixture("packages/ai/dist/index.d.ts", "export declare const ai: 1;\n");
+      writeFixture("packages/net-policy/src/index.ts", "export const net = 1;\n");
+      writeFixture("packages/net-policy/dist/index.d.ts", "export declare const net: 1;\n");
+
+      for (const step of steps) {
+        const state = resolveBuildStepCacheState(step, { rootDir });
+        expect(state.cacheable).toBe(true);
+        expect(state.signature).toHaveLength(64);
+        writeBuildStepCacheStamp(step, resolveBuildStepCacheStampState(step, state, { rootDir }), {
+          rootDir,
+        });
+        expect(resolveBuildStepCacheState(step, { rootDir }).fresh).toBe(true);
+      }
+
+      fs.appendFileSync(
+        path.join(rootDir, "scripts/lib/tsdown-package-config.mts"),
+        "// changed\n",
+      );
+      for (const step of steps) {
+        expect(resolveBuildStepCacheState(step, { rootDir })).toMatchObject({
+          fresh: false,
+          reason: "signature-mismatch",
+        });
+      }
+    } finally {
+      fs.rmSync(rootDir, { force: true, recursive: true });
+    }
+  });
+
   it.each<{ name: string; before: NodeJS.ProcessEnv; after: NodeJS.ProcessEnv }>([
     { name: "bounded plugins", before: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "plain" }, after: {} },
     { name: "optional plugins", before: { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" }, after: {} },

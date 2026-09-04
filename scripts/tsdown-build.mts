@@ -123,6 +123,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/root-package-bundled-plugin-excludes.mjs",
   "scripts/lib/tsdown-config-groups.mts",
   "scripts/lib/tsdown-output-roots.mts",
+  "scripts/lib/tsdown-package-config.mts",
 ];
 export const TSDOWN_PACKAGES_CACHE_INPUT = {
   path: "packages",
@@ -520,6 +521,12 @@ const isConfigArg = (arg: string) =>
   arg === "--no-config";
 const isWatchArg = (arg: string) =>
   arg === "--watch" || arg.startsWith("--watch=") || arg === "-w" || arg.startsWith("-w=");
+const readDtsArg = (arg: string) =>
+  arg === "--dts" || arg === "--dts=true"
+    ? true
+    : arg === "--no-dts" || arg === "--dts=false"
+      ? false
+      : undefined;
 const isUnifiedDtsGroup = (value: string | undefined) =>
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((group) => group === value);
 
@@ -1465,28 +1472,36 @@ function resolveSerializedMainConfigGroups(filters: string[]) {
 
 /** Builds declarations in dependency order without overlapping the largest graphs. */
 export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
-  const forwardedArgs = params.args ?? [];
-  readForwardedScalarOption(forwardedArgs, ["--out-dir", "-d"], "--out-dir/-d");
-  if (forwardedArgs.filter(isConfigArg).length > 1) {
+  const initialArgs = params.args ?? [];
+  readForwardedScalarOption(initialArgs, ["--out-dir", "-d"], "--out-dir/-d");
+  if (initialArgs.filter(isConfigArg).length > 1) {
     throw new Error("tsdown build accepts only one --config/-c/--no-config selector");
   }
-  const env = params.env ?? process.env;
+  const initialEnv = params.env ?? process.env;
+  const config = readForwardedOption(initialArgs, ["--config", "-c"]);
+  const dtsArg = initialArgs.findLast((arg) => readDtsArg(arg) !== undefined);
+  const dtsEnabled = dtsArg === undefined ? undefined : readDtsArg(dtsArg);
+  const ownsDtsMode =
+    dtsEnabled !== undefined &&
+    !initialArgs.includes("--no-config") &&
+    (config === undefined ||
+      selectsMainConfig(initialArgs) ||
+      path.resolve(config) === path.resolve("tsdown.ai.config.ts"));
+  // Inline DTS flags otherwise override the runtime/declaration mode owned by each split config.
+  const forwardedArgs = ownsDtsMode
+    ? initialArgs.filter((arg) => readDtsArg(arg) === undefined)
+    : initialArgs;
+  const env = ownsDtsMode
+    ? { ...initialEnv, [RUN_NODE_SKIP_DTS_BUILD_ENV]: dtsEnabled ? "0" : "1" }
+    : initialEnv;
   const forwardedFilters = readForwardedOptions(forwardedArgs, ["--filter", "-F"]);
   const hasForwardedFilter = forwardedArgs.some(isFilterArg);
   const aiArgs = forwardedArgs.filter((arg, index) => {
     const previous = forwardedArgs[index - 1];
     return !isFilterArg(arg) && !isFilterFlag(previous);
   });
-  const dtsArg = aiArgs.findLast((arg) => arg === "--dts" || arg === "--no-dts");
-  const declarationsEnabled = dtsArg
-    ? dtsArg === "--dts"
-    : env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  const declarationsEnabled = env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
   const hasForwardedConfig = aiArgs.some(isConfigArg);
-
-  const declarationEnv =
-    declarationsEnabled && env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
-      ? { ...env, [RUN_NODE_SKIP_DTS_BUILD_ENV]: "0" }
-      : env;
 
   if (forwardedArgs.some(isWatchArg)) {
     if (!hasForwardedConfig) {
@@ -1496,7 +1511,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     }
     // Watchers are long-lived, so sequential group orchestration would block forever on the
     // first child. Keep watch mode inside tsdown's single owning process.
-    return [resolveTsdownBuildInvocation(params)];
+    return [resolveTsdownBuildInvocation({ ...params, args: forwardedArgs, env })];
   }
 
   if (hasForwardedConfig) {
@@ -1507,18 +1522,19 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
           resolveTsdownBuildInvocation({
             ...params,
             args: ["--filter", group, ...aiArgs],
-            env: declarationEnv,
+            env,
           }),
         );
       }
     }
-    return [resolveTsdownBuildInvocation(params)];
+    return [resolveTsdownBuildInvocation({ ...params, args: forwardedArgs, env })];
   }
 
   const invocations = [
     resolveTsdownBuildInvocation({
       ...params,
       args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
+      env,
     }),
   ];
 
@@ -1535,11 +1551,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
       ? uniqueForwardedFilters
       : null;
   if (!declarationsEnabled || (hasForwardedFilter && !serializedGroups)) {
-    const mainEnv =
-      !declarationsEnabled && env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1"
-        ? { ...env, [RUN_NODE_SKIP_DTS_BUILD_ENV]: "1" }
-        : env;
-    invocations.push(resolveTsdownBuildInvocation({ ...params, env: mainEnv }));
+    invocations.push(resolveTsdownBuildInvocation({ ...params, args: forwardedArgs, env }));
     return invocations;
   }
 
@@ -1548,7 +1560,7 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
       resolveTsdownBuildInvocation({
         ...params,
         args: ["--filter", group, ...aiArgs],
-        env: declarationEnv,
+        env,
       }),
     );
   }

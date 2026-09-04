@@ -191,6 +191,10 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(results).toHaveLength(2);
     expect(results[0]?.args).toEqual(expect.arrayContaining(["--config", "tsdown.ai.config.ts"]));
     expect(results[1]?.args).not.toContain("--filter");
+    for (const result of results) {
+      expect(result.args).not.toContain("--no-dts");
+      expect(result.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
+    }
   });
 
   it("serializes declaration graphs when --dts overrides the no-DTS environment", () => {
@@ -209,6 +213,101 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(results.at(-1)?.args).toEqual(
       expect.arrayContaining(["--filter", TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.at(-1)]),
     );
+    for (const result of results) {
+      expect(result.args).not.toContain("--dts");
+      expect(result.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("0");
+    }
+  });
+
+  it.each([
+    {
+      label: "default config uses the last no-DTS switch",
+      args: ["--dts", "--no-dts"],
+      env: {},
+      expected: "1",
+      expectedInvocations: 2,
+    },
+    {
+      label: "default config uses the last DTS switch",
+      args: ["--no-dts", "--dts"],
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      expected: "0",
+      expectedInvocations: 3 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length,
+    },
+    {
+      label: "default config uses the last assigned no-DTS switch",
+      args: ["--dts", "--dts=false"],
+      env: {},
+      expected: "1",
+      expectedInvocations: 2,
+    },
+    {
+      label: "default config uses a trailing DTS switch after assigned no-DTS",
+      args: ["--dts=false", "--dts"],
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      expected: "0",
+      expectedInvocations: 3 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length,
+    },
+    {
+      label: "main config accepts assigned no-DTS",
+      args: ["--config", "tsdown.config.ts", "--dts=false"],
+      env: {},
+      expected: "1",
+      expectedInvocations: 1,
+    },
+    {
+      label: "main config uses a trailing assigned DTS switch",
+      args: ["--config", ".", "--no-dts", "--dts=true"],
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      expected: "0",
+      expectedInvocations: 2 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length,
+    },
+    {
+      label: "AI config accepts assigned DTS",
+      args: ["--config", "tsdown.ai.config.ts", "--dts=true"],
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      expected: "0",
+      expectedInvocations: 1,
+    },
+    {
+      label: "unknown OR filter preserves one main invocation",
+      args: [
+        "--filter",
+        TSDOWN_PACKAGE_CONFIG_GROUP,
+        "--filter",
+        "missing-group",
+        "--dts",
+        "--no-dts",
+      ],
+      env: {},
+      expected: "1",
+      expectedInvocations: 2,
+    },
+  ])("$label", ({ args, env, expected, expectedInvocations }) => {
+    const results = resolveTsdownBuildInvocations({ args, env, ...NO_MEMORY_LIMIT });
+
+    expect(results).toHaveLength(expectedInvocations);
+    for (const result of results) {
+      expect(result.args).not.toContain("--dts");
+      expect(result.args).not.toContain("--no-dts");
+      expect(result.args).not.toContain("--dts=true");
+      expect(result.args).not.toContain("--dts=false");
+      expect(result.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(expected);
+    }
+  });
+
+  it.each([
+    ["custom config", ["--config", "custom.tsdown.config.ts", "--dts=true", "--dts=false"]],
+    ["config disabled", ["--no-config", "src/index.ts", "--dts=false", "--dts=true"]],
+  ])("preserves repeated DTS switches for %s", (_label, args) => {
+    const [result] = resolveTsdownBuildInvocations({
+      args,
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "fixture" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result?.args.slice(-args.length)).toEqual(args);
+    expect(result?.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("fixture");
   });
 
   it.each([
@@ -368,11 +467,13 @@ describe("resolveTsdownBuildInvocation", () => {
     ["short", ["-w"]],
     ["short assigned", ["-w=src"]],
   ])("keeps an explicit-config %s watch in one owning process", (_label, watchArgs) => {
-    const args = ["--config", "tsdown.config.ts", ...watchArgs];
+    const args = ["--config", "tsdown.config.ts", "--no-dts", ...watchArgs];
     const results = resolveTsdownBuildInvocations({ args, env: {}, ...NO_MEMORY_LIMIT });
 
     expect(results).toHaveLength(1);
-    expect(results[0]?.args.slice(-args.length)).toEqual(args);
+    expect(results[0]?.args).not.toContain("--no-dts");
+    expect(results[0]?.args).toEqual(expect.arrayContaining(watchArgs));
+    expect(results[0]?.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
   });
 
   it.each([["--watch"], ["-w"]])(
@@ -382,6 +483,139 @@ describe("resolveTsdownBuildInvocation", () => {
         resolveTsdownBuildInvocations({ args: [watchArg], env: {}, ...NO_MEMORY_LIMIT }),
       ).toThrow("watch mode requires an explicit --config/-c or --no-config selector");
     },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps one owned watcher through its initial build and one edit",
+    () =>
+      fixture.run(async () => {
+        for (const declarations of [false, true]) {
+          const rootDir = fs.realpathSync(
+            createTempDir(`openclaw-tsdown-watch-${declarations ? "dts" : "runtime"}-`),
+          );
+          const sourcePath = path.join(rootDir, "src/index.ts");
+          const outputRoot = path.join(rootDir, "packages/ai/dist");
+          const outputPath = path.join(outputRoot, "index.mjs");
+          const sourceMapPath = `${outputPath}.map`;
+          const declarationPath = path.join(outputRoot, "index.d.mts");
+          const childPidPath = path.join(rootDir, "watch.pid");
+          const writeSource = (value: string) => {
+            fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+            fs.writeFileSync(sourcePath, `export const watched = ${JSON.stringify(value)};\n`);
+          };
+          fs.writeFileSync(path.join(rootDir, "package.json"), '{"type":"module"}\n');
+          fs.symlinkSync(
+            path.resolve("node_modules"),
+            path.join(rootDir, "node_modules"),
+            "junction",
+          );
+          fs.writeFileSync(
+            path.join(rootDir, "tsdown.ai.config.ts"),
+            [
+              'import fs from "node:fs";',
+              `import { splitTsdownPackageConfig } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/tsdown-package-config.mts")).href)};`,
+              `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+              "export default splitTsdownPackageConfig({",
+              '  entry: { index: "src/index.ts" },',
+              '  format: "esm",',
+              '  outDir: "packages/ai/dist",',
+              '  outExtensions: () => ({ js: ".mjs", dts: ".d.mts" }),',
+              "  sourcemap: true,",
+              `}, process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1");`,
+            ].join("\n"),
+          );
+          writeSource("initial");
+          const runner = spawn(
+            process.execPath,
+            [
+              "--import",
+              import.meta.resolve("tsx"),
+              path.resolve("scripts/tsdown-build.mts"),
+              "--config",
+              "tsdown.ai.config.ts",
+              declarations ? "--dts=true" : "--dts=false",
+              "--watch",
+            ],
+            {
+              cwd: rootDir,
+              env: {
+                ...process.env,
+                OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+                OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
+                OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "1024",
+              },
+              stdio: ["ignore", "pipe", "pipe"],
+            },
+          );
+          const closeEvent = once(runner, "close");
+          let childPid = 0;
+          const joinRunner = async (timeoutMs: number) => {
+            let timeout: NodeJS.Timeout | undefined;
+            try {
+              return await Promise.race([
+                closeEvent,
+                new Promise<never>((_resolve, reject) => {
+                  timeout = setTimeout(
+                    () => reject(new Error("owned tsdown watcher did not close")),
+                    timeoutMs,
+                  );
+                }),
+              ]);
+            } finally {
+              clearTimeout(timeout);
+            }
+          };
+
+          try {
+            childPid = await waitForPidFile(childPidPath, 10_000);
+            await waitForFile(outputPath, 10_000);
+            await vi.waitUntil(() => fs.readFileSync(outputPath, "utf8").includes("initial"), {
+              timeout: 10_000,
+              interval: 20,
+            });
+            expect(fs.existsSync(sourceMapPath)).toBe(true);
+            if (declarations) {
+              await waitForFile(declarationPath, 10_000);
+            } else {
+              expect(fs.existsSync(declarationPath)).toBe(false);
+            }
+
+            writeSource("edited");
+            await vi.waitUntil(() => fs.readFileSync(outputPath, "utf8").includes("edited"), {
+              timeout: 10_000,
+              interval: 20,
+            });
+            expect(fs.existsSync(sourceMapPath)).toBe(true);
+            if (declarations) {
+              await vi.waitUntil(
+                () => fs.readFileSync(declarationPath, "utf8").includes('"edited"'),
+                { timeout: 10_000, interval: 20 },
+              );
+            } else {
+              expect(fs.existsSync(declarationPath)).toBe(false);
+            }
+
+            runner.kill("SIGTERM");
+            expect(await joinRunner(10_000)).toEqual([143, null]);
+            await waitForDead(childPid, 2_000);
+          } finally {
+            await fixture.verifyCleanup(async () => {
+              if (runner.pid && isProcessAlive(runner.pid)) {
+                runner.kill("SIGTERM");
+                await joinRunner(2_000).catch(() => undefined);
+              }
+              if (childPid && isProcessAlive(childPid)) {
+                process.kill(childPid, "SIGKILL");
+                await waitForDead(childPid, 2_000);
+              }
+              if (runner.pid && isProcessAlive(runner.pid)) {
+                process.kill(runner.pid, "SIGKILL");
+                await waitForDead(runner.pid, 2_000);
+              }
+            });
+          }
+        }
+      }),
   );
 
   it("keeps an explicit config-free positional entry in one small plan", () => {
