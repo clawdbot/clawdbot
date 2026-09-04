@@ -11,7 +11,6 @@ import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js"
 import type { SkillSnapshot } from "../../skills/types.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import { cleanupSkillResourceAllocation } from "./skill-resource-allocation-cleanup.js";
-import type { SkillResourceAllocationCoordinator } from "./skill-resource-allocation-coordinator.js";
 import {
   createSkillResourceLeaseRenewal,
   RESOURCE_LEASE_MS,
@@ -20,6 +19,7 @@ import {
 import {
   skillResourceAllocationAttestation,
   skillResourceAllocationDirectoryName,
+  type SkillResourceAllocationOwner,
   type SkillResourceLeaseLocation,
   type SkillResourceLocation,
   type SkillResourceRuntimeOperation,
@@ -353,7 +353,7 @@ export async function transferSkillResources(params: {
   tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand">;
   assertCurrent: () => void;
   allocationOwner?: {
-    coordinator: SkillResourceAllocationCoordinator;
+    coordinator: SkillResourceAllocationOwner;
     environmentId: string;
     ownerEpoch: number;
   };

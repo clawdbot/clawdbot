@@ -1,5 +1,26 @@
 import { createHash } from "node:crypto";
+import type {
+  SkillResourceAllocationIntent,
+  SkillResourceAllocationLocation,
+  SkillResourceAllocationRecord,
+} from "./skill-resource-allocation-ledger.js";
+import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import { WORKER_ATTACHMENT_DIRECTORY_PREFIX } from "./workspace-path-exclusions.js";
+
+export type SkillResourceAllocationOwner = {
+  assertOwned(): void;
+  createIntent(intent: SkillResourceAllocationIntent): Promise<SkillResourceAllocationRecord>;
+  markAllocated(
+    record: SkillResourceAllocationRecord,
+    location: SkillResourceAllocationLocation,
+  ): Promise<SkillResourceAllocationRecord>;
+  retire(
+    record: SkillResourceAllocationRecord,
+    tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand">,
+    assertCurrent: () => void,
+  ): Promise<void>;
+};
+
 export type SkillResourceLocation = {
   attestation: string;
   id: string;
