@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -10,11 +11,12 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
+import { applyShortTermPromotions, type PromotionCandidate } from "../short-term-promotion.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { resetMemoryDatabase } from "./manager-db.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import type { MemoryIndexManager } from "./manager.js";
+import { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: string[] };
@@ -118,6 +120,123 @@ describe("memory manager reindex recovery", () => {
     return manager;
   }
 
+  async function listReindexArtifacts(): Promise<string[]> {
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const entries = await fs.readdir(path.dirname(databasePath)).catch(() => []);
+    const prefix = `${path.basename(databasePath)}.memory-reindex-`;
+    return entries.filter((entry) => entry.startsWith(prefix)).toSorted();
+  }
+
+  it("rebuilds automatic maintenance after a concurrent promotion changes memory sources", async () => {
+    const sourcePath = path.join(memoryDir, "alpha.md");
+    await fs.writeFile(sourcePath, "Searchable alpha memory.\n");
+    const memoryManager = await openManager(createCfg({ provider: "none", sources: ["memory"] }));
+    await memoryManager.sync({ reason: "test", force: true });
+    const harness = memoryManager as unknown as ReindexHarness & {
+      closeNativeMemoryWatchPairs: () => void;
+      awaitManagerIdle: () => Promise<void>;
+    };
+    harness.closeNativeMemoryWatchPairs();
+
+    const snippet = "Promoted sapphire routing preference.";
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), `${snippet}\n`);
+    const candidate: PromotionCandidate = {
+      key: "promotion-reindex-race",
+      path: "memory/2026-01-13.md",
+      startLine: 1,
+      endLine: 1,
+      source: "memory",
+      snippet,
+      recallCount: 3,
+      signalCount: 3,
+      avgScore: 0.95,
+      maxScore: 0.95,
+      uniqueQueries: 3,
+      firstRecalledAt: "2026-01-12T00:00:00.000Z",
+      lastRecalledAt: "2026-01-13T00:00:00.000Z",
+      ageDays: 0,
+      score: 0.95,
+      recallDays: ["2026-01-12", "2026-01-13"],
+      conceptTags: [],
+      components: {
+        frequency: 1,
+        relevance: 1,
+        diversity: 1,
+        recency: 1,
+        consolidation: 1,
+        conceptual: 0,
+      },
+    };
+    harness.dirty = true;
+    harness.memoryFullRetryDirty = true;
+
+    const shadowReady = createDeferred<void>();
+    const releasePublish = createDeferred<void>();
+    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
+    let syncCalls = 0;
+    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
+      const acquired = await originalGet(params);
+      if (params.purpose !== "maintenance" || !acquired) {
+        return acquired;
+      }
+      const fields = acquired as unknown as {
+        syncMemoryFiles: (params: unknown) => Promise<unknown>;
+      };
+      const syncMemoryFiles = fields.syncMemoryFiles.bind(acquired);
+      vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (syncParams) => {
+        const result = await syncMemoryFiles(syncParams);
+        syncCalls += 1;
+        if (syncCalls === 1) {
+          shadowReady.resolve();
+          await releasePublish.promise;
+        }
+        return result;
+      });
+      return acquired;
+    });
+
+    try {
+      const search = memoryManager.search("searchable alpha", { maxResults: 5, minScore: 0 });
+      await shadowReady.promise;
+      const refreshedSource = "Searchable alpha memory refreshed after the shadow build.";
+      await fs.writeFile(sourcePath, `${refreshedSource}\n`);
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: [candidate],
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(applied).toMatchObject({ applied: 1, appended: 1 });
+      releasePublish.resolve();
+
+      await expect(search).resolves.toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/alpha.md" })]),
+      );
+      await harness.awaitManagerIdle();
+      expect(syncCalls).toBe(2);
+      expect(memoryManager.status()).toMatchObject({ dirty: false, lastSyncError: undefined });
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+      expect(memoryText.match(/openclaw-memory-promotion:promotion-reindex-race/gu)).toHaveLength(
+        1,
+      );
+      expect(
+        harness.db
+          .prepare("SELECT text FROM memory_index_chunks WHERE path = 'MEMORY.md' AND text LIKE ?")
+          .all(`%${snippet}%`),
+      ).toHaveLength(1);
+      expect(
+        harness.db
+          .prepare("SELECT text FROM memory_index_chunks WHERE path = 'memory/alpha.md'")
+          .get(),
+      ).toMatchObject({ text: refreshedSource });
+    } finally {
+      releasePublish.resolve();
+      await harness.awaitManagerIdle();
+      getSpy.mockRestore();
+    }
+  });
+
   it("restores retry state after a shadow full reindex fails late", async () => {
     const memoryManager = await openManager(
       createCfg({
@@ -203,6 +322,107 @@ describe("memory manager reindex recovery", () => {
         .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
         .all(),
     ).toEqual(publishedRows);
+    expect(await listReindexArtifacts()).toEqual([]);
+  });
+
+  it("removes shadow database sidecars when a full reindex is cancelled", async () => {
+    const memoryPath = path.join(memoryDir, "alpha.md");
+    await fs.writeFile(memoryPath, "published alpha", "utf8");
+    const memoryManager = await openManager(createCfg({ provider: "none", sources: ["memory"] }));
+    await memoryManager.sync({ reason: "test", force: true });
+    const harness = memoryManager as unknown as ReindexHarness;
+    const published = harness.db
+      .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
+      .all();
+    await fs.writeFile(memoryPath, "cancelled replacement", "utf8");
+
+    await expect(
+      memoryManager.sync({
+        reason: "test",
+        force: true,
+        progress: ({ completed }) => {
+          if (completed > 0) {
+            throw new DOMException("cancelled reindex", "AbortError");
+          }
+        },
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(await listReindexArtifacts()).toEqual([]);
+    expect(
+      harness.db
+        .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
+        .all(),
+    ).toEqual(published);
+  });
+
+  it("keeps search available while a published reindex converges its cache", async () => {
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "published searchable alpha", "utf8");
+    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
+    await memoryManager.sync({ reason: "test", force: true });
+    const harness = memoryManager as unknown as ReindexHarness & {
+      replaceEmbeddingCacheFrom: (sourceDb: DatabaseSync, revision: number) => Promise<boolean>;
+    };
+    const replaceCache = harness.replaceEmbeddingCacheFrom.bind(memoryManager);
+    let releaseCache = () => {};
+    let markCacheReady = () => {};
+    const cacheReady = new Promise<void>((resolve) => {
+      markCacheReady = resolve;
+    });
+    const cacheGate = new Promise<void>((resolve) => {
+      releaseCache = resolve;
+    });
+    vi.spyOn(harness, "replaceEmbeddingCacheFrom").mockImplementation(async (...args) => {
+      markCacheReady();
+      await cacheGate;
+      return await replaceCache(...args);
+    });
+
+    const reindex = memoryManager.sync({ reason: "test", force: true });
+    try {
+      await cacheReady;
+      let reindexSettled = false;
+      void reindex.then(() => {
+        reindexSettled = true;
+      });
+      const searches = Promise.all(
+        Array.from(
+          { length: 12 },
+          async () =>
+            await memoryManager.search("searchable alpha", {
+              lexicalOnly: true,
+              minScore: 0,
+            }),
+        ),
+      );
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        searches.then((results) => ({ kind: "results" as const, results })),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          timeout = setTimeout(() => resolve({ kind: "timeout" }), 1_000);
+        }),
+      ]).finally(() => clearTimeout(timeout));
+
+      expect(outcome.kind).toBe("results");
+      if (outcome.kind === "results") {
+        expect(outcome.results).toHaveLength(12);
+        for (const results of outcome.results) {
+          expect(results.some((entry) => entry.path === "memory/alpha.md")).toBe(true);
+        }
+      }
+      expect(reindexSettled).toBe(false);
+      expect(memoryManager.status()).toMatchObject({ files: 1, chunks: 1, dirty: false });
+    } finally {
+      releaseCache();
+      await reindex;
+    }
+    expect(memoryManager.status()).toMatchObject({ files: 1, chunks: 1, dirty: false });
+    await expect(
+      memoryManager.search("searchable alpha", { lexicalOnly: true, minScore: 0 }),
+    ).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/alpha.md" })]),
+    );
+    expect(await listReindexArtifacts()).toEqual([]);
   });
 
   it("bounds the shadow cache before any entries reach the primary", async () => {
@@ -336,18 +556,41 @@ describe("memory manager reindex recovery", () => {
     });
   });
 
-  it("rejects a full reindex while another process owns the build lock", async () => {
+  it("recovers after a build-lock timeout without losing data or leaving shadows", async () => {
     const memoryManager = await openManager(createCfg({ provider: "none", sources: ["memory"] }));
+    await fs.writeFile(path.join(memoryDir, "alpha.md"), "published alpha", "utf8");
+    await memoryManager.sync({ reason: "test", force: true });
+    const harness = memoryManager as unknown as ReindexHarness;
+    const published = harness.db
+      .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
+      .all();
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const orphan = `${databasePath}.memory-reindex-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`;
+    await fs.writeFile(orphan, "fresh crash remnant");
+    await fs.writeFile(`${orphan}-wal`, "fresh crash remnant");
+    await fs.writeFile(`${orphan}-shm`, "fresh crash remnant");
     const lock = await waitForMemoryReindexLock(databasePath);
 
     try {
       await expect(memoryManager.sync({ reason: "test", force: true })).rejects.toThrow(
         /another reindex is active/,
       );
+      expect(
+        harness.db
+          .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
+          .all(),
+      ).toEqual(published);
     } finally {
       lock.release();
     }
+
+    await expect(memoryManager.sync({ reason: "test", force: true })).resolves.toBeUndefined();
+    expect(await listReindexArtifacts()).toEqual([]);
+    expect(
+      harness.db
+        .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line")
+        .all(),
+    ).toEqual(published);
   });
 
   it("refuses reset during incremental embeddings, then clears and rebuilds their writes", async () => {
@@ -549,14 +792,14 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "test", force: true });
 
     const harness = memoryManager as unknown as ReindexHarness;
-    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
     const memorySyncCalls: Array<{ needsFullReindex: boolean }> = [];
+    const syncMemoryFiles = harness.syncMemoryFiles.bind(memoryManager);
 
     harness.dirty = true;
     harness.memoryFullRetryDirty = true;
     harness.syncMemoryFiles = async (params: { needsFullReindex: boolean }) => {
       memorySyncCalls.push(params);
-      return emptySyncPlan;
+      return await syncMemoryFiles(params);
     };
 
     await harness.sync({ reason: "test" });

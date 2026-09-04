@@ -1,3 +1,4 @@
+import { memoryPublishWorkerEntrypoint } from "../../extensions/memory-core/src/memory/manager-publish-entrypoint.ts";
 import { vectorKnnProcessEntrypoint } from "../../extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts";
 import {
   createRuntimeProcessBuildEntries,
@@ -6,5 +7,5 @@ import {
 
 export const runtimeProcessBuildEntries = {
   ...runtimeProcessCoreBuildEntries,
-  ...createRuntimeProcessBuildEntries([vectorKnnProcessEntrypoint]),
+  ...createRuntimeProcessBuildEntries([vectorKnnProcessEntrypoint, memoryPublishWorkerEntrypoint]),
 };

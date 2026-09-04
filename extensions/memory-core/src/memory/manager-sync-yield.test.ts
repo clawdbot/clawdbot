@@ -1,4 +1,5 @@
 // Memory Core tests cover manager sync yield plugin behavior.
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -13,27 +14,30 @@ import {
   requireNodeSqlite,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+} from "../test-helpers.js";
 
 const { buildSessionEntryMock } = vi.hoisted(() => ({
   buildSessionEntryMock: vi.fn(),
 }));
-const originalSyncYieldStateDir = process.env.OPENCLAW_STATE_DIR;
+let syncYieldStateDir = "";
 
-function setSyncYieldStateDir(): void {
-  Reflect.set(
-    process.env,
-    "OPENCLAW_STATE_DIR",
-    path.join(os.tmpdir(), "openclaw-session-sync-yield"),
-  );
+async function setSyncYieldStateDir(): Promise<void> {
+  syncYieldStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-sync-yield-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", syncYieldStateDir);
+  await configureMemoryCoreDreamingStateForTests();
 }
 
-function restoreSyncYieldStateDir(): void {
-  if (originalSyncYieldStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalSyncYieldStateDir);
-  }
+async function restoreSyncYieldStateDir(): Promise<void> {
+  resetPluginStateStoreForTests();
+  resetMemoryCoreDreamingStateForTests();
+  vi.unstubAllEnvs();
+  await fs.rm(syncYieldStateDir, { recursive: true, force: true });
+  syncYieldStateDir = "";
 }
 
 vi.mock("undici", async () => {
@@ -208,11 +212,15 @@ class EmbeddingCacheSeedHarness extends SessionSyncYieldHarness {
   async seedCache(sourceDb: DatabaseSync): Promise<void> {
     await this.seedEmbeddingCache(sourceDb);
   }
+
+  async replaceCache(sourceDb: DatabaseSync, expectedRevision: number): Promise<boolean> {
+    return await this.replaceEmbeddingCacheFrom(sourceDb, expectedRevision);
+  }
 }
 
 describe("session sync responsiveness", () => {
-  beforeEach(() => {
-    setSyncYieldStateDir();
+  beforeEach(async () => {
+    await setSyncYieldStateDir();
     buildSessionEntryMock.mockImplementation(async (absPath: string) => {
       const name = path.basename(absPath);
       return {
@@ -226,8 +234,8 @@ describe("session sync responsiveness", () => {
     });
   });
 
-  afterEach(() => {
-    restoreSyncYieldStateDir();
+  afterEach(async () => {
+    await restoreSyncYieldStateDir();
     vi.clearAllMocks();
   });
 
@@ -260,6 +268,15 @@ describe("session sync responsiveness", () => {
 
 describe("embedding cache seed responsiveness", () => {
   const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
+
+  beforeEach(async () => {
+    await setSyncYieldStateDir();
+  });
+
+  afterEach(async () => {
+    await restoreSyncYieldStateDir();
+    vi.clearAllMocks();
+  });
 
   function createCacheDb(): DatabaseSync {
     const db = new NodeDatabaseSync(":memory:");
@@ -323,6 +340,132 @@ describe("embedding cache seed responsiveness", () => {
         rows: 100,
       });
       expect(countCacheRows(targetDb)).toBe(101);
+    } finally {
+      sourceDb.close();
+      targetDb.close();
+    }
+  });
+
+  it("replaces the published cache in committed pages between event-loop yields", async () => {
+    const sourceDb = createCacheDb();
+    const targetDb = createCacheDb();
+    try {
+      const insert = (db: DatabaseSync, prefix: string) => {
+        const statement = db.prepare(
+          `INSERT INTO memory_embedding_cache
+             (provider, model, provider_key, hash, embedding, dims, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        );
+        db.exec("BEGIN");
+        for (let index = 0; index < 101; index += 1) {
+          statement.run("test", "model", "key", `${prefix}-${index}`, "[0.5]", 1, index);
+        }
+        db.exec("COMMIT");
+      };
+      insert(sourceDb, "source");
+      insert(targetDb, "target");
+
+      let observed: { inTransaction: boolean; rows: number } | undefined;
+      let observation: Promise<void> | undefined;
+      targetDb.function("observe_cache_delete", () => {
+        if (!observation) {
+          observation = new Promise<void>((resolve) => {
+            setImmediate(() => {
+              observed = {
+                inTransaction: targetDb.isTransaction,
+                rows: countCacheRows(targetDb),
+              };
+              resolve();
+            });
+          });
+        }
+        return null;
+      });
+      targetDb.exec(`
+        CREATE TEMP TRIGGER observe_cache_delete
+        BEFORE DELETE ON memory_embedding_cache
+        BEGIN SELECT observe_cache_delete(); END
+      `);
+
+      const revision = (
+        targetDb.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
+          revision: number;
+        }
+      ).revision;
+      await expect(
+        new EmbeddingCacheSeedHarness(targetDb).replaceCache(sourceDb, revision),
+      ).resolves.toBe(true);
+      await observation;
+
+      expect(observed?.inTransaction).toBe(false);
+      expect(observed?.rows).toBeGreaterThan(0);
+      expect(observed?.rows).toBeLessThan(101);
+      expect(countCacheRows(targetDb)).toBe(101);
+      expect(
+        targetDb
+          .prepare(
+            "SELECT COUNT(*) AS count FROM memory_embedding_cache WHERE hash LIKE 'source-%'",
+          )
+          .get(),
+      ).toEqual({ count: 101 });
+    } finally {
+      sourceDb.close();
+      targetDb.close();
+    }
+  });
+
+  it("stops cache publication when the canonical index revision changes", async () => {
+    const sourceDb = createCacheDb();
+    const targetDb = createCacheDb();
+    try {
+      const insert = targetDb.prepare(
+        `INSERT INTO memory_embedding_cache
+           (provider, model, provider_key, hash, embedding, dims, updated_at)
+         VALUES ('test', 'model', 'key', ?, '[0.5]', 1, ?)`,
+      );
+      targetDb.exec("BEGIN");
+      for (let index = 0; index < 101; index += 1) {
+        insert.run(`target-${index}`, index);
+      }
+      targetDb.exec("COMMIT");
+      sourceDb
+        .prepare(
+          `INSERT INTO memory_embedding_cache
+             (provider, model, provider_key, hash, embedding, dims, updated_at)
+           VALUES ('test', 'model', 'key', 'stale-shadow', '[0.5]', 1, 1)`,
+        )
+        .run();
+      let revisionAdvanced = false;
+      targetDb.function("advance_index_revision", () => {
+        if (!revisionAdvanced) {
+          revisionAdvanced = true;
+          setImmediate(() => {
+            targetDb.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
+          });
+        }
+        return null;
+      });
+      targetDb.exec(`
+        CREATE TEMP TRIGGER advance_index_revision
+        BEFORE DELETE ON memory_embedding_cache
+        BEGIN SELECT advance_index_revision(); END
+      `);
+      const revision = (
+        targetDb.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
+          revision: number;
+        }
+      ).revision;
+
+      await expect(
+        new EmbeddingCacheSeedHarness(targetDb).replaceCache(sourceDb, revision),
+      ).resolves.toBe(false);
+      expect(countCacheRows(targetDb)).toBeGreaterThan(0);
+      expect(countCacheRows(targetDb)).toBeLessThan(101);
+      expect(
+        targetDb
+          .prepare("SELECT hash FROM memory_embedding_cache WHERE hash = 'stale-shadow'")
+          .get(),
+      ).toBeUndefined();
     } finally {
       sourceDb.close();
       targetDb.close();

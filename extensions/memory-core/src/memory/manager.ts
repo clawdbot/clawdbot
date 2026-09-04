@@ -26,7 +26,11 @@ import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js
 import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { closeMemoryDatabase, memoryDatabaseTableExists } from "./manager-db.js";
+import {
+  cleanupMemoryReindexTempFiles,
+  closeMemoryDatabase,
+  memoryDatabaseTableExists,
+} from "./manager-db.js";
 import {
   clearMemoryEmbeddingProbeCache,
   resolveEffectiveMemorySearchSettings,
@@ -388,6 +392,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           resolveUserPath(this.settings.store.databasePath),
         );
         try {
+          // The exclusive maintenance lease proves no shadow builder owns any
+          // recognized reindex files, including fresh remnants from a crashed run.
+          await cleanupMemoryReindexTempFiles(resolveUserPath(this.settings.store.databasePath));
           this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
           try {
             await this.runSync(params);
