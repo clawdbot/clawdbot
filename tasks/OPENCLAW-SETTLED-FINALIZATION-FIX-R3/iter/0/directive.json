@@ -1,25 +1,26 @@
 {
   "schema_version": 1,
   "iter": 0,
-  "ts": "2026-09-04T03:24:02.341Z",
-  "goal": "Finish the remaining bounded baseline-equivalence evidence and pre-review documentation/scope/LOC checks for the preserved R3 candidate, then return evidence to Planner.",
+  "ts": "2026-09-04T03:34:03.500Z",
+  "goal": "Confirm the amended goal contract against the preserved candidate, include the existing `Reflect.get` correction, and emit iter_complete so the orchestrator captures the current candidate for advisory read-only review.",
   "constraints": [
-    "Resume the latest durable checkpoint; preserve all files, hashes, prior evidence, instruction snapshot, branch, and roles.",
-    "Accept and do not rerun the recorded controlled pairs: zstd candidate/base each failed 26 of 37; Android/Ruby candidate/base each had the same two failures; systemd candidate/base each timed out the exact environment case at 120000ms after the same unsafe-permissions prerequisite.",
-    "Do not rerun the full suite, the full systemd file, or any previously completed candidate gate.",
-    "Finish only any remaining representative timing/auth candidate-versus-base comparison that can complete quickly, using identical environments and exact targeted commands. Stop and report if it cannot be bounded safely.",
-    "Run `pnpm docs:list` and cache-corrected `pnpm check:docs`, then the exact scope gates: `git diff --check`, `git diff --name-status`, and `git diff --numstat` against base `194b7f2a16196481a70c139fb31f1777bdfbdc12`.",
-    "Classify production, test, docs, planner, and ledger deltas separately; verify production LOC is net-neutral or negative and no out-of-scope tracked file is present.",
-    "Preserve the intended `Reflect.get` regression assertion.",
-    "Do not edit, format, repair, stage, commit, push, delete, or manually commit anything; the orchestrator owns commits.",
-    "Return exact commands, exit statuses, baseline-pair evidence, docs results, scope results, LOC classification, current tracked status, and hashes to Planner.",
-    "Do not emit iter_complete; Reviewer must not start."
+    "Read the amended goal.json completely and preserve plan.md, goal.json, coordination ledgers, all prior evidence, and the five-file implementation content.",
+    "Do not rerun the full suite, baseline comparisons, aggregate static checks, build, or documentation suite already evidenced green.",
+    "Do not change implementation, tests, or docs. Preserve and include the existing `Reflect.get` correction at settled-turn-finalization.unavailable.test.ts:141.",
+    "Run only the minimum checks needed for the amended contract: the focused unavailable-finalizer regression, candidate/working-tree whitespace and scope union, production-versus-test/docs/coordination LOC classification, and exact file-hash comparison against the previously tested candidate.",
+    "Confirm from recorded evidence that every selected broad failure class satisfies the amended exact-base equivalence rule and that no failure touches a candidate file.",
+    "Do not stage or commit manually; the orchestrator owns candidate capture and commits.",
+    "After these checks pass, emit iter_complete with exact file hashes and evidence so the orchestrator captures the current candidate.",
+    "Reviewer remains strictly read-only and performs a defect-first review of the exact captured candidate content, including direct Codex contract, caller/callee and sibling surfaces, tests, docs, baseline exception, and LOC.",
+    "Reviewer must label this first verdict advisory because coordination artifacts remain in the branch diff. It must not claim the final exact-head gate satisfied; a second review is mandatory after mechanical coordination-artifact cleanup.",
+    "Do not push or create a pull request."
   ],
   "success_criteria": [
-    "Every remaining quickly bounded timing/auth representative has controlled candidate/base evidence, or a precise boundedness reason is recorded.",
-    "Documentation checks reach terminal status.",
-    "Scope, diff-check, and LOC gates reach terminal status with production LOC at most zero and no unexplained tracked path.",
-    "No files are changed or committed, and complete evidence returns to Planner without Reviewer."
+    "The focused unavailable-finalizer regression passes with `Reflect.get` present and no implementation change.",
+    "Amended broad-test baseline-equivalence and Autoloop scope rules are confirmed from exact recorded evidence.",
+    "Candidate scope, whitespace, hashes, and production LOC satisfy the amended contract.",
+    "Coder emits iter_complete without a manual commit, enabling orchestrator candidate capture.",
+    "Reviewer returns a read-only defect-first advisory verdict on the exact captured candidate and explicitly reserves final approval for the post-cleanup exact SHA."
   ],
   "max_attempts": 1
 }

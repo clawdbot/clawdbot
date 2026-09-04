@@ -1,0 +1,12 @@
+Verified the unchanged five-file candidate against the amended baseline-equivalence, focused regression, hash, whitespace, scope-union, and net-negative production LOC contract for advisory review capture.
+
+--- coder cleaned reply ---
+Using the OpenClaw testing and completion-verification workflows. I’ll validate only the amended minimum gate set and leave candidate content untouched.The focused unavailable-finalizer regression passed all 3 cases with `Reflect.get` present. I’m now checking the amended HEAD-plus-working-tree scope union, whitespace, and LOC only.Minimum amended checks are green on candidate content at HEAD `28cab0495f6a20a8a2482bc7df3bfb1a95d057aa`.
+
+- Focused regression: exit `0`, 3/3 passed; `Reflect.get` remains at `src/agents/embedded-agent-runner/run/settled-turn-finalization.unavailable.test.ts:141`.
+- Candidate hashes exactly match the previously tested candidate.
+- HEAD, working-tree, and base-to-working-tree whitespace checks: exit `0`.
+- Scope union contains only the five candidate files plus amended-contract coordination artifacts.
+- LOC: production `+0/-6`; tests `+72/-28`; docs `+19/-9`; Planner `+120/-0`; ledger `+126/-0`.
+- Recorded broad exception satisfies every amended pair: pnpm 29/29 pass; zstd identical 26/37 failures; Ruby identical 2/9 failures; systemd identical prerequisite and 120000ms timeout; provider selection identical 1 failed/9 skipped. All representative files are outside candidate scope.
+- No implementation, test, or docs content changed. Current worktree modifications are coordination-ledger files only.

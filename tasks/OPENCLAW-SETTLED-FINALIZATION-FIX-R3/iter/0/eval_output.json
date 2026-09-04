@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "iter": 0,
+  "eval_output": {
+    "metric": null,
+    "gates": [
+      {
+        "name": "amended_goal_contract",
+        "pass": true,
+        "evidence": "Read goal.json completely; broad baseline-equivalence exception and Autoloop coordination-artifact scope are explicit."
+      },
+      {
+        "name": "focused_unavailable_finalizer",
+        "pass": true,
+        "exit_code": 0,
+        "evidence": "node scripts/run-vitest.mjs src/agents/embedded-agent-runner/run/settled-turn-finalization.unavailable.test.ts: 1 file and 3 tests passed; Reflect.get assertion present at line 141."
+      },
+      {
+        "name": "candidate_hash_comparison",
+        "pass": true,
+        "exit_code": 0,
+        "evidence": "All five SHA-256 values exactly match the previously tested candidate."
+      },
+      {
+        "name": "broad_test_baseline_equivalence",
+        "pass": true,
+        "evidence": "Recorded full suite exit 1 (40/631 failed shards) accepted under amended rule: missing-pnpm 29/29 pass both; zstd 26/37 fail both; Android/Ruby same 2/9 null-spawn failures; systemd same unsafe-permissions prerequisite and exact 120000ms environment timeout; provider selection same 1 failed/9 skipped and identical expected/received models. No representative failure file is in candidate scope."
+      },
+      {
+        "name": "whitespace_and_scope_union",
+        "pass": true,
+        "exit_code": 0,
+        "evidence": "git diff --check base...HEAD, git diff --check, and git diff --check base all exited 0. Union contains five candidate paths plus only explicitly allowed Planner/R2/R3 coordination artifacts."
+      },
+      {
+        "name": "production_loc",
+        "pass": true,
+        "evidence": "Base-to-working-tree classification: production +0/-6 (net -6); tests +72/-28; docs +19/-9; Planner +120/-0; ledger +126/-0."
+      }
+    ],
+    "extra": {
+      "candidate_head_before_capture": "28cab0495f6a20a8a2482bc7df3bfb1a95d057aa",
+      "base_and_origin_main": "194b7f2a16196481a70c139fb31f1777bdfbdc12",
+      "branch": "fix/settled-post-tool-finalization-unavailable",
+      "file_hashes": {
+        "docs/plugins/sdk-agent-harness.md": "00f81db0a8f02a41725942e0fd1d0a0011278e0715436b1f6063eb07d4c577ac",
+        "src/agents/embedded-agent-runner/run/settled-turn-finalization.test.ts": "d0e7dcc165d0396a4cdf4f2fc5f853c1dfff357f7748921f01ff17b6aefb86cf",
+        "src/agents/embedded-agent-runner/run/settled-turn-finalization.ts": "a784b45ea3518c0b547d9d80b492324bbfb03685fe45141e11b1d6d92b0ddbf4",
+        "src/agents/embedded-agent-runner/run/settled-turn-finalization.unavailable.test.ts": "a24d1685980c6a9ebbcdfe3d48a5e7bdb3b54607f3801a48cd8aefa935078165",
+        "src/agents/embedded-agent-runner/run/terminal-resolution.ts": "27d0a23267c3b99a08dcd5b25ad69ef114656e4d3e5c142a3aa26786dcb4e28f",
+        "plan.md": "46b3fb0f7a8d55249bd06549c3084ac1f63c19c2c6ebde21d34337513e34f78a",
+        "goal.json": "bfe3018ea649517fab9c57f4ac0fa33e2f4738b0dc7beb1cba962e3119fbfb2b"
+      },
+      "working_tree": "Only tasks/OPENCLAW-SETTLED-FINALIZATION-FIX-R3 coordination files modified; no candidate file modified.",
+      "review_mode": "First review is advisory and read-only; final exact-head approval remains reserved for the post-cleanup SHA."
+    }
+  }
+}
