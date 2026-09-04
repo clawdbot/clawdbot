@@ -207,16 +207,15 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  let startupBinding = await resolveCodexSessionBinding({
+  const hostCapabilities = params.hostCapabilities;
+  let { binding: startupBinding, assertCurrent } = await resolveCodexSessionBinding({
     reclaimStale: true,
     bindingStore,
     identity: bindingIdentity,
     config: params.config,
     storePath: params.sessionTarget?.storePath,
-    assertCurrent: () => {
-      params.hostCapabilities.assertActive();
-      params.abortSignal?.throwIfAborted();
-    },
+    assertCurrent: hostCapabilities.assertActive,
+    signal: params.abortSignal,
     assertBinding: params.expectedSessionRuntimeOwnership
       ? (binding) =>
           assertCodexSessionRuntimeOwnership(binding, params.expectedSessionRuntimeOwnership)
@@ -424,6 +423,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   try {
     const startupBindingBeforeRotation = startupBinding;
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
+      assertCurrent,
       binding: startupBinding,
       bindingStore,
       identity: bindingIdentity,
@@ -480,8 +480,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
         selection,
       ).appServer;
+    assertCurrent();
     return {
-      params,
+      params: { ...params, hostCapabilities: { ...hostCapabilities, assertActive: assertCurrent } },
       options,
       attemptStartedAt,
       profilerEnabled,

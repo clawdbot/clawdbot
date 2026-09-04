@@ -106,7 +106,7 @@ export async function materializePendingSupervisionBranch(
     params.client.request(
       "thread/read",
       { threadId: pending.sourceThreadId, includeTurns: true },
-      { signal: params.signal },
+      { signal: params.signal, assertCurrent: params.throwIfAborted },
     ),
   );
   params.throwIfAborted();
@@ -177,6 +177,7 @@ export async function materializePendingSupervisionBranch(
         try {
           return await params.client.request("thread/fork", probeParams, {
             signal: params.signal,
+            assertCurrent: params.throwIfAborted,
           });
         } catch (error) {
           if (!(error instanceof CodexAppServerRpcError)) {
@@ -260,6 +261,7 @@ export async function materializePendingSupervisionBranch(
         try {
           return await params.client.request("thread/start", startParams, {
             signal: params.signal,
+            assertCurrent: params.throwIfAborted,
           });
         } catch (error) {
           if (error instanceof CodexAppServerRpcError) {
@@ -330,7 +332,7 @@ export async function materializePendingSupervisionBranch(
         params.client.request(
           "thread/inject_items",
           { threadId: finalThreadId, items: history.responseItems },
-          { signal: params.signal },
+          { signal: params.signal, assertCurrent: params.throwIfAborted },
         ),
       );
       params.throwIfAborted();
@@ -343,17 +345,21 @@ export async function materializePendingSupervisionBranch(
     );
     let committed = false;
     try {
-      committed = await params.bindingStore.mutate(params.bindingIdentity, {
-        kind: "commit-pending-supervision-branch",
-        expected: pending,
-        threadId: finalThreadId,
-        patch: {
-          ...params.bindingPatch,
-          model: nativeModel,
-          modelProvider: bindingModelProvider,
-          historyCoveredThrough,
+      committed = await params.bindingStore.mutate(
+        params.bindingIdentity,
+        {
+          kind: "commit-pending-supervision-branch",
+          expected: pending,
+          threadId: finalThreadId,
+          patch: {
+            ...params.bindingPatch,
+            model: nativeModel,
+            modelProvider: bindingModelProvider,
+            historyCoveredThrough,
+          },
         },
-      });
+        params.throwIfAborted,
+      );
     } catch (error) {
       let current: CodexAppServerThreadBinding | undefined;
       try {

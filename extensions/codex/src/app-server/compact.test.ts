@@ -6,6 +6,7 @@ import {
   embeddedAgentLog,
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   consumeCodexAppServerLiveThread,
@@ -21,6 +22,7 @@ import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { sessionBindingIdentity } from "./session-binding.js";
 import {
   clearCodexAppServerBindingForThread,
+  createCodexTestBindingStore,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
@@ -211,6 +213,59 @@ describe("maybeCompactCodexAppServerSession", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("rejects a host-only rotation after recovering the predecessor during compaction startup", async () => {
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionKey: "agent:main:recovered-compaction",
+      sessionId: "after-compaction",
+    };
+    const previous = { ...current, sessionId: "before-compaction" };
+    const scope = {
+      agentId: current.agentId,
+      sessionKey: current.sessionKey,
+      storePath: path.join(tempDir, "admitted", "sessions.json"),
+    };
+    await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
+    const bindingStore = createCodexTestBindingStore();
+    const binding = { threadId: "thread-1", cwd: tempDir };
+    await bindingStore.mutate(previous, { kind: "set", binding });
+    const fake = createFakeCodexClient({ retainedThreadId: null });
+
+    const result = await maybeCompactCodexAppServerSessionImpl(
+      {
+        sessionId: current.sessionId,
+        sessionKey: current.sessionKey,
+        agentId: current.agentId,
+        sessionTarget: { ...scope, sessionId: current.sessionId },
+        sessionFile: path.join(tempDir, "recovered.jsonl"),
+        workspaceDir: tempDir,
+        trigger: "manual",
+      },
+      {
+        bindingStore,
+        clientFactory: async () => {
+          expect(bindingStore.read(current)).toEqual(binding);
+          await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
+          return fake.client;
+        },
+      },
+    );
+
+    expect(
+      fake.request.mock.calls.some(([method]) =>
+        ["thread/resume", "thread/compact/start"].includes(method),
+      ),
+    ).toBe(false);
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: expect.stringContaining("Codex session generation is no longer current"),
+    });
+    expect(bindingStore.read(current)).toEqual(binding);
+  });
+
   it("waits for native app-server compaction completion", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -220,7 +275,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       await startCompaction(sessionFile, { currentTokenCount: 123 }),
     );
 
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/compact/start",
+      { threadId: "thread-1" },
+      { assertCurrent: expect.any(Function) },
+    );
     expect(fake.client["addNotificationHandler"]).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
@@ -306,7 +365,11 @@ describe("maybeCompactCodexAppServerSession", () => {
     const sessionFile = await writeTestBinding();
     const pending = startCompaction(sessionFile);
     await vi.waitFor(() => {
-      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+      expect(fake.request).toHaveBeenCalledWith(
+        "thread/compact/start",
+        { threadId: "thread-1" },
+        { assertCurrent: expect.any(Function) },
+      );
     });
 
     await fake.client.request("thread/resume", { threadId: "thread-2", excludeTurns: true });
@@ -333,7 +396,11 @@ describe("maybeCompactCodexAppServerSession", () => {
     const sessionFile = await writeTestBinding({ clientId: "client-before-compaction" });
     const pending = startCompaction(sessionFile);
     await vi.waitFor(() => {
-      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+      expect(fake.request).toHaveBeenCalledWith(
+        "thread/compact/start",
+        { threadId: "thread-1" },
+        { assertCurrent: expect.any(Function) },
+      );
     });
 
     seedCodexTestBinding(sessionFile, {
@@ -598,7 +665,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.request).toHaveBeenCalledWith(
       "thread/compact/start",
       { threadId: "thread-1" },
-      { timeoutMs: 60_000 },
+      { timeoutMs: 60_000, assertCurrent: expect.any(Function) },
     );
     expect(fake.request.mock.calls.map(([method]) => method)).toEqual([
       "thread/resume",
@@ -655,6 +722,41 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(
       (await readCodexAppServerBinding(sessionFile))?.contextEngine?.projection,
     ).toBeUndefined();
+  });
+
+  it("releases the rejected compaction watcher when binding restoration fails", async () => {
+    const fake = createFakeCodexClient();
+    fake.request.mockRejectedValueOnce(
+      new CodexAppServerRpcError(
+        { code: -32_600, message: "compaction temporarily unavailable" },
+        "thread/compact/start",
+      ),
+    );
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+    const mutate = testCodexAppServerBindingStore.mutate.bind(testCodexAppServerBindingStore);
+    const mutateSpy = vi
+      .spyOn(testCodexAppServerBindingStore, "mutate")
+      .mockImplementation(async (...args) => {
+        if (args[1].kind === "set") {
+          throw new Error("binding restoration refused");
+        }
+        return await mutate(...args);
+      });
+    const removeCloseHandler = vi.fn();
+    vi.spyOn(fake.client, "addCloseHandler").mockReturnValue(removeCloseHandler);
+
+    try {
+      await expect(startCompaction(sessionFile)).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: "binding restoration refused",
+      });
+      expect(removeCloseHandler).toHaveBeenCalledOnce();
+    } finally {
+      mutateSpy.mockRestore();
+      fake.completeCompaction();
+    }
   });
 
   it("preserves projected context and warm ownership when native compaction is rejected", async () => {
@@ -733,7 +835,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.request).toHaveBeenCalledWith(
       "thread/compact/start",
       { threadId: "thread-1" },
-      { timeoutMs: 60_000 },
+      { timeoutMs: 60_000, assertCurrent: expect.any(Function) },
     );
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
@@ -1027,7 +1129,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.request).toHaveBeenCalledWith(
       "thread/compact/start",
       { threadId: "thread-1" },
-      { timeoutMs: 60_000 },
+      { timeoutMs: 60_000, assertCurrent: expect.any(Function) },
     );
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
@@ -1102,7 +1204,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.request).toHaveBeenCalledWith(
       "thread/compact/start",
       { threadId: "thread-1" },
-      { timeoutMs: 60_000 },
+      { timeoutMs: 60_000, assertCurrent: expect.any(Function) },
     );
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
@@ -1221,7 +1323,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       settled = true;
     });
     await vi.waitFor(() => {
-      expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+      expect(fake.request).toHaveBeenCalledWith(
+        "thread/compact/start",
+        { threadId: "thread-1" },
+        { assertCurrent: expect.any(Function) },
+      );
     });
     await flushAsyncTasks();
     expect(settled).toBe(false);
@@ -1923,7 +2029,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       await startCompaction(sessionFile, { currentTokenCount: 456 }),
     );
 
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/compact/start",
+      { threadId: "thread-1" },
+      { assertCurrent: expect.any(Function) },
+    );
     const preservedBinding = await readCodexAppServerBinding(sessionFile);
     expect(preservedBinding?.threadId).toBe("thread-1");
     expect(preservedBinding?.authProfileId).toBe("openai:work");
@@ -2061,7 +2171,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       },
     });
 
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/compact/start",
+      { threadId: "thread-1" },
+      { assertCurrent: expect.any(Function) },
+    );
     expect(warn).toHaveBeenCalledWith(
       "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
       {
@@ -2112,7 +2226,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       },
     });
 
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/compact/start",
+      { threadId: "thread-1" },
+      { assertCurrent: expect.any(Function) },
+    );
     expect(warn).toHaveBeenCalledWith(
       "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
       {
@@ -2194,7 +2312,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       }),
     );
 
-    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/compact/start",
+      { threadId: "thread-1" },
+      { assertCurrent: expect.any(Function) },
+    );
     expect(fake.request.mock.calls.map(([method]) => method)).toEqual([
       "thread/resume",
       "thread/compact/start",

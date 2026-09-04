@@ -57,9 +57,16 @@ export async function startOrResumeThread(
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const incognito = isIncognitoSessionKey(params.params.sessionKey);
   const clientId = resolveCodexAppServerClientInstanceId(params.client);
-  return await withCodexThreadLifecycleBinding(params, async (bindingIdentity, currentBinding) => {
+  return await withCodexThreadLifecycleBinding(params, async (bindingIdentity, current, assert) => {
+    params = {
+      ...params,
+      params: {
+        ...params.params,
+        hostCapabilities: { ...params.params.hostCapabilities, assertActive: assert },
+      },
+    };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
-    let binding = currentBinding;
+    let binding = current;
     if (hasCodexNativeToolCatalog(binding)) {
       // A resumed native catalog is immutable data. Run eligibility only changes
       // the bridge's available executors, never this thread's inherited history.
@@ -180,7 +187,10 @@ export async function startOrResumeThread(
         environmentSelection: params.environmentSelection,
         provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,
-        throwIfAborted,
+        throwIfAborted: () => {
+          throwIfAborted();
+          assert();
+        },
         lifecycleTiming,
         normalizeBindingModelProvider,
         bindingPatch: {
@@ -223,10 +233,14 @@ export async function startOrResumeThread(
         return;
       }
       assertCodexBindingMayBeReplaced(current, operation, expectedOwnership);
-      const cleared = await params.bindingStore.mutate(bindingIdentity, {
-        kind: "clear",
-        threadId: current.threadId,
-      });
+      const cleared = await params.bindingStore.mutate(
+        bindingIdentity,
+        {
+          kind: "clear",
+          threadId: current.threadId,
+        },
+        assert,
+      );
       if (!cleared) {
         throw new CodexThreadBindingConflictError(current.threadId, operation);
       }

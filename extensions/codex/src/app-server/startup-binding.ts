@@ -408,6 +408,7 @@ function hasContextEngineThreadBootstrapProjection(binding: CodexAppServerThread
 
 /** Clears and drops a binding when the native Codex thread is too large to resume safely. */
 export async function rotateOversizedCodexAppServerStartupBinding(params: {
+  assertCurrent?: () => void;
   binding: CodexAppServerThreadBinding | undefined;
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
@@ -475,10 +476,14 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
           files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
         },
       );
-      await params.bindingStore.mutate(params.identity, {
-        kind: "clear",
-        threadId: binding.threadId,
-      });
+      await params.bindingStore.mutate(
+        params.identity,
+        {
+          kind: "clear",
+          threadId: binding.threadId,
+        },
+        params.assertCurrent,
+      );
       return { binding: undefined };
     }
   }
@@ -537,10 +542,14 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         projectedTurnTokens: params.projectedTurnTokens,
       },
     );
-    await params.bindingStore.mutate(params.identity, {
-      kind: "clear",
-      threadId: binding.threadId,
-    });
+    await params.bindingStore.mutate(
+      params.identity,
+      {
+        kind: "clear",
+        threadId: binding.threadId,
+      },
+      params.assertCurrent,
+    );
     return { binding: undefined };
   }
   // Session metadata has no source provenance and may contain a catalog fallback.

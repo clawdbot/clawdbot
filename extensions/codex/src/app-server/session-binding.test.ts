@@ -1077,7 +1077,7 @@ describe("Codex app-server binding store", () => {
 
         await expect(
           resolveCodexSessionBinding({ bindingStore: store, identity: current, storePath }),
-        ).resolves.toBeUndefined();
+        ).resolves.toMatchObject({ binding: undefined });
         expect(store.read(previous)).toEqual(binding);
         await expect(
           reclaimCurrentCodexSessionGeneration({

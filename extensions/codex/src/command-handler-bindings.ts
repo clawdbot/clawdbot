@@ -22,7 +22,7 @@ import {
   assertCodexBindingMayBeReplaced,
   createCodexSessionGenerationSupersededError,
   normalizeCodexAppServerBindingModelProvider,
-  reclaimCurrentCodexSessionGeneration,
+  resolveCodexSessionBinding,
   sessionBindingIdentity,
 } from "./app-server/session-binding.js";
 import {
@@ -339,19 +339,13 @@ export async function resumeThread(
     agentId: scope.agentId,
     config: ctx.config,
   });
-  let assertHostGeneration: (() => void) | undefined;
-  const reclaimed = await reclaimCurrentCodexSessionGeneration({
+  const { assertCurrent: assertHostGeneration } = await resolveCodexSessionBinding({
+    reclaimStale: true,
     bindingStore: deps.bindingStore,
     identity,
     config: ctx.config,
     storePath: ctx.sessionTarget?.storePath,
-    onHostGenerationVerified: (assertCurrent) => {
-      assertHostGeneration = assertCurrent;
-    },
   });
-  if (!reclaimed) {
-    throw createCodexSessionGenerationSupersededError(identity.sessionId);
-  }
   return await withExclusiveCodexAppServerThread({
     bindingStore: deps.bindingStore,
     identity,
@@ -361,7 +355,7 @@ export async function resumeThread(
         // The host can rotate while its binding remains one generation behind.
         // Keep both fences after native queue and binding lease waits.
         const generation = await deps.bindingStore.prepareSessionGenerationReclaim(identity);
-        assertHostGeneration?.();
+        assertHostGeneration();
         if (generation.kind !== "resolved" || !generation.result) {
           throw createCodexSessionGenerationSupersededError(identity.sessionId);
         }

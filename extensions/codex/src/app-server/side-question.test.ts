@@ -627,36 +627,43 @@ describe("runCodexAppServerSideQuestion", () => {
     vi.useRealTimers();
   });
 
-  it("recovers the recorded predecessor from the admitted store before forking a side thread", async () => {
-    const root = tempDirs.make("codex-side-predecessor-");
-    const storePath = path.join(root, "admitted", "sessions.json");
-    const previous = {
-      kind: "session" as const,
-      agentId: "main",
-      sessionKey: "agent:main:side-continuity",
-      sessionId: "before-compaction",
-    };
-    const current = { ...previous, sessionId: "after-compaction" };
-    const scope = { agentId: previous.agentId, sessionKey: previous.sessionKey, storePath };
-    await upsertSessionEntry({
-      ...scope,
-      entry: { sessionId: previous.sessionId, updatedAt: 1 },
-    });
-    const sessionEntry = await patchSessionEntry({
-      ...scope,
-      update: () => ({ sessionId: current.sessionId }),
-    });
-    if (!sessionEntry) {
-      throw new Error("Expected the committed successor session");
-    }
-    const parent = { threadId: "parent-thread", cwd: "/tmp/workspace" };
-    const persistedBindings = createCodexTestBindingStore();
-    await persistedBindings.mutate(previous, { kind: "set", binding: parent });
-    const client = createFakeClient();
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+  it.each([false, true])(
+    "fences the recovered predecessor before forking a side thread (host rotated: %s)",
+    async (hostRotated) => {
+      const root = tempDirs.make("codex-side-predecessor-");
+      const storePath = path.join(root, "admitted", "sessions.json");
+      const previous = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionKey: "agent:main:side-continuity",
+        sessionId: "before-compaction",
+      };
+      const current = { ...previous, sessionId: "after-compaction" };
+      const scope = { agentId: previous.agentId, sessionKey: previous.sessionKey, storePath };
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: previous.sessionId, updatedAt: 1 },
+      });
+      const sessionEntry = await patchSessionEntry({
+        ...scope,
+        update: () => ({ sessionId: current.sessionId }),
+      });
+      if (!sessionEntry) {
+        throw new Error("Expected the committed successor session");
+      }
+      const parent = { threadId: "parent-thread", cwd: "/tmp/workspace" };
+      const persistedBindings = createCodexTestBindingStore();
+      await persistedBindings.mutate(previous, { kind: "set", binding: parent });
+      const client = createFakeClient();
+      getSharedCodexAppServerClientMock.mockImplementationOnce(async () => {
+        expect(persistedBindings.read(current)).toEqual(parent);
+        if (hostRotated) {
+          await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
+        }
+        return client;
+      });
 
-    await expect(
-      runCodexAppServerSideQuestionImpl(
+      const operation = runCodexAppServerSideQuestionImpl(
         sideParams({
           cfg: { session: { store: path.join(root, "configured", "sessions.json") } },
           storePath,
@@ -666,15 +673,21 @@ describe("runCodexAppServerSideQuestion", () => {
           sessionEntry,
         }),
         { bindingStore: persistedBindings },
-      ),
-    ).resolves.toEqual({ text: "Side answer." });
-    expect(persistedBindings.read(current)).toEqual(parent);
-    expect(client.request).toHaveBeenCalledWith(
-      "thread/fork",
-      expect.objectContaining({ threadId: parent.threadId }),
-      expect.any(Object),
-    );
-  });
+      );
+      if (hostRotated) {
+        await expect(operation).rejects.toThrow("Codex session generation is no longer current");
+        expect(client.request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
+      } else {
+        await expect(operation).resolves.toEqual({ text: "Side answer." });
+        expect(client.request).toHaveBeenCalledWith(
+          "thread/fork",
+          expect.objectContaining({ threadId: parent.threadId }),
+          expect.any(Object),
+        );
+      }
+      expect(persistedBindings.read(current)).toEqual(parent);
+    },
+  );
 
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T00:30:00.000Z"));
@@ -839,7 +852,11 @@ describe("runCodexAppServerSideQuestion", () => {
           },
         },
       },
-      { timeoutMs: 60_000, signal: expect.any(AbortSignal) },
+      {
+        timeoutMs: 60_000,
+        signal: expect.any(AbortSignal),
+        assertCurrent: expect.any(Function),
+      },
     ]);
     const turnStartParams = turnStartCall?.[1] as Record<string, unknown> | undefined;
     expect(turnStartParams).not.toHaveProperty("approvalPolicy");

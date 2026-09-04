@@ -378,7 +378,7 @@ export function scopeCodexRunBindingStore(params: {
 /** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
 export async function reclaimCurrentCodexSessionGeneration(params: {
   assertCurrent?: () => void;
-  onHostGenerationVerified?: (assertCurrent: () => void) => void;
+  onHostGenerationVerified?: (assertHostGeneration: () => void) => void;
   bindingStore: CodexAppServerBindingStore;
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
@@ -410,8 +410,7 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
   }
   // Lease waits may outlive host rotation without closing the run. Recheck the
   // recorded pair immediately before each write, outside the binding transaction.
-  const assertCurrent = () => {
-    params.assertCurrent?.();
+  const assertHostGeneration = () => {
     const entry = readCodexBindingSessionEntry(params);
     if (
       entry?.sessionId !== params.identity.sessionId ||
@@ -420,7 +419,11 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
       throw createCodexSessionGenerationSupersededError(params.identity.sessionId);
     }
   };
-  params.onHostGenerationVerified?.(assertCurrent);
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    assertHostGeneration();
+  };
+  params.onHostGenerationVerified?.(assertHostGeneration);
   if (previousSessionId === plan.expectedPreviousSessionId) {
     const adopted = await params.bindingStore.adoptSessionGeneration(
       params.identity,
@@ -451,10 +454,24 @@ export async function resolveCodexSessionBinding(params: {
   config?: OpenClawConfig;
   storePath?: string;
   reclaimStale?: boolean;
+  signal?: AbortSignal;
   assertCurrent?: () => void;
   assertBinding?: (binding: CodexAppServerThreadBinding | undefined) => void;
-}): Promise<CodexAppServerThreadBinding | undefined> {
-  params.assertCurrent?.();
+}): Promise<{
+  binding: CodexAppServerThreadBinding | undefined;
+  assertCurrent: () => void;
+}> {
+  let assertHostGeneration: (() => void) | undefined;
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    assertHostGeneration?.();
+  };
+  const assertAdmissionCurrent = () => {
+    // Each caller retains its own cancellation error and cleanup behavior.
+    params.assertCurrent?.();
+    params.signal?.throwIfAborted();
+  };
+  assertAdmissionCurrent();
   if (params.assertBinding) {
     params.assertBinding(readCodexSessionOwnershipBinding(params));
   }
@@ -465,6 +482,10 @@ export async function resolveCodexSessionBinding(params: {
         ...params,
         identity: params.identity,
         reclaimStale: params.reclaimStale === true,
+        assertCurrent: assertAdmissionCurrent,
+        onHostGenerationVerified: (assertHost) => {
+          assertHostGeneration = assertHost;
+        },
       })) &&
       params.reclaimStale
     ) {
@@ -472,9 +493,12 @@ export async function resolveCodexSessionBinding(params: {
     }
     binding = params.bindingStore.read(params.identity);
   }
-  params.assertCurrent?.();
+  assertCurrent();
+  params.signal?.throwIfAborted();
   params.assertBinding?.(binding);
-  return binding;
+  // Adoption can finish before a later host rollover. Carry its exact proof
+  // through caller waits instead of treating the rewritten binding as authority.
+  return { binding, assertCurrent };
 }
 
 /** Creates the single binding facade owned by the Codex plugin runtime. */

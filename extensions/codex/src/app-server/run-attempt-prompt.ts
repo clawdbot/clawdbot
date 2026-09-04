@@ -441,6 +441,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     const previousThreadId = binding.threadId;
     const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(binding);
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
+      assertCurrent: params.hostCapabilities.assertActive,
       binding,
       bindingStore,
       identity: bindingIdentity,

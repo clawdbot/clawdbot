@@ -49,7 +49,7 @@ async function assertAdoptedCodexThreadResumeAllowed(
     params.client.request(
       "thread/read",
       { threadId, includeTurns: false },
-      { signal: params.signal },
+      { signal: params.signal, assertCurrent: params.params.hostCapabilities.assertActive },
     ),
   );
   context.throwIfAborted();
@@ -69,6 +69,7 @@ export async function withCodexThreadLifecycleBinding(
   run: (
     identity: CodexAppServerBindingIdentity,
     binding: CodexAppServerThreadBinding | undefined,
+    assertCurrent: () => void,
   ) => Promise<CodexAppServerThreadLifecycleBinding>,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const identity = sessionBindingIdentity({
@@ -77,16 +78,14 @@ export async function withCodexThreadLifecycleBinding(
     agentId: params.agentId ?? params.params.agentId,
     config: params.params.config,
   });
-  const snapshot = await resolveCodexSessionBinding({
+  const { binding: snapshot, assertCurrent } = await resolveCodexSessionBinding({
     reclaimStale: true,
     bindingStore: params.bindingStore,
     identity,
     config: params.params.config,
     storePath: params.params.sessionTarget?.storePath,
-    assertCurrent: () => {
-      params.params.hostCapabilities.assertActive();
-      params.signal?.throwIfAborted();
-    },
+    assertCurrent: params.params.hostCapabilities.assertActive,
+    signal: params.signal,
     assertBinding: params.params.expectedSessionRuntimeOwnership
       ? (binding) =>
           assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership)
@@ -103,9 +102,8 @@ export async function withCodexThreadLifecycleBinding(
           "acquiring thread lifecycle ownership",
         );
       }
-      params.params.hostCapabilities.assertActive();
-      params.signal?.throwIfAborted();
-      return await run(identity, binding);
+      assertCurrent();
+      return await run(identity, binding, assertCurrent);
     });
   // Ordinary resumes own their binding key even when a legacy row omits sessionId.
   // Foreign-owner rejection belongs to adoption, not an upgrade of that same binding.
@@ -218,7 +216,7 @@ async function preparePendingCodexThreadResume(
   const { thread } = await params.client.request(
     "thread/read",
     { threadId: binding.threadId, includeTurns: false },
-    { signal: params.signal },
+    { signal: params.signal, assertCurrent },
   );
   assertCurrent();
   const statusType = thread.status?.type;
