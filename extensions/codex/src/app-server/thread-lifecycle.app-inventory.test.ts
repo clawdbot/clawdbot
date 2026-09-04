@@ -649,7 +649,12 @@ describe("Codex app inventory across physical process restart", () => {
       });
       const binding = f.readBinding();
       const release = createDeferred<void>();
-      f.process.faults.beforeInventory = () => release.promise;
+      const clock = vi.spyOn(Date, "now");
+      f.process.faults.beforeInventory = () => {
+        // A request timer can expire before the wall clock reaches the outer deadline.
+        clock.mockReturnValue(Date.now());
+        return release.promise;
+      };
       f.appServer.requestTimeoutMs = 400;
       const boundary = f.calls.length;
       try {
@@ -680,6 +685,7 @@ describe("Codex app inventory across physical process restart", () => {
           f.calls.slice(boundary).filter((call) => call.method === "thread/start"),
         ).toHaveLength(1);
       } finally {
+        clock.mockRestore();
         f.process.abort.abort();
         release.resolve();
       }

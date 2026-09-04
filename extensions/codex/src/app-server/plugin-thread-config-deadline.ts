@@ -7,7 +7,7 @@ import {
   defaultCodexAppInventoryCache,
   type CodexAppInventoryCache,
 } from "./app-inventory-cache.js";
-import type { CodexAppServerClient } from "./client.js";
+import { isCodexAppServerRequestTimeoutError, type CodexAppServerClient } from "./client.js";
 import {
   resolveCodexPluginsPolicy,
   type CodexPluginConfig,
@@ -108,14 +108,20 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   // One deadline owns the whole config build; every RPC gets only the remaining
   // budget so discovery cannot consume one full request timeout per call.
   const deadlineMs = Date.now() + timeoutMs;
+  // Inventory readers can absorb timeouts; retain the request's verdict even
+  // when its timer fires before the wall clock reaches our deadline.
+  let requestTimedOut = false;
   const boundedRequest: CodexPluginRuntimeRequest = (method, requestParams) => {
     const remainingTimeoutMs = deadlineMs - Date.now();
-    if (remainingTimeoutMs <= 0) {
+    if (requestTimedOut || remainingTimeoutMs <= 0) {
       throw new CodexPluginThreadConfigDeadlineError();
     }
     return request(method, requestParams, {
       timeoutMs: remainingTimeoutMs,
       signal,
+    }).catch((error: unknown) => {
+      requestTimedOut ||= isCodexAppServerRequestTimeoutError(error);
+      throw error;
     });
   };
   try {
@@ -128,8 +134,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
           request: boundedRequest,
         });
         const result = transform ? await transform(config, boundedRequest) : config;
-        // Inventory readers can absorb an RPC timeout into an unavailable result.
-        if (Date.now() >= deadlineMs) {
+        if (requestTimedOut || Date.now() >= deadlineMs) {
           throw new CodexPluginThreadConfigDeadlineError();
         }
         return result;
@@ -140,7 +145,7 @@ async function buildCodexPluginThreadConfigWithinDeadline(
   } catch (error) {
     if (
       signal.aborted ||
-      (!isCodexPluginThreadConfigTimeoutError(error) && Date.now() < deadlineMs)
+      (!requestTimedOut && !isCodexPluginThreadConfigTimeoutError(error) && Date.now() < deadlineMs)
     ) {
       throw error;
     }
@@ -255,9 +260,6 @@ function resolveCodexPluginThreadConfigTimeoutMs(requestTimeoutMs: number): numb
 function isCodexPluginThreadConfigTimeoutError(error: unknown): boolean {
   return (
     error instanceof CodexPluginThreadConfigDeadlineError ||
-    (error instanceof Error &&
-      "code" in error &&
-      error.code === "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED" &&
-      error.message.endsWith(" timed out"))
+    isCodexAppServerRequestTimeoutError(error)
   );
 }
