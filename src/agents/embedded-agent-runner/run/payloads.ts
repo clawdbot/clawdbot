@@ -249,11 +249,12 @@ export function buildEmbeddedRunPayloads(params: {
     isTimeoutErrorMessage(rawErrorMessage) &&
     errorText === SYNTHESIZED_TIMEOUT_ERROR_TEXT;
   if (errorText && !deferAssistantTimeoutError) {
-    replyItems.push({
+    const errorPayload = {
       text: errorText,
       isError: true,
       ...(codexLoginRecovery ? { presentation: codexLoginRecovery.presentation } : {}),
-    });
+    };
+    replyItems.push(setReplyPayloadMetadata(errorPayload, { terminalProviderError: true }));
   }
   const reasoningText =
     suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
