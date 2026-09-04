@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
+
+const log = createSubsystemLogger("gateway/http-byte-range");
 
 const HTTP_DATE_MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
 const HTTP_DATE_WEEKDAYS = "Sun Mon Tue Wed Thu Fri Sat".split(" ");
@@ -263,7 +266,12 @@ export function createGatewayByteStream(
       stream.destroy();
       return;
     }
-    await handle.close().catch(() => {});
+    // A FileHandle-backed stream is never created for a zero-length/HEAD/already-ended
+    // response, so this direct close is the only cleanup that runs; a rejected close
+    // otherwise leaks the descriptor with no trace (#116346).
+    await handle.close().catch((err: unknown) => {
+      log.warn(`gateway byte stream handle close failed: ${String(err)}`);
+    });
   };
   const release = () => {
     void close();
@@ -289,9 +297,16 @@ export function createGatewayByteStream(
         autoClose: true,
       });
       stream.once("end", release).once("close", release);
-      stream.once("error", () => {
+      stream.once("error", (err) => {
+        // A FileHandle-backed autoClose stream routes its internal close through the
+        // handle, so a close failure after the response already settled surfaces here
+        // as a stream error with no live reader left to report it to (#116346).
+        const isPostResponseCloseFailure = res.destroyed || res.writableEnded;
+        if (isPostResponseCloseFailure) {
+          log.warn(`gateway byte stream handle close failed: ${String(err)}`);
+        }
         release();
-        if (!res.destroyed && !res.writableEnded) {
+        if (!isPostResponseCloseFailure) {
           if (res.headersSent) {
             res.destroy();
           } else {

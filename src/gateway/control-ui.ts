@@ -22,6 +22,7 @@ import { readFileWindowFully } from "../infra/file-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { isWithinDir } from "../infra/path-safety.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { assertLocalMediaAllowed, getDefaultLocalRootsCore } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { probePlaybackMediaFileDescriptor, type MediaProbeResult } from "../media/media-probe.js";
@@ -93,6 +94,8 @@ import {
 } from "./http-byte-range.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
+
+const log = createSubsystemLogger("gateway/control-ui");
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -375,6 +378,21 @@ function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
   return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
 }
 
+type OpenedAssistantMediaHandle = Awaited<ReturnType<typeof openLocalFileSafely>>["handle"];
+
+// A rejected FileHandle.close() still releases the underlying descriptor at the OS level
+// before or during the rejection (Node clears `handle.fd` first), so a numeric-fd retry can
+// end up closing an unrelated descriptor a different gateway operation acquired in the
+// meantime. Log the failure instead of retrying; it is a rare failure path and the leaked
+// slot cannot outlive the process here, unlike closing the wrong live descriptor (#116346).
+async function closeAssistantMediaHandle(handle: OpenedAssistantMediaHandle): Promise<void> {
+  try {
+    await handle.close();
+  } catch (err) {
+    log.warn(`control-ui assistant media handle close failed: ${String(err)}`);
+  }
+}
+
 async function resolveAssistantMediaAvailability(
   source: string,
   localRoots: readonly string[],
@@ -431,7 +449,7 @@ async function resolveAssistantMediaAvailability(
         ...probe,
       };
     } finally {
-      await opened.handle.close().catch(() => {});
+      await closeAssistantMediaHandle(opened.handle);
     }
   } catch (err) {
     return classifyAssistantMediaError(err);
