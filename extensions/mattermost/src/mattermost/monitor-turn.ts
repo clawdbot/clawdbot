@@ -19,7 +19,7 @@ import {
   createMattermostDraftPreviewBoundaryController,
   createMattermostDraftStream,
 } from "./draft-stream.js";
-import { normalizeMattermostAllowEntry } from "./monitor-auth.js";
+import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import {
   formatMattermostFinalDeliveryOutcomeLog,
   resolveMattermostReplyRootId,
@@ -88,7 +88,6 @@ export async function dispatchMattermostInboundTurn(
   const { channelId, kind, route, senderId, thread, to } = eventPlan;
   const { effectiveReplyToId } = thread;
   const {
-    deliveryBarrier,
     replyOptions,
     replyPipeline: baseReplyPipeline,
     tableMode,
@@ -111,8 +110,9 @@ export async function dispatchMattermostInboundTurn(
     (hookRunner?.hasHooks("message_sending") ?? false)
   );
   const draftPreviewEnabled = allowProviderPreview && account.streamingMode !== "off";
-  const draftToolProgressEnabled =
-    draftPreviewEnabled && shouldUpdateMattermostDraftToolProgress(account);
+  const draftProgressEnabled =
+    draftPreviewEnabled &&
+    (account.streamingMode === "progress" || shouldUpdateMattermostDraftToolProgress(account));
   const suppressDefaultToolProgressMessages =
     draftPreviewEnabled && shouldSuppressMattermostDefaultToolProgressMessages(account);
   const draftStream = draftPreviewEnabled
@@ -282,8 +282,6 @@ export async function dispatchMattermostInboundTurn(
 
   const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
     ...dispatcherPipeline,
-    resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-    onDeliverySettled: deliveryBarrier.markDeliverySettled,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
   };
@@ -335,7 +333,7 @@ export async function dispatchMattermostInboundTurn(
             core,
             cfg,
             payload: resolvedPayload,
-            to,
+            channelId,
             accountId: account.accountId,
             agentId: route.agentId,
             replyToId: resolveMattermostReplyRootId({
@@ -346,7 +344,6 @@ export async function dispatchMattermostInboundTurn(
             textLimit,
             tableMode,
             sendMessage: sendMessageMattermost,
-            onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
           }).catch((error: unknown) => {
             if (isChannelPartialDeliveryError(error)) {
               markThreadParticipation();
@@ -468,13 +465,11 @@ export async function dispatchMattermostInboundTurn(
             ...(turnAdoptionLifecycle
               ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
               : {}),
-            allowProgressCallbacksWhenSourceDeliverySuppressed: draftToolProgressEnabled
+            allowProgressCallbacksWhenSourceDeliverySuppressed: draftProgressEnabled
               ? true
               : undefined,
             preserveProgressCallbackStartOrder: draftPreviewEnabled ? true : undefined,
-            onObservedReplyDelivery: draftToolProgressEnabled
-              ? () => draftStream.clear()
-              : undefined,
+            onObservedReplyDelivery: draftProgressEnabled ? () => draftStream.clear() : undefined,
             disableBlockStreaming: draftPreviewEnabled ? true : replyOptions.disableBlockStreaming,
             ...(suppressDefaultToolProgressMessages
               ? { suppressDefaultToolProgressMessages: true }
@@ -482,18 +477,19 @@ export async function dispatchMattermostInboundTurn(
             onModelSelected,
             onPartialReply: (payloadResult) =>
               account.streamingMode === "progress"
-                ? undefined
+                ? false
                 : updateDraftFromPartial(payloadResult.text),
             onAssistantMessageStart: () => {
               lastPartialText = "";
               progressDraft.resetReasoningProgress();
               if (account.streamingMode === "block") {
                 blockPreviewAssistantMessagePending = true;
-                return;
+                return false;
               }
               if (account.streamingMode !== "progress") {
                 progressDraft.reset();
               }
+              return false;
             },
             onReasoningEnd: () => {
               // Hidden reasoning has no boundary; only rendered text, reasoning, or tools rotate preview posts.
@@ -502,13 +498,16 @@ export async function dispatchMattermostInboundTurn(
               if (account.streamingMode !== "block" && account.streamingMode !== "progress") {
                 progressDraft.reset();
               }
+              return false;
             },
             onReasoningStream: async (payloadResult) => {
               if (account.streamingMode === "progress") {
-                await progressDraft.pushReasoningProgress(payloadResult.text || "Thinking…", {
-                  snapshot: payloadResult.isReasoningSnapshot === true,
-                });
-                return;
+                return await progressDraft.pushReasoningProgress(
+                  payloadResult.text || "Thinking…",
+                  {
+                    snapshot: payloadResult.isReasoningSnapshot === true,
+                  },
+                );
               }
               if (!lastPartialText) {
                 const boundarySettled = enterBlockPreviewActivity("reasoning");
@@ -516,10 +515,11 @@ export async function dispatchMattermostInboundTurn(
                 previewBoundaryController.noteUpdate();
                 await boundarySettled;
               }
+              return false;
             },
             onToolStart: async (payloadValue) => {
-              if (!draftToolProgressEnabled) {
-                return;
+              if (!draftProgressEnabled) {
+                return false;
               }
               const boundarySettled = enterBlockPreviewActivity("tool");
               // Boundary detach and progress staging both happen synchronously before
@@ -540,11 +540,12 @@ export async function dispatchMattermostInboundTurn(
                 { startImmediately: true },
               );
               previewBoundaryController.noteUpdate();
-              await Promise.all([boundarySettled, progressSettled]);
+              const [, visible] = await Promise.all([boundarySettled, progressSettled]);
+              return visible;
             },
             onItemEvent: async (payloadLocal) => {
-              if (!draftToolProgressEnabled) {
-                return;
+              if (!draftProgressEnabled) {
+                return false;
               }
               const boundarySettled = enterBlockPreviewActivity("tool");
               const progressSettled = progressDraft.pushToolProgress(
@@ -563,7 +564,8 @@ export async function dispatchMattermostInboundTurn(
                 { startImmediately: true },
               );
               previewBoundaryController.noteUpdate();
-              await Promise.all([boundarySettled, progressSettled]);
+              const [, visible] = await Promise.all([boundarySettled, progressSettled]);
+              return visible;
             },
           },
         }),

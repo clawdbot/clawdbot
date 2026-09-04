@@ -6,6 +6,7 @@ import { resolveCliName } from "../cli/cli-name.js";
 import {
   completionCacheExists,
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
+  findCompletionProfileWriteError,
   formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
@@ -17,7 +18,6 @@ import {
   type CompletionShell,
 } from "../cli/completion-runtime.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { isErrno } from "../infra/errors.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -32,17 +32,8 @@ export type CompletionCacheGenerationOptions = ShellCompletionStatusOptions & {
   generationMode: "core-only" | "full";
 };
 
-const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
-
-function findProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
-  if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
-    return err;
-  }
-  return err instanceof Error ? findProfileWriteError(err.cause) : undefined;
-}
-
 async function installCompletionForDoctor(
-  shell: CompletionShell,
+  { shell, cachePath }: ShellCompletionStatus,
   cliName: string,
   action: "installed" | "upgraded",
 ): Promise<void> {
@@ -55,13 +46,14 @@ async function installCompletionForDoctor(
     );
   } catch (err) {
     // Completion is optional, but only profile permission failures are safe to downgrade.
-    const writeError = findProfileWriteError(err);
+    const writeError = findCompletionProfileWriteError(err);
     if (!writeError) {
       throw err;
     }
-    const profilePath = writeError.path ?? resolveCompletionProfilePath(shell);
+    const failedPath = writeError.path ?? resolveCompletionProfilePath(shell);
+    const command = formatCompletionReloadCommand(shell, cachePath);
     note(
-      `Shell completion not ${action}: ${profilePath} is not writable. Run \`${cliName} completion --install\` against a writable profile file.`,
+      `Shell completion could not be ${action} (permission or read-only error at ${failedPath}). For this ${shell} session only, run:\n${command}`,
       "Shell completion",
     );
   }
@@ -229,7 +221,7 @@ export async function doctorShellCompletion(
       }
     }
 
-    await installCompletionForDoctor(status.shell, cliName, "upgraded");
+    await installCompletionForDoctor(status, cliName, "upgraded");
     return;
   }
 
@@ -270,7 +262,7 @@ export async function doctorShellCompletion(
         return;
       }
 
-      await installCompletionForDoctor(status.shell, cliName, "installed");
+      await installCompletionForDoctor(status, cliName, "installed");
     }
   }
 }

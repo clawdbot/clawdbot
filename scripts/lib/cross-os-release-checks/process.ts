@@ -15,6 +15,8 @@ import {
 import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
+import { toStringifiedError } from "../error-format.mts";
+import { terminateManagedChild } from "../managed-child-process.mts";
 import { resolveWindowsTaskkillPath } from "../windows-taskkill.mjs";
 import type {
   Cleanup,
@@ -29,6 +31,7 @@ import {
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
   CROSS_OS_PROCESS_TREE_KILL_AFTER_MS,
 } from "./config.ts";
+import { readLogTextSince } from "./logs.ts";
 import { formatError, sleep, toLintErrorObject, trimForSummary } from "./shared.ts";
 
 const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
@@ -37,6 +40,8 @@ const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
   SIGTERM: 143,
 };
 const CROSS_OS_ACTIVE_CHILD_TREE_KILLERS = new Set<(signal: NodeJS.Signals) => void>();
+const STARTUP_MIGRATION_RESTART_PREFIX =
+  "OpenClaw plugin migration inputs changed during startup convergence;";
 let forwardedSignalExitCode: number | undefined;
 let forwardedSignalForceKillTimer: NodeJS.Timeout | undefined;
 
@@ -117,8 +122,38 @@ export async function canConnectToLoopbackPort(port: number, timeoutMs = 1_000) 
   });
 }
 
-function hasChildExited(child: ChildProcess) {
+export function hasChildExited(child: ChildProcess) {
   return child.exitCode !== null || (child.signalCode ?? null) !== null;
+}
+
+export async function waitForGatewayWithStartupMigrationRestart(params: {
+  gatewayHolder: { current: GatewayHandle | null };
+  restartGateway: () => Promise<GatewayHandle>;
+  waitUntilReady: (gateway: GatewayHandle) => Promise<void>;
+}) {
+  let gateway = params.gatewayHolder.current;
+  if (!gateway) {
+    throw new Error("Gateway restart coordination requires an active gateway handle.");
+  }
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await params.waitUntilReady(gateway);
+      return;
+    } catch (error) {
+      if (!hasChildExited(gateway.child)) {
+        throw error;
+      }
+      await gateway.waitForClose();
+      await gateway.closeLog();
+      const startupLog = readLogTextSince(gateway.logPath, gateway.launchLogOffset);
+      if (attempt > 0 || !startupLog.includes(STARTUP_MIGRATION_RESTART_PREFIX)) {
+        throw error;
+      }
+      gateway = await params.restartGateway();
+      params.gatewayHolder.current = gateway;
+    }
+  }
 }
 
 export async function stopGateway(gateway: GatewayHandle | null) {
@@ -161,15 +196,12 @@ export async function stopGateway(gateway: GatewayHandle | null) {
 }
 
 function signalChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // The child may have exited before its process group was signaled.
-    }
-  }
-  child.kill(signal);
+  terminateManagedChild(child, signal, {
+    onChildSignalError(error) {
+      throw error;
+    },
+    useWindowsTaskkill: false,
+  });
 }
 
 export function registerActiveChildProcessTree(child: ChildProcess) {
@@ -526,8 +558,7 @@ export async function startStaticFileServer(params: {
         server.close((error) => {
           void (async () => {
             const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
-              (logError: unknown): Error =>
-                logError instanceof Error ? logError : new Error(String(logError)),
+              (logError: unknown): Error => toStringifiedError(logError),
             );
             if (error) {
               rejectPromise(error);

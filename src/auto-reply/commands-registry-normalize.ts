@@ -21,12 +21,14 @@ type TextAliasSpec = {
 };
 
 type CommandRegistryLookup = {
-  commands: ChatCommandDefinition[];
   aliases: Map<string, TextAliasSpec>;
   detection: CommandDetection;
 };
 
 let cachedRegistryLookup: CommandRegistryLookup | undefined;
+
+const TARGETED_COMMAND_BODY_RE =
+  /^\/([^\s@]+)@([A-Za-z0-9_]+)(?=$|\s|[.!?！？…,，。;；:：'"’”)\]}])([\s\S]*)$/u;
 
 function appendMultilineTail(head: string, tail: string | undefined, spec?: TextAliasSpec): string {
   if (!tail) {
@@ -43,14 +45,13 @@ function appendMultilineTail(head: string, tail: string | undefined, spec?: Text
 }
 
 function getCommandRegistryLookup(): CommandRegistryLookup {
-  const commands = getChatCommands();
-  if (cachedRegistryLookup?.commands === commands) {
+  if (cachedRegistryLookup) {
     return cachedRegistryLookup;
   }
   const aliases = new Map<string, TextAliasSpec>();
   const exact = new Set<string>();
   const patterns: string[] = [];
-  for (const command of commands) {
+  for (const command of getChatCommands()) {
     // Canonicalize to the primary text alias, not `/${key}`. Some command keys are
     // internal identifiers while the public text command is a dedicated alias.
     const canonical = normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
@@ -73,7 +74,6 @@ function getCommandRegistryLookup(): CommandRegistryLookup {
     }
   }
   cachedRegistryLookup = {
-    commands,
     aliases,
     detection: {
       exact,
@@ -105,11 +105,14 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     : singleLine;
 
   const normalizedBotUsername = normalizeOptionalLowercaseString(options?.botUsername);
-  const mentionMatch = normalizedBotUsername
-    ? normalized.match(/^\/([^\s@]+)@([^\s]+)(.*)$/)
-    : null;
+  const mentionMatch = normalized.match(TARGETED_COMMAND_BODY_RE);
+  const targetBotUsername = normalizeOptionalLowercaseString(mentionMatch?.[2]);
+  const targetMatchesBot =
+    normalizedBotUsername !== undefined && targetBotUsername === normalizedBotUsername;
+  const resolveBeforeIdentity =
+    normalizedBotUsername === undefined && options?.targetedCommandMode === "pre-identity";
   const commandBody =
-    mentionMatch && normalizeLowercaseStringOrEmpty(mentionMatch[2]) === normalizedBotUsername
+    mentionMatch && (targetMatchesBot || resolveBeforeIdentity)
       ? `/${mentionMatch[1]}${mentionMatch[3] ?? ""}`
       : normalized;
 

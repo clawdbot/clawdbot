@@ -63,10 +63,14 @@ function parseInlineCodeSpans(
   let openStart = open ? 0 : -1;
 
   let i = 0;
+  // The scanner emits ordered, disjoint fences and the input cursor only advances.
+  // Retire each fence once instead of searching all prior fences at every character.
+  let fenceIndex = 0;
   while (i < text.length) {
-    const fence = findFenceSpanAtInclusive(fenceSpans, i);
-    if (fence) {
+    const fence = fenceSpans[fenceIndex];
+    if (fence && i >= fence.start) {
       i = fence.end;
+      fenceIndex += 1;
       continue;
     }
 
@@ -105,10 +109,6 @@ function parseInlineCodeSpans(
     spans,
     state: { open, ticks },
   };
-}
-
-function findFenceSpanAtInclusive(spans: FenceSpan[], index: number): FenceSpan | undefined {
-  return spans.find((span) => index >= span.start && index < span.end);
 }
 
 function isInsideFenceSpan(index: number, spans: FenceSpan[]): boolean {

@@ -12,10 +12,12 @@ extension CritterStatusLabel {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            self.iconImage
+            CritterStatusImage(
+                image: self.iconImage,
+                rotation: self.iconRotation,
+                translation: self.iconTranslation,
+                motionEnabled: self.effectiveAnimationsEnabled && !self.earBoostActive)
                 .frame(width: 18, height: 18)
-                .rotationEffect(.degrees(self.wiggleAngle), anchor: .center)
-                .offset(x: self.wiggleOffset)
                 // Avoid Combine's TimerPublisher here: on macOS 26.2 we've seen crashes inside executor checks
                 // triggered by its callbacks. Drive periodic updates via a Swift-concurrency task instead.
                 .task(id: self.tickTaskID) {
@@ -211,7 +213,7 @@ extension CritterStatusLabel {
         }
     }
 
-    private var iconImage: Image {
+    private var iconImage: NSImage {
         let badge: CritterIconRenderer.Badge? = if let prominence = self.iconState.badgeProminence, !self.isPaused {
             CritterIconRenderer.Badge(
                 symbolName: self.iconState.badgeSymbolName,
@@ -223,31 +225,31 @@ extension CritterStatusLabel {
         if self.isPaused {
             // Paused reads as "off duty": awake but with drooped antennae, distinct
             // from idle (perked) and sleeping (drooped + closed eyes).
-            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 0, antennaDroop: 1, badge: nil))
+            return CritterIconRenderer.makeIcon(blink: 0, antennaDroop: 1, badge: nil)
         }
 
         if self.isSleeping {
-            return Image(nsImage: CritterIconRenderer.makeIcon(
+            return CritterIconRenderer.makeIcon(
                 blink: 1,
                 antennaDroop: 1,
                 eyesClosedLines: true,
-                badge: nil))
+                badge: nil)
         }
 
-        return Image(nsImage: CritterIconRenderer.makeIcon(
+        return CritterIconRenderer.makeIcon(
             blink: self.blinkAmount,
             legWiggle: max(self.legWiggle, self.isWorkingNow ? 0.6 : 0),
             earWiggle: self.earWiggle,
             earScale: self.earBoostActive ? 1.9 : 1.0,
             happyEyes: self.celebrating,
-            badge: badge))
+            badge: badge)
     }
 
     private func resetMotion() {
         self.blinkAmount = 0
         self.celebrating = false
-        self.wiggleAngle = 0
-        self.wiggleOffset = 0
+        self.iconRotation = .init()
+        self.iconTranslation = .init()
         self.legWiggle = 0
         self.earWiggle = 0
     }
@@ -277,18 +279,14 @@ extension CritterStatusLabel {
     }
 
     private func wiggle() {
-        let targetAngle = Double.random(in: -4.5...4.5)
+        let targetAngle = CGFloat.random(in: -4.5...4.5)
         let targetOffset = CGFloat.random(in: -0.5...0.5)
-        withAnimation(.interpolatingSpring(stiffness: 220, damping: 18)) {
-            self.wiggleAngle = targetAngle
-            self.wiggleOffset = targetOffset
-        }
+        self.iconRotation = .init(value: targetAngle, curve: .wiggle)
+        self.iconTranslation = .init(value: targetOffset, curve: .wiggle)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 360_000_000)
-            withAnimation(.interpolatingSpring(stiffness: 220, damping: 18)) {
-                self.wiggleAngle = 0
-                self.wiggleOffset = 0
-            }
+            self.iconRotation = .init(value: 0, curve: .wiggle)
+            self.iconTranslation = .init(value: 0, curve: .wiggle)
         }
     }
 
@@ -305,15 +303,15 @@ extension CritterStatusLabel {
 
     private func scurry() {
         let target = CGFloat.random(in: 0.7...1.0)
-        withAnimation(.easeInOut(duration: 0.12)) {
+        withAnimation(.easeInOut(duration: CritterMotionCurve.scurryOutDuration)) {
             self.legWiggle = target
-            self.wiggleOffset = CGFloat.random(in: -0.6...0.6)
+            self.iconTranslation = .init(value: CGFloat.random(in: -0.6...0.6), curve: .scurryOut)
         }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 180_000_000)
-            withAnimation(.easeOut(duration: 0.16)) {
+            withAnimation(.easeOut(duration: CritterMotionCurve.scurryBackDuration)) {
                 self.legWiggle = 0.25
-                self.wiggleOffset = 0
+                self.iconTranslation = .init(value: 0, curve: .scurryBack)
             }
         }
     }
@@ -345,111 +343,48 @@ extension CritterStatusLabel {
     }
 
     private var gatewayNeedsAttention: Bool {
-        if self.isSleeping { return false }
-        switch self.gatewayStatus {
-        case .failed, .stopped:
-            return !self.isPaused
-        case .starting, .running, .attachedExisting:
+        Self.needsAttention(
+            connectionMode: self.connectionMode,
+            controlState: self.controlChannelState,
+            gatewayStatus: self.gatewayStatus,
+            isPaused: self.isPaused,
+            isSleeping: self.isSleeping)
+    }
+
+    static func needsAttention(
+        connectionMode: AppState.ConnectionMode,
+        controlState: ControlChannel.ConnectionState,
+        gatewayStatus: GatewayProcessManager.Status,
+        isPaused: Bool,
+        isSleeping: Bool) -> Bool
+    {
+        guard !isPaused else { return false }
+        switch connectionMode {
+        case .unconfigured:
             return false
+        case .remote:
+            return GatewayConnectionPresentation(state: controlState).needsAttention
+        case .local:
+            guard !isSleeping else { return false }
+            switch gatewayStatus {
+            case .failed, .stopped:
+                return true
+            case .starting, .running, .attachedExisting:
+                return false
+            }
         }
     }
 
     private var gatewayBadgeColor: Color {
+        if self.connectionMode == .remote,
+           GatewayConnectionPresentation(state: self.controlChannelState).needsAttention
+        {
+            return .red
+        }
         switch self.gatewayStatus {
-        case .failed: .red
-        case .stopped: .orange
-        default: .clear
+        case .failed: return .red
+        case .stopped: return .orange
+        default: return .clear
         }
     }
 }
-
-#if DEBUG
-@MainActor
-extension CritterStatusLabel {
-    static func exerciseForTesting() async {
-        var label = CritterStatusLabel(
-            isPaused: false,
-            isSleeping: false,
-            isWorking: true,
-            earBoostActive: false,
-            blinkTick: 1,
-            sendCelebrationTick: 1,
-            gatewayStatus: .running(details: nil),
-            animationsEnabled: true,
-            iconState: .workingMain(.tool(.bash)),
-            voiceWakeMeterActive: true)
-
-        _ = label.body
-        _ = label.iconImage
-        _ = label.tickTaskID
-        _ = label.isWorkingNow
-        label.tick(Date())
-        label.resetMotion()
-        label.blink()
-        label.wiggle()
-        label.wiggleLegs()
-        label.wiggleEars()
-        label.scurry()
-        label.celebrate()
-        label.scheduleRandomTimers(from: Date())
-        label.handleGatewayStatusChange(from: .failed("boom"), to: .running(details: nil))
-        let workStartedAt = Date(timeIntervalSinceReferenceDate: 100)
-        label.handleWorkingChange(from: false, to: true, at: workStartedAt)
-        label.handleWorkingChange(from: true, to: false, at: workStartedAt.addingTimeInterval(10))
-        _ = Self.reconnectBeat(lastSettled: .failed("boom"), to: .running(details: nil))
-        _ = Self.isSettled(.starting)
-        _ = Self.workCompletionBeat(startedAt: nil, endedAt: Date(), minimumDuration: 10)
-        _ = label.gatewayNeedsAttention
-        _ = label.gatewayBadgeColor
-
-        label.isPaused = true
-        _ = label.iconImage
-
-        label.isPaused = false
-        label.isSleeping = true
-        _ = label.iconImage
-
-        label.isSleeping = false
-        label.iconState = .idle
-        _ = label.iconImage
-
-        let failed = CritterStatusLabel(
-            isPaused: false,
-            isSleeping: false,
-            isWorking: false,
-            earBoostActive: false,
-            blinkTick: 0,
-            sendCelebrationTick: 0,
-            gatewayStatus: .failed("boom"),
-            animationsEnabled: false,
-            iconState: .idle,
-            voiceWakeMeterActive: false)
-        _ = failed.gatewayNeedsAttention
-        _ = failed.gatewayBadgeColor
-
-        let stopped = CritterStatusLabel(
-            isPaused: false,
-            isSleeping: false,
-            isWorking: false,
-            earBoostActive: false,
-            blinkTick: 0,
-            sendCelebrationTick: 0,
-            gatewayStatus: .stopped,
-            animationsEnabled: false,
-            iconState: .idle,
-            voiceWakeMeterActive: false)
-        _ = stopped.gatewayNeedsAttention
-        _ = stopped.gatewayBadgeColor
-
-        _ = CritterIconRenderer.makeIcon(
-            blink: 0.6,
-            legWiggle: 0.8,
-            earWiggle: 0.4,
-            earScale: 1.4,
-            antennaDroop: 0.5,
-            eyesClosedLines: true,
-            happyEyes: true,
-            badge: .init(symbolName: "gearshape.fill", prominence: .secondary))
-    }
-}
-#endif

@@ -11,7 +11,7 @@ import type { CompactionMessageMetrics } from "./compact.types.js";
 
 export const hasRealConversationContent = isRealConversationMessage;
 
-export function createCompactionDiagId(): string {
+export function createDirectCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 

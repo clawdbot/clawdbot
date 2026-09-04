@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/types.js";
+import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
@@ -7,6 +8,7 @@ const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
 
 describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
   it("does not share the client turn's turnAdoptionLifecycle with the system retry", () => {
+    const receipts: ReplyOperationRunState[] = [{ agentTurn: "ok" }];
     const onComplete = vi.fn();
     const onEnqueued = vi.fn(() => true);
     const parent = createMockFollowupRun({
@@ -18,7 +20,7 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
         onDeferred: onEnqueued,
       },
       admissionSessionId: "sess-rotated",
-      onReplyAdmissionWaitChange: vi.fn(),
+      replyOperationRunStates: receipts,
     });
 
     const recovery = resolveStrandedReplyRecovery({
@@ -38,11 +40,12 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
     const retry = recovery.run;
 
     expect(retry.turnAdoptionLifecycle).toBeUndefined();
+    expect(retry.replyOperationRunStates).toBeUndefined();
+    expect(parent.replyOperationRunStates).toBe(receipts);
     expect(retry.strandedReplyRetry).toBe(true);
     expect(retry.summaryLine).toBe(STRANDED_REPLY_RETRY_MARKER);
     // Session routing stays; only the client-turn lifecycle identity is detached.
     expect(retry.admissionSessionId).toBe("sess-rotated");
-    expect(retry.onReplyAdmissionWaitChange).toBe(parent.onReplyAdmissionWaitChange);
     expect(retry.run.sessionKey).toBe(parent.run.sessionKey);
 
     // mark/complete no-op when lifecycle is absent (drop-policy onDrop path too).
@@ -82,6 +85,13 @@ describe("resolveStrandedReplyRecovery", () => {
     if (recovery.kind === "retry") {
       expect(recovery.run.strandedReplyRetry).toBe(true);
       expect(recovery.run.disableCollectBatching).toBe(true);
+      expect(recovery.run.prompt).toBe(
+        `[System] Your previous reply was not delivered to the conversation because ` +
+          `you did not call message(action=send). Your reply text was:\n\n` +
+          `"${substantiveFinal}"\n\n` +
+          `Please deliver this reply now by calling message(action=send). ` +
+          `Do not add any extra commentary; just deliver the original reply.`,
+      );
     }
   });
 

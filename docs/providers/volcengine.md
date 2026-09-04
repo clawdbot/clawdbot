@@ -58,7 +58,7 @@ The Volcengine provider gives access to Doubao models and third-party models hos
 For non-interactive setup (CI, scripting), pass the key directly:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice volcengine-api-key \
   --volcengine-api-key "$VOLCANO_ENGINE_API_KEY"

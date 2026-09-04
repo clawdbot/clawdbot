@@ -121,7 +121,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
     channelId: params.channelId,
     client: params.context.sutReadClient,
     decision: params.run.decision,
-    extraTextMatches: ["openclaw-codex-app-server", expectedTitle],
+    extraTextMatches: ["codex", expectedTitle],
     observedMessages: params.observedMessages,
     oldestTs,
     scenarioId: params.scenario.id,
@@ -185,7 +185,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
     scenarioTitle: params.scenario.title,
     sutIdentity: params.context.sutIdentity,
     timeoutMs: params.scenario.timeoutMs,
-    extraTextMatches: ["openclaw-codex-app-server", expectedTitle],
+    extraTextMatches: ["codex", expectedTitle],
   });
   const resolvedCheckpoint = await writeSlackApprovalCheckpoint({
     approvalId,

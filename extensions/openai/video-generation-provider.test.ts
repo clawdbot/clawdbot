@@ -13,6 +13,7 @@ import {
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const {
@@ -123,6 +124,24 @@ describe("openai video generation provider", () => {
     });
   });
 
+  it("advertises OpenAI video for an actual config-only API key", () => {
+    expect(
+      buildOpenAIVideoGenerationProvider().isConfigured?.({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                apiKey: "openai-video-config-key",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("does not advertise video generation for OAuth-only OpenAI profiles", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-openai-video-auth-"));
     const previousOpenAIKey = process.env.OPENAI_API_KEY;
@@ -153,6 +172,10 @@ describe("openai video generation provider", () => {
       } else {
         process.env.OPENAI_API_KEY = previousOpenAIKey;
       }
+      // Saving the profile store opens the per-agent database under the temporary agent
+      // dir, and clearing the snapshots does not release it, so Windows fails the removal
+      // with EBUSY unless the cached handles are closed first.
+      closeOpenClawAgentDatabasesForTest();
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
@@ -612,13 +635,15 @@ describe("openai video generation provider", () => {
       });
 
     const provider = buildOpenAIVideoGenerationProvider();
+    const input = Buffer.from("!png-bytes?").subarray(1, -1);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
       prompt: "Animate this frame",
       cfg: {},
-      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      inputImages: [{ buffer: input, mimeType: "image/png" }],
     });
+    input.fill(0);
 
     const createRequest = postMultipartRequest();
     expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
@@ -901,13 +926,15 @@ describe("openai video generation provider", () => {
       });
 
     const provider = buildOpenAIVideoGenerationProvider();
+    const input = Buffer.from("!mp4-bytes?").subarray(1, -1);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
       prompt: "Remix this clip",
       cfg: {},
-      inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+      inputVideos: [{ buffer: input, mimeType: "video/mp4" }],
     });
+    input.fill(0);
 
     expect(postJsonRequestMock).not.toHaveBeenCalled();
     const createRequest = postMultipartRequest();
@@ -917,6 +944,9 @@ describe("openai video generation provider", () => {
     expect(form.get("prompt")).toBe("Remix this clip");
     expect(form.get("model")).toBeNull();
     expect(form.get("video")).toBeInstanceOf(File);
+    expect(Buffer.from(await (form.get("video") as File).arrayBuffer())).toEqual(
+      Buffer.from("mp4-bytes"),
+    );
     expect(form.get("input_reference")).toBeNull();
     expect(createRequest.timeoutMs).toBe(120000);
     expect(createRequest.fetchFn).toBe(fetch);

@@ -2,7 +2,7 @@
 import { ComponentType, InteractionType } from "discord-api-types/v10";
 import { vi, type Mock } from "vitest";
 import { Client } from "./client.js";
-import type { BaseCommand } from "./commands.js";
+import type { DiscordCommand } from "./commands.js";
 import type { RawInteraction } from "./interactions.js";
 import type { RequestClient, RequestData } from "./rest.js";
 
@@ -27,14 +27,6 @@ type FakeRestClient = RequestClient & {
   calls: FakeRestCall[];
   enqueueResponse: (value: unknown) => void;
 };
-
-export function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve: resolve! };
-}
 
 export function createJsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
@@ -63,7 +55,7 @@ export function createAbortableFetchMock() {
 }
 
 export function createInternalTestClient(
-  commands: BaseCommand[] = [],
+  commands: DiscordCommand[] = [],
   options?: Partial<ClientOptions>,
 ): Client {
   return new Client(

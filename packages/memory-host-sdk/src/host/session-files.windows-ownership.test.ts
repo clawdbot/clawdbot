@@ -5,10 +5,15 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../../../../src/config/sessions/session-accessor.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { extractAgentIdFromSessionsDir } from "./openclaw-runtime-session.js";
+import { describe, expect, it, vi } from "vitest";
+import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  extractAgentIdFromSessionsDir,
+  resolveSessionTranscriptsDirForAgent,
+} from "./openclaw-runtime-session.js";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
   parseCanonicalSessionSyncTargetFromPath,
@@ -16,44 +21,20 @@ import {
 } from "./session-files.js";
 
 const invalidWindowsAgentIds = ["bad owner", "!!!", " Main", "Main ", "a".repeat(65)];
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-let tmpDir = "";
-let originalStateDir: string | undefined;
-let originalConfigPath: string | undefined;
-
-beforeEach(() => {
-  tmpDir = tempDirs.make("session-windows-ownership-");
-  originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_STATE_DIR = tmpDir;
-  delete process.env.OPENCLAW_CONFIG_PATH;
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-});
-
-afterEach(() => {
-  if (originalStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = originalStateDir;
-  }
-  if (originalConfigPath === undefined) {
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  } else {
-    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
-  }
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-});
+function resolveFixtureStateDir(): string {
+  return path.resolve(resolveSessionTranscriptsDirForAgent("main"), "../../..");
+}
 
 describe("memory session directory ownership", () => {
   it("preserves the canonical owner for case-variant Windows session directories", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
-      expect(extractAgentIdFromSessionsDir(path.join(tmpDir, "AGENTS", "Main", "SESSIONS"))).toBe(
-        "main",
-      );
+      expect(
+        extractAgentIdFromSessionsDir(
+          path.join(resolveFixtureStateDir(), "AGENTS", "Main", "SESSIONS"),
+        ),
+      ).toBe("main");
     } finally {
       platform.mockRestore();
     }
@@ -63,7 +44,9 @@ describe("memory session directory ownership", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     try {
       expect(
-        extractAgentIdFromSessionsDir(path.join(tmpDir, "AGENTS", "Main", "SESSIONS")),
+        extractAgentIdFromSessionsDir(
+          path.join(resolveFixtureStateDir(), "AGENTS", "Main", "SESSIONS"),
+        ),
       ).toBeNull();
     } finally {
       platform.mockRestore();
@@ -73,7 +56,13 @@ describe("memory session directory ownership", () => {
   it("preserves case-variant Windows ownership in logical transcript paths", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
-      const sessionFile = path.join(tmpDir, "AGENTS", "Main", "SESSIONS", "active.jsonl");
+      const sessionFile = path.join(
+        resolveFixtureStateDir(),
+        "AGENTS",
+        "Main",
+        "SESSIONS",
+        "active.jsonl",
+      );
       expect(sessionPathForFile(sessionFile)).toBe("sessions/main/active.jsonl");
       expect(parseCanonicalSessionSyncTargetFromPath(sessionFile)).toEqual({
         agentId: "main",
@@ -88,7 +77,7 @@ describe("memory session directory ownership", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
       const sessionFile = path.join(
-        tmpDir,
+        resolveFixtureStateDir(),
         "AGENTS",
         "OPS",
         "SESSIONS",
@@ -105,7 +94,7 @@ describe("memory session directory ownership", () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
       const sessionFile = path.join(
-        tmpDir,
+        resolveFixtureStateDir(),
         "agents",
         "main",
         "sessions",
@@ -121,12 +110,21 @@ describe("memory session directory ownership", () => {
 
   it("preserves canonical SQLite session identity on Windows", async () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const tempDirs = createTempDirTracker();
+    const tmpDir = tempDirs.make("session-windows-ownership-");
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
     try {
+      process.env.OPENCLAW_STATE_DIR = tmpDir;
+      delete process.env.OPENCLAW_CONFIG_PATH;
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+
       const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
       const storePath = path.join(sessionsDir, "sessions.json");
       const sessionKey = "agent:main:chat:windows-transcript";
       fsSync.mkdirSync(sessionsDir, { recursive: true });
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey, storePath },
         { sessionId: "active", updatedAt: 1 },
       );
@@ -141,6 +139,23 @@ describe("memory session directory ownership", () => {
       );
     } finally {
       platform.mockRestore();
+      // Agent close releases leases through shared state; close agent handles first while the
+      // fixture env is active, then close shared state before removing the Windows-owned directory.
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      if (originalConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      }
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+      tempDirs.cleanup();
     }
   });
 
@@ -149,7 +164,7 @@ describe("memory session directory ownership", () => {
     (owner) => {
       const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       try {
-        const sessionsDir = path.join(tmpDir, "agents", owner, "sessions");
+        const sessionsDir = path.join(resolveFixtureStateDir(), "agents", owner, "sessions");
         const sessionFile = path.join(sessionsDir, "active.jsonl");
         expect(extractAgentIdFromSessionsDir(sessionsDir)).toBeNull();
         expect(sessionPathForFile(sessionFile)).toBe("sessions/active.jsonl");

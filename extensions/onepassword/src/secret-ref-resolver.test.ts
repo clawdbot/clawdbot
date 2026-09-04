@@ -2,9 +2,16 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { DEFAULT_SECRET_FILE_MAX_BYTES } from "openclaw/plugin-sdk/secret-file-runtime";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspaceSync,
+  type TempWorkspaceSync,
+} from "openclaw/plugin-sdk/temp-path";
+import { build } from "tsdown";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createStateSchemaInlinePlugin } from "../../../scripts/lib/state-schema-inline-plugin.mjs";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
 
@@ -18,45 +25,28 @@ const sourceStaticAssetPaths = [
 ];
 const manifestPath = fileURLToPath(new URL("../openclaw.plugin.json", import.meta.url));
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
-const tsxCliPath = fileURLToPath(import.meta.resolve("tsx/cli"));
 const rootTsconfigPath = path.resolve("tsconfig.json");
-const secretRefRuntimeSourceUrl = pathToFileURL(
-  path.resolve("src/plugin-sdk/secret-ref-runtime.ts"),
-).href;
 // The manifest test reads the production source; the timeout-only staged executable needs a
 // shorter deadline to prove cleanup without sleeping for the production seven seconds.
 const TEST_OP_READ_TIMEOUT_MS = process.platform === "win32" ? 5_000 : 1_500;
 const TEST_DESCENDANT_MARKER_DELAY_MS = TEST_OP_READ_TIMEOUT_MS + 500;
 const TEST_DESCENDANT_SETTLE_MARGIN_MS = 2_000;
-const tempDirs: string[] = [];
+const resolverStateWorkspaces: TempWorkspaceSync[] = [];
+let fixtureWorkspace: TempWorkspaceSync;
 let resolverPath = sourceResolverPath;
 let timeoutResolverPath: string | undefined;
 let stagedResolverRoot: string | undefined;
 let trustedNodeRoot: string | undefined;
 let trustedNodePath: string | undefined;
 
-beforeAll(() => {
+beforeAll(async () => {
   const tempRoot = path.join(process.cwd(), ".tmp");
   fs.mkdirSync(tempRoot, { recursive: true });
   stagedResolverRoot = fs.mkdtempSync(path.join(tempRoot, "onepassword-resolver-"));
   for (const sourcePath of sourceStaticAssetPaths) {
     const stagedPath = path.join(stagedResolverRoot, path.basename(sourcePath));
-    if (sourcePath.endsWith("onepassword-op-path.js")) {
-      fs.writeFileSync(
-        stagedPath,
-        fs
-          .readFileSync(sourcePath, "utf8")
-          .replace(
-            '"openclaw/plugin-sdk/secret-ref-runtime"',
-            JSON.stringify(secretRefRuntimeSourceUrl),
-          ),
-      );
-      continue;
-    }
     fs.copyFileSync(sourcePath, stagedPath);
   }
-  // Keep the relative static assets together, but resolve the real SDK from source so this
-  // focused test does not depend on a parallel build producing dist/plugin-sdk first.
   resolverPath = path.join(stagedResolverRoot, path.basename(sourceResolverPath));
   const resolverSource = fs.readFileSync(sourceResolverPath, "utf8");
   const timeoutResolverSource = resolverSource.replace(
@@ -68,6 +58,25 @@ beforeAll(() => {
   }
   timeoutResolverPath = path.join(stagedResolverRoot, "onepassword-timeout-resolver.js");
   fs.writeFileSync(timeoutResolverPath, timeoutResolverSource);
+  // Build the real SDK once; each request still gets a fresh process and real op execution.
+  // Keep native dependencies external and use the production schema-asset transform.
+  const compiledRoot = path.join(stagedResolverRoot, "compiled");
+  await build({
+    config: false,
+    entry: [resolverPath, timeoutResolverPath],
+    outDir: compiledRoot,
+    tsconfig: rootTsconfigPath,
+    format: "esm",
+    outExtensions: () => ({ js: ".js" }),
+    dts: false,
+    deps: {
+      neverBundle: true,
+      alwaysBundle: [/^openclaw\//, /^@openclaw\/(?!fs-safe(?:\/|$))/],
+    },
+    plugins: [createStateSchemaInlinePlugin()],
+  });
+  resolverPath = path.join(compiledRoot, path.basename(resolverPath));
+  timeoutResolverPath = path.join(compiledRoot, path.basename(timeoutResolverPath));
   // The fake op paths remain per-test; only their trusted Node interpreter is shared.
   // Re-copying the runtime does not strengthen path-ownership coverage.
   trustedNodeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-1password-node-"));
@@ -97,12 +106,6 @@ function getTimeoutResolverPath(): string {
   return timeoutResolverPath;
 }
 
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-1password-test-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
 async function waitForPath(filePath: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!fs.existsSync(filePath)) {
@@ -115,6 +118,15 @@ async function waitForPath(filePath: string, timeoutMs: number): Promise<void> {
   }
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function runResolver(params: {
   request: unknown;
   cwd?: string;
@@ -122,7 +134,15 @@ function runResolver(params: {
   resolverExecutablePath?: string;
   token?: string | null;
 }): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  const stateDir = params.env?.OPENCLAW_STATE_DIR ?? makeTempDir();
+  let stateDir = params.env?.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    const workspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-1password-test-",
+    });
+    resolverStateWorkspaces.push(workspace);
+    stateDir = workspace.dir;
+  }
   if (params.token !== null) {
     const tokenDir = path.join(stateDir, "credentials", "onepassword");
     fs.mkdirSync(tokenDir, { recursive: true });
@@ -133,21 +153,17 @@ function runResolver(params: {
     );
   }
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [tsxCliPath, "--tsconfig", rootTsconfigPath, params.resolverExecutablePath ?? resolverPath],
-      {
-        ...(params.cwd ? { cwd: params.cwd } : {}),
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          OP_SERVICE_ACCOUNT_TOKEN: "",
-          CLAW_1PASSWORD_OP: "",
-          OPENCLAW_STATE_DIR: stateDir,
-          ...params.env,
-        },
+    const child = spawn(process.execPath, [params.resolverExecutablePath ?? resolverPath], {
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        OP_SERVICE_ACCOUNT_TOKEN: "",
+        CLAW_1PASSWORD_OP: "",
+        OPENCLAW_STATE_DIR: stateDir,
+        ...params.env,
       },
-    );
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -166,10 +182,18 @@ function runResolver(params: {
   });
 }
 
+beforeEach(() => {
+  fixtureWorkspace = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-1password-test-",
+  });
+});
+
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+  for (const workspace of resolverStateWorkspaces.splice(0)) {
+    workspace.cleanup();
   }
+  fixtureWorkspace.cleanup();
 });
 
 describe("plugin manifest", () => {
@@ -240,8 +264,6 @@ describe("plugin manifest", () => {
     expect(integration?.maxOutputBytes).toBeGreaterThan(
       maxRefsPerRequest * worstCaseEscapedValueBytes,
     );
-    expect(resolverSource).toContain("#!/usr/bin/env node");
-    expect(resolverSource).toContain('from "execa"');
     expect(packageJson.openclaw?.build?.staticAssets).toContainEqual({
       source: "./onepassword-op-path.js",
       output: "onepassword-op-path.js",
@@ -261,7 +283,7 @@ describe("1Password SecretRef resolver", () => {
   it.runIf(process.platform === "win32")(
     "preserves the Windows profile directories required by op",
     async () => {
-      const tempDir = makeTempDir();
+      const tempDir = fixtureWorkspace.dir;
       const appData = path.join(tempDir, "profile", "AppData", "Roaming");
       const localAppData = path.join(tempDir, "profile", "AppData", "Local");
       const temp = path.join(localAppData, "Temp");
@@ -311,7 +333,7 @@ describe("1Password SecretRef resolver", () => {
   it.runIf(process.platform !== "win32")(
     "uses op read with native 1Password secret references",
     async () => {
-      const tempDir = makeTempDir();
+      const tempDir = fixtureWorkspace.dir;
       const opPath = path.join(tempDir, "op");
       const logPath = path.join(tempDir, "op-args.json");
       fs.writeFileSync(
@@ -362,7 +384,7 @@ process.stdout.write("not-a-real-value \\t");
   it.runIf(process.platform !== "win32")(
     "decodes native references that do not fit the shared exec id grammar",
     async () => {
-      const tempDir = makeTempDir();
+      const tempDir = fixtureWorkspace.dir;
       const opPath = path.join(tempDir, "op");
       const logPath = path.join(tempDir, "op-args.json");
       const nativeRef = "op://Personal/OpenClaw QA API Key/password?attribute=value%20one";
@@ -404,7 +426,7 @@ process.stdout.write("not-a-real-value");
   it.runIf(process.platform !== "win32")(
     "waits for inherited op stdout to close before returning the secret",
     async () => {
-      const tempDir = makeTempDir();
+      const tempDir = fixtureWorkspace.dir;
       const opPath = path.join(tempDir, "op");
       fs.writeFileSync(
         opPath,
@@ -436,7 +458,7 @@ process.stdout.write("head");
   it.runIf(process.platform !== "win32")(
     "builds op secret references from shorthand ids",
     async () => {
-      const tempDir = makeTempDir();
+      const tempDir = fixtureWorkspace.dir;
       const opPath = path.join(tempDir, "op");
       const logPath = path.join(tempDir, "op-args.json");
       fs.writeFileSync(
@@ -554,7 +576,7 @@ process.stdout.write("not-a-real-value");
   });
 
   it.runIf(process.platform !== "win32")("rejects a symlinked broker token file", async () => {
-    const stateDir = makeTempDir();
+    const stateDir = fixtureWorkspace.dir;
     const tokenDir = path.join(stateDir, "credentials", "onepassword");
     const targetPath = path.join(tokenDir, "service-account-token-target");
     const tokenPath = path.join(tokenDir, "service-account-token");
@@ -582,7 +604,7 @@ process.stdout.write("not-a-real-value");
   it.runIf(process.platform !== "win32")(
     "accepts the broker token file through a hardlink",
     async () => {
-      const stateDir = makeTempDir();
+      const stateDir = fixtureWorkspace.dir;
       const tokenDir = path.join(stateDir, "credentials", "onepassword");
       const targetPath = path.join(tokenDir, "service-account-token-target");
       const tokenPath = path.join(tokenDir, "service-account-token");
@@ -616,7 +638,7 @@ process.stdout.write("not-a-real-value");
   it.runIf(process.platform !== "win32")(
     "reads the service token from the selected profile state directory",
     async () => {
-      const home = makeTempDir();
+      const home = fixtureWorkspace.dir;
       const profileTokenDir = path.join(home, ".openclaw-work", "credentials", "onepassword");
       const defaultTokenDir = path.join(home, ".openclaw", "credentials", "onepassword");
       const opPath = path.join(home, "op");
@@ -658,9 +680,87 @@ process.stdout.write("not-a-real-value");
   );
 
   it.runIf(process.platform !== "win32")(
+    "keeps literal $ patterns in home when expanding the tilde state dir",
+    async () => {
+      const home = path.join(fixtureWorkspace.dir, "home$&d");
+      const tokenDir = path.join(home, "oc-state", "credentials", "onepassword");
+      const opPath = path.join(fixtureWorkspace.dir, "op");
+      fs.mkdirSync(tokenDir, { recursive: true });
+      fs.writeFileSync(path.join(tokenDir, "service-account-token"), "dollar-token", {
+        mode: 0o600,
+      });
+      fs.writeFileSync(
+        opPath,
+        `#!${getTrustedNodePath()}\nprocess.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`,
+        { mode: 0o755 },
+      );
+
+      const result = await runResolver({
+        request: {
+          protocolVersion: 1,
+          provider: "onepassword",
+          ids: ["op://Engineering/OpenRouter/apiKey"],
+        },
+        env: {
+          CLAW_1PASSWORD_OP: opPath,
+          HOME: home,
+          OPENCLAW_HOME: "",
+          OPENCLAW_PROFILE: "",
+          OPENCLAW_STATE_DIR: "~/oc-state",
+        },
+        token: null,
+      });
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout).values).toEqual({
+        "op://Engineering/OpenRouter/apiKey": "dollar-token",
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps literal $ patterns in HOME when expanding a tilde OPENCLAW_HOME",
+    async () => {
+      const home = path.join(fixtureWorkspace.dir, "home$&d");
+      const tokenDir = path.join(home, "oc-home", ".openclaw", "credentials", "onepassword");
+      const opPath = path.join(fixtureWorkspace.dir, "op");
+      fs.mkdirSync(tokenDir, { recursive: true });
+      fs.writeFileSync(path.join(tokenDir, "service-account-token"), "home-token", {
+        mode: 0o600,
+      });
+      fs.writeFileSync(
+        opPath,
+        `#!${getTrustedNodePath()}\nprocess.stdout.write(process.env.OP_SERVICE_ACCOUNT_TOKEN);\n`,
+        { mode: 0o755 },
+      );
+
+      const result = await runResolver({
+        request: {
+          protocolVersion: 1,
+          provider: "onepassword",
+          ids: ["op://Engineering/OpenRouter/apiKey"],
+        },
+        env: {
+          CLAW_1PASSWORD_OP: opPath,
+          HOME: home,
+          OPENCLAW_HOME: "~/oc-home",
+          OPENCLAW_PROFILE: "",
+          OPENCLAW_STATE_DIR: "",
+        },
+        token: null,
+      });
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout).values).toEqual({
+        "op://Engineering/OpenRouter/apiKey": "home-token",
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "does not include failed child output in resolver errors",
     async () => {
-      const tempDir = makeTempDir();
+      const tempDir = fixtureWorkspace.dir;
       const opPath = path.join(tempDir, "op");
       fs.writeFileSync(
         opPath,
@@ -691,44 +791,60 @@ process.exitCode = 1;
   it.runIf(process.platform !== "win32")(
     "kills the op process tree when output exceeds the limit",
     async () => {
-      const tempDir = makeTempDir();
+      const tempDir = fixtureWorkspace.dir;
       const opPath = path.join(tempDir, "op");
-      const descendantMarker = path.join(tempDir, "descendant-survived");
+      const descendantPidPath = path.join(tempDir, "descendant.pid");
       fs.writeFileSync(
         opPath,
         `#!${getTrustedNodePath()}
+const fs = require("node:fs");
 const { spawn } = require("node:child_process");
-spawn(process.execPath, ["-e", ${JSON.stringify(`process.on("SIGTERM", () => {}); setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(descendantMarker)}, "survived"), 800); setInterval(() => {}, 1000);`)}], { stdio: "ignore" });
-process.stdout.write("x".repeat(70 * 1024));
+const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(`process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`)}], { stdio: "ignore" });
+descendant.once("spawn", () => {
+  fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));
+  process.stdout.write("x".repeat(70 * 1024));
+});
 setInterval(() => {}, 1000);
 `,
         { mode: 0o755 },
       );
 
-      const result = await runResolver({
-        request: {
-          protocolVersion: 1,
-          provider: "onepassword",
-          ids: ["op://Engineering/OpenRouter/apiKey"],
-        },
-        env: { CLAW_1PASSWORD_OP: opPath },
-      });
-      expect(JSON.parse(result.stdout).errors).toEqual({
-        "op://Engineering/OpenRouter/apiKey": {
-          message: "op read output exceeded the secret value limit.",
-        },
-      });
-      await new Promise((resolve) => {
-        setTimeout(resolve, 650);
-      });
-      expect(fs.existsSync(descendantMarker)).toBe(false);
+      let descendantPid: number | undefined;
+      try {
+        const result = await runResolver({
+          request: {
+            protocolVersion: 1,
+            provider: "onepassword",
+            ids: ["op://Engineering/OpenRouter/apiKey"],
+          },
+          env: { CLAW_1PASSWORD_OP: opPath },
+        });
+        expect(JSON.parse(result.stdout).errors).toEqual({
+          "op://Engineering/OpenRouter/apiKey": {
+            message: "op read output exceeded the secret value limit.",
+          },
+        });
+        const pid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        descendantPid = pid;
+        expect(pid).toBeGreaterThan(0);
+        await expect
+          .poll(
+            () => (isProcessAlive(pid) ? `descendant ${String(pid)} is still alive` : "exited"),
+            { timeout: 2_000, interval: 10 },
+          )
+          .toBe("exited");
+      } finally {
+        if (descendantPid && isProcessAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+      }
     },
   );
 
   it(
     "kills the op process tree when a read times out",
     async () => {
-      const tempDir = makeTempDir();
+      const tempDir = fixtureWorkspace.dir;
       const descendantReady = path.join(tempDir, "timed-out-descendant-ready");
       const descendantMarker = path.join(tempDir, "timed-out-descendant-survived");
       const descendantBody = `const fs = require("node:fs");
@@ -775,7 +891,7 @@ while true; do sleep 1; done
       // Windows verifies the executable owner and ACL chain through OS tooling before op starts.
       // Keep the synchronization bound above that preflight without weakening the kill deadline.
       await Promise.race([
-        waitForPath(descendantReady, process.platform === "win32" ? 15_000 : 5_000),
+        waitForPath(descendantReady, process.platform === "win32" ? 15_000 : 10_000),
         resultPromise.then((result) => {
           throw new Error(
             `Resolver exited before the descendant was ready: ${JSON.stringify(result)}`,
@@ -804,7 +920,7 @@ while true; do sleep 1; done
   );
 
   it.runIf(process.platform !== "win32")("bounds concurrent op reads", async () => {
-    const tempDir = makeTempDir();
+    const tempDir = fixtureWorkspace.dir;
     const opPath = path.join(tempDir, "op");
     const logPath = path.join(tempDir, "events.log");
     fs.writeFileSync(
@@ -836,7 +952,7 @@ setTimeout(() => {
   });
 
   it.runIf(process.platform !== "win32")("resolves the op CLI from PATH", async () => {
-    const tempDir = makeTempDir();
+    const tempDir = fixtureWorkspace.dir;
     const opPath = path.join(tempDir, process.platform === "win32" ? "op.exe" : "op");
     fs.writeFileSync(opPath, `#!${getTrustedNodePath()}\nprocess.stdout.write('from-path');\n`, {
       mode: 0o755,
@@ -861,7 +977,7 @@ setTimeout(() => {
   it.runIf(process.platform !== "win32")(
     "refuses to pass the token to an op CLI in an unsafe PATH directory",
     async () => {
-      const tempDir = makeTempDir();
+      const tempDir = fixtureWorkspace.dir;
       const opPath = path.join(tempDir, "op");
       const tokenLogPath = path.join(tempDir, "token.log");
       fs.writeFileSync(

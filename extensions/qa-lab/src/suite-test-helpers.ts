@@ -16,6 +16,7 @@ export function makeQaSuiteTestScenario(
       forwardHostHome?: boolean;
       preserveDebugArtifacts?: boolean;
     };
+    flowKind?: "module" | "steps";
     runtimePairLane?: QaSuiteTestScenario["runtimePairLane"];
     suiteIsolation?: "isolated";
     surface?: string;
@@ -36,9 +37,11 @@ export function makeQaSuiteTestScenario(
     execution: {
       kind: "flow",
       ...(params.channel ? { channel: params.channel } : {}),
+      channels: params.channel ? [params.channel] : [],
       ...(params.suiteIsolation ? { suiteIsolation: params.suiteIsolation } : {}),
       ...(params.transportPolicy ? { transportPolicy: params.transportPolicy } : {}),
       ...(params.config ? { config: params.config } : {}),
+      flowKind: params.flowKind ?? "steps",
       flow: { steps: [{ name: "noop", actions: [{ assert: "true" }] }] },
     },
   } as QaSuiteTestScenario;

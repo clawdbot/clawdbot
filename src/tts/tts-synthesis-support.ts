@@ -1,3 +1,4 @@
+import { normalizeOptionalString as readTtsResultString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -23,9 +24,20 @@ import {
 } from "./tts-settings.js";
 import type { VoiceModelRef, VoiceProviderCandidate } from "./voice-models.js";
 
+// The transport names its abort "TimeoutError" (fetch-timeout.ts) and provider
+// deadlines throw plain Errors ending in "timed out"; AbortError alone misses both.
+function isTtsTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return (
+    err.name === "AbortError" || err.name === "TimeoutError" || /\btimed out\b/iu.test(err.message)
+  );
+}
+
 export function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
   const error = err instanceof Error ? err : new Error(String(err));
-  if (error.name === "AbortError") {
+  if (isTtsTimeoutError(error)) {
     return `${provider}: request timed out`;
   }
   return `${provider}: ${redactSensitiveText(error.message)}`;
@@ -385,8 +397,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
       attempts.push({
         provider,
         outcome: "failed",
-        reasonCode:
-          err instanceof Error && err.name === "AbortError" ? "timeout" : "provider_error",
+        reasonCode: isTtsTimeoutError(err) ? "timeout" : "provider_error",
         latencyMs,
         persona: persona?.id,
         personaBinding: resolvePersonaBinding(persona, provider),
@@ -405,10 +416,6 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   }
 
   return buildTtsFailureResult(errors, attemptedProviders, attempts, persona?.id);
-}
-
-function readTtsResultString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function resolveTtsResultModel(

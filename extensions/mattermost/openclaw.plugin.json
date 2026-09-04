@@ -1,6 +1,10 @@
 {
   "id": "mattermost",
-  "icon": "https://cdn.simpleicons.org/mattermost",
+  "name": "Mattermost",
+  "description": "OpenClaw Mattermost channel plugin.",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },

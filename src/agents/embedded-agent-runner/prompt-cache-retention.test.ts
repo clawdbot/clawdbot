@@ -3,6 +3,17 @@ import { describe, expect, it } from "vitest";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
 
 describe("prompt cache retention", () => {
+  it.each([undefined, "none", "short", "long"] as const)(
+    "honors explicit retention %s for Anthropic-marker completions without cache keys",
+    (cacheRetention) => {
+      expect(
+        resolveCacheRetention({ cacheRetention }, "custom", "openai-completions", "qwen-plus", {
+          cacheControlFormat: "anthropic",
+        }),
+      ).toBe(cacheRetention);
+    },
+  );
+
   it("passes explicit cacheRetention through for direct Google models", () => {
     expect(
       resolveCacheRetention(
@@ -40,7 +51,7 @@ describe("prompt cache retention", () => {
         "omlx-local",
         "openai-completions",
         "local_model",
-        true,
+        { supportsPromptCacheKey: true },
       ),
     ).toBe("long");
     expect(
@@ -49,7 +60,7 @@ describe("prompt cache retention", () => {
         "omlx-local",
         "openai-completions",
         "local_model",
-        true,
+        { supportsPromptCacheKey: true },
       ),
     ).toBe("short");
     expect(
@@ -58,7 +69,7 @@ describe("prompt cache retention", () => {
         "omlx-local",
         "openai-completions",
         "local_model",
-        true,
+        { supportsPromptCacheKey: true },
       ),
     ).toBe("none");
   });
@@ -91,7 +102,7 @@ describe("prompt cache retention", () => {
         "omlx-local",
         "openai-completions",
         "local_model",
-        false,
+        { supportsPromptCacheKey: false },
       ),
     ).toBeUndefined();
   });
@@ -101,10 +112,14 @@ describe("prompt cache retention", () => {
     // to the transport-level default ("short") rather than receiving a
     // wrapper-injected value.
     expect(
-      resolveCacheRetention(undefined, "omlx-local", "openai-completions", "local_model", true),
+      resolveCacheRetention(undefined, "omlx-local", "openai-completions", "local_model", {
+        supportsPromptCacheKey: true,
+      }),
     ).toBeUndefined();
     expect(
-      resolveCacheRetention({}, "omlx-local", "openai-completions", "local_model", true),
+      resolveCacheRetention({}, "omlx-local", "openai-completions", "local_model", {
+        supportsPromptCacheKey: true,
+      }),
     ).toBeUndefined();
   });
 
@@ -118,7 +133,7 @@ describe("prompt cache retention", () => {
         "omlx-local",
         "openai-completions",
         "local_model",
-        true,
+        { supportsPromptCacheKey: true },
       ),
     ).toBeUndefined();
     expect(
@@ -127,7 +142,7 @@ describe("prompt cache retention", () => {
         "omlx-local",
         "openai-completions",
         "local_model",
-        true,
+        { supportsPromptCacheKey: true },
       ),
     ).toBeUndefined();
   });

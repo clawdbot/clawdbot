@@ -1,7 +1,7 @@
 /**
  * Carries confirmed CLI messaging delivery across failed execution/finalization paths.
  */
-import type { CliOutput } from "../cli-output.js";
+import type { CliOutput } from "../cli-output-contracts.js";
 
 const CLI_MESSAGING_DELIVERY_EVIDENCE_KEY = "cliMessagingDeliveryEvidence";
 
@@ -9,6 +9,7 @@ type CliMessagingDeliveryEvidence = Pick<
   CliOutput,
   | "didSendViaMessagingTool"
   | "didDeliverSourceReplyViaMessageTool"
+  | "sourceReplyDelivered"
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
@@ -26,6 +27,7 @@ function snapshotCliMessagingDeliveryEvidence(
     ...(output.didDeliverSourceReplyViaMessageTool
       ? { didDeliverSourceReplyViaMessageTool: true }
       : {}),
+    ...(output.sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
     ...(output.messagingToolSentTexts?.length
       ? { messagingToolSentTexts: output.messagingToolSentTexts.slice() }
       : {}),

@@ -1,0 +1,27 @@
+title: Gateway agent RPC contracts
+
+scenario:
+  id: gateway-agent-rpc-contracts
+  surface: runtime
+  category: gateway.gateway-rpc-apis-and-events
+  coverage:
+    primary:
+      - gateway.delivery-fallback-behavior
+      - gateway.accepted-then-final-results
+      - gateway.idempotent-side-effects
+  objective: Prove real Gateway agent RPC delivery fallback, response ordering, and reconnect-safe idempotency.
+  successCriteria:
+    - Ambiguous best-effort delivery runs through webchat as a session-only agent request.
+    - One request ID receives accepted and terminal responses with the same run ID in that order.
+    - Reconnecting and repeating the idempotency key returns the cached terminal result without another agent execution.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/server-methods/agent.ts
+    - src/gateway/agent-turn/agent-delivery-phase.ts
+    - src/gateway/server.agent.rpc-contracts.test.ts
+  execution:
+    kind: vitest
+    path: src/gateway/server.agent.rpc-contracts.test.ts
+    summary: Run a real Gateway agent request through session-only fallback, ordered responses, and reconnect replay.

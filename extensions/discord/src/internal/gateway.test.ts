@@ -11,6 +11,7 @@ import {
   type GatewaySendPayload,
 } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DiscordVoiceStateUpdateListener } from "../voice/listeners.js";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
 import { GatewayPlugin } from "./gateway.js";
 
@@ -100,6 +101,7 @@ function gatewaySessionState(gateway: GatewayPlugin): GatewaySessionState {
 describe("GatewayPlugin", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     sharedGatewayIdentifyLimiter.reset();
   });
 
@@ -375,7 +377,10 @@ describe("GatewayPlugin", () => {
       },
     });
 
-    const initialStates = gateway.listVoiceChannelStates("g1", "c1");
+    const initialStates = expectDefined(
+      gateway.listVoiceChannelStates("g1", "c1"),
+      "initial guild voice snapshot",
+    );
     expect(initialStates.map((state) => state.user_id)).toEqual(["u1", "u2"]);
     expect(initialStates.map((state) => state.member?.user.username)).toEqual(["owner", "friend"]);
 
@@ -420,13 +425,46 @@ describe("GatewayPlugin", () => {
     });
 
     expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([]);
-    expect(gateway.listVoiceChannelStates("g1", "c2").map((state) => state.user_id)).toEqual([
-      "u1",
-      "u3",
-    ]);
+    expect(
+      expectDefined(gateway.listVoiceChannelStates("g1", "c2"), "updated guild voice snapshot").map(
+        (state) => state.user_id,
+      ),
+    ).toEqual(["u1", "u3"]);
 
     await handleDispatch({ t: GatewayDispatchEvents.GuildDelete, d: { id: "g1" } });
-    expect(gateway.listVoiceChannelStates("g1", "c2")).toEqual([]);
+    expect(gateway.listVoiceChannelStates("g1", "c2")).toBeNull();
+  });
+
+  it("keeps newly memberless voice updates unknown through the voice listener", async () => {
+    const gateway = new GatewayPlugin({ autoInteractions: false });
+    const client = {
+      dispatchGatewayEvent: vi.fn(async () => {}),
+      getPlugin: vi.fn((id: string) => (id === "gateway" ? gateway : undefined)),
+    };
+    (gateway as unknown as { client: unknown }).client = client;
+    const handleDispatch = (payload: { t: string; d: unknown }): Promise<void> =>
+      (
+        gateway as unknown as {
+          handleDispatch(payload: { t: string; d: unknown }): Promise<void>;
+        }
+      ).handleDispatch(payload);
+    await handleDispatch({
+      t: GatewayDispatchEvents.GuildCreate,
+      d: { id: "g1", voice_states: [], members: [] },
+    });
+    const memberlessState = { guild_id: "g1", user_id: "unknown-user", channel_id: "c1" };
+    await handleDispatch({ t: GatewayDispatchEvents.VoiceStateUpdate, d: memberlessState });
+    const handleVoiceStateUpdate = vi.fn(async () => {});
+    const listener = new DiscordVoiceStateUpdateListener({
+      handleVoiceStateUpdate,
+    } as unknown as ConstructorParameters<typeof DiscordVoiceStateUpdateListener>[0]);
+
+    await listener.handle(memberlessState as never, client as never);
+
+    expect(handleVoiceStateUpdate).toHaveBeenCalledWith(memberlessState, null);
+    expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([
+      expect.not.objectContaining({ member: expect.anything() }),
+    ]);
   });
 
   it("clears cached voice states when a fresh gateway session becomes ready", async () => {
@@ -451,7 +489,7 @@ describe("GatewayPlugin", () => {
       d: { session_id: "session-2", resume_gateway_url: "wss://gateway.discord.gg" },
     });
 
-    expect(gateway.listVoiceChannelStates("g1", "c1")).toEqual([]);
+    expect(gateway.listVoiceChannelStates("g1", "c1")).toBeNull();
   });
 
   it("marks successful gateway resumes connected", async () => {
@@ -854,6 +892,52 @@ describe("GatewayPlugin", () => {
     expect(gateway.connectCalls).toEqual([false]);
     expect(gateway.sockets).toHaveLength(1);
   });
+
+  it.each([
+    ["a well-formed interval", { heartbeat_interval: 45_000 }, 45_000],
+    ["a shorter negotiated interval", { heartbeat_interval: 41_250 }, 41_250],
+    ["a null body", null, 45_000],
+    ["an absent body", undefined, 45_000],
+    ["an array body", [], 45_000],
+    ["an empty body", {}, 45_000],
+    ["a scalar body", "hello", 45_000],
+    ["a zero interval", { heartbeat_interval: 0 }, 45_000],
+    ["a negative interval", { heartbeat_interval: -1 }, 45_000],
+    ["a sub-second interval a compatible gateway may negotiate", { heartbeat_interval: 500 }, 500],
+    ["the smallest positive interval", { heartbeat_interval: 1 }, 1],
+    ["a stringified interval", { heartbeat_interval: "45000" }, 45_000],
+    ["an interval past the timer ceiling", { heartbeat_interval: Number.MAX_SAFE_INTEGER }, 45_000],
+  ])(
+    "survives a HELLO with %s and schedules the first heartbeat accordingly",
+    async (_case, helloData, expectedFirstHeartbeatMs) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      // Pin the start jitter to the top of its window so the scheduled delay is
+      // exactly the resolved interval; a storm shows up as a heartbeat at t=0.
+      vi.spyOn(Math, "random").mockReturnValue(1);
+      const gateway = new TestGatewayPlugin({
+        autoInteractions: false,
+        url: "wss://gateway.example.test",
+      });
+      gateway.emitter.on("error", () => {});
+      gateway.connect(false);
+      const socket = expectDefined(gateway.sockets[0], "Discord gateway socket");
+      socket.emit("open");
+
+      const hello = JSON.stringify({ op: GatewayOpcodes.Hello, d: helloData, s: null });
+      expect(() => socket.emit("message", hello)).not.toThrow();
+
+      let firstHeartbeatMs: number | undefined;
+      for (let tick = 0; tick < 4 && firstHeartbeatMs === undefined; tick += 1) {
+        await vi.advanceTimersToNextTimerAsync();
+        if (sentGatewayOpcodes(socket.send).includes(GatewayOpcodes.Heartbeat)) {
+          firstHeartbeatMs = Date.now();
+        }
+      }
+
+      expect(firstHeartbeatMs).toBe(expectedFirstHeartbeatMs);
+    },
+  );
 
   it("clears heartbeat timers before delayed reconnects", () => {
     vi.useFakeTimers();

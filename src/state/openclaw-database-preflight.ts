@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -7,18 +7,47 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import {
+  collectSqliteSchemaIssues,
+  type SqliteSchemaIssue,
+} from "../infra/sqlite-schema-contract.js";
 import {
   describeRunningOpenClawBuild,
   readSqliteUserVersion,
+  SqliteSchemaVersionError,
 } from "../infra/sqlite-user-version.js";
+import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { assertOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
 import type { OpenClawSchemaVersions } from "./openclaw-schema-versions.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-} from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "./openclaw-state-db-contract.js";
+import {
+  assertOpenClawStateDatabaseOwner,
+  assertOpenClawStateDatabaseForMaintenance,
+} from "./openclaw-state-db-maintenance.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import {
+  resolveOpenClawRegisteredAgentDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "./openclaw-state-db.paths.js";
+import {
+  inspectOpenClawStateOwnershipFromDatabase,
+  type OpenClawExternalStateOwnership,
+} from "./openclaw-state-ownership.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  isOpenClawStateFirstUseSchemaIssue,
+  isOpenClawStateStartupRepairableSchemaIssue,
+  OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+} from "./openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db.js";
 
@@ -42,9 +71,21 @@ export type OpenClawDatabaseSchemaPreflight = {
   indeterminate: IndeterminateOpenClawDatabase[];
 };
 
+type OpenClawStateSchemaPreflightResult = {
+  databasePath: string;
+  foundVersion: number | null;
+  issues: SqliteSchemaIssue[];
+  ownership: OpenClawExternalStateOwnership | null;
+  reason?: string;
+  requiresWrite: boolean;
+  schema: "openclaw.state-schema-preflight.v1";
+  status: "exact" | "startup-repairable" | "migration-required" | "incompatible" | "indeterminate";
+  targetVersion: number;
+};
+
 type AgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
-type OpenClawDatabaseSchemaPreflightOperation = "doctor" | "gateway-startup";
+type OpenClawDatabaseSchemaPreflightOperation = "doctor" | "gateway-restart" | "gateway-startup";
 
 function formatDoctorIncompatibleDatabase(database: IncompatibleOpenClawDatabase): string {
   const agent = database.agentId ? ` for agent ${database.agentId}` : "";
@@ -53,14 +94,18 @@ function formatDoctorIncompatibleDatabase(database: IncompatibleOpenClawDatabase
 }
 
 /** Fatal refusal when persisted schemas were written by a newer build. */
-export class OpenClawDatabaseSchemaPreflightError extends Error {
+export class OpenClawDatabaseSchemaPreflightError extends SqliteSchemaVersionError {
   constructor(
     readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[],
     options: { operation?: OpenClawDatabaseSchemaPreflightOperation } = {},
   ) {
     const operation = options.operation ?? "gateway-startup";
     const prefix =
-      operation === "doctor" ? "Doctor refused to continue" : "Gateway refused startup";
+      operation === "doctor"
+        ? "Doctor refused to continue"
+        : operation === "gateway-restart"
+          ? "Gateway refused restart"
+          : "Gateway refused startup";
     const doctorGuidance =
       operation === "doctor"
         ? ` ${incompatibleDatabases.map(formatDoctorIncompatibleDatabase).join(" ")} Run Doctor with the OpenClaw install that wrote this state (typically the active Gateway install), or another build that supports these schemas.`
@@ -71,6 +116,48 @@ export class OpenClawDatabaseSchemaPreflightError extends Error {
     );
     this.name = "OpenClawDatabaseSchemaPreflightError";
   }
+}
+
+/** Verify persisted runtime schemas before certifying repair or accepting restart. */
+export function assertOpenClawDatabasesReady(
+  options: {
+    env: NodeJS.ProcessEnv;
+  } & (
+    | {
+        operation: "doctor";
+        configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
+      }
+    | { operation: "gateway-restart" }
+  ),
+): void {
+  const schemas = preflightOpenClawDatabaseSchemas({
+    env: options.env,
+    supportedVersions: {
+      state: OPENCLAW_STATE_SCHEMA_VERSION,
+      agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+    },
+    verifyCurrentSchemaShape: true,
+    ...(options.operation === "doctor"
+      ? { configuredAgentDatabaseTargets: options.configuredAgentDatabaseTargets }
+      : {}),
+  });
+  if (schemas.incompatible.length > 0) {
+    throw new OpenClawDatabaseSchemaPreflightError(schemas.incompatible, {
+      operation: options.operation,
+    });
+  }
+  if (schemas.indeterminate.length === 0) {
+    return;
+  }
+  const shown = schemas.indeterminate
+    .slice(0, 3)
+    .map((database) => `${database.kind} ${database.path}: ${database.reason}`);
+  const omitted = schemas.indeterminate.length - shown.length;
+  const action =
+    options.operation === "doctor" ? "Doctor could not complete repair" : "Gateway refused restart";
+  throw new Error(
+    `${action} because persisted database readiness could not be verified: ${shown.join("; ")}${omitted > 0 ? `; +${omitted} more` : ""}. Stop the Gateway and other OpenClaw processes, run openclaw doctor --fix, then retry.`,
+  );
 }
 
 function readWriterAppVersion(database: DatabaseSync): string | undefined {
@@ -86,7 +173,10 @@ function readWriterAppVersion(database: DatabaseSync): string | undefined {
   }
 }
 
-function readRegisteredAgentDatabases(database: DatabaseSync): Array<{
+function readRegisteredAgentDatabases(
+  database: DatabaseSync,
+  registryPath: string,
+): Array<{
   agentId: string;
   path: string;
 }> {
@@ -102,87 +192,195 @@ function readRegisteredAgentDatabases(database: DatabaseSync): Array<{
     db.selectFrom("agent_databases").select(["agent_id", "path"]),
   ).rows.flatMap((row) =>
     typeof row.agent_id === "string" && typeof row.path === "string"
-      ? [{ agentId: row.agent_id, path: row.path }]
+      ? [
+          {
+            agentId: row.agent_id,
+            path: resolveOpenClawRegisteredAgentDatabasePath(registryPath, row.path),
+          },
+        ]
       : [],
   );
 }
 
-/** Read schema headers; report unreadable existing files without diagnosing or repairing them. */
+function deduplicateSchemaIssues(issues: readonly SqliteSchemaIssue[]): SqliteSchemaIssue[] {
+  return [
+    ...new Map(
+      issues.map((issue) => [`${issue.code}\0${issue.objectName}`, issue] as const),
+    ).values(),
+  ];
+}
+
+/** Compare one explicit SQLite file with this release's canonical shared-state schema. */
+export async function preflightOpenClawStateDatabasePath(
+  databasePath: string,
+): Promise<OpenClawStateSchemaPreflightResult> {
+  const resolvedPath = path.resolve(databasePath);
+  const base = {
+    schema: "openclaw.state-schema-preflight.v1",
+    databasePath: resolvedPath,
+    targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  } as const;
+  let database: DatabaseSync | undefined;
+  let foundVersion: number | null = null;
+  let ownership: OpenClawExternalStateOwnership | null = null;
+  const result = (
+    status: OpenClawStateSchemaPreflightResult["status"],
+    details: { issues?: SqliteSchemaIssue[]; reason?: string; requiresWrite?: boolean } = {},
+  ): OpenClawStateSchemaPreflightResult => ({
+    ...base,
+    foundVersion,
+    ownership,
+    issues: details.issues ?? [],
+    status,
+    requiresWrite: details.requiresWrite ?? false,
+    ...(details.reason ? { reason: details.reason } : {}),
+  });
+  try {
+    const inspectionPath = realpathSync.native(resolvedPath);
+    const sidecars = ["-wal", "-shm", "-journal"].filter((suffix) =>
+      existsSync(`${inspectionPath}${suffix}`),
+    );
+    if (sidecars.length > 0) {
+      throw new Error(
+        `SQLite preflight requires a consolidated snapshot with no sidecars; found ${sidecars.join(", ")}. Create a WAL-aware online backup and preflight the resulting standalone file.`,
+      );
+    }
+    database = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(inspectionPath), {
+      readOnly: true,
+    });
+    database.exec(
+      `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
+    );
+    assertSqliteIntegrity(database, resolvedPath);
+    foundVersion = readSqliteUserVersion(database);
+    if (!Number.isSafeInteger(foundVersion) || foundVersion < 0) {
+      throw new Error(
+        `OpenClaw state database ${resolvedPath} has invalid schema version metadata.`,
+      );
+    }
+    if (foundVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
+      try {
+        ownership = inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
+      } catch {
+        // A newer release can own a newer metadata contract; the numeric refusal remains decisive.
+      }
+      return result("incompatible");
+    }
+    ownership = inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
+    if (foundVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+      return result("migration-required", { requiresWrite: true });
+    }
+    assertOpenClawStateDatabaseOwner(database, { pathname: resolvedPath });
+    const metadata = database
+      .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
+      .get() as { schema_version?: unknown } | undefined;
+    if (metadata?.schema_version !== foundVersion) {
+      throw new Error(
+        `OpenClaw state database ${resolvedPath} metadata schema version ${typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid"} does not match ${foundVersion}.`,
+      );
+    }
+    const maintenanceIssues = collectSqliteSchemaIssues(
+      database,
+      OPENCLAW_STATE_SCHEMA_SQL,
+      OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+    );
+    const blockingIssues = maintenanceIssues.filter(
+      (issue) =>
+        !isOpenClawStateStartupRepairableSchemaIssue(issue) &&
+        !isOpenClawStateFirstUseSchemaIssue(issue),
+    );
+    if (blockingIssues.length > 0) {
+      return result("incompatible", { issues: deduplicateSchemaIssues(blockingIssues) });
+    }
+    const projectedRuntimeIssues = collectSqliteSchemaIssues(
+      database,
+      getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
+      STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+    );
+    const projectedRuntimeBlockingIssues = projectedRuntimeIssues.filter(
+      (issue) =>
+        !isOpenClawStateStartupRepairableSchemaIssue(issue) &&
+        !isOpenClawStateFirstUseSchemaIssue(issue),
+    );
+    if (projectedRuntimeBlockingIssues.length > 0) {
+      return result("incompatible", {
+        issues: deduplicateSchemaIssues(projectedRuntimeBlockingIssues),
+      });
+    }
+    const startupRepairableIssues = deduplicateSchemaIssues([
+      ...maintenanceIssues.filter(isOpenClawStateStartupRepairableSchemaIssue),
+      ...projectedRuntimeIssues.filter(isOpenClawStateStartupRepairableSchemaIssue),
+    ]);
+    return result(startupRepairableIssues.length > 0 ? "startup-repairable" : "exact", {
+      issues: startupRepairableIssues,
+      requiresWrite: startupRepairableIssues.length > 0,
+    });
+  } catch (error) {
+    return result("indeterminate", { reason: formatErrorMessage(error) });
+  } finally {
+    database?.close();
+  }
+}
+
+/** Read schema headers and optionally verify current schema shape without repairing it. */
 export function preflightOpenClawDatabaseSchemas(options: {
   env: NodeJS.ProcessEnv;
   supportedVersions: OpenClawSchemaVersions;
+  verifyCurrentSchemaShape?: boolean;
+  configuredAgentDatabaseTargets?:
+    | readonly { agentId: string; path: string }[]
+    | ((
+        registeredDatabases: readonly { agentId: string; path: string }[],
+      ) => readonly { agentId: string; path: string }[]);
+  configuredAgentDatabaseCandidatePaths?: readonly string[];
 }): OpenClawDatabaseSchemaPreflight {
   const result: OpenClawDatabaseSchemaPreflight = { incompatible: [], indeterminate: [] };
   const statePath = path.resolve(resolveOpenClawStateSqlitePath(options.env));
-  if (!existsSync(statePath)) {
-    return result;
-  }
-
+  let registeredDatabases: ReturnType<typeof readRegisteredAgentDatabases> = [];
   let stateDatabase: DatabaseSync | undefined;
   try {
-    stateDatabase = openNodeSqliteDatabase(statePath, {
-      readOnly: true,
-    });
-    stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    const stateVersion = readSqliteUserVersion(stateDatabase);
-    if (stateVersion > options.supportedVersions.state) {
-      const writerAppVersion = readWriterAppVersion(stateDatabase);
-      result.incompatible.push({
-        kind: "state",
-        path: statePath,
-        foundVersion: stateVersion,
-        supportedVersion: options.supportedVersions.state,
-        ...(writerAppVersion ? { writerAppVersion } : {}),
+    if (existsSync(statePath)) {
+      stateDatabase = openNodeSqliteDatabase(statePath, {
+        readOnly: true,
       });
-    }
-
-    let registeredDatabases: ReturnType<typeof readRegisteredAgentDatabases>;
-    try {
-      registeredDatabases = readRegisteredAgentDatabases(stateDatabase);
-    } catch (error) {
-      result.indeterminate.push({
-        kind: "state",
-        path: statePath,
-        reason: `agent database registry query failed: ${formatErrorMessage(error)}`,
-      });
-      return result;
-    }
-
-    for (const row of registeredDatabases) {
-      const agentPath = path.resolve(row.path);
-      if (!existsSync(agentPath)) {
-        continue;
-      }
-      let agentDatabase: DatabaseSync | undefined;
-      try {
-        agentDatabase = openNodeSqliteDatabase(agentPath, {
-          readOnly: true,
-        });
-        agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-        const agentVersion = readSqliteUserVersion(agentDatabase);
-        if (agentVersion <= options.supportedVersions.agent) {
-          continue;
-        }
-        const writerAppVersion = readWriterAppVersion(agentDatabase);
+      stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+      const stateVersion = readSqliteUserVersion(stateDatabase);
+      if (stateVersion > options.supportedVersions.state) {
+        const writerAppVersion = readWriterAppVersion(stateDatabase);
         result.incompatible.push({
-          kind: "agent",
-          path: agentPath,
-          agentId: row.agentId,
-          foundVersion: agentVersion,
-          supportedVersion: options.supportedVersions.agent,
+          kind: "state",
+          path: statePath,
+          foundVersion: stateVersion,
+          supportedVersion: options.supportedVersions.state,
           ...(writerAppVersion ? { writerAppVersion } : {}),
         });
+      }
+      if (
+        options.verifyCurrentSchemaShape === true &&
+        stateVersion === OPENCLAW_STATE_SCHEMA_VERSION
+      ) {
+        try {
+          assertOpenClawStateDatabaseForMaintenance(stateDatabase, { pathname: statePath });
+        } catch (error) {
+          result.indeterminate.push({
+            kind: "state",
+            path: statePath,
+            reason: formatErrorMessage(error),
+          });
+        }
+      }
+
+      try {
+        registeredDatabases = readRegisteredAgentDatabases(stateDatabase, statePath);
       } catch (error) {
         result.indeterminate.push({
-          kind: "agent",
-          path: agentPath,
-          reason: formatErrorMessage(error),
+          kind: "state",
+          path: statePath,
+          reason: `agent database registry query failed: ${formatErrorMessage(error)}`,
         });
-      } finally {
-        agentDatabase?.close();
+        return result;
       }
     }
-    return result;
   } catch (error) {
     result.indeterminate.push({
       kind: "state",
@@ -196,4 +394,79 @@ export function preflightOpenClawDatabaseSchemas(options: {
       stateDatabase.close();
     }
   }
+  let agentTargets = registeredDatabases;
+  if (options.configuredAgentDatabaseTargets !== undefined) {
+    // Doctor must resolve configured paths from these read-only facts: the
+    // runtime registry reader rejects the very legacy schema Doctor repairs.
+    const configuredTargets =
+      typeof options.configuredAgentDatabaseTargets === "function"
+        ? options.configuredAgentDatabaseTargets(registeredDatabases)
+        : options.configuredAgentDatabaseTargets;
+    const discovery = discoverAgentDatabaseMigrationTargets({
+      env: options.env,
+      configuredAgentDatabaseTargets: configuredTargets,
+      registeredAgentDatabases: registeredDatabases,
+    });
+    agentTargets = discovery.targets;
+    for (const failure of discovery.failures) {
+      result.indeterminate.push({ kind: "agent", ...failure });
+    }
+  }
+  // An occupied custom-store candidate can have a newer, unreadable owner.
+  // Check its version without promoting it into an owned migration target.
+  const inspectionTargets: Array<{ agentId?: string; path: string }> = [
+    ...agentTargets,
+    ...(options.configuredAgentDatabaseCandidatePaths ?? []).map((candidatePath) => ({
+      path: candidatePath,
+    })),
+  ];
+  const inspectedAgentPaths = new Set<string>();
+  for (const row of inspectionTargets) {
+    const agentPath = row.path;
+    if (!existsSync(agentPath)) {
+      continue;
+    }
+    let agentDatabase: DatabaseSync | undefined;
+    try {
+      const realAgentPath = realpathSync(agentPath);
+      if (row.agentId === undefined && inspectedAgentPaths.has(realAgentPath)) {
+        continue;
+      }
+      inspectedAgentPaths.add(realAgentPath);
+      agentDatabase = openNodeSqliteDatabase(agentPath, {
+        readOnly: true,
+      });
+      agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+      const agentVersion = readSqliteUserVersion(agentDatabase);
+      if (agentVersion <= options.supportedVersions.agent) {
+        if (options.verifyCurrentSchemaShape === true && row.agentId !== undefined) {
+          // Existing agent databases require Doctor-owned migration before
+          // startup; a successor cannot safely repair them after close.
+          assertOpenClawAgentDatabaseForMaintenance(agentDatabase, {
+            agentId: row.agentId,
+            pathname: agentPath,
+          });
+        }
+        continue;
+      }
+      const writerAppVersion = readWriterAppVersion(agentDatabase);
+      result.incompatible.push({
+        kind: "agent",
+        path: agentPath,
+        ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
+        foundVersion: agentVersion,
+        supportedVersion: options.supportedVersions.agent,
+        ...(writerAppVersion ? { writerAppVersion } : {}),
+      });
+    } catch (error) {
+      result.indeterminate.push({
+        kind: "agent",
+        path: agentPath,
+        reason: formatErrorMessage(error),
+      });
+    } finally {
+      agentDatabase?.close();
+    }
+  }
+  return result;
 }

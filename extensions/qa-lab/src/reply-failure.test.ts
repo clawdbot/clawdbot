@@ -1,49 +1,32 @@
-// Qa Lab tests cover reply failure plugin behavior.
+// Qa Lab tests cover typed reply failure markers and independent leak detection.
 import { describe, expect, it } from "vitest";
 import { extractQaFailureReplyText, extractQaVisibleReplyLeakText } from "./reply-failure.js";
 
 describe("extractQaFailureReplyText", () => {
   it("returns undefined for normal assistant replies", () => {
     expect(
-      extractQaFailureReplyText("Yes, precious. The build is green and a little cursed."),
+      extractQaFailureReplyText({
+        text: "Yes, precious. The build is green and a little cursed.",
+      }),
     ).toBe(undefined);
   });
 
-  it("classifies the generic external fallback reply as a failure", () => {
-    expect(
-      extractQaFailureReplyText(
-        "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
-      ),
-    ).toContain("Something went wrong while processing your request.");
+  it("classifies marked failures without depending on copy wording", () => {
+    const text = "Any future user-facing failure wording can go here.";
+    expect(extractQaFailureReplyText({ text, isError: true })).toBe(text);
   });
 
-  it.each([
-    "⚠️ Agent couldn't generate a response. Please try again.",
-    "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
-  ])("classifies the canonical incomplete-turn warning as a failure: %s", (reply) => {
-    expect(extractQaFailureReplyText(reply)).toBe(reply);
+  it("does not classify legacy failure-looking copy without the marker", () => {
+    expect(
+      extractQaFailureReplyText({
+        text: "⚠️ Something went wrong while processing your request.",
+      }),
+    ).toBeUndefined();
   });
 
-  it("classifies explicit provider auth guidance as a failure", () => {
-    expect(
-      extractQaFailureReplyText(
-        '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
-      ),
-    ).toContain('No API key found for provider "openai".');
-  });
-
-  it("classifies curated missing-key guidance as a failure", () => {
-    expect(
-      extractQaFailureReplyText(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-luna` with the Codex OAuth profile, or set `OPENAI_API_KEY`, then try again.",
-      ),
-    ).toContain("Missing API key for OpenAI on the gateway.");
-  });
-
-  it("classifies leaked codex harness coordination chatter as a failure", () => {
-    expect(
-      extractQaFailureReplyText("checking thread context; then post a tight progress reply here."),
-    ).toContain("checking thread context");
+  it("classifies leaked harness coordination chatter independently", () => {
+    const text = "checking thread context; then post a tight progress reply here.";
+    expect(extractQaFailureReplyText({ text })).toContain("checking thread context");
   });
 });
 

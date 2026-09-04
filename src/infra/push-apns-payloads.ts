@@ -1,6 +1,7 @@
 // Builds portable APNs payloads for alerts, wakes, and approval lifecycle events.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 const EXEC_APPROVAL_GENERIC_ALERT_BODY = "Open OpenClaw to review this request.";
 const PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH = 256;
@@ -59,7 +60,7 @@ export function resolveExecApprovalAlertBody(): string {
 }
 
 export function createApnsApprovalAlertPayload(params: {
-  kind: "exec" | "plugin";
+  kind: ChannelApprovalKind;
   approvalId: string;
   gatewayDeviceId: string;
   title: string;
@@ -94,7 +95,7 @@ export function resolvePluginApprovalAlertBody(description: string): string {
 }
 
 export function createApnsApprovalResolvedPayload(params: {
-  kind: "exec" | "plugin";
+  kind: ChannelApprovalKind;
   approvalId: string;
   gatewayDeviceId: string;
 }): object {

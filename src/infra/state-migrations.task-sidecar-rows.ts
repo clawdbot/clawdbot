@@ -2,14 +2,12 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 export type SqliteBindRow = Record<string, SQLInputValue>;
 
 export function normalizeLegacySqliteInteger(value: number | bigint | null): number | null {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return value;
+  return value === null ? null : sqliteNumber(value);
 }
 
 export function listSqliteColumns(db: DatabaseSync, table: string): Set<string> {

@@ -74,7 +74,6 @@ describe("applyLocalSetupWorkspaceConfig", () => {
 
     const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
 
-    expect(result.agents?.list).toHaveLength(2);
     expect(result.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
     expect(result.bindings).toEqual(baseConfig.bindings);
   });

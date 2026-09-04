@@ -12,7 +12,11 @@ import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
 } from "./lifecycle.js";
-import { appendTranscriptEvent, loadSessionEntry, upsertSessionEntry } from "./session-accessor.js";
+import {
+  appendTranscriptEvent,
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "./session-accessor.js";
 import type { SessionEntry } from "./types.js";
 
 describe("terminal main session transcript freshness", () => {
@@ -51,7 +55,7 @@ describe("terminal main session transcript freshness", () => {
       ...(params.endedAt !== undefined ? { endedAt: params.endedAt } : {}),
       ...(params.status !== undefined ? { status: params.status } : {}),
     };
-    await upsertSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
+    await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, sessionEntry);
     await appendTranscriptEvent(
       { agentId: "main", sessionId, sessionKey, storePath },
       {
@@ -132,9 +136,9 @@ describe("terminal main session transcript freshness", () => {
     expect(check(entry, sessionKey)).toBe(true);
   });
 
-  it("reads the transcript header when the caller has no session key", async () => {
+  it("preserves Date.parse semantics for a numeric-looking transcript header", async () => {
     const sessionId = "session-header-without-key";
-    const timestamp = "2026-01-01T12:00:00.000Z";
+    const timestamp = "2026";
     await appendTranscriptEvent(
       { agentId: "main", sessionId, sessionKey: "agent:main:header", storePath },
       { type: "session", version: 3, id: sessionId, timestamp, cwd: stateDir },
@@ -158,7 +162,7 @@ describe("terminal main session transcript freshness", () => {
     });
     expect(check(entry, sessionKey)).toBe(true);
 
-    await upsertSessionEntry({ agentId: "main", sessionKey, storePath }, entry);
+    await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, entry);
     const refreshed = loadSessionEntry({ agentId: "main", sessionKey, storePath });
     dateNow.mockRestore();
 
@@ -178,7 +182,7 @@ describe("terminal main session transcript freshness", () => {
       status: "timeout",
       updatedAt: Date.now() + 10_000,
     });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey: newerRegistry.sessionKey, storePath },
       newerRegistry.entry,
     );

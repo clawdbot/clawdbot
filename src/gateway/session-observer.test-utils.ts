@@ -43,16 +43,21 @@ export function event(params: {
 
 export function modelMessage(value: Record<string, unknown>) {
   return {
-    stopReason: "stop",
-    content: [{ type: "text", text: JSON.stringify(value) }],
+    text: JSON.stringify(value),
+    provider: "openai",
+    model: "gpt-test",
+    owner: { kind: "harness", id: "openclaw" },
   };
 }
 
 export function preparedModel() {
   return {
-    selection: { provider: "openai", modelId: "gpt-test", agentDir: "/tmp/agent" },
-    model: { provider: "openai", id: "gpt-test", maxTokens: 8_192 },
-    auth: { apiKey: "test-api-key", mode: "api-key" },
+    config: cfg,
+    provider: "openai",
+    model: "gpt-test",
+    outputTextPolicy: "strict-visible" as const,
+    agentId: "main",
+    agentDir: "/tmp/agent",
   };
 }
 

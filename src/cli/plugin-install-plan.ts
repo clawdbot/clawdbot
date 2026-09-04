@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveArchiveKind } from "../infra/archive.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { findBundledPluginSource, type BundledPluginSource } from "../plugins/bundled-sources.js";
 import { parseGitPluginSpec } from "../plugins/git-install.js";
@@ -70,6 +70,7 @@ export function resolvePluginInstallSourcePlan(params: {
         path: resolved,
         recordSource,
         mode: params.mode,
+        ...(bundled ? { bundledOrigin: true } : {}),
         ...(params.link ? { link: true } : {}),
       },
       params.raw,
@@ -146,10 +147,11 @@ export function resolvePluginInstallSourcePlan(params: {
     return sourcePlan(
       {
         source: "official",
-        spec: official.npmSpec,
+        spec: official.spec,
+        installSources: official.installSources,
+        expectedPluginId: official.pluginId,
         pluginId: official.pluginId,
         mode: params.mode,
-        ...(official.expectedIntegrity ? { expectedIntegrity: official.expectedIntegrity } : {}),
         ...(params.pin ? { pin: true } : {}),
       },
       params.raw,

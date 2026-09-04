@@ -2,6 +2,7 @@
  * Builds extension factories available to embedded-agent runtime sessions.
  */
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
@@ -18,7 +19,7 @@ import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-mi
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { recordEmbeddedToolSendReceipt } from "./tool-send-receipts.js";
+import { recordEmbeddedToolReceipt } from "./tool-send-receipts.js";
 
 type AgentToolResultEvent = {
   threadId?: string;
@@ -30,19 +31,6 @@ type AgentToolResultEvent = {
   details?: unknown;
   isError?: boolean;
 };
-
-function recordFromUnknown(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function snapshotToolSendReceipt(details: unknown): unknown {
-  const toolSend = recordFromUnknown(details).toolSend;
-  return toolSend && typeof toolSend === "object" && !Array.isArray(toolSend)
-    ? { ...(toolSend as Record<string, unknown>) }
-    : toolSend;
-}
 
 function buildAgentToolResultMiddlewareFactory(
   sessionManager: SessionManager,
@@ -66,7 +54,7 @@ function buildAgentToolResultMiddlewareFactory(
   });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
-      const event = recordFromUnknown(rawEvent) as AgentToolResultEvent;
+      const event = (asOptionalRecord(rawEvent) ?? {}) as AgentToolResultEvent;
       if (!event.toolName) {
         return undefined;
       }
@@ -80,10 +68,14 @@ function buildAgentToolResultMiddlewareFactory(
         content,
         details: event.details,
       } satisfies AgentToolResult<unknown>;
-      const rawToolSend = snapshotToolSendReceipt(current.details);
-      if (eventToolCallId && rawToolSend !== undefined) {
-        // Routing evidence stays private so middleware may fully replace result details.
-        recordEmbeddedToolSendReceipt(sessionManager, eventToolCallId, rawToolSend);
+      if (eventToolCallId) {
+        // Delivery evidence stays private so middleware may fully replace result details.
+        recordEmbeddedToolReceipt(
+          sessionManager,
+          eventToolCallId,
+          current.details,
+          event.toolName === "message",
+        );
       }
       const inputHadErrorStatus = isToolResultError(current);
       const adjustedInput = eventToolCallId
@@ -94,7 +86,7 @@ function buildAgentToolResultMiddlewareFactory(
         turnId: event.turnId,
         toolCallId,
         toolName: event.toolName,
-        args: recordFromUnknown(adjustedInput ?? event.input),
+        args: asOptionalRecord(adjustedInput ?? event.input) ?? {},
         cwd: ctx.cwd,
         isError: event.isError,
         result: current,
@@ -118,6 +110,7 @@ function buildAgentToolResultMiddlewareFactory(
       return {
         content: result.content,
         details: result.details,
+        ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
         ...(isError ? { isError: true } : {}),
         ...(clearsAcceptedSessionSpawnError ? { isError: false } : {}),
       };
@@ -132,6 +125,7 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  contextTokenBudget?: number;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -141,16 +135,20 @@ export function buildEmbeddedExtensionFactories(params: {
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
-    const contextWindowInfo = resolveContextWindowInfo({
-      cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.modelId,
-      modelContextTokens: params.model?.contextTokens,
-      modelContextWindow: params.model?.contextWindow,
-      defaultTokens: DEFAULT_CONTEXT_TOKENS,
-    });
+    // Prepared runs carry the canonical policy budget; fallback resolution is
+    // only for callers that do not own a prepared attempt.
+    const contextWindowTokens =
+      params.contextTokenBudget ??
+      resolveContextWindowInfo({
+        cfg: params.cfg,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelContextTokens: params.model?.contextTokens,
+        modelContextWindow: params.model?.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      }).tokens;
     setCompactionSafeguardRuntime(params.sessionManager, {
-      contextWindowTokens: contextWindowInfo.tokens,
+      contextWindowTokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,

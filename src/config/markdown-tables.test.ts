@@ -46,10 +46,6 @@ describe("resolveMarkdownTableMode default modes", () => {
   it("whatsapp mode is bullets", () => {
     expect(resolveMarkdownTableMode({ channel: "whatsapp" })).toBe("bullets");
   });
-
-  it("slack has no special default in this seam-only slice", () => {
-    expect(resolveMarkdownTableMode({ channel: "slack" })).toBe("code");
-  });
 });
 
 describe("resolveMarkdownTableMode", () => {

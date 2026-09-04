@@ -7,7 +7,7 @@ import {
 import {
   listLegacyWebSearchConfigPaths,
   migrateLegacyWebSearchConfig,
-} from "./legacy-web-search-migrate.js";
+} from "./legacy-web-tools-migrate.js";
 
 const LEGACY_WEB_SEARCH_RULES: LegacyConfigRule[] = [
   {

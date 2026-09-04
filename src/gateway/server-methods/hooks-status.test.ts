@@ -84,6 +84,46 @@ async function dispatchHooksStatus(params: {
 }
 
 describe("hooks.status", () => {
+  it("returns typed selection-required for an ownerless explicit fleet", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-status-"));
+    tempDirs.push(workspaceDir);
+    const fixture = createHookRegistry(workspaceDir);
+    const config = {
+      ...fixture.config,
+      agents: {
+        ownership: "explicit",
+        defaults: { workspace: workspaceDir },
+        list: [{ id: "ops" }, { id: "research", workspace: workspaceDir }],
+      },
+    };
+
+    const missing = await dispatchHooksStatus({
+      ...fixture,
+      config,
+      scopes: ["operator.read"],
+    });
+    expect(missing).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("agent"),
+      }),
+    );
+
+    const selected = await dispatchHooksStatus({
+      ...fixture,
+      config,
+      scopes: ["operator.read"],
+      requestParams: { agentId: "research" },
+    });
+    expect(selected).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ workspaceDir }),
+      undefined,
+    );
+  });
+
   it("returns registered plugin hooks from the request-attached live registry", async () => {
     const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-status-"));
     tempDirs.push(workspaceDir);

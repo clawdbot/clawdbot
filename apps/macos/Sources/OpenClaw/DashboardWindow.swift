@@ -6,11 +6,11 @@ let dashboardWindowLogger = Logger(subsystem: "ai.openclaw", category: "Dashboar
 
 enum DashboardWindowLayout {
     static let windowSize = NSSize(width: 1240, height: 860)
-    static let mainBrowserMinWidth: CGFloat = 601
+    // The dashboard can use its compact navigation below 600pt; keeping the
+    // expanded rail's width here would stop the browser near half the window.
+    static let mainBrowserMinWidth: CGFloat = 400
     static let linkBrowserMinWidth: CGFloat = 320
-    static let windowMinSize = NSSize(
-        width: DashboardWindowLayout.mainBrowserMinWidth + DashboardWindowLayout.linkBrowserMinWidth + 1,
-        height: 620)
+    static let windowMinSize = NSSize(width: 922, height: 620)
     static let linkBrowserPreferredFraction: CGFloat = 0.5
     static let linkBrowserTabBarHeight: CGFloat = 30
     static let linkBrowserToolbarHeight: CGFloat = 52
@@ -89,23 +89,38 @@ struct DashboardLinkRequest: Equatable {
     let target: DashboardLinkTarget
 }
 
-struct DashboardWindowAuth: Equatable {
-    var gatewayUrl: String?
-    var token: String?
-    var password: String?
+enum DashboardWindowAuth: Equatable {
+    case sharedCredentials(gatewayUrl: String?, token: String?, password: String?)
+    case browserIdentity(gatewayUrl: String)
+
+    init(gatewayUrl: String?, token: String?, password: String?) {
+        self = .sharedCredentials(gatewayUrl: gatewayUrl, token: token, password: password)
+    }
+
+    var gatewayUrl: String? {
+        switch self {
+        case let .sharedCredentials(gatewayUrl, _, _): gatewayUrl
+        case let .browserIdentity(gatewayUrl): gatewayUrl
+        }
+    }
+
+    var token: String? {
+        guard case let .sharedCredentials(_, token, _) = self else { return nil }
+        return token
+    }
+
+    var password: String? {
+        guard case let .sharedCredentials(_, _, password) = self else { return nil }
+        return password
+    }
+
+    var usesBrowserIdentity: Bool {
+        if case .browserIdentity = self { return true }
+        return false
+    }
 
     var hasCredential: Bool {
         self.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
             self.password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
-}
-
-/// Dashboard URLs carry the auth token in the `#token=...` fragment; strip the
-/// fragment before logging so credentials never land in unified logs.
-func dashboardLogString(for url: URL) -> String {
-    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-        return "<unparseable-url>"
-    }
-    components.fragment = nil
-    return components.url?.absoluteString ?? "<unparseable-url>"
 }

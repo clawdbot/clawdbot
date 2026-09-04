@@ -425,41 +425,43 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
   const { client, startSince } = await primeMatrixQaDriverMediaClient(context);
   const triggerBody = buildMatrixQaImageGenerationPrompt(context.sutUserId);
-  const driverEventIds: string[] = [];
+  const triggerSentAt = Date.now();
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId,
+  });
   const isGeneratedImageEvent = (event: MatrixQaObservedEvent) =>
     event.roomId === roomId &&
     event.sender === context.sutUserId &&
     event.type === "m.room.message" &&
     event.relatesTo === undefined &&
     event.msgtype === "m.image" &&
-    event.attachment?.kind === "image";
-  let matched: Awaited<ReturnType<typeof client.waitForOptionalRoomEvent>> | undefined;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const triggerSentAt = Date.now();
-    const driverEventId = await client.sendTextMessage({
-      body: triggerBody,
-      mentionUserIds: [context.sutUserId],
-      roomId,
-    });
-    driverEventIds.push(driverEventId);
-    matched = await client.waitForOptionalRoomEvent({
-      observedEvents: context.observedEvents,
-      // The start cursor can still receive delayed images from an earlier run.
-      predicate: (event) =>
-        isGeneratedImageEvent(event) &&
-        typeof event.originServerTs === "number" &&
-        event.originServerTs >= triggerSentAt,
-      roomId,
-      since: matched?.since ?? startSince,
-      timeoutMs: context.timeoutMs,
-    });
-    if (matched.matched) {
-      break;
-    }
-  }
-  if (!matched?.matched) {
+    event.attachment?.kind === "image" &&
+    typeof event.originServerTs === "number" &&
+    event.originServerTs >= triggerSentAt;
+  const matched = await client.waitForOptionalRoomEvent({
+    observedEvents: context.observedEvents,
+    // The start cursor can still receive delayed images from an earlier run.
+    predicate: isGeneratedImageEvent,
+    roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  if (!matched.matched) {
+    const recentRoomEvents = context.observedEvents
+      .filter((event) => event.roomId === roomId)
+      .slice(-8)
+      .map((event) => ({
+        body: truncateMatrixQaPreview(event.body),
+        eventId: event.eventId,
+        kind: event.kind,
+        msgtype: event.msgtype,
+        sender: event.sender,
+        type: event.type,
+      }));
     throw new Error(
-      `timed out after ${context.timeoutMs}ms waiting for Matrix generated image after ${driverEventIds.length} attempt(s)`,
+      `timed out after ${context.timeoutMs}ms waiting for Matrix generated image; recent room events: ${JSON.stringify(recentRoomEvents)}`,
     );
   }
   const matchedEvent = matched.event;
@@ -480,14 +482,13 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
       attachmentFilename: attachment.filename,
       attachmentKind: attachment.kind,
       attachmentMsgtype: matchedEvent.msgtype,
-      driverEventId: driverEventIds[0],
-      driverEventIds,
+      driverEventId,
       roomId,
       triggerBody,
     },
     details: [
       `room id: ${roomId}`,
-      `driver events: ${driverEventIds.join(", ")}`,
+      `driver event: ${driverEventId}`,
       ...buildMatrixQaAttachmentDetailLines({
         attachmentEvent: matchedEvent,
         label: "generated image",

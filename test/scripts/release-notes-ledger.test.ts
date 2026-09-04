@@ -6,7 +6,105 @@ import {
   renderContributionRecordEntry,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 
+const targetSha = "a".repeat(40);
+
+function contributionLedger({
+  nodes,
+  seededPullRequests = [],
+  sourcePullRequests = [],
+  sourceReferences = [],
+}: {
+  nodes: Map<number, Record<string, unknown>>;
+  seededPullRequests?: number[];
+  sourcePullRequests?: number[];
+  sourceReferences?: number[];
+}) {
+  return ledgerFor(
+    "v2026.7.2-beta.7",
+    targetSha,
+    [...nodes.keys()],
+    nodes,
+    new Map(),
+    new Map(),
+    { issuesByPullRequest: new Map() },
+    {
+      legacyIssues: new Map(),
+      pullRequests: new Map(
+        seededPullRequests.map((number) => [
+          number,
+          { externalReferences: [], references: [], thanks: [] },
+        ]),
+      ),
+    },
+    new Set(sourcePullRequests),
+    sourceReferences,
+    [],
+    [],
+    new Set(),
+    [],
+    Date.parse("2026-08-05T00:00:00Z"),
+  ) as ReturnType<typeof ledgerFor> & {
+    provenance: {
+      inRangePullRequests: number;
+      retainedSeedOnlyPullRequests: number;
+      uniquePullRequests: number;
+    };
+  };
+}
+
 describe("renderContributionRecordEntry", () => {
+  it.each([
+    ["refactor(plugins)!: remove a bundled workflow plugin", "refactor", true],
+    ["refactor!: remove the legacy setup command", "refactor", true],
+    ["REFACTOR(cli)!: rename the setup command", "refactor", true],
+    ["build!: require a supported runtime", "build", true],
+    ["refactor(plugins): simplify loader internals", "refactor", false],
+    ["test: cover breaking plugin changes!", "test", false],
+    ["fix: preserve message delivery", "fix", true],
+    ["feat(fleet): add resource controls and operator docs", "feat", true],
+    ["feat(sessions): add creator attribution and multi-user docs", "feat", true],
+    ["fix(feishu): stop repeated doc child pagination", "fix", true],
+    ["fix: Git update reports success while Web UI serves an old build", "fix", true],
+    ["fix(provider): keep connection test errors readable", "fix", true],
+    ["fix(qa-matrix): preserve shared reply previews", "fix", false],
+    ["feat(ci): add artifact reuse", "feat", false],
+    ["fix(docs): repair setup links", "fix", false],
+    ["fix(build): preserve generated outputs", "fix", false],
+    ["Add operator docs", "other", false],
+    ["Improve provider discovery", "other", true],
+  ])("classifies release prose from declared type and scope: %s", (title, type, eligible) => {
+    const nodes = new Map([
+      [
+        123,
+        {
+          __typename: "PullRequest",
+          author: { __typename: "User", login: "alice" },
+          closingIssuesReferences: { nodes: [] },
+          mergedAt: "2026-08-04T00:00:00Z",
+          title,
+        },
+      ],
+    ]);
+    const result = contributionLedger({ nodes, sourcePullRequests: [123] });
+    expect(result.pullRequests).toMatchObject([
+      { number: 123, type, editorialEligible: eligible, thanks: ["alice"] },
+    ]);
+    const source = [
+      "## 2026.8.1",
+      "### Highlights",
+      ...[1, 2, 3, 4, 5].map((value) => `- Highlight ${value}.`),
+      "### Changes",
+      "- Explain the user impact. (#123) Thanks @alice.",
+      "### Fixes",
+      result.ledger,
+    ].join("\n");
+    expect(ledgerChecks({ source }, result.pullRequests, nodes, [])).toEqual(
+      eligible
+        ? []
+        : [`editorial release prose references non-editorial ${type} PR #123 (${type})`],
+    );
+  });
+
   it("keeps external and linked issue references without repeating PR title references", () => {
     expect(
       renderContributionRecordEntry({
@@ -101,7 +199,7 @@ describe("renderContributionRecordEntry", () => {
 
     const result = ledgerFor(
       "v2026.6.11",
-      "HEAD",
+      targetSha,
       [125],
       nodes,
       new Map(),
@@ -118,6 +216,126 @@ describe("renderContributionRecordEntry", () => {
     );
 
     expect(result.ledger).toContain("- **PR #125** Thanks @carol and @alice and @bob.");
+  });
+
+  it("counts associated and PR-typed source refs before retained seed-only rows", () => {
+    const nodes = new Map(
+      [1, 2, 3].map((number) => [
+        number,
+        {
+          __typename: "PullRequest",
+          closingIssuesReferences: { nodes: [] },
+          mergedAt: "2026-08-04T00:00:00Z",
+          title: `fix: contribution ${number}`,
+        },
+      ]),
+    );
+    const result = contributionLedger({
+      nodes,
+      seededPullRequests: [1, 3],
+      sourcePullRequests: [1],
+      sourceReferences: [2],
+    });
+
+    expect(result.provenance).toEqual({
+      inRangePullRequests: 2,
+      retainedSeedOnlyPullRequests: 1,
+      uniquePullRequests: 3,
+    });
+    expect(result.ledger).toContain("2 in-range PRs + 1 retained seed-only PR = 3 unique PRs.");
+  });
+
+  it("reports zero retained seed-only PRs when every row is in range", () => {
+    const nodes = new Map([
+      [
+        1,
+        {
+          __typename: "PullRequest",
+          closingIssuesReferences: { nodes: [] },
+          mergedAt: "2026-08-04T00:00:00Z",
+          title: "fix: in-range contribution",
+        },
+      ],
+    ]);
+    const result = contributionLedger({ nodes, sourcePullRequests: [1] });
+
+    expect(result.provenance).toMatchObject({
+      inRangePullRequests: 1,
+      retainedSeedOnlyPullRequests: 0,
+      uniquePullRequests: 1,
+    });
+  });
+
+  it("reports all rows as retained seed-only when the release range has no PRs", () => {
+    const nodes = new Map(
+      [1, 2].map((number) => [
+        number,
+        {
+          __typename: "PullRequest",
+          closingIssuesReferences: { nodes: [] },
+          mergedAt: "2026-08-04T00:00:00Z",
+          title: `fix: seeded contribution ${number}`,
+        },
+      ]),
+    );
+    const result = contributionLedger({ nodes, seededPullRequests: [1, 2] });
+
+    expect(result.provenance).toMatchObject({
+      inRangePullRequests: 0,
+      retainedSeedOnlyPullRequests: 2,
+      uniquePullRequests: 2,
+    });
+  });
+
+  it("rejects a forged canonical range and seed partition", () => {
+    const source = [
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- Highlight one.",
+      "- Highlight two.",
+      "- Highlight three.",
+      "- Highlight four.",
+      "- Highlight five.",
+      "",
+      "### Changes",
+      "",
+      "### Fixes",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete base..${targetSha} history: 0 in-range PRs + 1 retained seed-only PR = 1 unique PR.`,
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #456**",
+    ].join("\n");
+    const entry = {
+      number: 456,
+      title: "fix: example",
+      editorialEligible: true,
+      priorReferences: [],
+      externalReferences: [],
+      linkedIssues: [],
+      thanks: [],
+    };
+
+    expect(
+      ledgerChecks(
+        {
+          source,
+          expectedProvenance: {
+            inRangePullRequests: 1,
+            retainedSeedOnlyPullRequests: 0,
+            uniquePullRequests: 1,
+          },
+        },
+        [entry],
+        new Map([[456, { __typename: "PullRequest" }]]),
+        [],
+      ),
+    ).toContain("contribution record provenance partition does not match generated inventory");
   });
 
   it("retains references from a verbose record when the source title changes", () => {
@@ -158,6 +376,8 @@ describe("renderContributionRecordEntry", () => {
       "### Fixes",
       "",
       "### Complete contribution record",
+      "",
+      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
       "",
       "#### Pull requests",
       "",
@@ -200,6 +420,8 @@ describe("renderContributionRecordEntry", () => {
       "",
       "### Complete contribution record",
       "",
+      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
+      "",
       "#### Pull requests",
       "",
       line,
@@ -238,6 +460,8 @@ describe("renderContributionRecordEntry", () => {
       "### Fixes",
       "",
       "### Complete contribution record",
+      "",
+      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
       "",
       "#### Pull requests",
       "",

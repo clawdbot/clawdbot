@@ -70,6 +70,7 @@ const evaluation: SkillWorkshopEvaluation = {
 
 const proposal: SkillWorkshopProposal = {
   key: "proposal-1",
+  kind: "update",
   slug: "inbox-cleaner",
   name: "Inbox Cleaner",
   oneLine: "Clean inbox triage",
@@ -83,16 +84,25 @@ const proposal: SkillWorkshopProposal = {
   recencyGroup: "today",
   ageLabel: "now",
   supportFiles: [],
+  bodyLoaded: true,
   isNew: false,
 };
 
 function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
   return {
+    access: {
+      canEvaluate: true,
+      canApply: true,
+      canRevise: true,
+      canReject: true,
+      canScanHistory: true,
+    },
     loading: false,
     error: null,
     inspectingKey: null,
     proposals: [proposal],
     selectedKey: proposal.key,
+    appliedDiffMode: "changes",
     statusFilter: "pending",
     query: "",
     filePreviewKey: null,
@@ -103,6 +113,7 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     actionNotice: null,
     revisionKey: null,
     revisionDraft: "",
+    revisionRecoveryActive: false,
     assistantName: "OpenClaw",
     workshopAgentName: "Research",
     selfLearning: null,
@@ -115,6 +126,7 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
     onQueueWidthChange: vi.fn(),
     onModeChange: vi.fn(),
     onSelect: vi.fn(),
+    onAppliedDiffModeChange: vi.fn(),
     onPrev: vi.fn(),
     onNext: vi.fn(),
     onApply: vi.fn(),
@@ -132,6 +144,38 @@ function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
 }
 
 describe("Skill Workshop evaluation results (browser)", () => {
+  it.each([
+    ["board", "apply", ".sw-action-bar .sw-btn--primary", "onApply"],
+    ["board", "reject", ".sw-action-bar .sw-btn--danger", "onReject"],
+    ["today", "apply", ".sw-today__big--primary", "onApply"],
+    ["today", "reject", ".sw-today__big--skip", "onReject"],
+  ] as const)(
+    "captures the rendered revision when %s %s is chosen",
+    async (mode, _action, selector, callbackName) => {
+      const container = document.createElement("div");
+      const props = propsFor(mode);
+      document.body.append(container);
+
+      try {
+        render(renderSkillWorkshop(props), container);
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+
+        const actionButton = container.querySelector<HTMLButtonElement>(selector);
+        expect(actionButton).toBeInstanceOf(HTMLButtonElement);
+        actionButton?.click();
+        expect(props[callbackName]).toHaveBeenCalledWith({
+          proposalId: "proposal-1",
+          expectedRevisionHash: DRAFT_HASH,
+        });
+      } finally {
+        render(nothing, container);
+        container.remove();
+      }
+    },
+  );
+
   it.each(["board", "today"] as const)(
     "renders attributed completed, error, and block results with an Evaluate command in %s",
     async (mode) => {

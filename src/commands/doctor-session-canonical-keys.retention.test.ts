@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -25,8 +25,8 @@ describe("doctor canonical session-key retention repair", () => {
     await withStateDirEnv("openclaw-doctor-canonical-cross-store-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const mainStore = resolveStorePath(storeTemplate, { agentId: "main", env });
-      const opsStore = resolveStorePath(storeTemplate, { agentId: "ops", env });
+      const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
+      const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
       const cfg = {
         agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
         session: { mainKey: "shared", store: storeTemplate },
@@ -214,8 +214,8 @@ describe("doctor canonical session-key retention repair", () => {
       async ({ stateDir }) => {
         const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
         const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-        const mainStore = resolveStorePath(storeTemplate, { agentId: "main", env });
-        const opsStore = resolveStorePath(storeTemplate, { agentId: "ops", env });
+        const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
+        const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
         const cfg = {
           agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
           session: { mainKey: "work", store: storeTemplate },

@@ -1,16 +1,20 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
-import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
+import { isPathInside } from "../../infra/path-guards.js";
+import {
+  addIgnoreRules,
+  normalizeNativePathSeparators,
+  type IgnoreMatcher,
+} from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
-import { getArchivedSkillFiles } from "../workshop/curator.js";
-import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { formatSkillsForPrompt as formatSkillContractForPrompt } from "./skill-contract.js";
-import { computeSkillPromptVersion } from "./skill-version.js";
+import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import { resolveSkillDisplayName } from "./skill-contract.js";
+import { formatSkillsForPromptBounded } from "./skill-prompt-limits.js";
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -20,9 +24,12 @@ const MAX_DESCRIPTION_LENGTH = 1024;
 
 export interface Skill {
   name: string;
+  /** Human-readable title from the first Markdown H1, falling back to the identifier. */
+  displayName?: string;
   description: string;
   filePath: string;
   baseDir: string;
+  /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */
   promptVersion?: string;
   source: string;
   sourceInfo: SourceInfo;
@@ -137,7 +144,7 @@ function loadSkillsFromDirInternal(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       if (!isFile || ig.ignores(relPath)) {
         continue;
       }
@@ -176,7 +183,7 @@ function loadSkillsFromDirInternal(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       const ignorePath = isDirectory ? `${relPath}/` : relPath;
       if (ig.ignores(ignorePath)) {
         continue;
@@ -215,7 +222,7 @@ function loadSkillFromFile(
 
   try {
     const rawContent = readFileSync(filePath, "utf-8");
-    const frontmatter = parseFrontmatter(rawContent);
+    const frontmatter = parseSkillFrontmatter(rawContent);
     const invocation = resolveSkillInvocationPolicy(frontmatter);
     const skillDir = dirname(filePath);
     const parentDirName = basename(skillDir);
@@ -243,10 +250,10 @@ function loadSkillFromFile(
     return {
       skill: {
         name,
+        displayName: resolveSkillDisplayName(rawContent, name),
         description: frontmatter.description,
         filePath,
         baseDir: skillDir,
-        promptVersion: computeSkillPromptVersion(rawContent),
         source,
         sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
         disableModelInvocation: invocation.disableModelInvocation,
@@ -270,7 +277,7 @@ function loadSkillFromFile(
  */
 export function formatSkillsForPrompt(skills: Skill[]): string {
   const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-  return formatSkillContractForPrompt(visibleSkills);
+  return formatSkillsForPromptBounded({ skills: visibleSkills });
 }
 
 interface LoadSkillsOptions {
@@ -295,8 +302,6 @@ function resolveSkillPath(p: string, cwd: string): string {
  */
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   const { cwd, agentDir, skillPaths, includeDefaults } = options;
-  // One snapshot-level query enforces archival without polling tool hot paths or touching files.
-  const archivedSkillFiles = getArchivedSkillFiles();
 
   // Resolve agentDir - if not provided, use default from config
   const resolvedAgentDir = agentDir ?? getAgentDir();
@@ -309,9 +314,6 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   function addSkills(result: LoadSkillsResult) {
     allDiagnostics.push(...result.diagnostics);
     for (const skill of result.skills) {
-      if (archivedSkillFiles.has(canonicalizePath(skill.filePath))) {
-        continue;
-      }
       // Resolve symlinks to detect duplicate files
       const realPath = canonicalizePath(skill.filePath);
 
@@ -348,21 +350,12 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   const userSkillsDir = join(resolvedAgentDir, "skills");
   const projectSkillsDir = resolve(cwd, CONFIG_DIR_NAME, "skills");
 
-  const isUnderPath = (target: string, root: string): boolean => {
-    const normalizedRoot = resolve(root);
-    if (target === normalizedRoot) {
-      return true;
-    }
-    const prefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
-    return target.startsWith(prefix);
-  };
-
   const getSource = (resolvedPath: string): "user" | "project" | "path" => {
     if (!includeDefaults) {
-      if (isUnderPath(resolvedPath, userSkillsDir)) {
+      if (isPathInside(userSkillsDir, resolvedPath)) {
         return "user";
       }
-      if (isUnderPath(resolvedPath, projectSkillsDir)) {
+      if (isPathInside(projectSkillsDir, resolvedPath)) {
         return "project";
       }
     }

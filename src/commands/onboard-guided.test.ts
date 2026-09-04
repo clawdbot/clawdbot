@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createWizardPrompter, trackWizardProgress } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CallGatewayCliOptions } from "../gateway/call.js";
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -10,20 +9,24 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
-import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
+import {
+  runGuidedOnboarding as runGuidedOnboardingImpl,
+  type GuidedOnboardingDeps,
+} from "./onboard-guided.js";
 
-type RemoteGatewayInferenceOnboardingDeps = NonNullable<
-  Parameters<typeof runRemoteGatewayInferenceOnboarding>[2]
->;
+const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
+  runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStore = vi.hoisted(() =>
   vi.fn(() => ({ version: 1 as const, profiles: {} })),
 );
+const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
+const launchTuiCli = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
+vi.mock("../tui/tui-launch.js", () => ({ launchTuiCli }));
 
 vi.mock("./auth-choice-prompt.js", async (importActual) => ({
   ...(await importActual<typeof import("./auth-choice-prompt.js")>()),
@@ -31,6 +34,9 @@ vi.mock("./auth-choice-prompt.js", async (importActual) => ({
 }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
+vi.mock("../plugins/provider-setup-availability.js", () => ({
+  detectAvailableSetupProviderIds,
+}));
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {
   const actual = await importActual<typeof import("./onboard-interactive-runner.js")>();
@@ -124,6 +130,7 @@ vi.mock("../state/local-onboarding-state.js", () => ({
 }));
 vi.mock("./onboard-agent.js", () => ({
   ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({ config }),
+  validateFirstOnboardingAgentName: () => undefined,
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
@@ -268,6 +275,8 @@ describe("runGuidedOnboarding", () => {
     restoreTerminalState.mockClear();
     promptAuthChoiceGrouped.mockReset();
     ensureAuthProfileStore.mockClear();
+    detectAvailableSetupProviderIds.mockReset();
+    detectAvailableSetupProviderIds.mockResolvedValue(new Set(["ollama"]));
     readConfigFileSnapshot.mockReset().mockImplementation(async () => ({
       exists: localOnboarding.persisted.config !== undefined,
       valid: true,
@@ -275,6 +284,7 @@ describe("runGuidedOnboarding", () => {
       issues: [],
       config: localOnboarding.persisted.config ?? {},
     }));
+    launchTuiCli.mockClear();
   });
 
   afterEach(() => {
@@ -316,6 +326,27 @@ describe("runGuidedOnboarding", () => {
     );
     expect(deps.launchHatchTui).not.toHaveBeenCalled();
     expect(prompter.outro).toHaveBeenCalledWith("Your browser is ready — I'll be in Settings.");
+  });
+
+  it("prompts for and passes the named first agent into system-agent setup", async () => {
+    const prompter = createWizardPrompter({ text: vi.fn(async () => "robby") });
+    const applySetup = vi.fn(async () => setupApplyResult());
+
+    await runGuidedOnboardingImpl(
+      { acceptRisk: true, workspace: "/tmp/work", skipUi: true },
+      makeRuntime(),
+      setupDeps({ prompter, applySetup }),
+    );
+
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "What should we call your first agent?",
+        initialValue: "main",
+      }),
+    );
+    expect(applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ firstAgent: { name: "robby" } }),
+    );
   });
 
   it("shows gateway repair failures before recovery and keeps onboarding pending", async () => {
@@ -380,6 +411,40 @@ describe("runGuidedOnboarding", () => {
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
   });
 
+  it("launches the guided terminal hatch through the running Gateway", async () => {
+    const prompter = createWizardPrompter();
+    const deps: GuidedOnboardingDeps = setupDeps({ prompter });
+    delete deps.launchHatchTui;
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", tui: true },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(launchTuiCli).toHaveBeenCalledOnce();
+    const options = launchTuiCli.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(options).toMatchObject({ deliver: false });
+    expect(options).not.toHaveProperty("local");
+  });
+
+  it("keeps the local terminal hatch for configured reruns", async () => {
+    localOnboarding.persisted.config = { gateway: {} };
+    const prompter = createWizardPrompter();
+    const deps: GuidedOnboardingDeps = setupDeps({ prompter });
+    delete deps.launchHatchTui;
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work", tui: true },
+      makeRuntime(),
+      deps,
+    );
+
+    expect(launchTuiCli).toHaveBeenCalledOnce();
+    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ local: true }));
+    expect(deps.applySetup).not.toHaveBeenCalled();
+  });
+
   it("uses --skip-ui to skip both browser and terminal handoffs", async () => {
     const prompter = createWizardPrompter();
     const deps = setupDeps({ prompter });
@@ -426,10 +491,29 @@ describe("runGuidedOnboarding", () => {
 
     expect(persistRiskAcknowledgement).toHaveBeenCalledWith({
       wizard: { securityAcknowledgedAt: expect.any(String) },
+      telemetry: { enabled: false, consentedAt: expect.any(String) },
     });
     expect(persistRiskAcknowledgement.mock.invocationCallOrder[0]).toBeLessThan(
       detect.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("persists explicit feature-stat consent with the guided onboarding acknowledgement", async () => {
+    const select = vi.fn(async ({ message }: { message: string }) =>
+      message === "Help make OpenClaw better?" ? true : "full",
+    ) as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({ select });
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work" },
+      makeRuntime(),
+      setupDeps({ prompter }),
+    );
+
+    expect(localOnboarding.persisted.config?.telemetry).toEqual({
+      enabled: true,
+      consentedAt: expect.any(String),
+    });
   });
 
   it("uses the configured workspace only as inference and OpenClaw context", async () => {
@@ -633,21 +717,33 @@ describe("runGuidedOnboarding", () => {
     expect(notes).toContain("Gateway: running");
   });
 
-  it("offers an auto-attempted transient failure for manual retry", async () => {
-    promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:claude-cli");
+  it("surfaces an auto-attempted failure detail before offering manual retry", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:codex-cli");
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => false),
     });
+    const expectSettledProgress = trackWizardProgress(prompter);
     const activate = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: false, status: "rate_limit", error: "try later" })
+      .fn<NonNullable<GuidedOnboardingDeps["activate"]>>()
       .mockResolvedValueOnce({
-        ok: true,
-        modelRef: "claude-cli/opus",
-        latencyMs: 700,
-        lines: ["Gateway: running"],
-      }) as GuidedOnboardingDeps["activate"];
-    const deps = setupDeps({ prompter, activate });
+        ok: false,
+        status: "unknown",
+        error: "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
+      })
+      .mockImplementationOnce(async ({ prompter: activationPrompter }) => {
+        activationPrompter!.progress("Testing your AI connection…").stop();
+        return {
+          ok: true,
+          modelRef: "openai/gpt-5.4",
+          latencyMs: 700,
+          lines: ["Gateway: running"],
+        };
+      });
+    const deps = setupDeps({
+      prompter,
+      activate,
+      detect: vi.fn(async () => detection({ candidates: [candidate("codex-cli", "Codex")] })),
+    });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
@@ -658,18 +754,23 @@ describe("runGuidedOnboarding", () => {
           expect.objectContaining({
             options: [
               expect.objectContaining({
-                value: "candidate:claude-cli",
-                label: "Retry Claude Code (logged in)",
+                value: "candidate:codex-cli",
+                label: "Retry Codex (logged in)",
               }),
             ],
           }),
         ],
       }),
     );
+    expect(activate).toHaveBeenNthCalledWith(1, expect.not.objectContaining({ prompter }));
+    expect(activate).toHaveBeenNthCalledWith(2, expect.objectContaining({ prompter }));
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     const retryNotes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(retryNotes).toContain("These didn't work just now:");
-    expect(retryNotes).toContain("rate-limiting");
+    expect(retryNotes).toContain(
+      "Codex runtime artifact cannot attest injected runtime environment: NODE_PATH",
+    );
+    expectSettledProgress();
   });
 
   it("accepts and verifies a manual provider key without displaying it", async () => {
@@ -686,12 +787,16 @@ describe("runGuidedOnboarding", () => {
       text: text as WizardPrompter["text"],
       confirm: vi.fn(async () => false),
     });
-    const activate = vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 500,
-      lines: ["Default model: openai/gpt-5.5"],
-    })) as GuidedOnboardingDeps["activate"];
+    const expectSettledProgress = trackWizardProgress(prompter);
+    const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+      params.prompter!.progress("Testing your AI connection…").stop();
+      return {
+        ok: true as const,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 500,
+        lines: ["Default model: openai/gpt-5.5"],
+      };
+    });
     const deps = setupDeps({
       prompter,
       detect,
@@ -702,13 +807,14 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({ allowedChoices: new Set(["apiKey"]) }),
+      expect.objectContaining({ allowedChoices: new Set(["apiKey", "custom-api-key"]) }),
     );
     expect(activate).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "api-key",
         authChoice: "apiKey",
         apiKey: enteredValue,
+        prompter,
       }),
     );
     expect(text).toHaveBeenLastCalledWith(expect.objectContaining({ sensitive: true }));
@@ -717,6 +823,7 @@ describe("runGuidedOnboarding", () => {
       enteredValue,
     );
     expect(JSON.stringify([runtime.log, runtime.error])).not.toContain(enteredValue);
+    expectSettledProgress();
   });
 
   it("offers detected OAuth methods through the grouped provider picker", async () => {
@@ -760,7 +867,7 @@ describe("runGuidedOnboarding", () => {
         includeSkip: true,
         assistantVisibleOnly: false,
         workspaceDir: "/tmp/work",
-        allowedChoices: new Set(["openai"]),
+        allowedChoices: new Set(["openai", "custom-api-key"]),
       }),
     );
     expect(activate).toHaveBeenCalledWith(
@@ -775,6 +882,54 @@ describe("runGuidedOnboarding", () => {
       }),
     );
     expect(text).not.toHaveBeenCalled();
+  });
+
+  it("routes detected local provider setup through its provider-owned flow", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("ollama");
+    const prompter = createWizardPrompter();
+    const activate = vi.fn(async () => ({
+      ok: true as const,
+      modelRef: "ollama/qwen3.5:4b",
+      latencyMs: 500,
+      lines: ["Default model: ollama/qwen3.5:4b"],
+    })) as GuidedOnboardingDeps["activate"];
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [],
+          prepareOptions: [
+            {
+              id: "ollama",
+              brandId: "ollama",
+              label: "Ollama",
+              actionLabel: "Choose connection",
+            },
+          ],
+        }),
+      ),
+      activate,
+    });
+    const runtime = makeRuntime();
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedChoices: new Set(["ollama", "custom-api-key"]),
+        detectedProviderIds: new Set(["ollama"]),
+      }),
+    );
+    expect(activate).toHaveBeenCalledWith({
+      kind: "provider-auth",
+      authChoice: "ollama",
+      workspace: "/tmp/work",
+      surface: "cli",
+      runtime,
+      prompter,
+      onCommitStarted: expect.any(Function),
+    });
+    expect(prompter.text).not.toHaveBeenCalled();
   });
 
   it("lets the grouped provider picker skip without opening AI chat", async () => {
@@ -793,7 +948,10 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
     expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({ includeSkip: true }),
+      expect.objectContaining({
+        includeSkip: true,
+        detectedProviderIds: new Set(["ollama"]),
+      }),
     );
     expect(deps.activate).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
@@ -801,46 +959,6 @@ describe("runGuidedOnboarding", () => {
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Add AI later"),
       "Next steps",
-    );
-  });
-
-  it("fails closed without opening an empty inference selector", async () => {
-    const select = vi.fn() as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ select });
-    const deps = setupDeps({
-      prompter,
-      detect: vi.fn(async () =>
-        detection({
-          candidates: [],
-          manualProviders: [],
-          recommendedInstalls: [
-            {
-              id: "ollama",
-              label: "Ollama",
-              hint: "Run open models locally",
-              website: "https://ollama.com/download",
-              icon: "https://cdn.simpleicons.org/ollama",
-            },
-          ],
-        }),
-      ),
-    });
-    const runtime = makeRuntime();
-
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
-
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(deps.activate).not.toHaveBeenCalled();
-    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
-    expect(deps.launchHatchTui).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(prompter.note).toHaveBeenCalledWith(
-      "Ollama — Run open models locally\n  https://ollama.com/download",
-      "Recommended installs",
-    );
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("No inference option is available yet"),
-      "AI access",
     );
   });
 
@@ -910,7 +1028,7 @@ describe("runGuidedOnboarding", () => {
     const deps = setupDeps({ prompter });
     const runtime = makeRuntime();
 
-    await runGuidedOnboarding({}, runtime, deps);
+    await runGuidedOnboarding({ tui: true }, runtime, deps);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(deps.detect).not.toHaveBeenCalled();
@@ -942,150 +1060,5 @@ describe("runGuidedOnboarding", () => {
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
-  });
-
-  it("converges remote inference before remote OpenClaw without mutating local config", async () => {
-    const localConfig = {
-      wizard: { securityAcknowledgedAt: "2026-07-11T00:00:00.000Z" },
-      agents: {
-        defaults: {
-          workspace: "/client/workspace",
-          model: { primary: "openai/local-only" },
-        },
-      },
-      gateway: {
-        mode: "remote",
-        remote: { url: "wss://configured.example/ws", token: "configured-token" },
-      },
-    } satisfies OpenClawConfig;
-    const localConfigBefore = structuredClone(localConfig);
-    readConfigFileSnapshot.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      path: "/tmp/openclaw.json",
-      issues: [],
-      config: localConfig,
-    });
-
-    const order: string[] = [];
-    const remoteConfig: { modelRef?: string } = {};
-    const gatewayCallMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
-      expect(options.url).toBe("wss://selected.example/ws");
-      expect(options.token).toBe("selected-token");
-      expect(options.tlsFingerprint).toBe("sha256:selected");
-      expect(options.ignoreEnvUrlOverride).toBe(true);
-      expect(options.config?.gateway?.remote?.url).toBe("wss://selected.example/ws");
-      order.push(options.method);
-      if (options.method === "openclaw.setup.detect") {
-        return {
-          candidates: [
-            {
-              kind: "claude-cli",
-              label: "Claude Code",
-              detail: "logged in",
-              modelRef: "claude-cli/opus",
-              recommended: true,
-              credentials: true,
-            },
-            {
-              kind: "codex-cli",
-              label: "Codex",
-              detail: "logged in",
-              modelRef: "openai/gpt-5.5",
-              recommended: false,
-              credentials: true,
-            },
-          ],
-          unavailableCandidates: [],
-          manualProviders: [],
-          authOptions: [],
-          recommendedInstalls: [],
-          workspace: "/gateway/workspace",
-          setupComplete: false,
-        };
-      }
-      if (options.method === "openclaw.setup.activate") {
-        expect(options.params).toEqual({
-          kind: "claude-cli",
-          modelRef: "claude-cli/opus",
-          workspace: "/gateway/workspace",
-        });
-        remoteConfig.modelRef = "claude-cli/opus";
-        return {
-          ok: true,
-          modelRef: remoteConfig.modelRef,
-          latencyMs: 250,
-          lines: ["Default model: claude-cli/opus"],
-        };
-      }
-      if (options.method === "openclaw.setup.verify") {
-        expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-        return { ok: true, modelRef: remoteConfig.modelRef, latencyMs: 100 };
-      }
-      if (options.method === "openclaw.chat") {
-        expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-        expect(options.params).toEqual({
-          sessionId: expect.any(String),
-          welcomeVariant: "onboarding",
-        });
-        return {
-          sessionId: (options.params as { sessionId: string }).sessionId,
-          reply: "Inference is ready. I can configure the rest.",
-          action: "open-agent",
-        };
-      }
-      throw new Error(`unexpected Gateway method ${options.method}`);
-    });
-    const runTui = vi.fn(async (options: unknown) => {
-      order.push("tui");
-      expect(options).toEqual({
-        config: expect.objectContaining({
-          gateway: expect.objectContaining({
-            remote: expect.objectContaining({ url: "wss://selected.example/ws" }),
-          }),
-        }),
-        deliver: false,
-        boundGateway: {
-          url: "wss://selected.example/ws",
-          token: "selected-token",
-          tlsFingerprint: "sha256:selected",
-        },
-      });
-      return { exitReason: "exit" as const };
-    });
-    const text = vi.fn(async () => "unexpected");
-    const prompter = createWizardPrompter({ text });
-    const runtime = makeRuntime();
-
-    await runRemoteGatewayInferenceOnboarding(
-      {
-        config: localConfig,
-        gatewayUrl: "wss://selected.example/ws",
-        token: "selected-token",
-        tlsFingerprint: "sha256:selected",
-      },
-      runtime,
-      {
-        callGateway: gatewayCallMock as unknown as NonNullable<
-          RemoteGatewayInferenceOnboardingDeps["callGateway"]
-        >,
-        createPrompter: () => prompter,
-        runTui,
-      },
-    );
-
-    expect(order).toEqual([
-      "openclaw.setup.detect",
-      "openclaw.setup.activate",
-      "openclaw.setup.verify",
-      "openclaw.chat",
-      "tui",
-    ]);
-    expect(remoteConfig.modelRef).toBe("claude-cli/opus");
-    expect(localConfig).toEqual(localConfigBefore);
-    expect(text).not.toHaveBeenCalled();
-    expect(
-      JSON.stringify([prompter.note, prompter.outro, runtime.log, runtime.error]),
-    ).not.toContain("selected-token");
   });
 });

@@ -1,6 +1,6 @@
 // Check Docs Mdx tests cover check docs mdx script behavior.
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "../../scripts/check-docs-mdx.mjs";
+import { parseArgs } from "../../scripts/check-docs-mdx.mts";
 
 describe("scripts/check-docs-mdx", () => {
   it("parses roots and output options", () => {

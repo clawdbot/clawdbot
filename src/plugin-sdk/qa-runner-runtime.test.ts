@@ -3,7 +3,7 @@
  */
 import path from "node:path";
 import type { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupTempDirs,
   expectPrivateQaLabRuntimeSurfaceLoad,
@@ -12,7 +12,7 @@ import {
   restorePrivateQaCliEnv,
 } from "./qa-runtime.test-helpers.js";
 
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryCore = vi.hoisted(() => vi.fn());
 const loadBundledPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
@@ -20,7 +20,7 @@ const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadBundledPluginManifestRegistry,
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
 }));
 
 vi.mock("../infra/openclaw-root.js", () => ({
@@ -50,9 +50,12 @@ describe("plugin-sdk qa-runner-runtime", () => {
   const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
   const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
-  beforeEach(() => {
+  beforeAll(() => {
     vi.resetModules();
-    loadPluginManifestRegistry.mockReset().mockReturnValue({
+  });
+
+  beforeEach(() => {
+    loadPluginManifestRegistryCore.mockReset().mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -78,9 +81,10 @@ describe("plugin-sdk qa-runner-runtime", () => {
   });
 
   it("stays cold until runner discovery is requested", async () => {
+    vi.resetModules();
     await import("./qa-runner-runtime.js");
 
-    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(loadPluginManifestRegistryCore).not.toHaveBeenCalled();
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
     expect(tryLoadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
@@ -135,10 +139,11 @@ describe("plugin-sdk qa-runner-runtime", () => {
     const adapterFactory = {
       id: "example",
       isolatesInstances: true,
+      supportsModuleFlows: true as const,
       matches: vi.fn(),
       create: vi.fn(),
     };
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "qa-example",
@@ -179,8 +184,42 @@ describe("plugin-sdk qa-runner-runtime", () => {
     });
   });
 
+  it("rejects invalid module-flow support metadata", async () => {
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [
+        {
+          id: "qa-example",
+          origin: "bundled",
+          qaRunners: [{ commandName: "example" }],
+          rootDir: "/tmp/qa-example",
+        },
+      ],
+      diagnostics: [],
+    });
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      qaRunnerCliRegistrations: [
+        {
+          commandName: "example",
+          adapterFactory: {
+            id: "example",
+            supportsModuleFlows: false,
+            matches: vi.fn(),
+            create: vi.fn(),
+          },
+          register: vi.fn(),
+        },
+      ],
+    });
+
+    const module = await import("./qa-runner-runtime.js");
+
+    expect(() => module.listQaRunnerCliContributions()).toThrow(
+      'QA runner plugin "qa-example" exported an invalid transport factory for "example"',
+    );
+  });
+
   it("reports declared runners as blocked when the plugin is present but not activated", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "qa-example",
@@ -206,7 +245,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
 
   it("keeps shipped runtime-api runner contributions available for installed plugins", async () => {
     const register = vi.fn((qa: Command) => qa);
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "qa-legacy",
@@ -300,7 +339,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
   });
 
   it("fails fast when two plugins declare the same qa runner command", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "alpha",
@@ -327,7 +366,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
   });
 
   it("fails when runtime registrations include an undeclared command", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
         {
           id: "qa-example",

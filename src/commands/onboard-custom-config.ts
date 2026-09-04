@@ -11,13 +11,16 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
+import { buildModelAliasIndex, modelKey, type ModelRef } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { normalizeAlias } from "./models/alias-name.js";
+import { applyAgentModelDefaults, type OnboardingAgentTarget } from "./onboard-agent-target.js";
 
 /**
  * Wizard default for non-Azure custom APIs when context length is unknown.
@@ -31,6 +34,7 @@ const DEFAULT_MAX_TOKENS = 4096;
 const AZURE_DEFAULT_CONTEXT_WINDOW = 400_000;
 const AZURE_DEFAULT_MAX_TOKENS = 16_384;
 type CustomModelInput = "text" | "image";
+type CustomAliasManifestPlugin = Pick<PluginManifestRecord, "modelIdNormalization">;
 
 /** Result of best-effort image-input inference for custom model ids. */
 type CustomModelImageInputInference = {
@@ -178,8 +182,8 @@ export type CustomApiCompatibility = "openai" | "openai-responses" | "anthropic"
 /** Config mutation result for a custom API setup pass. */
 export type CustomApiResult = {
   config: OpenClawConfig;
-  providerId?: string;
-  modelId?: string;
+  providerId: string;
+  modelId: string;
   providerIdRenamedFrom?: string;
 };
 
@@ -193,6 +197,9 @@ type ApplyCustomApiConfigParams = {
   providerId?: string;
   alias?: string;
   supportsImageInput?: boolean;
+  target?: OnboardingAgentTarget;
+  setAsPrimary?: boolean;
+  manifestPlugins?: readonly CustomAliasManifestPlugin[];
 };
 
 /** Raw CLI flag values for non-interactive custom API setup. */
@@ -293,11 +300,23 @@ function resolveUniqueEndpointId(params: {
   return { providerId: candidate, renamed: true };
 }
 
+function configuredAliasModelKey(
+  ref: ModelRef,
+  manifestPlugins: readonly CustomAliasManifestPlugin[],
+): string {
+  return modelKey(
+    ref.provider,
+    normalizeConfiguredProviderCatalogModelId(ref.provider, ref.model, { manifestPlugins }),
+  );
+}
+
 /** Returns a human-readable alias collision error for a custom model ref. */
 export function resolveCustomModelAliasError(params: {
   raw: string;
   cfg: OpenClawConfig;
-  modelRef: string;
+  modelRef: ModelRef;
+  manifestPlugins: readonly CustomAliasManifestPlugin[];
+  agentId?: string;
 }): string | undefined {
   const trimmed = params.raw.trim();
   if (!trimmed) {
@@ -312,6 +331,9 @@ export function resolveCustomModelAliasError(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
+    agentId: params.agentId,
+    manifestPlugins: params.manifestPlugins,
+    allowPluginNormalization: false,
   });
   const aliasKey = normalizeLowercaseStringOrEmpty(normalized);
   const existing = aliasIndex.byAlias.get(aliasKey);
@@ -319,7 +341,10 @@ export function resolveCustomModelAliasError(params: {
     return undefined;
   }
   const existingKey = modelKey(existing.ref.provider, existing.ref.model);
-  if (existingKey === params.modelRef) {
+  if (
+    configuredAliasModelKey(existing.ref, params.manifestPlugins) ===
+    configuredAliasModelKey(params.modelRef, params.manifestPlugins)
+  ) {
     return undefined;
   }
   return `Alias ${normalized} already points to ${existingKey}.`;
@@ -555,7 +580,7 @@ export function parseNonInteractiveCustomApiFlags(
   };
 }
 
-/** Applies custom provider config and makes the custom model the primary model. */
+/** Applies custom provider config and optionally makes its model the primary model. */
 export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
   const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
   if (!URL.canParse(baseUrl)) {
@@ -589,13 +614,15 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   });
   const providerId = providerIdResult.providerId;
   const providers = params.config.models?.providers ?? {};
-
   const modelRef = modelKey(providerId, modelId);
+
   const alias = normalizeOptionalString(params.alias) ?? "";
   const aliasError = resolveCustomModelAliasError({
     raw: alias,
     cfg: params.config,
-    modelRef,
+    modelRef: { provider: providerId, model: modelId },
+    manifestPlugins: params.manifestPlugins ?? [],
+    agentId: params.target?.agentId,
   });
   if (aliasError) {
     throw new CustomApiError("invalid_alias", aliasError);
@@ -667,7 +694,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   // Azure clients use api-key headers and no bearer Authorization header.
   const azureHeaders = isAzure && normalizedApiKey ? { "api-key": normalizedApiKey } : undefined;
 
-  let config: OpenClawConfig = {
+  const config: OpenClawConfig = {
     ...params.config,
     models: {
       ...params.config.models,
@@ -687,54 +714,62 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     },
   };
 
-  config = applyPrimaryModel(config, modelRef);
-  if (isAzure && isLikelyReasoningModel) {
-    const existingPerModelThinking = config.agents?.defaults?.models?.[modelRef]?.params?.thinking;
-    if (!existingPerModelThinking) {
-      // Seed a conservative reasoning effort only when the user has not already
-      // configured per-model thinking for this exact custom deployment.
-      config = {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            models: {
-              ...config.agents?.defaults?.models,
-              [modelRef]: {
-                ...config.agents?.defaults?.models?.[modelRef],
-                params: {
-                  ...config.agents?.defaults?.models?.[modelRef]?.params,
-                  thinking: "medium",
+  const applyModelDefaults = (modelConfig: OpenClawConfig): OpenClawConfig => {
+    let updated =
+      params.setAsPrimary === false ? modelConfig : applyPrimaryModel(modelConfig, modelRef);
+    if (isAzure && isLikelyReasoningModel) {
+      const existingPerModelThinking =
+        updated.agents?.defaults?.models?.[modelRef]?.params?.thinking;
+      if (!existingPerModelThinking) {
+        // Seed a conservative reasoning effort only when the user has not already
+        // configured per-model thinking for this exact custom deployment.
+        updated = {
+          ...updated,
+          agents: {
+            ...updated.agents,
+            defaults: {
+              ...updated.agents?.defaults,
+              models: {
+                ...updated.agents?.defaults?.models,
+                [modelRef]: {
+                  ...updated.agents?.defaults?.models?.[modelRef],
+                  params: {
+                    ...updated.agents?.defaults?.models?.[modelRef]?.params,
+                    thinking: "medium",
+                  },
                 },
+              },
+            },
+          },
+        };
+      }
+    }
+    if (alias) {
+      updated = {
+        ...updated,
+        agents: {
+          ...updated.agents,
+          defaults: {
+            ...updated.agents?.defaults,
+            models: {
+              ...updated.agents?.defaults?.models,
+              [modelRef]: {
+                ...updated.agents?.defaults?.models?.[modelRef],
+                alias,
               },
             },
           },
         },
       };
     }
-  }
-  if (alias) {
-    config = {
-      ...config,
-      agents: {
-        ...config.agents,
-        defaults: {
-          ...config.agents?.defaults,
-          models: {
-            ...config.agents?.defaults?.models,
-            [modelRef]: {
-              ...config.agents?.defaults?.models?.[modelRef],
-              alias,
-            },
-          },
-        },
-      },
-    };
-  }
+    return updated;
+  };
 
   return {
-    config,
+    config:
+      params.target && params.config.agents?.ownership === "explicit"
+        ? applyAgentModelDefaults(config, params.target, applyModelDefaults)
+        : applyModelDefaults(config),
     providerId,
     modelId,
     ...(providerIdResult.providerIdRenamedFrom

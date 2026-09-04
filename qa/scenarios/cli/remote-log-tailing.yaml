@@ -1,0 +1,31 @@
+title: Remote gateway log tailing
+
+scenario:
+  id: remote-log-tailing
+  surface: cli
+  coverage:
+    primary:
+      - cli.remote-log-tailing
+      - observability.gateway-rpc-logs-tail
+      - observability.openclaw-logs
+  objective: Verify authenticated remote log tailing through the real Gateway and packaged CLI.
+  successCriteria:
+    - The Gateway logs.tail RPC honors line, byte, and cursor bounds.
+    - The packaged CLI accepts an explicit remote URL and token and emits JSON records.
+    - Follow mode receives a later record and exits after the QA owner sends SIGINT.
+  docsRefs:
+    - docs/cli/logs.md
+    - docs/gateway/index.md
+  codeRefs:
+    - src/cli/logs-cli.ts
+    - src/gateway/server-methods/logs.ts
+    - src/logging/log-tail.ts
+    - test/e2e/qa-lab/runtime/remote-log-tailing-runtime.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/remote-log-tailing-runtime.ts
+    summary: Starts an authenticated Gateway and exercises logs.tail through RPC and the packaged CLI.
+    args:
+      - --artifact-base
+      - ${outputDir}

@@ -33,7 +33,7 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
     ]);
   });
 
-  it("omits webhook and public-key style fields from generic snapshots", () => {
+  it("preserves diagnostic identity and audience metadata without raw credentials", () => {
     const snapshot = projectSafeChannelAccountSnapshotFields({
       name: "Primary",
       tokenSource: "config",
@@ -44,6 +44,12 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       webhookPath: "/webhook",
       audienceType: "project-number",
       audience: "1234567890",
+      identity: "user",
+      userTokenSource: "config",
+      credentialSource: "serviceAccount",
+      secretSource: "env",
+      apiCredentialStatus: "configured_unavailable",
+      botToken: "must-not-leak",
       publicKey: "pk_live_123",
     });
 
@@ -53,6 +59,32 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       tokenStatus: "configured_unavailable",
       signingSecretSource: "config", // pragma: allowlist secret
       signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
+      webhookPath: "/webhook",
+      audienceType: "project-number",
+      audience: "1234567890",
+      identity: "user",
+      userTokenSource: "config",
+      credentialSource: "serviceAccount",
+      secretSource: "env",
+      apiCredentialStatus: "configured_unavailable",
+    });
+  });
+
+  it("redacts URL-shaped audiences while omitting bearer webhook URLs", () => {
+    const rawUrl = joinUrlParts(
+      "https://user",
+      ":",
+      "password",
+      "@example.test/path?token=",
+      "private",
+    );
+    expect(
+      projectSafeChannelAccountSnapshotFields({
+        audience: rawUrl,
+        webhookUrl: "https://example.test/webhooks/id/bearer-token",
+      }),
+    ).toEqual({
+      audience: "https://example.test/path?token=***",
     });
   });
 
@@ -180,6 +212,7 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       activeRuns: 0,
       token: "must-not-leak",
       tokenStatus: "unexpected-status",
+      apiCredentialStatus: "unexpected-status",
     });
 
     expect(snapshot).toStrictEqual({

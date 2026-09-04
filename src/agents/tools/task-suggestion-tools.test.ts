@@ -20,9 +20,9 @@ describe("task suggestion tools", () => {
     const { gatewayCall, tools } = createTools(
       vi.fn(async () => ({ taskId: "task_123", suggestion: {} })),
     );
-    const spawnTask = tools.find((tool) => tool.name === "spawn_task");
+    const suggestTask = tools.find((tool) => tool.name === "suggest_task");
 
-    const result = await spawnTask?.execute("call-1", {
+    const result = await suggestTask?.execute("call-1", {
       title: "Remove stale adapter",
       prompt: "Delete the unused adapter in src/example.ts and update its tests.",
       tldr: "The adapter is no longer reachable. Removing it reduces maintenance cost.",
@@ -43,9 +43,20 @@ describe("task suggestion tools", () => {
     expect(result?.content).toEqual([
       { type: "text", text: JSON.stringify({ task_id: "task_123" }, null, 2) },
     ]);
-    expect(spawnTask?.outputSchema).toBeDefined();
-    expect(Value.Check(spawnTask!.outputSchema!, result?.details)).toBe(true);
-    expect(compactToolOutputHint(spawnTask?.outputSchema)).toBe("{ task_id: string }");
+    expect(suggestTask?.description).toContain(
+      "Nothing is spawned or started: this only records a card.",
+    );
+    expect(suggestTask?.description).toContain("absolute path inside a git checkout");
+    expect(suggestTask?.parameters).toMatchObject({
+      properties: {
+        cwd: {
+          description: "Absolute path inside a git checkout; defaults to the current project.",
+        },
+      },
+    });
+    expect(suggestTask?.outputSchema).toBeDefined();
+    expect(Value.Check(suggestTask!.outputSchema!, result?.details)).toBe(true);
+    expect(compactToolOutputHint(suggestTask?.outputSchema)).toBe("{ task_id: string }");
     expect(tools.find((tool) => tool.name === "dismiss_task")?.outputSchema).toBeUndefined();
   });
 
@@ -66,10 +77,10 @@ describe("task suggestion tools", () => {
 
   it("rejects relative project directories", async () => {
     const { tools } = createTools();
-    const spawnTask = tools.find((tool) => tool.name === "spawn_task");
+    const suggestTask = tools.find((tool) => tool.name === "suggest_task");
 
     await expect(
-      spawnTask?.execute("call-3", {
+      suggestTask?.execute("call-3", {
         title: "Add coverage",
         prompt: "Add the missing regression test.",
         tldr: "The edge case is confirmed and untested.",

@@ -6,7 +6,8 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
-import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mjs";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
+import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mts";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,
@@ -168,10 +169,6 @@ const EVIDENCE_SUITES: Record<EvidenceSuiteId, HostedMediaSuiteDefinition> = {
 
 function formatProviderList(providers: Iterable<string>): string {
   return [...providers].toSorted().join(", ");
-}
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }) {
@@ -491,7 +488,7 @@ Defaults:
   - auto-loads missing provider env vars from ~/.profile
   - narrows each suite to providers that currently have usable auth
   - skips the slow fal video smoke by default; pass --video-providers fal to run it
-  - forwards extra args to scripts/test-live.mjs
+  - forwards extra args to scripts/test-live.mts
 
 Flags:
   --providers <csv>         global provider filter

@@ -4,7 +4,6 @@ export { discordSetupPlugin } from "./src/channel.setup.js";
 export {
   handleDiscordSubagentDeliveryTarget,
   handleDiscordSubagentEnded,
-  handleDiscordSubagentSpawning,
 } from "./src/subagent-hooks.js";
 export { inspectDiscordAccount, type InspectedDiscordAccount } from "./src/account-inspect.js";
 export { type DiscordCredentialStatus } from "./src/token.js";

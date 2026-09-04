@@ -28,7 +28,7 @@ export function listHealthChecks(): readonly HealthCheck[] {
 
 /** Returns registered extension checks after rejecting any reserved core doctor id claims. */
 export function listExtensionHealthChecksForDoctor(
-  coreChecks: readonly HealthCheck[],
+  coreChecks: readonly Pick<HealthCheck, "id">[],
 ): readonly HealthCheck[] {
   const coreIds = new Set(coreChecks.map((check) => check.id));
   const registeredChecks = listHealthChecks();

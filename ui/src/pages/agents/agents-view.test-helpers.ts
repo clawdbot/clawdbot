@@ -1,3 +1,4 @@
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import type { renderAgents } from "./view.ts";
 
 type AgentsViewProps = Parameters<typeof renderAgents>[0];
@@ -6,6 +7,14 @@ export function createAgentViewTestProps(
   overrides: Partial<AgentsViewProps> = {},
 ): AgentsViewProps {
   return {
+    access: {
+      canCreateAgent: true,
+      canPatchConfig: true,
+      canUpdateConfig: true,
+      canUpdateIdentity: true,
+      canWriteFiles: true,
+      canRunCron: true,
+    },
     basePath: "",
     authToken: null,
     loading: false,
@@ -13,7 +22,7 @@ export function createAgentViewTestProps(
     agentsList: {
       defaultId: "alpha",
       mainKey: "main",
-      scope: "workspace",
+      scope: "per-sender",
       agents: [{ id: "alpha", name: "Alpha" } as never, { id: "beta", name: "Beta" } as never],
     },
     selectedAgentId: "beta",
@@ -74,6 +83,15 @@ export function createAgentViewTestProps(
       error: null,
       result: null,
     },
+    onOpenGitHubConnections: () => undefined,
+    githubIdentity: new GitHubIdentityController({
+      requestUpdate: () => undefined,
+      runExternalMutation: async () => ({
+        ok: false,
+        reason: "unavailable",
+        error: "Mutation unavailable in rendering test.",
+      }),
+    }),
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: false,
     modelCatalog: [],

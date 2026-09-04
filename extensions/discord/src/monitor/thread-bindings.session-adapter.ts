@@ -9,8 +9,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordChannelId } from "../target-parsing.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
-import { resolveBindingRecordKey } from "./thread-bindings.state.js";
 import {
+  resolveBindingRecordKey,
   resolveThreadBindingIdleTimeoutMs,
   resolveThreadBindingInactivityExpiresAt,
   resolveThreadBindingMaxAgeExpiresAt,
@@ -115,7 +115,8 @@ export function createThreadBindingSessionAdapter(params: {
   resolveCurrentCfg: () => OpenClawConfig;
   resolveCurrentToken: () => string | undefined;
 }): SessionBindingAdapter {
-  const toRecord = (entry: ThreadBindingRecord) => toSessionBindingRecord(entry, params.defaults);
+  const serializeBinding = (entry: ThreadBindingRecord) =>
+    toSessionBindingRecord(entry, params.defaults);
 
   return {
     channel: "discord",
@@ -184,16 +185,16 @@ export function createThreadBindingSessionAdapter(params: {
         introText,
         metadata,
       });
-      return bound ? toRecord(bound) : null;
+      return bound ? serializeBinding(bound) : null;
     },
     listBySession: (targetSessionKey) =>
-      params.manager.listBySessionKey(targetSessionKey).map(toRecord),
+      params.manager.listBySessionKey(targetSessionKey).map(serializeBinding),
     resolveByConversation: (ref) => {
       if (ref.channel !== "discord") {
         return null;
       }
       const binding = params.manager.getByThreadId(ref.conversationId);
-      return binding ? toRecord(binding) : null;
+      return binding ? serializeBinding(binding) : null;
     },
     touch: (bindingId, at) => {
       const threadId = resolveThreadBindingConversationIdFromBindingId({
@@ -211,7 +212,7 @@ export function createThreadBindingSessionAdapter(params: {
           targetSessionKey: input.targetSessionKey,
           reason: input.reason,
         });
-        return removed.map(toRecord);
+        return removed.map(serializeBinding);
       }
       const threadId = resolveThreadBindingConversationIdFromBindingId({
         accountId: params.accountId,
@@ -224,7 +225,7 @@ export function createThreadBindingSessionAdapter(params: {
         threadId,
         reason: input.reason,
       });
-      return removed ? [toRecord(removed)] : [];
+      return removed ? [serializeBinding(removed)] : [];
     },
   };
 }

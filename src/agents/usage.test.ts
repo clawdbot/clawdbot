@@ -136,6 +136,50 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it.each([
+    {
+      name: "flat CLI cache fields",
+      raw: {
+        input_tokens: 100,
+        output_tokens: 10,
+        cached_input_tokens: 40,
+        cache_write_input_tokens: 60,
+      },
+    },
+    {
+      name: "nested CLI cache fields",
+      raw: {
+        input_tokens: 100,
+        output_tokens: 10,
+        input_tokens_details: { cached_tokens: 40, cache_write_tokens: 60 },
+      },
+    },
+  ])("normalizes $name without double-counting input", ({ raw }) => {
+    expect(normalizeUsage(raw)).toEqual({
+      input: 0,
+      output: 10,
+      cacheRead: 40,
+      cacheWrite: 60,
+      total: undefined,
+    });
+  });
+
+  it("preserves Gemini CLI's explicit uncached input", () => {
+    const raw = {
+      input: 5,
+      input_tokens: 13,
+      output_tokens: 5,
+      cached: 8,
+    };
+    expect(normalizeUsage(raw)).toEqual({
+      input: 5,
+      output: 5,
+      cacheRead: 8,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("handles OpenAI Chat Completions reasoning token details", () => {
     const usage = normalizeUsage({
       prompt_tokens: 120,

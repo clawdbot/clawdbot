@@ -1178,6 +1178,7 @@ export async function sendZaloTextMessage(
       try {
         if (options.mediaUrl?.trim()) {
           const media = await loadOutboundMediaFromUrl(options.mediaUrl.trim(), {
+            maxBytes: options.mediaMaxBytes,
             mediaLocalRoots: options.mediaLocalRoots,
             mediaReadFile: options.mediaReadFile,
           });

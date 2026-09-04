@@ -29,12 +29,12 @@ Root rules still apply. This file adds the iOS release guardrails.
 ## App Store Releases
 
 - Agent-driven App Store uploads must use only `pnpm ios:release:upload`.
-- Release selection belongs to the pipeline. Run `pnpm ios:release:plan -- --json`; if it reports `changelogStatus: needs-cut`, run `pnpm ios:release:cut`, review and commit `apps/ios/CHANGELOG.md`, then run `pnpm ios:release:upload` without release arguments.
-- The planner derives the gateway version from the canonical root version, reuses the one editable App Store revision for that gateway, retries an unreleased revision found in App Store Connect build-upload history, and allocates the next revision only after released history. Historical exact gateway versions consume revision zero.
+- Release preparation belongs to `scripts/mobile-release-version.ts`. Run its `--prepare` phase, capture `pnpm ios:release:plan -- --json`, run its `--finalize` phase, review and commit all five cutter outputs, then run `pnpm ios:release:upload` without release arguments.
+- The planner derives the gateway version from `apps/mobile/version.json`, reuses the one editable App Store revision for that gateway, retries an unreleased revision found in App Store Connect build-upload history, and allocates the next revision only after released history. Historical exact gateway versions consume revision zero.
 - Build allocation uses App Store Connect `buildUploads`, including awaiting, processing, failed, and complete uploads. Every Apple-visible attempt consumes its build number; retries increment the build within the same App Store revision.
 - Only one iOS release uploader may run at a time. Multiple active App Store versions, locked/in-review state, a different active gateway, unknown upload state, or revision exhaustion must fail closed for human resolution.
 - `--version`, `--revision`, and `--build-number` remain checked overrides. The pipeline must reject an override that differs from the live deterministic plan. `--version` is always the gateway version, never the encoded App Store version.
-- Do not infer release identity from the current date, mobile-release refs, or generated local files. `## Unreleased` supplies notes only through the deterministic cutter; it does not select a revision.
+- Do not infer release identity from the current date, mobile-release refs, or generated local files. `## Unreleased` supplies notes only through the shared mobile cutter; it does not select a revision.
 - If `pnpm ios:release:upload` exits non-zero, stop immediately and report the failing step.
 - After a failed `pnpm ios:release:upload`, do not continue with a lower-level upload path. A human may repair App Store Connect state; the next pipeline run re-plans the same revision and next build automatically.
 - Do not submit an iOS App Store version for App Review. App Review submission stays manual unless the user explicitly asks to submit a specific already-prepared version after the failed state has been reported.

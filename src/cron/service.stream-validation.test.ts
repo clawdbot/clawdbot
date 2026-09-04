@@ -1,7 +1,10 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
+import { cronStoreKey } from "./store/key.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
+import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-stream-validation-" });
@@ -18,12 +21,14 @@ function streamJob(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
   };
 }
 
-async function createCron(triggersEnabled: boolean) {
+async function createCron(triggersEnabled: boolean | undefined, cronEnabled = true) {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
     storePath,
-    cronEnabled: true,
-    cronConfig: { triggers: { enabled: triggersEnabled } },
+    cronEnabled,
+    ...(triggersEnabled === undefined
+      ? {}
+      : { cronConfig: { triggers: { enabled: triggersEnabled } } }),
     log: logger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
@@ -34,10 +39,33 @@ async function createCron(triggersEnabled: boolean) {
 }
 
 describe("cron stream schedule validation", () => {
+  it.each([
+    { cronEnabled: true, configured: undefined, triggersEnabled: true },
+    { cronEnabled: true, configured: true, triggersEnabled: true },
+    { cronEnabled: true, configured: false, triggersEnabled: false },
+    { cronEnabled: false, configured: true, triggersEnabled: true },
+    { cronEnabled: false, configured: false, triggersEnabled: false },
+  ])(
+    "reports active trigger capability independently of scheduler enablement ($cronEnabled/$configured)",
+    async ({ cronEnabled, configured, triggersEnabled }) => {
+      const cron = await createCron(configured, cronEnabled);
+      try {
+        await expect(cron.status()).resolves.toMatchObject({
+          enabled: cronEnabled,
+          triggersEnabled,
+        });
+      } finally {
+        cron.stop();
+      }
+    },
+  );
+
   it("rejects creation while cron triggers are disabled", async () => {
     const cron = await createCron(false);
     try {
-      await expect(cron.add(streamJob())).rejects.toThrow("cron.triggers.enabled=true");
+      await expect(cron.add(streamJob())).rejects.toThrow(
+        "the operator set cron.triggers.enabled: false",
+      );
     } finally {
       cron.stop();
     }
@@ -139,9 +167,18 @@ describe("cron stream schedule validation", () => {
     }
   });
 
-  it("routes restart exhaustion through normal failure alerts", async () => {
+  it("records restart exhaustion before routing its normal failure alert", async () => {
     const { storePath } = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
+    let jobId = "";
+    const historyAtAlert: unknown[][] = [];
+    const enqueueSystemEvent = vi.fn(() => {
+      historyAtAlert.push(
+        readCronTaskRunHistoryPage({
+          storeKey: cronStoreKey(storePath),
+          jobId,
+        }).entries,
+      );
+    });
     const cron = new CronService({
       storePath,
       cronEnabled: true,
@@ -157,6 +194,7 @@ describe("cron stream schedule validation", () => {
     await cron.start();
     try {
       const created = await cron.add(streamJob());
+      jobId = created.id;
       await cron.recordExternalFailure(created.id, "stream source exhausted restarts", {
         streamStatus: "error",
         streamRestartExhausted: true,
@@ -164,14 +202,41 @@ describe("cron stream schedule validation", () => {
       });
       expect(cron.getJob(created.id)?.state).toMatchObject({
         lastRunStatus: "error",
+        lastError: "stream source exhausted restarts",
         consecutiveErrors: 5,
         streamStatus: "error",
         streamRestartExhausted: true,
       });
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
-        expect.stringContaining("stream source exhausted restarts"),
+        'Automation "stream" failed 5 times\nCheck automation history for details.',
         expect.any(Object),
       );
+      expect(historyAtAlert).toEqual([
+        [
+          expect.objectContaining({
+            jobId: created.id,
+            status: "error",
+            error: "stream source exhausted restarts",
+            durationMs: 0,
+          }),
+        ],
+      ]);
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("rejects invalid scheduler timestamps from external event sources", async () => {
+    const cron = await createCron(true);
+    try {
+      const created = await cron.add(streamJob());
+
+      await expect(
+        cron.recordExternalFailure(created.id, "invalid source state", {
+          startupCatchupAtMs: MAX_DATE_TIMESTAMP_MS + 1,
+        }),
+      ).rejects.toThrow("cron state.startupCatchupAtMs");
+      expect(cron.getJob(created.id)?.state.startupCatchupAtMs).toBeUndefined();
     } finally {
       cron.stop();
     }

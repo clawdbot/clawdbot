@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDraftStreamLoop } from "../../channels/draft-stream-loop.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticModelStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -7,6 +13,7 @@ import {
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   requireRecord,
   expectRecordFields,
   expectNoMockCallWithFields,
@@ -35,21 +42,68 @@ vi.mock("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js", asyn
   };
 });
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
+const executeAgentTurn = await getExecuteAgentTurnForTest();
 
 beforeEach(() => {
   sanitizerState.sanitizeUserFacingText.mockClear();
+  resetDiagnosticRunActivityForTest();
 });
 
 async function executeTestTurn(
   params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],
   overrides?: Partial<AgentTurnParams>,
 ) {
-  const executeAgentTurn = await getExecuteAgentTurnForTest();
   return executeAgentTurn({ ...createMinimalRunAgentTurnParams(params), ...overrides });
 }
 
 describe("executeAgentTurn: lifecycle progress", () => {
+  it("keeps operational agent events from resetting repeated request evidence", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      const sessionId = params.sessionId ?? "session";
+      const sessionKey = params.sessionKey ?? "main";
+      markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: params.runId });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        markDiagnosticModelStartedForTest({
+          sessionId,
+          sessionKey,
+          runId: params.runId,
+          provider: "mock",
+          model: "request-model",
+          observationUnit: "request",
+        });
+      }
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
+          .repeatedRequestNoProgressAgeMs,
+      ).toBe(0);
+
+      for (const event of [
+        {
+          stream: "item",
+          data: { kind: "preamble", phase: "update", progressText: "Working" },
+        },
+        { stream: "tool", data: { phase: "start", name: "read", toolCallId: "call-1" } },
+        {
+          stream: "tool",
+          data: { phase: "result", name: "read", toolCallId: "call-1", isError: false },
+        },
+        { stream: "item", data: { phase: "end", status: "completed", itemId: "item-1" } },
+        { stream: "thinking", data: { delta: "internal" } },
+        { stream: "custom.runtime", data: { status: "ready" } },
+      ]) {
+        await params.onAgentEvent?.(event);
+      }
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
+          .repeatedRequestNoProgressAgeMs,
+      ).toBeGreaterThanOrEqual(0);
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    await executeTestTurn();
+  });
+
   it("forwards item lifecycle events to reply options", async () => {
     const onItemEvent = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -77,7 +131,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
     await Promise.all(pendingToolTasks);
 
     expect(result.kind).toBe("success");
-    expect(onItemEvent).toHaveBeenCalledWith({
+    expect(onItemEvent.mock.calls[0]?.[0]).toMatchObject({
       itemId: "tool:read-1",
       toolCallId: "read-1",
       kind: "tool",
@@ -168,7 +222,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onItemEvent).toHaveBeenCalledWith({
+    expect(onItemEvent.mock.calls[0]?.[0]).toMatchObject({
       itemId: "cmd-1",
       toolCallId: "cmd-1",
       kind: "command",
@@ -557,26 +611,40 @@ describe("executeAgentTurn: lifecycle progress", () => {
     });
   });
 
-  it("emits an embedded lifecycle terminal backstop when the runner returns without one", async () => {
+  it("publishes the timeout explanation and records failed dispatch through the lifecycle backstop", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const onAgentRunTerminalOutcome = vi.fn();
+    const timeoutText = "Request timed out before a response was generated. Please try again.";
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
         stream: "lifecycle",
         data: { phase: "start", startedAt: 1_000 },
       });
       return {
-        payloads: [{ text: "Request timed out before a response was generated.", isError: true }],
-        meta: { aborted: true, livenessState: "blocked", replayInvalid: true },
+        payloads: [
+          { text: "An earlier tool failed.", isError: true },
+          { text: timeoutText, isError: true },
+        ],
+        meta: {
+          error: { kind: "incomplete_turn", message: timeoutText, fallbackSafe: false },
+          aborted: false,
+          stopReason: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          livenessState: "blocked",
+          replayInvalid: false,
+        },
       };
     });
 
     const result = await executeTestTurn(
-      { opts: { runId: "run-timeout" } as GetReplyOptions },
+      { opts: { runId: "run-timeout", onAgentRunTerminalOutcome } },
       { commandBody: "hello" },
     );
 
     expect(result.kind).toBe("success");
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
     const lifecycleEvent = requireRecord(
       requireMockCallArgWithFields(
         emitAgentEvent,
@@ -585,25 +653,110 @@ describe("executeAgentTurn: lifecycle progress", () => {
       ),
       "agent event",
     );
-    expectRecordFields(lifecycleEvent, {
-      runId: "run-timeout",
-      sessionKey: "main",
-      stream: "lifecycle",
-    });
     const lifecycleData = requireRecord(lifecycleEvent.data, "lifecycle data");
     expectRecordFields(lifecycleData, {
-      phase: "end",
+      phase: "error",
+      error: timeoutText,
       startedAt: 1_000,
-      aborted: true,
+      aborted: false,
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
       livenessState: "blocked",
-      replayInvalid: true,
+      replayInvalid: false,
     });
     expect(typeof lifecycleData.endedAt).toBe("number");
   });
 
-  it("settles a successful same-candidate retry instead of its deferred failed attempt", async () => {
+  it.each(["timeout", "failure"] as const)(
+    "preserves explicit deferred guidance over distinct %s metadata and payload errors",
+    async (kind) => {
+      const agentEvents = await import("../../infra/agent-events.js");
+      const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+      const deferredError = "Reconnect the selected provider, then try again.";
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "finishing", error: deferredError, livenessState: "blocked" },
+        });
+        return {
+          payloads: [{ text: "Rendered payload diagnostic.", isError: true }],
+          meta: {
+            error: { kind: "incomplete_turn", message: "Internal provider diagnostic." },
+            ...(kind === "timeout" ? { stopReason: "timeout", timeoutPhase: "provider" } : {}),
+          },
+        };
+      });
+
+      await executeTestTurn({ opts: { runId: "run-deferred-diagnostic" } });
+
+      const lifecycleEvent = requireRecord(
+        requireMockCallArgWithFields(
+          emitAgentEvent,
+          { runId: "run-deferred-diagnostic", stream: "lifecycle" },
+          "agent event",
+        ),
+        "agent event",
+      );
+      expectRecordFields(requireRecord(lifecycleEvent.data, "lifecycle data"), {
+        phase: "error",
+        error: deferredError,
+      });
+      expect(JSON.stringify(lifecycleEvent)).not.toContain("Internal provider diagnostic.");
+      expect(JSON.stringify(lifecycleEvent)).not.toContain("Rendered payload diagnostic.");
+    },
+  );
+
+  it.each([
+    { name: "successful run", stopReason: "completed", aborted: false },
+    { name: "explicit cancellation", stopReason: "stop", aborted: true },
+  ])(
+    "does not turn a tool error into terminal failure for $name",
+    async ({ stopReason, aborted }) => {
+      const agentEvents = await import("../../infra/agent-events.js");
+      const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+      const onAgentRunTerminalOutcome = vi.fn();
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+        return {
+          payloads: [
+            { text: "A tool timed out before the run settled.", isError: true },
+            { text: "Settled output." },
+          ],
+          meta: { stopReason, aborted, replayInvalid: false },
+        };
+      });
+
+      const result = await executeTestTurn({
+        opts: { runId: "run-tool-diagnostic", onAgentRunTerminalOutcome },
+      });
+
+      expect(result.kind).toBe("success");
+      expect(onAgentRunTerminalOutcome).not.toHaveBeenCalledWith("failed");
+      const lifecycleEvent = requireRecord(
+        requireMockCallArgWithFields(
+          emitAgentEvent,
+          { runId: "run-tool-diagnostic", stream: "lifecycle" },
+          "agent event",
+        ),
+        "agent event",
+      );
+      const lifecycleData = requireRecord(lifecycleEvent.data, "lifecycle data");
+      expectRecordFields(lifecycleData, {
+        phase: "end",
+        stopReason,
+        aborted,
+        replayInvalid: false,
+      });
+      expect(lifecycleData).not.toHaveProperty("error");
+    },
+  );
+
+  it("shows only the successful reply after a transient provider retry", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
         stream: "lifecycle",
@@ -633,11 +786,15 @@ describe("executeAgentTurn: lifecycle progress", () => {
     });
 
     const result = await executeTestTurn(
-      { opts: { runId: "run-recovered" } as GetReplyOptions },
+      { opts: { runId: "run-recovered", onBlockReply } as GetReplyOptions },
       { commandBody: "hello" },
     );
 
     expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads).toEqual([{ text: "recovered" }]);
+    }
+    expect(onBlockReply).not.toHaveBeenCalled();
     const lifecycleEvent = requireRecord(
       requireMockCallArgWithFields(
         emitAgentEvent,
@@ -723,7 +880,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
 
   it("preserves GPT ack-turn final prose without reply-side truncation", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4"),
+      result: await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
       provider: "openai",
       model: "gpt-5.4",
       attempts: [],
@@ -764,7 +921,7 @@ describe("executeAgentTurn: lifecycle progress", () => {
 
   it("does not trim GPT replies when the user asked for depth", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4"),
+      result: await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
       provider: "openai",
       model: "gpt-5.4",
       attempts: [],

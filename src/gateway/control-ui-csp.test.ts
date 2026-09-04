@@ -36,6 +36,19 @@ describe("buildControlUiCspHeader", () => {
     expect(connectSrc?.split(" ")).not.toContain("https:");
   });
 
+  it("allows portal probes only across ports on the current document host", () => {
+    const csp = buildControlUiCspHeader({ portalHost: "gateway.example.test:18789" });
+    const connectSrc = csp.split("; ").find((directive) => directive.startsWith("connect-src "));
+    expect(connectSrc?.split(" ")).toContain("http://gateway.example.test:*");
+    expect(connectSrc?.split(" ")).toContain("https://gateway.example.test:*");
+    expect(connectSrc?.split(" ")).not.toContain("https:");
+
+    const invalid = buildControlUiCspHeader({
+      portalHost: "gateway.example.test/path;connect-src https://example.test",
+    });
+    expect(invalid).not.toContain("https://example.test");
+  });
+
   it("limits image loading to local sources and the Gravatar fallback origin", () => {
     const csp = buildControlUiCspHeader();
     const imgSrc = csp.split("; ").find((directive) => directive.startsWith("img-src "));
@@ -45,6 +58,7 @@ describe("buildControlUiCspHeader", () => {
       "data:",
       "blob:",
       "https://gravatar.com",
+      "https://avatars.githubusercontent.com",
     ]);
     expect(imgSrc?.split(" ")).not.toContain("https:");
   });

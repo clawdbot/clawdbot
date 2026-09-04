@@ -1,5 +1,6 @@
 {
   "id": "volcengine",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -352,7 +353,9 @@
   },
   "contracts": {
     "speechProviders": [
-      "volcengine"
+      "volcengine",
+      "bytedance",
+      "doubao"
     ]
   }
 }

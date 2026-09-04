@@ -15,6 +15,13 @@ extension QuickChatModelControlSnapshot {
 
 @MainActor
 struct QuickChatPowerFeaturesTests {
+    private static let solModelChoice = OpenClawChatModelChoice(
+        modelID: "gpt-5.6-sol",
+        name: "Sol",
+        provider: "openai",
+        contextWindow: 400_000,
+        reasoning: true)
+
     @Test func `dictation inserts at a UTF16 caret and replaces each partial`() {
         let text = "Hello"
         let session = QuickChatDictationTextSession(
@@ -104,12 +111,7 @@ struct QuickChatPowerFeaturesTests {
                 provider: "anthropic",
                 contextWindow: 200_000,
                 reasoning: true),
-            OpenClawChatModelChoice(
-                modelID: "gpt-5.6-sol",
-                name: "Sol",
-                provider: "openai",
-                contextWindow: 400_000,
-                reasoning: true),
+            Self.solModelChoice,
         ]
         let sessions = try JSONDecoder().decode(
             OpenClawChatSessionsListResponse.self,
@@ -185,7 +187,7 @@ struct QuickChatPowerFeaturesTests {
         #expect(QuickChatModelControlLogic.validatedThinkingSelection(nil, options: options) == nil)
     }
 
-    @Test func `reasoning override threads into chat send per message`() async throws {
+    @Test func `reasoning override threads into chat send per message`() async {
         var sentThinking: String?
         let model = QuickChatModel(
             sessionKeyProvider: { "main" },
@@ -219,7 +221,6 @@ struct QuickChatPowerFeaturesTests {
             modelPatchProvider: { _, _ in nil })
         let presentationID = model.beginPresentation()
         await model.refreshForPresentation(id: presentationID)
-        try await Self.waitForModelControls(model)
         model.selectThinkingLevel("high")
         model.text = "Hello"
 
@@ -227,62 +228,95 @@ struct QuickChatPowerFeaturesTests {
         #expect(sentThinking == "high")
     }
 
-    @Test func `session model patch settles and send aborts after dismissal`() async throws {
-        let latch = QuickChatModelPatchLatch()
+    @Test func `session model patch settles and send aborts after dismissal`() async {
+        let patchStarted = AsyncTestGate()
+        let finishPatch = AsyncTestGate()
+        let refreshStarted = AsyncTestGate()
+        let finishRefresh = AsyncTestGate()
+        let sendStarted = AsyncTestGate()
         var sendCount = 0
-        let choice = OpenClawChatModelChoice(
-            modelID: "gpt-5.6-sol",
-            name: "Sol",
-            provider: "openai",
-            contextWindow: 400_000,
-            reasoning: true)
+        var patchCount = 0
+        var controlsCallCount = 0
+        let choice = Self.solModelChoice
         let model = Self.model(
             sendProvider: { _, _, _, _, _, _ in
                 sendCount += 1
                 return "ok"
             },
             controlsProvider: { _ in
-                QuickChatModelControlSnapshot(
+                controlsCallCount += 1
+                if controlsCallCount > 1 {
+                    refreshStarted.open()
+                    await finishRefresh.wait()
+                }
+                return QuickChatModelControlSnapshot(
                     models: [choice],
-                    currentModelSelectionID: nil,
+                    currentModelSelectionID: controlsCallCount == 1 ? nil : choice.selectionID,
                     currentThinkingLevel: nil,
                     thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
                     defaultProvider: nil)
             },
-            patchProvider: { _, _ in try await latch.wait() })
+            patchProvider: { _, _ in
+                patchCount += 1
+                patchStarted.open()
+                await finishPatch.wait()
+                return OpenClawChatModelPatchResult(
+                    modelProvider: choice.provider,
+                    model: choice.modelID,
+                    thinkingLevel: nil)
+            })
         let presentationID = model.beginPresentation()
         await model.refreshForPresentation(id: presentationID)
-        try await Self.waitForModelControls(model)
 
         model.selectModel(choice.selectionID)
+        #expect(model.isUpdatingModel)
         model.text = "Hello"
-        let send = Task { await model.send() }
+        let send = Task {
+            sendStarted.open()
+            return await model.send()
+        }
+        await sendStarted.wait()
+        await patchStarted.wait()
+        finishPatch.open()
+        await refreshStarted.wait()
         model.endPresentation()
-        try await latch.waitUntilStarted()
-        latch.finish(with: OpenClawChatModelPatchResult(
-            modelProvider: choice.provider,
-            model: choice.modelID,
-            thinkingLevel: nil,
-            thinkingLevels: QuickChatModelControlLogic.baseThinkingOptions))
-        try await Self.waitForModelPatch(model)
+        #expect(!model.isPresentationActive)
+        let replacementPresentationID = model.beginPresentation()
+        let replacementRefresh = Task {
+            await model.refreshForPresentation(id: replacementPresentationID)
+        }
+        finishRefresh.open()
 
-        #expect(latch.completed)
-        #expect(!(await send.value))
+        #expect(await !(send.value))
+        await replacementRefresh.value
+        #expect(!model.isUpdatingModel)
+        #expect(patchCount == 1)
+        #expect(controlsCallCount == 3)
+        #expect(model.currentSessionModelSelectionID == choice.selectionID)
         #expect(sendCount == 0)
     }
 
-    @Test func `failed post-patch refresh preserves and blocks explicit reasoning`() async throws {
-        let choice = OpenClawChatModelChoice(
-            modelID: "gpt-5.6-sol",
-            name: "Sol",
-            provider: "openai",
-            contextWindow: 400_000,
-            reasoning: true)
+    @Test func `failed post-patch refresh preserves and blocks explicit reasoning`() async {
+        let patchStarted = AsyncTestGate()
+        let finishPatch = AsyncTestGate()
+        let refreshStarted = AsyncTestGate()
+        let finishRefresh = AsyncTestGate()
+        let sendStarted = AsyncTestGate()
+        let choice = Self.solModelChoice
         var controlsCallCount = 0
+        var sendCount = 0
         let model = Self.model(
+            sendProvider: { _, _, _, _, _, _ in
+                sendCount += 1
+                return "ok"
+            },
             controlsProvider: { _ in
                 controlsCallCount += 1
-                if controlsCallCount > 1 { throw QuickChatModelControlsTestError.refreshFailed }
+                if controlsCallCount > 1 {
+                    refreshStarted.open()
+                    await finishRefresh.wait()
+                    throw QuickChatModelControlsTestError.refreshFailed
+                }
                 return QuickChatModelControlSnapshot(
                     models: [choice],
                     currentModelSelectionID: nil,
@@ -291,31 +325,132 @@ struct QuickChatPowerFeaturesTests {
                     defaultProvider: nil)
             },
             patchProvider: { _, _ in
-                OpenClawChatModelPatchResult(
+                patchStarted.open()
+                await finishPatch.wait()
+                return OpenClawChatModelPatchResult(
                     modelProvider: choice.provider,
                     model: choice.modelID,
                     thinkingLevel: nil)
             })
         let presentationID = model.beginPresentation()
         await model.refreshForPresentation(id: presentationID)
-        try await Self.waitForModelControls(model)
         model.selectThinkingLevel("high")
-        model.selectModel(choice.selectionID)
-        let refreshClock = ContinuousClock()
-        let refreshDeadline = refreshClock.now.advanced(by: .seconds(1))
-        while controlsCallCount < 2 {
-            guard refreshClock.now < refreshDeadline else {
-                throw QuickChatModelControlsTestError.timeout
-            }
-            await Task.yield()
-        }
-        try await Self.waitForModelPatch(model)
         model.text = "Hello"
+        model.selectModel(choice.selectionID)
 
+        #expect(model.isUpdatingModel)
+        #expect(!model.canSend)
+        let send = Task {
+            sendStarted.open()
+            return await model.send()
+        }
+        await sendStarted.wait()
+        await patchStarted.wait()
+        finishPatch.open()
+        await refreshStarted.wait()
+        finishRefresh.open()
+
+        #expect(await !(send.value))
+        #expect(!model.isUpdatingModel)
         #expect(model.selectedThinkingLevel == "high")
         #expect(model.thinkingOptions.isEmpty)
         #expect(!model.isSelectedThinkingLevelSupported)
         #expect(!model.canSend)
+        #expect(controlsCallCount == 2)
+        #expect(sendCount == 0)
+    }
+
+    @Test func `blocked model patch does not block another target controls bootstrap`() async {
+        let patchStarted = AsyncTestGate()
+        let finishPatch = AsyncTestGate()
+        let targetBControlsStarted = AsyncTestGate()
+        var agentsCallCount = 0
+        var patchCompleted = false
+        var controlTargets: [QuickChatRoutingTarget] = []
+        let choice = Self.solModelChoice
+        let model = QuickChatModel(
+            sessionKeyProvider: { "agent:a:main" },
+            agentsProvider: {
+                agentsCallCount += 1
+                let agentID = agentsCallCount == 1 ? "a" : "b"
+                return AgentsListResult(
+                    defaultid: agentID,
+                    mainkey: "main",
+                    scope: AnyCodable("per-agent"),
+                    agents: [AgentSummary(id: agentID, name: agentID.uppercased())])
+            },
+            agentIdentityProvider: { _ in .placeholder },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
+            permissionStatusProvider: { capabilities in
+                Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
+            },
+            permissionGrantProvider: { capabilities in
+                Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
+            },
+            connectionGateProvider: { .available },
+            modelControlsProvider: { target in
+                controlTargets.append(target)
+                if target.sessionKey == "agent:b:main" {
+                    targetBControlsStarted.open()
+                }
+                return QuickChatModelControlSnapshot(
+                    models: [choice],
+                    currentModelSelectionID: nil,
+                    currentThinkingLevel: nil,
+                    thinkingOptions: QuickChatModelControlLogic.baseThinkingOptions,
+                    defaultProvider: nil)
+            },
+            modelPatchProvider: { target, _ in
+                #expect(target == QuickChatRoutingTarget(sessionKey: "agent:a:main", agentID: nil))
+                patchStarted.open()
+                await finishPatch.wait()
+                patchCompleted = true
+                return OpenClawChatModelPatchResult(
+                    modelProvider: choice.provider,
+                    model: choice.modelID,
+                    thinkingLevel: nil)
+            })
+        let firstPresentationID = model.beginPresentation()
+        await model.refreshForPresentation(id: firstPresentationID)
+        model.selectModel(choice.selectionID)
+        model.text = "Hello A"
+        let targetASend = Task { await model.send() }
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            Issue.record("timed out waiting for cross-target model controls bootstrap")
+            patchStarted.open()
+            targetBControlsStarted.open()
+            finishPatch.open()
+        }
+        defer {
+            watchdog.cancel()
+            targetASend.cancel()
+            patchStarted.open()
+            targetBControlsStarted.open()
+            finishPatch.open()
+        }
+
+        await patchStarted.wait()
+        model.endPresentation()
+        let secondPresentationID = model.beginPresentation()
+        let targetBRefresh = Task {
+            await model.refreshForPresentation(id: secondPresentationID)
+        }
+
+        await targetBControlsStarted.wait()
+        await targetBRefresh.value
+        model.text = "Hello B"
+        #expect(!patchCompleted)
+        #expect(!model.isUpdatingModel)
+        #expect(model.canSend)
+        #expect(controlTargets.contains(QuickChatRoutingTarget(
+            sessionKey: "agent:b:main",
+            agentID: nil)))
+
+        finishPatch.open()
+        #expect(await !(targetASend.value))
+        #expect(patchCompleted)
     }
 
     private static func model(
@@ -343,24 +478,6 @@ struct QuickChatPowerFeaturesTests {
             connectionGateProvider: { .available },
             modelControlsProvider: controlsProvider,
             modelPatchProvider: patchProvider)
-    }
-
-    private static func waitForModelControls(_ model: QuickChatModel) async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(1))
-        while model.isLoadingModelControls {
-            guard clock.now < deadline else { throw QuickChatModelControlsTestError.timeout }
-            await Task.yield()
-        }
-    }
-
-    private static func waitForModelPatch(_ model: QuickChatModel) async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(1))
-        while model.isUpdatingModel {
-            guard clock.now < deadline else { throw QuickChatModelControlsTestError.timeout }
-            await Task.yield()
-        }
     }
 
     private static func message(
@@ -432,39 +549,4 @@ struct QuickChatPowerFeaturesTests {
 
 private enum QuickChatModelControlsTestError: Error {
     case refreshFailed
-    case timeout
-}
-
-@MainActor
-private final class QuickChatModelPatchLatch {
-    private var continuation: CheckedContinuation<OpenClawChatModelPatchResult, Never>?
-    private(set) var completed = false
-
-    var started: Bool {
-        self.continuation != nil
-    }
-
-    func wait() async throws -> OpenClawChatModelPatchResult {
-        try Task.checkCancellation()
-        let result = await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
-        try Task.checkCancellation()
-        self.completed = true
-        return result
-    }
-
-    func waitUntilStarted() async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(1))
-        while !self.started {
-            guard clock.now < deadline else { throw QuickChatModelControlsTestError.timeout }
-            await Task.yield()
-        }
-    }
-
-    func finish(with result: OpenClawChatModelPatchResult) {
-        self.continuation?.resume(returning: result)
-        self.continuation = nil
-    }
 }

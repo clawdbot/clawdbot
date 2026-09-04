@@ -6,8 +6,17 @@ import {
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import {
+  createReplyOperation,
+  runAfterReplyOperationClear,
+} from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import {
@@ -15,12 +24,12 @@ import {
   markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticRunProgress,
-  resetDiagnosticRunActivityForTest,
 } from "./diagnostic-run-activity.js";
-import {
-  testing as recoveryTesting,
-  recoverStuckDiagnosticSession,
-} from "./diagnostic-stuck-session-recovery.runtime.js";
+import { markDiagnosticModelStartedForTest } from "./diagnostic-run-activity.test-support.js";
+import { logMessageQueuedWithBacklogPolicy } from "./diagnostic-runtime.js";
+import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
+import { logSessionStateChange, startDiagnosticHeartbeat } from "./diagnostic.js";
+import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 async function expectPendingAfterEventLoopTurn(promise: Promise<unknown>): Promise<void> {
   let settled = false;
@@ -40,12 +49,165 @@ async function expectPendingAfterEventLoopTurn(promise: Promise<unknown>): Promi
 
 describe("stuck session recovery integration", () => {
   afterEach(() => {
-    recoveryTesting.resetRecoveriesInFlight();
     embeddedRunTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     resetCommandQueueStateForTest();
-    resetDiagnosticRunActivityForTest();
+    resetDiagnosticStateForTest();
+    resetDiagnosticEventsForTest();
   });
+
+  it("recovers repeated paid-call-shaped activity once without duplicate queued delivery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-08-04T03:00:00Z"));
+    const sessionKey = "agent:main:repeated-requests";
+    const sessionId = "repeated-requests-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.setPhase("running");
+    let markActiveStarted!: () => void;
+    const activeStarted = new Promise<void>((resolve) => {
+      markActiveStarted = resolve;
+    });
+    const active = enqueueCommandInLane(
+      lane,
+      () =>
+        new Promise<"aborted">((resolve) => {
+          markActiveStarted();
+          operation.abortSignal.addEventListener(
+            "abort",
+            () => {
+              operation.complete();
+              resolve("aborted");
+            },
+            { once: true },
+          );
+        }),
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    let deliveries = 0;
+    const queued = enqueueCommandInLane(
+      lane,
+      async () => {
+        deliveries += 1;
+        return "delivered";
+      },
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    await activeStarted;
+
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
+    startDiagnosticHeartbeat(
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession: recoverStuckDiagnosticSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 },
+      },
+    );
+    logSessionStateChange({ sessionId, sessionKey, state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId: sessionId });
+    markDiagnosticModelStartedForTest({
+      sessionId,
+      sessionKey,
+      runId: sessionId,
+      provider: "mock",
+      model: "repeated-request-model",
+      observationUnit: "request",
+    });
+    for (let attempt = 2; attempt <= 3; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      markDiagnosticModelStartedForTest({
+        sessionId,
+        sessionKey,
+        runId: sessionId,
+        provider: "mock",
+        model: "repeated-request-model",
+        observationUnit: "request",
+      });
+    }
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+
+    await expect(active).resolves.toBe("aborted");
+    await expect(queued).resolves.toBe("delivered");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(deliveries).toBe(1);
+    expect(getQueueSize(lane)).toBe(0);
+    expect(events.filter((event) => event.type === "session.recovery.requested")).toHaveLength(1);
+    expect(events.find((event) => event.type === "session.recovery.completed")).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+    });
+    unsubscribe();
+  });
+
+  it.each(["preflight_compacting", "memory_flushing"] as const)(
+    "keeps real queued turns behind healthy %s work",
+    async (phase) => {
+      const sessionKey = `agent:main:healthy-${phase}`;
+      const sessionId = `healthy-${phase}-session`;
+      const lane = resolveEmbeddedSessionLane(sessionKey);
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      operation.setPhase(phase);
+      const handle = {
+        queueMessage: async () => {},
+        isStreaming: () => false,
+        isCompacting: () => phase === "preflight_compacting",
+        abort: () => {},
+      };
+      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+
+      let releaseActive!: () => void;
+      let markActiveStarted!: () => void;
+      const activeStarted = new Promise<void>((resolve) => {
+        markActiveStarted = resolve;
+      });
+      const active = enqueueCommandInLane(
+        lane,
+        () =>
+          new Promise<void>((resolve) => {
+            releaseActive = resolve;
+            markActiveStarted();
+          }),
+        { warnAfterMs: Number.MAX_SAFE_INTEGER },
+      );
+      const queued = enqueueCommandInLane(lane, async () => "delivered", {
+        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      });
+      await activeStarted;
+      operation.abortSignal.addEventListener(
+        "abort",
+        () => {
+          clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+          operation.complete();
+          releaseActive();
+        },
+        { once: true },
+      );
+
+      try {
+        const outcome = await recoverStuckDiagnosticSession({
+          sessionId,
+          sessionKey,
+          ageMs: 720_000,
+          queueDepth: 1,
+          compactionSafetyTimeoutMs: 900_000,
+          allowActiveAbort: true,
+        });
+
+        expect(operation.abortSignal.aborted).toBe(false);
+        expect(outcome.status).toBe("skipped");
+        await expectPendingAfterEventLoopTurn(queued);
+        expect(getQueueSize(lane)).toBe(2);
+      } finally {
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        operation.complete();
+        releaseActive();
+        await active;
+        await queued;
+      }
+    },
+  );
 
   it("does not reset a blocked lane while a reply operation is still active", async () => {
     const sessionKey = "agent:main:active-reply";
@@ -148,7 +310,14 @@ describe("stuck session recovery integration", () => {
             resolve("aborted");
             return;
           }
-          operation.abortSignal.addEventListener("abort", () => resolve("aborted"), { once: true });
+          operation.abortSignal.addEventListener(
+            "abort",
+            () => {
+              operation.complete();
+              resolve("aborted");
+            },
+            { once: true },
+          );
         }),
       { warnAfterMs: Number.MAX_SAFE_INTEGER },
     );
@@ -173,6 +342,240 @@ describe("stuck session recovery integration", () => {
     expect(getQueueSize(lane)).toBe(0);
   });
 
+  it("keeps queued preflight compaction alive until its configured safety timeout", async () => {
+    const sessionKey = "agent:main:active-preflight";
+    const sessionId = "active-preflight-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.setPhase("preflight_compacting");
+    let markActiveStarted!: () => void;
+    const activeStarted = new Promise<void>((resolve) => {
+      markActiveStarted = resolve;
+    });
+    const active = enqueueCommandInLane(
+      lane,
+      () =>
+        new Promise<"aborted">((resolve) => {
+          markActiveStarted();
+          operation.abortSignal.addEventListener(
+            "abort",
+            () => {
+              operation.complete();
+              resolve("aborted");
+            },
+            { once: true },
+          );
+        }),
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    const queued = enqueueCommandInLane(lane, async () => "drained", {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    await activeStarted;
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      // The session can be old even though it only just entered preflight.
+      ageMs: 30 * 60_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+      compactionSafetyTimeoutMs: 10 * 60_000,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "keep_lane",
+      reason: "active_reply_work",
+      activeSessionId: sessionId,
+    });
+    expect(operation.abortSignal.aborted).toBe(false);
+    await expectPendingAfterEventLoopTurn(active);
+    await expectPendingAfterEventLoopTurn(queued);
+    expect(getQueueSize(lane)).toBe(2);
+
+    // Intentional cancellation remains owned by the reply operation.
+    expect(operation.abortByUser()).toBe(true);
+    await expect(active).resolves.toBe("aborted");
+    await expect(queued).resolves.toBe("drained");
+  });
+
+  it("keeps fresh preflight compaction through the queued-session heartbeat watchdog", async () => {
+    vi.useFakeTimers();
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event));
+    try {
+      const sessionKey = "agent:main:heartbeat-preflight";
+      const sessionId = "heartbeat-preflight-session";
+      const lane = resolveEmbeddedSessionLane(sessionKey);
+      const startMs = Date.parse("2026-08-18T12:00:00Z");
+      vi.setSystemTime(startMs);
+      setDiagnosticsEnabledForProcess(true);
+      logSessionStateChange({ sessionId, sessionKey, state: "processing" });
+      logMessageQueuedWithBacklogPolicy({ sessionId, sessionKey, source: "test" }, true);
+      markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+
+      // The diagnostic owner is old, but preflight starts only now.
+      vi.setSystemTime(startMs + 12 * 60_000);
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      operation.setPhase("preflight_compacting");
+      let markActiveStarted!: () => void;
+      const activeStarted = new Promise<void>((resolve) => {
+        markActiveStarted = resolve;
+      });
+      const active = enqueueCommandInLane(
+        lane,
+        () =>
+          new Promise<"aborted">((resolve) => {
+            markActiveStarted();
+            operation.abortSignal.addEventListener(
+              "abort",
+              () => {
+                operation.complete();
+                resolve("aborted");
+              },
+              { once: true },
+            );
+          }),
+        { warnAfterMs: Number.MAX_SAFE_INTEGER },
+      );
+      const queued = enqueueCommandInLane(lane, async () => "drained", {
+        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      });
+      await activeStarted;
+
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: { enabled: true },
+          agents: { defaults: { compaction: { timeoutSeconds: 600 } } },
+        },
+        {
+          recoverStuckSession: recoverStuckDiagnosticSession,
+          testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(90_000);
+      await Promise.resolve();
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session.recovery.requested",
+          sessionId,
+          sessionKey,
+          queueDepth: 1,
+          allowActiveAbort: true,
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session.recovery.completed",
+          sessionId,
+          sessionKey,
+          status: "skipped",
+          action: "keep_lane",
+          outcomeReason: "active_reply_work",
+        }),
+      );
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(getQueueSize(lane)).toBe(2);
+
+      // Restart remains an intentional, immediate cancellation source.
+      expect(operation.abortForRestart()).toBe(true);
+      await expect(active).resolves.toBe("aborted");
+      await expect(queued).resolves.toBe("drained");
+    } finally {
+      unsubscribe();
+      resetDiagnosticStateForTest();
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps supersession cancellation immediate during protected preflight", async () => {
+    const sessionKey = "agent:main:superseded-preflight";
+    const sessionId = "superseded-preflight-session";
+    const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+    operation.setPhase("preflight_compacting");
+
+    await expect(
+      recoverStuckDiagnosticSession({
+        sessionId,
+        sessionKey,
+        ageMs: 30 * 60_000,
+        queueDepth: 1,
+        allowActiveAbort: true,
+        compactionSafetyTimeoutMs: 10 * 60_000,
+      }),
+    ).resolves.toMatchObject({
+      status: "skipped",
+      action: "keep_lane",
+      reason: "active_reply_work",
+    });
+
+    expect(operation.supersede()).toBe(true);
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(operation.result).toEqual({
+      kind: "aborted",
+      code: "aborted_for_supersession",
+    });
+  });
+
+  it("keeps queued lane work behind reply-only force-clear settlement", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionKey = "agent:main:reply-only-force-clear";
+      const sessionId = "reply-only-force-clear-session";
+      const lane = resolveEmbeddedSessionLane(sessionKey);
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: () => {},
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+      let ownerCleared = false;
+      runAfterReplyOperationClear(operation, () => {
+        ownerCleared = true;
+      });
+
+      void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      });
+      const queued = enqueueCommandInLane(
+        lane,
+        async () => {
+          expect(ownerCleared).toBe(true);
+          return "drained";
+        },
+        { warnAfterMs: Number.MAX_SAFE_INTEGER },
+      );
+
+      const recovery = recoverStuckDiagnosticSession({
+        sessionId,
+        sessionKey,
+        ageMs: 720_000,
+        queueDepth: 1,
+        allowActiveAbort: true,
+      });
+      // The shared deadline can leave the owner-settlement clamp's final 100 ms.
+      await vi.advanceTimersByTimeAsync(15_100);
+
+      await expect(recovery).resolves.toMatchObject({
+        status: "aborted",
+        action: "abort_embedded_run",
+        aborted: false,
+        drained: false,
+        forceCleared: true,
+      });
+      await expect(queued).resolves.toBe("drained");
+      expect(ownerCleared).toBe(true);
+      expect(getQueueSize(lane)).toBe(0);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("reclaims continuous argument churn after its semantic progress clock becomes stale", async () => {
     const sessionKey = "agent:main:argument-churn";
     const sessionId = "argument-churn-session";
@@ -192,7 +595,14 @@ describe("stuck session recovery integration", () => {
       () =>
         new Promise<"aborted">((resolve) => {
           markActiveStarted();
-          operation.abortSignal.addEventListener("abort", () => resolve("aborted"), { once: true });
+          operation.abortSignal.addEventListener(
+            "abort",
+            () => {
+              operation.complete();
+              resolve("aborted");
+            },
+            { once: true },
+          );
         }),
       { warnAfterMs: Number.MAX_SAFE_INTEGER },
     );

@@ -102,6 +102,17 @@ const WizardResultFields = {
   // real outcome rather than the preselection.
   channels: Type.Optional(Type.Array(NonEmptyString)),
   accounts: Type.Optional(Type.Array(WizardConfiguredAccountSchema)),
+  // Exact model prepared by provider-owned setup. Clients must still run the
+  // live activation step before presenting the route as ready.
+  preparedModelRef: Type.Optional(NonEmptyString),
+  // Successful terminal auth flows report the exact live-verified activation;
+  // provider sign-in or model preparation alone does not establish readiness.
+  modelActivation: Type.Optional(
+    closedObject({
+      modelRef: NonEmptyString,
+      gatewayRestartRequired: Type.Optional(Type.Literal(true)),
+    }),
+  ),
 };
 
 /** Result after advancing a wizard session. */

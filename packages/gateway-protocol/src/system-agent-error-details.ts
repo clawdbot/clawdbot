@@ -1,3 +1,5 @@
+import { isProtocolRecord } from "./protocol-value-normalization.js";
+
 /** Structured system-agent details carried in gateway error payloads. */
 export const SystemAgentErrorDetailCodes = {
   INFERENCE_UNAVAILABLE: "system_agent_inference_unavailable",
@@ -23,7 +25,7 @@ export function buildSystemAgentSessionInvalidatedErrorDetails(): SystemAgentSes
 export function readSystemAgentInferenceUnavailableErrorDetails(
   details: unknown,
 ): SystemAgentInferenceUnavailableErrorDetails | undefined {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return undefined;
   }
   const code = (details as { code?: unknown }).code;
@@ -33,7 +35,7 @@ export function readSystemAgentInferenceUnavailableErrorDetails(
 export function readSystemAgentSessionInvalidatedErrorDetails(
   details: unknown,
 ): SystemAgentSessionInvalidatedErrorDetails | undefined {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return undefined;
   }
   const code = (details as { code?: unknown }).code;

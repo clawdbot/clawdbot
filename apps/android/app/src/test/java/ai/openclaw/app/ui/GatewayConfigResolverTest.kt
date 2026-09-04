@@ -110,6 +110,30 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun parseGatewayEndpointPreservesDecodedContextPath() {
+    val parsed = parseGatewayEndpoint("wss://gateway.example/openclaw%20gateway")
+
+    assertEquals("/openclaw%20gateway", parsed?.contextPath)
+    assertEquals("https://gateway.example/openclaw%20gateway", parsed?.displayUrl)
+  }
+
+  @Test
+  fun parseGatewayEndpointPreservesEscapedPathDelimiter() {
+    val parsed = parseGatewayEndpoint("wss://gateway.example/openclaw%2Fgateway")
+
+    assertEquals("/openclaw%2Fgateway", parsed?.contextPath)
+    assertEquals("https://gateway.example/openclaw%2Fgateway", parsed?.displayUrl)
+  }
+
+  @Test
+  fun parseGatewayEndpointPreservesRepeatedLeadingPathSlashes() {
+    val parsed = parseGatewayEndpoint("wss://gateway.example//openclaw")
+
+    assertEquals("//openclaw", parsed?.contextPath)
+    assertEquals("https://gateway.example//openclaw", parsed?.displayUrl)
+  }
+
+  @Test
   fun parseGatewayEndpointRejectsNonLoopbackCleartextWsUrls() {
     assertEndpointRejected("ws://gateway.example")
   }
@@ -154,24 +178,6 @@ class GatewayConfigResolverTest {
       input = "ws://10.0.2.2:18789",
       host = "10.0.2.2",
       displayUrl = "http://10.0.2.2:18789",
-    )
-  }
-
-  @Test
-  fun parseGatewayEndpointAllowsPrivateLanCleartextWsUrls() {
-    assertParsedEndpoint(
-      input = "ws://192.168.1.20:18789",
-      host = "192.168.1.20",
-      displayUrl = "http://192.168.1.20:18789",
-    )
-  }
-
-  @Test
-  fun parseGatewayEndpointAllowsMdnsCleartextWsUrls() {
-    assertParsedEndpoint(
-      input = "ws://gateway.local:18789",
-      host = "gateway.local",
-      displayUrl = "http://gateway.local:18789",
     )
   }
 
@@ -376,6 +382,22 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun parseGatewayEndpointResultRejectsCredentialsQueriesAndFragments() {
+    val urls =
+      listOf(
+        "wss://user@gateway.example/openclaw-gw",
+        "wss://gateway.example/openclaw-gw?mode=setup",
+        "wss://gateway.example/openclaw-gw#fragment",
+      )
+
+    for (url in urls) {
+      val parsed = parseGatewayEndpointResult(url)
+      assertNull(url, parsed.config)
+      assertEquals(url, GatewayEndpointValidationError.INVALID_URL, parsed.error)
+    }
+  }
+
+  @Test
   fun parseGatewayEndpointResultAllowsPrivateLanCleartextGateway() {
     val parsed = parseGatewayEndpointResult("ws://192.168.1.20:18789")
 
@@ -421,6 +443,17 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun decodeGatewaySetupCodeAcceptsPairingUrlWrapper() {
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"Bootstrap-AbC123"}""")
+
+    val decoded = decodeGatewaySetupCode("oc-pair://$setupCode")
+
+    assertEquals("wss://gateway.example:18789", decoded?.url)
+    assertEquals("Bootstrap-AbC123", decoded?.bootstrapToken)
+  }
+
+  @Test
   fun manualTokenDetectsSetupCodePayloads() {
     val setupCode =
       encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
@@ -448,6 +481,20 @@ class GatewayConfigResolverTest {
     assertEquals("bootstrap-1", resolved?.bootstrapToken)
     assertEquals("", resolved?.token)
     assertEquals("", resolved?.password)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigPreservesSetupContextPath() {
+    val resolved =
+      resolveConnectConfigFixture(
+        useSetupCode = true,
+        setupCode = setupCode("wss://gateway.example/openclaw-gw"),
+      )
+
+    assertEquals("gateway.example", resolved?.host)
+    assertEquals(443, resolved?.port)
+    assertEquals(true, resolved?.tls)
+    assertEquals("/openclaw-gw", resolved?.contextPath)
   }
 
   @Test
@@ -512,10 +559,12 @@ class GatewayConfigResolverTest {
     val plan =
       resolveConnectPlanFixture(
         manualHostInput = "127.0.0.2",
+        tokenInput = "replacement-token",
       )
 
     assertEquals(GatewaySavedAuthAction.REPLACE_ENDPOINT, plan?.savedAuthAction)
     assertEquals("127.0.0.2", plan?.config?.host)
+    assertEquals("replacement-token", plan?.config?.token)
   }
 
   @Test
@@ -531,15 +580,23 @@ class GatewayConfigResolverTest {
 
   @Test
   fun resolveGatewayConnectPlanMarksSetupCodeAsExplicitReplacement() {
+    val scanned = resolveScannedSetupCodeResult(setupCode("ws://10.0.2.2:18789"))
     val plan =
       resolveConnectPlanFixture(
         useSetupCode = true,
-        setupCode = setupCode("wss://gateway.example:18789"),
+        setupCode = requireNotNull(scanned.setupCode),
+        tokenInput = "stale-shared-token",
+        passwordInput = "stale-shared-password",
       )
 
     assertEquals(GatewaySavedAuthAction.REPLACE_SETUP, plan?.savedAuthAction)
+    assertEquals("10.0.2.2", plan?.config?.host)
+    assertEquals(18789, plan?.config?.port)
+    assertEquals(false, plan?.config?.tls)
     assertEquals("bootstrap-1", plan?.config?.bootstrapToken)
     assertEquals("", plan?.config?.token)
+    assertEquals("", plan?.config?.password)
+    assertNull(scanned.error)
   }
 
   @Test
@@ -630,9 +687,9 @@ class GatewayConfigResolverTest {
     val cases =
       listOf(
         "ws://gateway.local:18790" to true,
-        "http://192.168.1.20:18790/gateway?mode=manual" to true,
+        "http://192.168.1.20:18790/gateway" to true,
         "wss://gateway.example:8443" to false,
-        "https://gateway.example/gateway?mode=manual" to false,
+        "https://gateway.example/gateway" to false,
         "HTTPS://gateway.example:443" to false,
         "WS://GATEWAY.LOCAL.:18790" to true,
         "ws://[::1]:18790" to true,
@@ -763,6 +820,9 @@ class GatewayConfigResolverTest {
         "gateway.local:18789#evil.example",
         "[::1]:18789?redirect=evil.example",
         "[::1]:18789#evil.example",
+        "wss://user@gateway.example/openclaw-gw",
+        "wss://gateway.example/openclaw-gw?mode=manual",
+        "wss://gateway.example/openclaw-gw#fragment",
       )
 
     for (hostInput in hosts) {

@@ -20,6 +20,8 @@
 //   - `src/agents/pi-embedded-runner/run/types.ts` —
 //     `AgentHarnessAttemptResult.replayMetadata` field requirement.
 
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 type ReplayDecision =
   | {
       readonly action: "resume";
@@ -38,11 +40,7 @@ interface ReplayShimInput {
 }
 
 function normalizeSdkSessionId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 /**

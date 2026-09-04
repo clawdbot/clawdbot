@@ -26,6 +26,30 @@ function findingByCheckId(
 }
 
 describe("browser security audit collector", () => {
+  it("warns while legacy extension relay auth remains enabled", () => {
+    const findings = collectFindings({
+      browser: {
+        extensionRelay: { allowLegacyAuth: true },
+      },
+    });
+
+    const finding = findingByCheckId(findings, "browser.extension_relay_legacy_auth");
+    expect(finding.severity).toBe("warn");
+    expect(finding.remediation).toContain("allowLegacyAuth=false");
+  });
+
+  it("does not warn when legacy extension relay auth is disabled", () => {
+    const findings = collectFindings({
+      browser: {
+        extensionRelay: { allowLegacyAuth: false },
+      },
+    });
+
+    expect(
+      findings.some((finding) => finding.checkId === "browser.extension_relay_legacy_auth"),
+    ).toBe(false);
+  });
+
   it("flags browser control without auth", () => {
     const findings = collectFindings({
       gateway: {

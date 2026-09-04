@@ -1,4 +1,5 @@
 /** Lazy runtime facade for isolated cron agent execution dependencies. */
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 export {
   resolveEffectiveModelFallbacks,
   resolveSubagentModelFallbacksOverride,
@@ -17,21 +18,16 @@ export { isCliProvider } from "../../agents/model-selection-cli.js";
 export { normalizeVerboseLevel } from "../../auto-reply/thinking.shared.js";
 export { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 export { logWarn } from "../../logger.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 const cronExecutionCliRuntimeLoader = createLazyImportLoader(
   () => import("./run-execution-cli.runtime.js"),
 );
 
-async function loadCronExecutionCliRuntime() {
-  return await cronExecutionCliRuntimeLoader.load();
-}
-
 /** Lazily resolves complete CLI bindings so cron continuations preserve reuse metadata. */
 export async function getCliSessionBinding(
   ...args: Parameters<typeof import("../../agents/cli-session.js").getCliSessionBinding>
 ): Promise<ReturnType<typeof import("../../agents/cli-session.js").getCliSessionBinding>> {
-  const runtime = await loadCronExecutionCliRuntime();
+  const runtime = await cronExecutionCliRuntimeLoader.load();
   return runtime.getCliSessionBinding(...args);
 }
 
@@ -39,6 +35,6 @@ export async function getCliSessionBinding(
 export async function runCliAgent(
   ...args: Parameters<typeof import("../../agents/cli-runner.js").runCliAgent>
 ): ReturnType<typeof import("../../agents/cli-runner.js").runCliAgent> {
-  const runtime = await loadCronExecutionCliRuntime();
+  const runtime = await cronExecutionCliRuntimeLoader.load();
   return runtime.runCliAgent(...args);
 }

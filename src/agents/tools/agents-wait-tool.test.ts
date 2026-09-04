@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "../subagent-registry.types.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 
 const records = new Map<string, SubagentRunRecord>();
 const registryEvents = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
 
-vi.mock("../subagent-registry.js", () => ({
+vi.mock("../subagents/registry/subagent-registry.js", () => ({
   getSubagentRunsByRunIds: (runIds: readonly string[]) => ({
     entries: new Map(
       runIds.flatMap((runId) => {
@@ -20,7 +20,8 @@ vi.mock("../subagent-registry.js", () => ({
   }),
 }));
 
-vi.mock("../subagent-registry-state.js", () => ({
+vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
+  SUBAGENT_RUNS_READ_CACHE_TTL_MS: 500,
   onSubagentRegistryPersisted: (listener: () => void) => {
     registryEvents.listeners.add(listener);
     return () => registryEvents.listeners.delete(listener);
@@ -29,7 +30,6 @@ vi.mock("../subagent-registry-state.js", () => ({
 
 import { isToolResultError } from "../tool-result-error.js";
 import { createAgentsWaitTool, waitForCollectorCompletion } from "./agents-wait-tool.js";
-import { testing } from "./agents-wait-tool.test-support.js";
 
 function collectorRun(
   runId: string,
@@ -120,11 +120,6 @@ describe("agents_wait", () => {
     expect(registryEvents.listeners.size).toBe(0);
   });
 
-  it("exposes ownership helpers through test support", () => {
-    const entry = collectorRun("owned", "agent:main:main");
-    expect(testing.ownsRun(entry, new Set(["agent:main:main"]))).toBe(true);
-  });
-
   it("returns the first completed child and leaves siblings pending", async () => {
     records.set("one", collectorRun("one", "agent:main:main"));
     records.set("two", collectorRun("two", "agent:main:main"));
@@ -160,7 +155,112 @@ describe("agents_wait", () => {
     });
   });
 
-  it("orders completions by their durable capture time instead of input order", async () => {
+  it("wakes from a local completion without waiting for the next poll", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const entry = collectorRun("local-wake", "agent:main:main");
+    records.set(entry.runId, entry);
+    const controller = new AbortController();
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+    let result: unknown;
+    const waiting = tool
+      .execute("call", { ids: [entry.runId], timeoutSeconds: 1 }, controller.signal)
+      .then((value) => {
+        result = value.details;
+      });
+    try {
+      await vi.advanceTimersByTimeAsync(10);
+      entry.collectorCompletion = { status: "done" };
+      for (const listener of registryEvents.listeners) {
+        listener();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result).toMatchObject({ completed: [{ runId: entry.runId }], pending: [] });
+      expect(registryEvents.listeners.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort();
+      await waiting.catch(() => {});
+      vi.useRealTimers();
+    }
+  });
+
+  it("projects an authorized collector failure without failing a mixed batch", async () => {
+    const failed = collectorRun("failed", "agent:main:main", {
+      status: "failed",
+      structured: { partial: true },
+    });
+    failed.execution = {
+      status: "terminal",
+      outcome: { status: "error", error: "provider failed after tool output" },
+    };
+    failed.completion = { required: false, resultText: null, capturedAt: 10 };
+    records.set(failed.runId, failed);
+    records.set("pending", collectorRun("pending", "agent:main:main"));
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+
+    const result = await tool.execute("call", {
+      ids: [failed.runId, "pending"],
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toEqual({
+      completed: [
+        {
+          runId: failed.runId,
+          status: "failed",
+          result: "",
+          structured: { partial: true },
+          error: "provider failed after tool output",
+          sessionKey: failed.childSessionKey,
+        },
+      ],
+      pending: ["pending"],
+    });
+    expect(isToolResultError(result)).toBe(false);
+  });
+
+  it.each([-60_000, 60_000])(
+    "keeps its elapsed deadline after a %d ms clock step",
+    async (step) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(100_000);
+      const controller = new AbortController();
+      records.set("clock-step", collectorRun("clock-step", "agent:main:main"));
+      const tool = createAgentsWaitTool({
+        agentSessionKey: "agent:main:main",
+        agentId: "main",
+        config: { tools: { swarm: true } },
+      });
+      let result: unknown;
+      const waiting = tool
+        .execute("clock", { ids: ["clock-step"], timeoutSeconds: 0.1 }, controller.signal)
+        .then((value) => {
+          result = value.details;
+        });
+      try {
+        await vi.advanceTimersByTimeAsync(25);
+        vi.setSystemTime(Date.now() + step);
+        await vi.advanceTimersByTimeAsync(74);
+        expect(result).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(result).toEqual({ completed: [], pending: ["clock-step"] });
+      } finally {
+        controller.abort();
+        await waiting.catch(() => {});
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("orders completions by durable capture time with input-order ties", async () => {
     const later = collectorRun("later", "agent:main:main", { status: "done" });
     later.completion = { required: false, resultText: "later", capturedAt: 10 };
     const earlier = collectorRun("earlier", "agent:main:main", { status: "done" });
@@ -182,6 +282,28 @@ describe("agents_wait", () => {
       completed: [{ runId: "earlier" }, { runId: "later" }],
       pending: [],
     });
+
+    const tied = collectorRun("tied", "agent:main:main", { status: "done" });
+    tied.completion = { required: false, resultText: "tied", capturedAt: 5 };
+    records.set(tied.runId, tied);
+    records.set("foreign", collectorRun("foreign", "agent:other:main", { status: "done" }));
+    records.set("pending-one", collectorRun("pending-one", "agent:main:main"));
+    records.set("pending-two", collectorRun("pending-two", "agent:main:main"));
+
+    const mixed = await tool.execute("mixed", {
+      ids: ["later", "missing", "tied", "pending-two", "foreign", "earlier", "pending-one"],
+      timeoutSeconds: 0,
+    });
+
+    expect(mixed.details).toMatchObject({
+      completed: [{ runId: "tied" }, { runId: "earlier" }, { runId: "later" }],
+      pending: ["pending-two", "pending-one"],
+      errors: [
+        { runId: "missing", error: "not_found" },
+        { runId: "foreign", error: "not_owner" },
+      ],
+    });
+    expect(isToolResultError(mixed)).toBe(false);
   });
 
   it("is idempotent and returns per-id ownership and unknown errors", async () => {
@@ -318,6 +440,30 @@ describe("agents_wait", () => {
       success: false,
     });
     expect(isToolResultError(denied)).toBe(true);
+  });
+
+  it("rejects a foreign collector with the same bare requester key", async () => {
+    const foreign = collectorRun("foreign-global", "global", { status: "done" });
+    foreign.requesterAgentId = "ops";
+    records.set(foreign.runId, foreign);
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "global",
+      agentId: "research",
+      config: {
+        agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+        tools: { swarm: true },
+      },
+    });
+
+    const result = await tool.execute("wait", {
+      ids: [foreign.runId],
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      errors: [{ runId: foreign.runId, error: "not_owner" }],
+      success: false,
+    });
   });
 
   it("marks entirely missing collector batches as failures without losing per-id errors", async () => {

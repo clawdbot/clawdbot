@@ -2,7 +2,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent } from "./extra-params.js";
-import { testing as extraParamsTesting } from "./extra-params.test-support.js";
+import { runExtraParamsCase, testing as extraParamsTesting } from "./extra-params.test-support.js";
 import { log } from "./logger.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
@@ -56,6 +56,29 @@ afterEach(() => {
 });
 
 describe("cacheRetention default behavior", () => {
+  it.each([undefined, "none", "short", "long"] as const)(
+    "forwards Model Studio explicit retention %s without opting into cache keys",
+    (cacheRetention) => {
+      const captured = runExtraParamsCase({
+        model: {
+          id: "qwen-plus",
+          name: "Qwen Plus",
+          api: "openai-completions",
+          provider: "qwen",
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 4_096,
+        },
+        cfg: { agents: { defaults: { params: { temperature: 0.5, cacheRetention } } } },
+        payload: {},
+      });
+      expect(captured.options?.cacheRetention).toBe(cacheRetention);
+    },
+  );
+
   it("returns 'short' for Anthropic when not configured", () => {
     applyAndExpectWrapped({
       modelId: "claude-3-sonnet",

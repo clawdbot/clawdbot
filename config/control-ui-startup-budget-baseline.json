@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 324587,
-  "reason": "multi-gateway footer subtitle plus accumulated main drift (PR #114059), then the Memory settings surface: its i18n strings plus the rendering-free memory-schema facts settings search reads at startup",
-  "updatedAt": "2026-07-26"
+  "startupJsGzipBytes": 350377,
+  "reason": "Current main b6a4d0dad430 measures 350377 B startup gzip in Linux CI after integrated UI changes (+812 B, 0.23%); pristine-main and candidate builds measured 350363 B and 350380 B, within the existing 64 B variance allowance. Fixed 358400 B cap and existing growth allowance retained.",
+  "updatedAt": "2026-09-04"
 }

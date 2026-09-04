@@ -4,7 +4,7 @@ import {
   extractBasicHtmlContent,
   htmlToMarkdown,
   markdownToText,
-  truncateText,
+  truncateWebFetchText,
 } from "./web-fetch-utils.js";
 
 describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
@@ -305,7 +305,7 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
 
   it("truncates without splitting a boundary emoji", () => {
     const prefix = "a".repeat(79);
-    const result = truncateText(`${prefix}${grin}tail`, 80);
+    const result = truncateWebFetchText(`${prefix}${grin}tail`, 80);
 
     expect(result.truncated).toBe(true);
     expect(result.text).toBe(prefix);

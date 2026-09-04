@@ -21,7 +21,7 @@ function resolveChannelDebounce(
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
-export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueSettings {
+export function resolveQueueSettingsCore(params: ResolveQueueSettingsParams): QueueSettings {
   const channelKey = normalizeOptionalLowercaseString(params.channel);
   const queueCfg = params.cfg.messages?.queue;
   const providerModeRaw =

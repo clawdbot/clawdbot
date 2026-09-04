@@ -313,7 +313,7 @@ describe("downloadLineMedia", () => {
 
     vi.useFakeTimers();
     const pending = downloadLineMedia("mid-hung", "token");
-    const rejection = expect(pending).rejects.toThrow(/did not become ready within 15 seconds/i);
+    const rejection = expect(pending).rejects.toThrow(/did not download within 15 seconds/i);
     await vi.advanceTimersByTimeAsync(15_000);
     await rejection;
 
@@ -383,23 +383,57 @@ describe("downloadLineMedia", () => {
     expect(isRetryableLineInboundMediaError(err)).toBe(true);
   });
 
-  it("raises a retryable MediaFetchError when the readiness deadline aborts", async () => {
-    fetchMock.mockImplementation(
-      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
-        await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () => reject(new Error("fetch aborted")), {
-            once: true,
-          });
-        }),
+  it("uses one deadline across headers and body, then permits an identical retry", async () => {
+    let stalledBody: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let stalledResponse: Response | undefined;
+    let requestSignal: AbortSignal | undefined;
+    fetchMock.mockImplementationOnce(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        requestSignal = init?.signal ?? undefined;
+        stalledResponse = new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              stalledBody = controller;
+              controller.enqueue(Buffer.from("partial"));
+              init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), {
+                once: true,
+              });
+            },
+          }),
+          { status: 200 },
+        );
+        return stalledResponse;
+      },
     );
 
     vi.useFakeTimers();
-    const pending = downloadLineMedia("mid-hung", "token").catch((e: unknown) => e);
+    let settledAtDeadline = false;
+    const pending = downloadLineMedia("mid-body-stall", "token")
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settledAtDeadline = true;
+      });
+    await vi.waitFor(() => expect(saveMediaStreamMock).toHaveBeenCalledTimes(1));
     await vi.advanceTimersByTimeAsync(15_000);
+    await Promise.resolve();
+    const observedAtDeadline = settledAtDeadline;
+    if (!settledAtDeadline) {
+      stalledBody?.error(new Error("pre-fix test cleanup"));
+    }
     const err = expectMediaFetchError(await pending);
 
+    expect(observedAtDeadline).toBe(true);
     expect(err.code).toBe("fetch_failed");
+    expect(err).toBe(requestSignal?.reason);
+    expect(requestSignal?.aborted).toBe(true);
+    expect(stalledResponse?.body?.locked).toBe(false);
     expect(isRetryableLineInboundMediaError(err)).toBe(true);
+
+    const healthy = Buffer.from("healthy retry");
+    fetchMock.mockResolvedValueOnce(responseWithChunks(200, [healthy]));
+    await expect(downloadLineMedia("mid-body-stall", "token")).resolves.toMatchObject({
+      size: healthy.length,
+    });
   });
 
   it("raises a non-retryable MediaFetchError for a permanent HTTP error", async () => {

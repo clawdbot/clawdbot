@@ -1,7 +1,7 @@
 // Implements config inspection and mutation commands for reply sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
-import { normalizeChannelId } from "../../channels/registry.js";
+import { normalizeChatChannelId } from "../../channels/registry.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -82,7 +82,7 @@ export const handleConfigCommand: CommandHandler = defineAuthorizedTextCommand(
         return commandReply(`⚠️ ${parsedPath.error}`);
       }
       parsedWritePath = parsedPath.path;
-      const channelId = params.command.channelId ?? normalizeChannelId(params.command.channel);
+      const channelId = params.command.channelId ?? normalizeChatChannelId(params.command.channel);
       const deniedText = resolveConfigWriteDeniedText({
         cfg: params.cfg,
         channel: params.command.channel,

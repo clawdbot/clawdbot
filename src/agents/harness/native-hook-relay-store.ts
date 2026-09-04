@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -303,4 +304,3 @@ export function clearNativeHookRelayBridgeRecordsForTests(
     { path: options.stateDbPath },
   );
 }
-import type { DatabaseSync } from "node:sqlite";

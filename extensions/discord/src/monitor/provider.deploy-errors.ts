@@ -1,11 +1,11 @@
 // Discord provider module implements model/runtime integration.
 import { inspect } from "node:util";
-import {
-  parseStrictFiniteNumber,
-  parseStrictNonNegativeInteger,
-} from "openclaw/plugin-sdk/number-runtime";
 import { formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  parseFiniteNumber as readFiniteNumber,
+  parseStrictNonNegativeInteger as readNonNegativeInteger,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { RateLimitError } from "../internal/discord.js";
 
@@ -100,20 +100,6 @@ function readDiscordDeployObjectField(value: unknown, field: string): unknown {
   return value && typeof value === "object" && field in value
     ? (value as Record<string, unknown>)[field]
     : undefined;
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim().length > 0) {
-    return parseStrictFiniteNumber(value);
-  }
-  return undefined;
-}
-
-function readNonNegativeInteger(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
 }
 
 function isAbortLikeError(err: unknown): boolean {

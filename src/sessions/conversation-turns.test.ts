@@ -355,9 +355,7 @@ describe("conversation turn correlation", () => {
       replyToId: "outbound-slow",
       text: "arrived before timeout",
     });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
+    expect(claim).toBeDefined();
     await expect(pending.wait()).resolves.toBeUndefined();
     claim?.complete();
   });

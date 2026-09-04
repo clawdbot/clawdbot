@@ -1,5 +1,5 @@
 // Memory Core plugin module implements mmr behavior.
-import { jaccardSimilarity, tokenize } from "./tokenize.js";
+import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
 
 /**
  * Maximal Marginal Relevance (MMR) re-ranking algorithm.
@@ -116,7 +116,10 @@ function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {
       const selectedTokens = tokenCache.get(bestItem.id) ?? tokenize(bestItem.content);
       for (const candidate of remaining) {
         const candidateTokens = tokenCache.get(candidate.id) ?? tokenize(candidate.content);
-        const similarity = jaccardSimilarity(candidateTokens, selectedTokens);
+        const similarity =
+          candidateTokens.size === 0 && selectedTokens.size === 0
+            ? textSimilarity(candidate.content, bestItem.content)
+            : jaccardSimilarity(candidateTokens, selectedTokens);
         const previousMax = maxSimilarityByItem.get(candidate) ?? 0;
         if (similarity > previousMax) {
           maxSimilarityByItem.set(candidate, similarity);

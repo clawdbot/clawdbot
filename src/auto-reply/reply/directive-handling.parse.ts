@@ -1,7 +1,8 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Parses inline reply directives into typed execution and routing options.
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
-import { extractModelDirective } from "../model.js";
+import { extractModelDirective, type ModelSelectionScope } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.js";
 import type {
   ElevatedLevel,
@@ -21,9 +22,9 @@ import {
   extractVerboseDirective,
 } from "./directives.js";
 import { extractQueueDirective } from "./queue/directive.js";
-import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
+import type { QueueDropPolicy } from "./queue/types.js";
 
-const NATIVE_REPLY_DIRECTIVE_COMMANDS = {
+const REPLY_DIRECTIVE_COMMANDS = {
   think: true,
   verbose: true,
   trace: true,
@@ -36,19 +37,19 @@ const NATIVE_REPLY_DIRECTIVE_COMMANDS = {
 } as const;
 
 /** Canonical command-registry keys that share the session-directive execution pipeline. */
-type NativeReplyDirectiveCommand = keyof typeof NATIVE_REPLY_DIRECTIVE_COMMANDS;
+type ReplyDirectiveCommand = keyof typeof REPLY_DIRECTIVE_COMMANDS;
 
 /** Resolves a registered command key without inferring directive ownership from slash text. */
-export function resolveNativeReplyDirectiveCommand(
+export function resolveReplyDirectiveCommand(
   commandKey: string | undefined,
-): NativeReplyDirectiveCommand | undefined {
-  return commandKey && Object.hasOwn(NATIVE_REPLY_DIRECTIVE_COMMANDS, commandKey)
-    ? (commandKey as NativeReplyDirectiveCommand)
+): ReplyDirectiveCommand | undefined {
+  return commandKey && Object.hasOwn(REPLY_DIRECTIVE_COMMANDS, commandKey)
+    ? (commandKey as ReplyDirectiveCommand)
     : undefined;
 }
 
 type NativeDirectiveInvocation = {
-  name: NativeReplyDirectiveCommand;
+  name: ReplyDirectiveCommand;
   unconsumedArguments?: string;
 };
 
@@ -96,6 +97,9 @@ export type InlineDirectives = {
   rawModelDirective?: string;
   rawModelProfile?: string;
   rawModelRuntime?: string;
+  modelDirectiveSource?: "alias" | "model";
+  modelScope?: ModelSelectionScope;
+  modelScopeConflict: boolean;
   hasQueueDirective: boolean;
   queueMode?: QueueMode;
   queueReset: boolean;
@@ -110,20 +114,20 @@ export type InlineDirectives = {
 };
 
 /** Parses supported inline directives in the same order they are stripped from text. */
-export function parseInlineDirectives(
+export function parseInlineSessionDirectives(
   body: string,
   options?: {
     modelAliases?: string[];
     disableElevated?: boolean;
     allowStatusDirective?: boolean;
-    nativeCommand?: NativeReplyDirectiveCommand;
+    nativeCommand?: ReplyDirectiveCommand;
   },
 ): InlineDirectives {
   const nativeCommand = options?.nativeCommand;
   let cleaned = body;
   let hasAnyDirective = false;
   const parseScopedDirective = <T extends { cleaned: string; hasDirective: boolean }>(
-    commandName: NativeReplyDirectiveCommand,
+    commandName: ReplyDirectiveCommand,
     extract: (value: string) => T,
     enabled = true,
   ): T => {
@@ -170,7 +174,7 @@ export function parseInlineDirectives(
   const queue = parseScopedDirective("queue", extractQueueDirective);
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
-    cleaned: hasAnyDirective ? cleaned : body.trim(),
+    cleaned,
     ...(nativeCommand && hasAnyDirective
       ? {
           nativeCommand: {
@@ -218,6 +222,9 @@ export function parseInlineDirectives(
     rawModelDirective: model.rawModel,
     rawModelProfile: model.rawProfile,
     rawModelRuntime: model.rawRuntime,
+    modelDirectiveSource: model.source,
+    modelScope: model.scope,
+    modelScopeConflict: model.scopeConflict,
     hasQueueDirective: queue.hasDirective,
     queueMode: queue.queueMode,
     queueReset: queue.queueReset,

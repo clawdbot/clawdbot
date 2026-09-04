@@ -503,12 +503,6 @@ function isValidTenantIdentifier(value: string): boolean {
   return isTenantUuid || isTenantDomain;
 }
 
-if (process.env.VITEST === "true") {
-  const key = Symbol.for("openclaw.microsoftFoundryTestApi");
-  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
-  Reflect.set(globalThis, key, { ...api, buildFoundryConnectionTest, isValidTenantIdentifier });
-}
-
 export async function promptTenantId(
   ctx: ProviderAuthContext,
   params?: {

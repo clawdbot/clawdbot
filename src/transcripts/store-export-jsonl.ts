@@ -8,7 +8,11 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
-import { meetingTranscriptDb, utteranceFromRow } from "./store-sqlite.js";
+import {
+  meetingTranscriptSessionQuery,
+  meetingTranscriptUtteranceQuery,
+  utteranceFromRow,
+} from "./store-sqlite.js";
 
 const TRANSCRIPT_EXPORT_ROW_BATCH_SIZE = 64;
 
@@ -21,11 +25,7 @@ export async function writeTranscriptJsonlArtifact(params: {
   const database = openOpenClawStateDatabase(params.databaseOptions);
   const sequenceHead = executeSqliteQueryTakeFirstSync(
     database.db,
-    meetingTranscriptDb(database.db)
-      .selectFrom("meeting_transcript_sessions")
-      .select("next_utterance_seq")
-      .where("session_id", "=", params.session.sessionId)
-      .where("started_at", "=", params.session.startedAt),
+    meetingTranscriptSessionQuery(database.db, params.session).select("next_utterance_seq"),
   )?.next_utterance_seq;
   if (sequenceHead === undefined) {
     throw new Error(`transcripts session not found: ${params.session.sessionId}`);
@@ -41,11 +41,8 @@ export async function writeTranscriptJsonlArtifact(params: {
         while (nextSequence < sequenceHead) {
           const rows = executeSqliteQuerySync(
             database.db,
-            meetingTranscriptDb(database.db)
-              .selectFrom("meeting_transcript_utterances")
+            meetingTranscriptUtteranceQuery(database.db, params.session)
               .selectAll()
-              .where("session_id", "=", params.session.sessionId)
-              .where("session_started_at", "=", params.session.startedAt)
               .where("sequence", ">=", nextSequence)
               .where("sequence", "<", sequenceHead)
               .orderBy("sequence", "asc")

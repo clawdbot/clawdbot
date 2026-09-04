@@ -4,7 +4,34 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { executeSystemAgentOperation, isPersistentSystemAgentOperation } from "./operations.js";
-import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
+import type { SystemAgentOverview } from "./overview.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
+
+function createOverview(gatewayReachable: boolean): SystemAgentOverview {
+  return {
+    config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
+    agents: [
+      { id: "main", isDefault: true },
+      { id: "work", isDefault: false },
+    ],
+    defaultAgentId: "main",
+    tools: {
+      codex: { command: "codex", found: false },
+      claude: { command: "claude", found: false },
+      gemini: { command: "gemini", found: false },
+      apiKeys: { openai: false, anthropic: false },
+    },
+    gateway: {
+      url: "ws://127.0.0.1:18789",
+      source: "test",
+      reachable: gatewayReachable,
+    },
+    references: {
+      docsUrl: "https://docs.openclaw.ai",
+      sourceUrl: "https://github.com/openclaw/openclaw",
+    },
+  };
+}
 
 describe("system-agent TUI operations", () => {
   it("refuses doctor repairs before any write or audit", async () => {
@@ -39,7 +66,7 @@ describe("system-agent TUI operations", () => {
     const result = await executeSystemAgentOperation(
       { kind: "open-tui", agentId: "work" },
       runtime,
-      { deps: { runTui } },
+      { deps: { runTui, loadOverview: async () => createOverview(false) } },
     );
 
     expect(runTui).toHaveBeenCalledWith({
@@ -58,22 +85,38 @@ describe("system-agent TUI operations", () => {
     );
   });
 
-  it("seeds a fresh hatch into the agent TUI", async () => {
+  it("connects a fresh hatch to the reachable Gateway", async () => {
     const { runtime } = createSystemAgentTestRuntime();
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
 
     await executeSystemAgentOperation(
       { kind: "open-tui", agentId: "work", agentDraft: "hatch" },
       runtime,
-      { deps: { runTui } },
+      { deps: { runTui, loadOverview: async () => createOverview(true) } },
     );
+
+    expect(runTui).toHaveBeenCalledWith({
+      local: false,
+      session: "agent:work:main",
+      deliver: false,
+      historyLimit: 200,
+      message: "Wake up, my friend!",
+    });
+  });
+
+  it("keeps the embedded TUI fallback when the Gateway is unreachable", async () => {
+    const { runtime } = createSystemAgentTestRuntime();
+    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+
+    await executeSystemAgentOperation({ kind: "open-tui", agentId: "work" }, runtime, {
+      deps: { runTui, loadOverview: async () => createOverview(false) },
+    });
 
     expect(runTui).toHaveBeenCalledWith({
       local: true,
       session: "agent:work:main",
       deliver: false,
       historyLimit: 200,
-      message: "Wake up, my friend!",
     });
   });
 
@@ -84,7 +127,7 @@ describe("system-agent TUI operations", () => {
     }));
 
     const result = await executeSystemAgentOperation({ kind: "open-tui" }, runtime, {
-      deps: { runTui },
+      deps: { runTui, loadOverview: async () => createOverview(false) },
     });
 
     expect(result).toMatchObject({

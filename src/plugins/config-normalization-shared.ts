@@ -1,4 +1,5 @@
 // Shares plugin config normalization helpers across control-plane paths.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -237,7 +238,7 @@ function normalizePluginEntries(
 }
 
 /** Normalizes plugin config while allowing callers to resolve aliases first. */
-export function normalizePluginsConfigWithResolver(
+export function normalizePluginsConfigWithResolverCore(
   config?: OpenClawConfig["plugins"],
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {
@@ -255,46 +256,29 @@ export function normalizePluginsConfigWithResolver(
   };
 }
 
-export function hasExplicitPluginConfig(plugins?: OpenClawConfig["plugins"]): boolean {
-  if (!plugins) {
-    return false;
-  }
-  if (typeof plugins.enabled === "boolean") {
-    return true;
-  }
-  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
-    return true;
-  }
-  if (plugins.load?.paths && Array.isArray(plugins.load.paths) && plugins.load.paths.length > 0) {
-    return true;
-  }
-  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
-    return true;
-  }
-  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
-    return true;
-  }
-  return false;
-}
-
-export function isBundledChannelEnabledByChannelConfig(
+/**
+ * Enables an owner for any enabled channel; disables it only when all channels are off.
+ * Unspecified channels leave the plugin's own activation policy in control.
+ */
+export function resolveChannelConfigEnablement(
   cfg: OpenClawConfig | undefined,
   pluginId: string,
-): boolean {
-  if (!cfg) {
-    return false;
+  channelIds: readonly string[] = [],
+): boolean | undefined {
+  const channels = cfg?.channels as Record<string, unknown> | undefined;
+  if (!channels) {
+    return undefined;
   }
-  const channelId = normalizeChatChannelId(pluginId);
-  if (!channelId) {
-    return false;
+  // Declared ownership is authoritative; infer from the plugin id only when absent.
+  const candidateIds = channelIds.length
+    ? channelIds.map((channelId) => normalizeChatChannelId(channelId) ?? channelId)
+    : [normalizeChatChannelId(pluginId)];
+  const enablement = candidateIds.map((channelId) => {
+    const entry = channelId ? channels[channelId] : undefined;
+    return isRecord(entry) ? entry.enabled : undefined;
+  });
+  if (enablement.includes(true)) {
+    return true;
   }
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const entry = channels?.[channelId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return false;
-  }
-  return (entry as Record<string, unknown>).enabled === true;
+  return enablement.every((enabled) => enabled === false) ? false : undefined;
 }

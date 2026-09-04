@@ -62,22 +62,23 @@ describe("withTempDownloadPath", () => {
     {
       name: "creates a temp path under tmp dir and cleans up the temp directory",
       input: { prefix: "line-media" },
-      expectCleanup: true,
       expectedBasename: undefined,
     },
     {
       name: "sanitizes prefix and fileName",
       input: { prefix: "../../channels/../media", fileName: "../../evil.bin" },
-      expectCleanup: false,
       expectedBasename: "evil.bin",
     },
-  ])("$name", async ({ input, expectCleanup, expectedBasename }) => {
+    ...[".", "..", "../..", "-..-"].map((fileName) => ({
+      name: `falls back to the default name for the dot segment ${fileName}`,
+      input: { prefix: "media", fileName },
+      expectedBasename: "download.bin",
+    })),
+  ])("$name", async ({ input, expectedBasename }) => {
     let capturedPath = "";
     await withTempDownloadPath(input, async (tmpPath) => {
       capturedPath = tmpPath;
-      if (expectCleanup) {
-        await fs.writeFile(tmpPath, "ok");
-      }
+      await fs.writeFile(tmpPath, "ok");
     });
 
     expectPathInsideTmpRoot(capturedPath);
@@ -86,14 +87,6 @@ describe("withTempDownloadPath", () => {
     } else {
       expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
     }
-    if (expectCleanup) {
-      let statError: NodeJS.ErrnoException | undefined;
-      try {
-        await fs.stat(capturedPath);
-      } catch (error) {
-        statError = error as NodeJS.ErrnoException;
-      }
-      expect(statError?.code).toBe("ENOENT");
-    }
+    await expect(fs.stat(path.dirname(capturedPath))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

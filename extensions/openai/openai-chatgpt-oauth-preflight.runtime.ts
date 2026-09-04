@@ -4,7 +4,7 @@ import { inspectTlsCertificateError } from "openclaw/plugin-sdk/provider-http";
 const OPENAI_AUTH_PROBE_URL =
   "https://auth.openai.com/oauth/authorize?response_type=code&client_id=openclaw-preflight&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email";
 type PreflightFailureKind = "tls-cert" | "network";
-export type OpenAIOAuthTlsPreflightResult =
+type OpenAIOAuthTlsPreflightResult =
   | { ok: true }
   | {
       ok: false;
@@ -49,18 +49,26 @@ function extractFailure(error: unknown): {
 export async function runOpenAIOAuthTlsPreflight(options?: {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<OpenAIOAuthTlsPreflightResult> {
   const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
   const fetchImpl = options?.fetchImpl ?? fetch;
+  options?.signal?.throwIfAborted();
+  options?.assertCurrent?.();
   let response: Response | undefined;
   try {
     response = await fetchImpl(OPENAI_AUTH_PROBE_URL, {
       method: "GET",
       redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: options?.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
     });
     return { ok: true };
   } catch (error) {
+    options?.signal?.throwIfAborted();
+    options?.assertCurrent?.();
     const failure = extractFailure(error);
     return {
       ok: false,

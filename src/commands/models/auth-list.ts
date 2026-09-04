@@ -9,6 +9,7 @@ import {
   type AuthProfileStore,
   type ProfileUsageStats,
 } from "../../agents/auth-profiles.js";
+import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
@@ -25,6 +26,10 @@ type AuthProfileSummary = {
   expiresAt?: string;
   cooldownUntil?: string;
   disabledUntil?: string;
+  cooldownReason?: ProfileUsageStats["cooldownReason"];
+  cooldownClassification?: ProfileUsageStats["cooldownClassification"];
+  disabledReason?: ProfileUsageStats["disabledReason"];
+  recoveryHint?: string;
 };
 
 function resolveProviderFilter(rawProvider: string | undefined): {
@@ -65,6 +70,21 @@ function summarizeProfile(params: {
   const expiresAt = resolveProfileExpiry(params.profile);
   const cooldownUntil = formatTimestamp(params.usage?.cooldownUntil);
   const disabledUntil = formatTimestamp(params.usage?.disabledUntil);
+  const disabledActive = Boolean(disabledUntil);
+  const reason = disabledActive
+    ? params.usage?.disabledReason
+    : cooldownUntil
+      ? params.usage?.cooldownReason
+      : undefined;
+  const recoveryHint =
+    disabledUntil || cooldownUntil
+      ? buildAuthProfileUnusableHint({
+          kind: disabledActive ? "disabled" : "cooldown",
+          reason,
+          provider: params.profile.provider,
+          profileId: params.profileId,
+        })
+      : undefined;
   return {
     id: params.profileId,
     provider: resolveProviderIdForAuth(params.profile.provider),
@@ -79,6 +99,12 @@ function summarizeProfile(params: {
     ...(expiresAt ? { expiresAt } : {}),
     ...(cooldownUntil ? { cooldownUntil } : {}),
     ...(disabledUntil ? { disabledUntil } : {}),
+    ...(params.usage?.cooldownReason ? { cooldownReason: params.usage.cooldownReason } : {}),
+    ...(params.usage?.cooldownClassification
+      ? { cooldownClassification: params.usage.cooldownClassification }
+      : {}),
+    ...(params.usage?.disabledReason ? { disabledReason: params.usage.disabledReason } : {}),
+    ...(recoveryHint ? { recoveryHint } : {}),
   };
 }
 
@@ -88,12 +114,15 @@ function formatProfileLine(profile: AuthProfileSummary): string {
     details.push(`expires ${profile.expiresAt}`);
   }
   if (profile.cooldownUntil) {
-    details.push(`cooldown until ${profile.cooldownUntil}`);
+    const diagnostic = profile.cooldownClassification ?? profile.cooldownReason;
+    details.push(`cooldown${diagnostic ? `:${diagnostic}` : ""} until ${profile.cooldownUntil}`);
   }
   if (profile.disabledUntil) {
-    details.push(`disabled until ${profile.disabledUntil}`);
+    details.push(
+      `disabled${profile.disabledReason ? `:${profile.disabledReason}` : ""} until ${profile.disabledUntil}`,
+    );
   }
-  return `- ${profile.label} [${details.join("; ")}]`;
+  return `- ${profile.label} [${details.join("; ")}]${profile.recoveryHint ? ` — ${profile.recoveryHint}` : ""}`;
 }
 
 /** Lists auth profiles for the selected agent, optionally filtered by provider. */
@@ -102,7 +131,7 @@ export async function modelsAuthListCommand(
   runtime: RuntimeEnv,
 ) {
   const cfg = await loadModelsConfig({ commandName: "models auth list", runtime });
-  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent);
+  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, { kind: "read" });
   const providerFilter = resolveProviderFilter(opts.provider);
   const store = ensureAuthProfileStore(
     agentDir,

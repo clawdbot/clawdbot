@@ -126,6 +126,7 @@ export async function runDuckDuckGoSearch(params: {
   safeSearch?: DdgSafeSearch;
   timeoutSeconds?: number;
   cacheTtlMinutes?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
   const region = params.region ?? resolveDdgRegion(params.config);
@@ -136,7 +137,10 @@ export async function runDuckDuckGoSearch(params: {
       ? params.safeSearch
       : resolveDdgSafeSearch(params.config);
   const timeoutSeconds = resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
-  const cacheTtlMs = resolveCacheTtlMs(params.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
+  const cacheTtlMs = resolveCacheTtlMs(
+    params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,
+    DEFAULT_CACHE_TTL_MINUTES,
+  );
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       provider: "duckduckgo",
@@ -146,7 +150,7 @@ export async function runDuckDuckGoSearch(params: {
       safeSearch,
     }),
   );
-  const cached = readCache(DDG_SEARCH_CACHE, cacheKey);
+  const cached = readCache(DDG_SEARCH_CACHE, cacheKey, cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
@@ -163,6 +167,7 @@ export async function runDuckDuckGoSearch(params: {
     {
       url: url.toString(),
       timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "GET",
         headers: {
@@ -187,6 +192,7 @@ export async function runDuckDuckGoSearch(params: {
     },
   );
 
+  params.signal?.throwIfAborted();
   const payload = {
     query: params.query,
     provider: "duckduckgo",
@@ -209,12 +215,3 @@ export async function runDuckDuckGoSearch(params: {
   writeCache(DDG_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  decodeDuckDuckGoUrl,
-  decodeHtmlEntities,
-  isBotChallenge,
-  parseDuckDuckGoHtml,
-  readDuckDuckGoHtmlResponse,
-};
-export { testing as __testing };

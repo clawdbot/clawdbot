@@ -1,6 +1,6 @@
 # Feishu Block Types Reference
 
-Complete reference for Feishu document block types. Use with `feishu_doc_list_blocks`, `feishu_doc_update_block`, and `feishu_doc_delete_block`.
+Complete reference for Feishu document block types. Use the single `feishu_doc` tool with its `list_blocks`, `update_block`, and `delete_block` actions.
 
 ## Block Type Table
 
@@ -59,10 +59,11 @@ Complete reference for Feishu document block types. Use with `feishu_doc_list_bl
 
 ### Text-based blocks (2-17, 19)
 
-Update text content using `feishu_doc_update_block`:
+Update text content with `feishu_doc`:
 
 ```json
 {
+  "action": "update_block",
   "doc_token": "ABC123",
   "block_id": "block_xxx",
   "content": "New text content"
@@ -71,13 +72,11 @@ Update text content using `feishu_doc_update_block`:
 
 ### Image blocks (27)
 
-Images cannot be updated directly via `update_block`. Use `feishu_doc_write` or `feishu_doc_append` with markdown to add new images.
+Images cannot be updated directly via `update_block`. Use `upload_image` to add a replacement image, then delete the old block only after the new upload succeeds.
 
 ### Table blocks (31)
 
-**Important:** Table blocks CANNOT be created via the `documentBlockChildren.create` API (error 1770029). This affects `feishu_doc_write` and `feishu_doc_append` - markdown tables will be skipped with a warning.
-
-Tables can only be read (via `list_blocks`) and individual cells (type 32) can be updated, but new tables cannot be inserted programmatically via markdown.
+Markdown tables are not converted by `write`, `append`, or `insert`. Create tables with `create_table` or `create_table_with_values`; use the table row, column, cell, and merge actions exposed by the current schema for later edits.
 
 ### Container blocks (24, 25, 35)
 
@@ -87,17 +86,13 @@ Grid and QuoteContainer are layout containers. Edit their child blocks instead.
 
 ### Replace specific paragraph
 
-1. `feishu_doc_list_blocks` - find the block_id
-2. `feishu_doc_update_block` - update its content
+1. Call `feishu_doc` with `action: "list_blocks"` to find the block ID.
+2. Call `feishu_doc` with `action: "update_block"` to replace its text.
 
 ### Insert content at specific location
 
-Currently, the API only supports appending to document end. For insertion at specific positions, consider:
-
-1. Read existing content
-2. Delete affected blocks
-3. Rewrite with new content in desired order
+Call `feishu_doc` with `action: "insert"`, the target `doc_token`, Markdown `content`, and the preceding block's ID as `after_block_id`.
 
 ### Delete multiple blocks
 
-Blocks must be deleted one at a time. Delete child blocks before parent containers.
+Call `delete_block` for exact block IDs. Delete child blocks before parent containers and confirm broad deletions first.

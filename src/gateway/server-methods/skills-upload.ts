@@ -4,12 +4,12 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  type ErrorShape,
   type ProtocolValidator,
   validateSkillsUploadBeginParams,
   validateSkillsUploadChunkParams,
   validateSkillsUploadCommitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   areUploadedSkillArchivesEnabled,

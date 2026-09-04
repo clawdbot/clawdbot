@@ -8,12 +8,11 @@ import {
 } from "../interactive-dispatch.js";
 import type { TopLevelComponents } from "../internal/discord.js";
 import { editDiscordComponentMessage } from "../send.components.js";
-import {
-  resolveDiscordInteractionId,
-  type AgentComponentContext,
-  type AgentComponentInteraction,
-  type ComponentInteractionContext,
-  type DiscordChannelContext,
+import type {
+  AgentComponentContext,
+  AgentComponentInteraction,
+  ComponentInteractionContext,
+  DiscordChannelContext,
 } from "./agent-components-helpers.js";
 
 const loadConversationRuntime = createLazyRuntimeModule(
@@ -144,10 +143,10 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
   }
   const dispatched = await dispatchDiscordPluginInteractiveHandler({
     data: params.data,
-    interactionId: resolveDiscordInteractionId(params.interaction),
+    interactionId: params.interaction.id,
     ctx: {
       accountId: params.ctx.accountId,
-      interactionId: resolveDiscordInteractionId(params.interaction),
+      interactionId: params.interaction.id,
       conversationId: normalizedConversationId,
       parentConversationId: params.channelCtx.parentId,
       guildId: params.interactionCtx.rawGuildId,

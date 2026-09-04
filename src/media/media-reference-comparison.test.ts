@@ -8,6 +8,36 @@ describe("normalizeMediaReferenceForComparison", () => {
     );
   });
 
+  it.each([
+    ["FILE:/workspace/a%5Cb.png", "/workspace/a\\b.png"],
+    ["FILE:/workspace/a%5cb.png", "/workspace/a\\b.png"],
+    ["FILE:/workspace/a%2Fb.png", "/workspace/a/b.png"],
+    ["FILE:/workspace/a%2fb.png", "/workspace/a/b.png"],
+  ])("preserves encoded separator URL %s without colliding with %s", (fileUrl, localPath) => {
+    expect(normalizeMediaReferenceForComparison(fileUrl)).toBe(fileUrl);
+    expect(normalizeMediaReferenceForComparison(fileUrl)).not.toBe(
+      normalizeMediaReferenceForComparison(localPath),
+    );
+  });
+
+  it.each(["file:/tmp/generated.png", "FILE:/tmp/generated.png", "FILE:///tmp/generated.png"])(
+    "matches canonical file URL form %s with the triple-slash form",
+    (fileUrl) => {
+      expect(normalizeMediaReferenceForComparison(fileUrl)).toBe(
+        normalizeMediaReferenceForComparison("file:///tmp/generated.png"),
+      );
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "matches Windows network file URLs across scheme casing",
+    () => {
+      expect(normalizeMediaReferenceForComparison("FILE://server/share.png")).toBe(
+        normalizeMediaReferenceForComparison("file://server/share.png"),
+      );
+    },
+  );
+
   it("keeps parent segments distinct without resolving filesystem identity", () => {
     expect(normalizeMediaReferenceForComparison("/tmp/output/../generated.png")).toBe(
       "/tmp/output/../generated.png",
@@ -38,6 +68,12 @@ describe("normalizeMediaReferenceForComparison", () => {
     );
     expect(normalizeMediaReferenceForComparison("file://server/share.png")).not.toBe(
       normalizeMediaReferenceForComparison("server/share.png"),
+    );
+    expect(normalizeMediaReferenceForComparison("FILE://server/share.png")).not.toBe(
+      normalizeMediaReferenceForComparison("server/share.png"),
+    );
+    expect(normalizeMediaReferenceForComparison("FILE:/tmp/a%2Fb.png")).not.toBe(
+      normalizeMediaReferenceForComparison("/tmp/a/b.png"),
     );
     expect(normalizeMediaReferenceForComparison("//cdn.example/share.png")).toBe(
       "//cdn.example/share.png",

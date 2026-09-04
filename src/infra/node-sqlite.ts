@@ -1,6 +1,7 @@
 // Loads node:sqlite with OpenClaw warning handling.
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
@@ -27,6 +28,20 @@ export function resolveNodeSqliteLocation(location: string): string {
     return location;
   }
   return resolveSqliteFilesystemPath(location);
+}
+
+/** Build an immutable SQLite URI without losing the Windows long-path namespace. */
+export function resolveImmutableSqliteFileUri(
+  pathname: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    const namespacedPath = path.win32.toNamespacedPath(path.win32.resolve(pathname));
+    // SQLite decodes path escapes after separating the query string, so the
+    // encoded \\?\ prefix reaches the Windows VFS without becoming URI syntax.
+    return `file:${encodeURIComponent(namespacedPath)}?mode=ro&immutable=1`;
+  }
+  return `${pathToFileURL(path.resolve(pathname)).href}?mode=ro&immutable=1`;
 }
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
@@ -101,11 +116,13 @@ export function openNodeSqliteDatabase(
 /** Hold a raw exclusive transaction until release for cross-process coordination. */
 export function tryAcquireExclusiveSqliteCoordinator(
   location: string,
+  options: { busyTimeoutMs?: number } = {},
 ): { release: () => void } | null {
+  const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? 0));
   const database = openNodeSqliteDatabase(location);
   try {
     // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
-    database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+    database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; BEGIN EXCLUSIVE;`);
   } catch (error) {
     database.close();
     if (isSqliteLockError(error)) {
@@ -115,10 +132,22 @@ export function tryAcquireExclusiveSqliteCoordinator(
   }
   return {
     release: () => {
+      const errors: unknown[] = [];
       try {
         database.exec("ROLLBACK");
-      } finally {
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
         database.close();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "SQLite coordinator rollback and close both failed");
       }
     },
   };

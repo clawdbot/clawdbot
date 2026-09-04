@@ -7,11 +7,27 @@ import {
   type SessionUpstreamActivity,
   type SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
 const MAX_CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
-export const continueOperations = new Map<string, Promise<{ sessionKey: string }>>();
+
+async function readFileRange(
+  handle: Awaited<ReturnType<typeof fs.open>>,
+  position: number,
+  length: number,
+): Promise<Buffer> {
+  const buffer = Buffer.alloc(length);
+  let offset = 0;
+  while (offset < length) {
+    const { bytesRead } = await handle.read(buffer, offset, length - offset, position + offset);
+    if (bytesRead <= 0) {
+      break;
+    }
+    offset += bytesRead;
+  }
+  return offset === length ? buffer : buffer.subarray(0, offset);
+}
 
 async function link(
   sessionKey: string,
@@ -102,7 +118,7 @@ function readMarkerOffset(probe: SessionUpstreamProbe): number | undefined {
     return undefined;
   }
   const offset = probe.marker.offset ?? probe.marker.size;
-  return Number.isSafeInteger(offset) && (offset as number) >= 0 ? (offset as number) : undefined;
+  return asSafeIntegerInRange(offset, { min: 0 });
 }
 
 async function checkClaudeSessionUpstreamActivity(
@@ -133,9 +149,7 @@ async function checkClaudeSessionUpstreamActivity(
       return undefined;
     }
     const readLength = Math.min(stat.size - markerOffset, MAX_CLAUDE_UPSTREAM_SCAN_BYTES);
-    const buffer = Buffer.allocUnsafe(readLength);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, markerOffset);
-    const tail = buffer.subarray(0, bytesRead);
+    const tail = await readFileRange(handle, markerOffset, readLength);
     const lastNewline = tail.lastIndexOf(0x0a);
     if (lastNewline < 0) {
       // Cursor movement requires a complete classified row. A row beyond the

@@ -20,7 +20,10 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readNonEmptyStringPreservingWhitespace as readNonEmptyUntrimmedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultNextcloudTalkAccountId, resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
@@ -35,10 +38,6 @@ type NextcloudSetupInput = ChannelSetupInput & {
   url?: string;
   password?: string;
 };
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
 
 export function normalizeNextcloudTalkBaseUrl(value: string | undefined): string {
   return value?.trim().replace(/\/+$/, "") ?? "";
@@ -147,12 +146,12 @@ const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
     const setupInput = input as NextcloudSetupInput;
     return {
       ...setupInput,
-      baseUrl: setupInput.baseUrl ?? readOptionalString(setupInput.url),
+      baseUrl: setupInput.baseUrl ?? readNonEmptyUntrimmedString(setupInput.url),
       secret:
         setupInput.secret ??
-        readOptionalString(setupInput.token) ??
-        readOptionalString(setupInput.password),
-      secretFile: setupInput.secretFile ?? readOptionalString(setupInput.tokenFile),
+        readNonEmptyUntrimmedString(setupInput.token) ??
+        readNonEmptyUntrimmedString(setupInput.password),
+      secretFile: setupInput.secretFile ?? readNonEmptyUntrimmedString(setupInput.tokenFile),
     };
   },
   applyAccountName: ({ cfg, accountId, name }) =>
@@ -246,6 +245,7 @@ export const nextcloudTalkSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Nextcloud Talk environment credentials" },
+      envVars: ["NEXTCLOUD_TALK_BOT_SECRET"],
     },
   },
   legacyAdapter: nextcloudTalkSetupAdapter,

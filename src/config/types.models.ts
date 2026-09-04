@@ -3,6 +3,7 @@ import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
+  RawModelCostConfig,
   ThinkingLevelMap,
 } from "../llm/types.js";
 import { isStringOption } from "../utils/string-readers.js";
@@ -31,6 +32,7 @@ type SupportedOpenAICompatFields = Pick<
   | "supportsStore"
   | "supportsDeveloperRole"
   | "supportsReasoningEffort"
+  | "reasoningEffortMap"
   | "supportsUsageInStreaming"
   | "supportsStrictMode"
   | "supportsJsonSchemaResponseFormat"
@@ -49,7 +51,10 @@ type SupportedOpenAICompatFields = Pick<
 
 type SupportedOpenAIResponsesCompatFields = Pick<
   OpenAIResponsesCompat,
-  "sendSessionIdHeader" | "supportsLongCacheRetention" | "supportsTemperature"
+  | "sendSessionIdHeader"
+  | "supportsLongCacheRetention"
+  | "supportsTemperature"
+  | "supportsInstructions"
 >;
 
 type SupportedAnthropicMessagesCompatFields = Pick<
@@ -87,8 +92,6 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     thinkingFormat?: SupportedThinkingFormat;
     /** Provider-accepted reasoning effort labels. */
     supportedReasoningEfforts?: string[];
-    /** Maps OpenClaw reasoning effort labels to provider-specific labels. */
-    reasoningEffortMap?: Record<string, string>;
     /** Reasoning detail block types safe to expose in visible transcripts. */
     visibleReasoningDetailTypes?: string[];
     /** Whether this model supports tool/function calling. */
@@ -163,26 +166,9 @@ export type ModelDefinitionConfig = {
   /** Supported input modalities for routing and media-tool selection. */
   input: Array<"text" | "image" | "video" | "audio">;
   /** Token pricing in USD per million tokens. */
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    /** Optional tiered pricing.  When present, cost calculation uses
-     *  per-tier rates instead of the flat rates above.  Prices are
-     *  USD / million tokens; ranges are half-open `[start, end)` on the
-     *  input-token axis. */
-    tieredPricing?: Array<{
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      /** Bounded tier: `[start, end)`. Open-ended top tier: `[start]` (normalized to `[start, Infinity]` at load time). */
-      range: [number, number] | [number];
-    }>;
-  };
+  cost: RawModelCostConfig;
   /** Provider/native maximum context window in tokens. */
-  contextWindow: number;
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while letting configs
@@ -216,10 +202,6 @@ export type ModelProviderConfig = {
   auth?: ModelProviderAuthMode;
   /** Default API adapter for models under this provider. */
   api?: ModelApi;
-  /** Provider-level default context window. */
-  contextWindow?: number;
-  /** Provider-level effective runtime context cap. */
-  contextTokens?: number;
   /** Provider-level default max output tokens. */
   maxTokens?: number;
   /** Provider request timeout in seconds. */

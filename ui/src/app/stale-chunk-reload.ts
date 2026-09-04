@@ -10,6 +10,7 @@
 // only recovery path there.
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
+import { getSafeSessionStorage } from "../local-storage.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
 // Bounds document probes across rapid re-renders of the same error state.
@@ -18,12 +19,9 @@ const ATTEMPT_COOLDOWN_MS = 5_000;
 // another probe immediately while the gateway is still unreachable.
 const DOCUMENT_PROBE_TIMEOUT_MS = 3_000;
 
-const MODULE_IMPORT_ERROR_PATTERNS = [
-  /importing a module script failed/i, // WebKit
-  /failed to fetch dynamically imported module/i, // Chromium
-  /error loading dynamically imported module/i, // Firefox
-  /unable to preload css/i, // Vite preload helper
-];
+// WebKit, Chromium, Firefox, and Vite's preload helper use these four phrases.
+const MODULE_IMPORT_ERROR_PATTERN =
+  /importing a module script failed|failed to fetch dynamically imported module|error loading dynamically imported module|unable to preload css/i;
 
 type StaleChunkReloadDeps = {
   now?: () => number;
@@ -38,33 +36,28 @@ type MissingStylesheetRecoveryDeps = {
   retry?: () => Promise<boolean>;
 };
 
-const lastAttemptAtByStorage = new WeakMap<object, number>();
-let lastAttemptWithoutStorage: number | null = null;
-let inFlightDocumentProbe: Promise<boolean> | null = null;
+type RecoveryState = [attemptsByBuild: Map<string, number>, pendingBuildId: string | null];
+
+const recoveryByStorage = new WeakMap<object, RecoveryState>();
+const unavailableStorage = {};
+// A shared probe can release automatic and manual recovery in the same microtask.
+// Admit one navigation before either path can replace the guard or reload.
+let inFlightDocumentProbe: { buildId?: string; promise: Promise<boolean> } | null = null;
 
 export function isStaleChunkImportError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    MODULE_IMPORT_ERROR_PATTERNS.some((pattern) => pattern.test(error.message))
-  );
+  return error instanceof Error && MODULE_IMPORT_ERROR_PATTERN.test(error.message);
 }
 
 function reloadControlUiDocument(): void {
-  window.location.reload();
+  const url = new URL(window.location.href);
+  // The pre-app mount recovery strips this one-shot cache buster before bootstrap.
+  url.searchParams.set("openclaw_mount_recovery", String(Date.now()));
+  window.location.replace(url.href);
 }
 
-function sessionStorageOrNull(): Pick<Storage, "getItem" | "setItem"> | null {
-  try {
-    return window.sessionStorage;
-  } catch {
-    // Storage can be disabled; recovery then stays manual via the Retry button.
-    return null;
-  }
-}
-
-function probeControlUiDocument(): Promise<boolean> {
+function probeControlUiDocument(buildId?: string): Promise<boolean> {
   if (inFlightDocumentProbe) {
-    return inFlightDocumentProbe;
+    return inFlightDocumentProbe.promise;
   }
   const probe = (async () => {
     const controller = new AbortController();
@@ -83,20 +76,12 @@ function probeControlUiDocument(): Promise<boolean> {
     }
   })();
   const settledProbe = probe.finally(() => {
-    if (inFlightDocumentProbe === settledProbe) {
+    if (inFlightDocumentProbe?.promise === settledProbe) {
       inFlightDocumentProbe = null;
     }
   });
-  inFlightDocumentProbe = settledProbe;
+  inFlightDocumentProbe = { buildId, promise: settledProbe };
   return settledProbe;
-}
-
-function readGuardBuildId(storage: Pick<Storage, "getItem" | "setItem"> | null): string | null {
-  try {
-    return storage?.getItem(RELOAD_GUARD_STORAGE_KEY) ?? null;
-  } catch {
-    return null;
-  }
 }
 
 function persistGuardBuildId(
@@ -122,36 +107,52 @@ function persistGuardBuildId(
  * app webviews) instead of the recoverable panel error.
  */
 export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
-  const now = deps.now?.() ?? Date.now();
-  const storage = deps.storage === undefined ? sessionStorageOrNull() : deps.storage;
-  const lastAttemptAt = storage
-    ? (lastAttemptAtByStorage.get(storage) ?? null)
-    : lastAttemptWithoutStorage;
-  if (lastAttemptAt !== null && now - lastAttemptAt < ATTEMPT_COOLDOWN_MS) {
-    return false;
-  }
-  if (storage) {
-    lastAttemptAtByStorage.set(storage, now);
-  } else {
-    lastAttemptWithoutStorage = now;
-  }
+  const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
   const buildId = deps.buildId ?? CONTROL_UI_BUILD_INFO.buildId;
   // One automatic reload per build id: if the reloaded document still fails
   // with the same build, the build itself is broken and reloading cannot help.
   // A genuinely newer deployment ships a new build id and may recover again.
-  if (readGuardBuildId(storage) === buildId) {
+  try {
+    if (storage?.getItem(RELOAD_GUARD_STORAGE_KEY) === buildId) {
+      return false;
+    }
+  } catch {
+    // Unreadable storage follows the same safe path as unavailable storage.
+  }
+  const now = deps.now?.() ?? Date.now();
+  const storageIdentity = storage ?? unavailableStorage;
+  const recovery = recoveryByStorage.get(storageIdentity) ?? [new Map<string, number>(), buildId];
+  const attemptsByBuild = recovery[0];
+  for (const [attemptedBuildId, attemptedAt] of attemptsByBuild) {
+    if (now - attemptedAt >= ATTEMPT_COOLDOWN_MS) {
+      attemptsByBuild.delete(attemptedBuildId);
+    }
+  }
+  if (attemptsByBuild.has(buildId)) {
     return false;
   }
-  if (!(await probeControlUiDocument())) {
+  attemptsByBuild.set(buildId, now);
+  recovery[1] = buildId;
+  recoveryByStorage.set(storageIdentity, recovery);
+  // A newer build cannot inherit the failed probe started for an older build.
+  const joinedOlderBuildProbe = Boolean(
+    inFlightDocumentProbe && inFlightDocumentProbe.buildId !== buildId,
+  );
+  if (
+    !(await probeControlUiDocument(buildId)) &&
+    (!joinedOlderBuildProbe || !(await probeControlUiDocument(buildId)))
+  ) {
     return false;
   }
   // A reload resets the in-memory state, so without a persisted guard a broken
   // build would reload forever. When storage is unavailable or rejects the
   // write, leave recovery to the manual Retry path instead of reloading.
-  if (!persistGuardBuildId(storage, buildId)) {
+  const reload = deps.reload ?? reloadControlUiDocument;
+  if (recovery[1] !== buildId || !persistGuardBuildId(storage, buildId)) {
     return false;
   }
-  (deps.reload ?? reloadControlUiDocument)();
+  recovery[1] = null;
+  reload();
   return true;
 }
 
@@ -183,9 +184,9 @@ async function probeWithinDeadline(
 
 /**
  * User-initiated retry that survives the restart which caused the stale chunk:
- * poll until the gateway answers, then reload. Returns false only when it stays
- * unreachable for the whole window, so callers keep the recoverable panel error
- * instead of navigating into a fatal error page.
+ * poll until the gateway answers, then reload if the caller still owns recovery.
+ * Unreachable or retired requests keep the current document instead of navigating
+ * into a fatal error page or discarding a newer action.
  */
 export async function retryStaleChunkReloadWhenReachable(
   deps: StaleChunkReloadDeps & {
@@ -193,8 +194,12 @@ export async function retryStaleChunkReloadWhenReachable(
     intervalMs?: number;
     probe?: () => Promise<boolean>;
     wait?: (ms: number) => Promise<void>;
+    canReload?: () => boolean;
   } = {},
 ): Promise<boolean> {
+  if (deps.canReload?.() === false) {
+    return false;
+  }
   const now = deps.now ?? Date.now;
   const probe = deps.probe ?? probeControlUiDocument;
   const wait =
@@ -216,7 +221,25 @@ export async function retryStaleChunkReloadWhenReachable(
     // rather than "never ask"; the probe's own abort bounds that case.
     const reachable = remaining > 0 ? await probeWithinDeadline(probe, remaining) : await probe();
     if (reachable) {
-      (deps.reload ?? reloadControlUiDocument)();
+      // The probe may outlive Close, a new request, or a failed replay-state write.
+      if (deps.canReload?.() === false) {
+        return false;
+      }
+      const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
+      const storageIdentity = storage ?? unavailableStorage;
+      const reload = deps.reload ?? reloadControlUiDocument;
+      const recovery = recoveryByStorage.get(storageIdentity) ?? [
+        new Map<string, number>(),
+        CONTROL_UI_BUILD_INFO.buildId,
+      ];
+      recoveryByStorage.set(storageIdentity, recovery);
+      const buildId = recovery[1];
+      if (buildId === null) {
+        return false;
+      }
+      recovery[1] = null;
+      persistGuardBuildId(storage, buildId);
+      reload();
       return true;
     }
     if (now() >= deadline) {
@@ -271,40 +294,14 @@ export function installMissingStylesheetRecovery(
       return;
     }
     banner = document.createElement("div");
-    banner.setAttribute("role", "alert");
+    banner.role = "alert";
     // All styles are inline because the entry stylesheet is broken by definition.
-    Object.assign(banner.style, {
-      position: "fixed",
-      top: "0",
-      left: "0",
-      right: "0",
-      zIndex: "2147483647",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: "12px",
-      padding: "12px 16px",
-      background: "#1f2937",
-      color: "#ffffff",
-      fontFamily: "system-ui, sans-serif",
-      fontSize: "14px",
-    });
-    const message = document.createElement("span");
-    message.textContent = t("lazyView.stylesFailed");
+    banner.style.cssText =
+      "position:fixed;inset:0 0 auto;z-index:2147483647;padding:12px;text-align:center;background:#1f2937;color:#fff;font:14px system-ui";
     const reloadButton = document.createElement("button");
-    reloadButton.type = "button";
     reloadButton.textContent = t("common.reload");
-    Object.assign(reloadButton.style, {
-      border: "0",
-      borderRadius: "4px",
-      padding: "6px 12px",
-      background: "#ffffff",
-      color: "#111827",
-      cursor: "pointer",
-      font: "inherit",
-    });
     reloadButton.addEventListener("click", () => void retry());
-    banner.append(message, reloadButton);
+    banner.append(t("lazyView.stylesFailed"), " ", reloadButton);
     document.body.append(banner);
   };
 

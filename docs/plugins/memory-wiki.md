@@ -13,8 +13,8 @@ navigable wiki: deterministic pages, structured claims with evidence,
 provenance, dashboards, and machine-readable digests.
 
 It does not replace the active memory plugin. Recall, promotion, indexing, and
-dreaming stay owned by whichever memory backend is configured
-(`memory-core`, QMD, Honcho, etc.). `memory-wiki` sits beside it and compiles
+dreaming stay owned by the configured memory plugin (`memory-core`, Honcho,
+and others). `memory-wiki` sits beside it and compiles
 knowledge into a maintained wiki layer.
 
 Enable the plugin before using its CLI, tools, or runtime integration:
@@ -35,9 +35,9 @@ Practical rule:
 - `wiki_search` / `wiki_get` when you want wiki-specific ranking, provenance, or page-level belief structure
 - `memory_search corpus=all` to span both layers in one call, when the active memory plugin supports corpus selection
 
-A common local-first setup: QMD as the active memory backend for recall, and
-`memory-wiki` in `bridge` mode for durable synthesized pages. See the
-QMD + bridge mode example under [Configuration](#configuration).
+A common local-first setup uses builtin memory for recall and `memory-wiki` in
+`bridge` mode for durable synthesized pages. See the bridge-mode example under
+[Configuration](#configuration).
 
 If bridge mode reports zero exported artifacts, the active memory plugin is
 not currently exposing public bridge inputs. Run `openclaw wiki doctor` first,
@@ -313,6 +313,15 @@ gateway methods (`wiki.overview`, `wiki.get`, `wiki.importInsights`); inline
 page previews use `wiki.get`, the same lookup agents reach through the
 `wiki_get` tool.
 
+Each dashboard keeps at most the newest 2,500 cards in its compiled snapshot.
+When a vault exceeds that bound, the UI shows the returned and total item counts.
+
+Dashboard requests never scan raw vault pages or wait for a full vault compile.
+During automatic recovery, the UI reports that the dashboards are rebuilding;
+reload the tab shortly. When
+`ingest.autoCompile` is `false`, a source change or older cache reports that a
+compile is required instead. Run `openclaw wiki compile`, then reload the tab.
+
 ## Prompt and context behavior
 
 When `context.includeCompiledDigestPrompt` is enabled, memory prompt sections
@@ -387,17 +396,23 @@ Key toggles:
 | ------------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------- |
 | `vaultMode`                                | `isolated` (default), `bridge`, `unsafe-local` | chooses input and integration behavior                                        |
 | `vault.scope`                              | `global` (default), `agent`                    | one shared vault or one child vault per agent                                 |
-| `vault.path`                               | global default `~/.openclaw/wiki/main`         | exact vault globally; agent-scope parent defaults to `~/.openclaw/wiki`       |
+| `vault.path`                               | global default `<state-dir>/wiki/main`         | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`       |
 | `vault.renderMode`                         | `native` (default), `obsidian`                 |                                                                               |
 | `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                  |
 | `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                             |
 | `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                                        |
 | `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode                         |
+| `ingest.autoCompile`                       | default `true`                                 | rebuild compiled output after imported sources change                         |
 | `search.backend`                           | `shared` (default), `local`                    |                                                                               |
 | `search.corpus`                            | `wiki` (default), `memory`, `all`              |                                                                               |
 | `context.includeCompiledDigestPrompt`      | default `false`                                | append the selected agent's compact digest snapshot to memory prompt sections |
 | `render.createBacklinks`                   | default `true`                                 | generate deterministic related blocks                                         |
 | `render.createDashboards`                  | default `true`                                 | generate dashboard pages                                                      |
+
+The state directory is `~/.openclaw` by default. When `OPENCLAW_STATE_DIR` is
+set, default wiki vaults use that directory instead. Explicit `vault.path`
+values keep their configured location, and `~/` still expands against the home
+directory.
 
 ### Per-agent vaults
 
@@ -408,7 +423,10 @@ normalized agent id:
 ```json5
 {
   agents: {
-    list: [{ id: "support" }, { id: "marketing" }],
+    entries: {
+      support: { default: true },
+      marketing: {},
+    },
   },
   plugins: {
     entries: {
@@ -433,8 +451,9 @@ normalized agent id:
 
 This resolves to `~/.openclaw/wiki/support` and
 `~/.openclaw/wiki/marketing`. If `vault.path` is omitted in agent scope, the
-parent defaults to `~/.openclaw/wiki`. The default `main` agent therefore keeps
-the existing `~/.openclaw/wiki/main` path.
+parent defaults to `<state-dir>/wiki`, where the state directory is
+`~/.openclaw` or the value of `OPENCLAW_STATE_DIR`. The default `main` agent
+therefore uses `<state-dir>/wiki/main`.
 
 Agent tools, compiled prompt digests, and the wiki supplement exposed through
 `memory_search` / `memory_get` resolve the vault from the active agent context.
@@ -460,18 +479,15 @@ still read another agent's directory. Use [sandboxing](/gateway/sandboxing) or
 each other.
 </Warning>
 
-### Example: QMD + bridge mode
+### Example: builtin memory + bridge mode
 
-Use this when you want QMD for recall and `memory-wiki` for a maintained
-knowledge layer. Each layer stays focused: QMD keeps raw notes, session
-exports, and extra collections searchable, while `memory-wiki` compiles
-stable entities, claims, dashboards, and source pages.
+Use this when you want builtin memory for recall and `memory-wiki` for a
+maintained knowledge layer. Each layer stays focused: `memory-core` searches
+memory notes and eligible session sources, while `memory-wiki` compiles stable
+entities, claims, dashboards, and source pages.
 
 ```json5
 {
-  memory: {
-    backend: "qmd",
-  },
   plugins: {
     entries: {
       "memory-wiki": {
@@ -500,7 +516,7 @@ stable entities, claims, dashboards, and source pages.
 }
 ```
 
-This keeps QMD in charge of active memory recall, `memory-wiki` focused on
+This keeps builtin memory in charge of active recall, `memory-wiki` focused on
 compiled pages and dashboards, and prompt shape unchanged until you
 intentionally enable compiled digest prompts.
 

@@ -9,19 +9,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_READY_OUTPUT_MAX_CHARS,
   MEMORY_SEARCH_PROBE_QUERY,
-  MEMORY_SEARCH_RESPONSE_MAX_BYTES,
   classifyMemorySearchInvokeResponse,
-  hasChildExited,
   invokeMemorySearch,
   parseArgs,
-  readBoundedResponseText,
-  readNumber,
-  readPositiveNumber,
   stopGatewayWithRuntime,
   updateGatewayReadyOutputState,
   waitForGatewayReady,
   writeConfig,
-} from "../../scripts/check-memory-fd-repro.mjs";
+} from "../../scripts/check-memory-fd-repro.mts";
 import { validateConfigObject } from "../../src/config/validation.js";
 import { withEnv } from "../../src/test-utils/env.js";
 
@@ -41,17 +36,6 @@ async function listen(server: Server): Promise<number> {
 }
 
 describe("check-memory-fd-repro", () => {
-  it("parses file, fd, and timing limits as strict integers", () => {
-    expect(readNumber("0", "limit")).toBe(0);
-    expect(readNumber(" 42 ", "limit")).toBe(42);
-    expect(readPositiveNumber("1", "limit")).toBe(1);
-
-    expect(() => readNumber("1.5", "limit")).toThrow("limit must be a non-negative integer");
-    expect(() => readNumber("1e3", "limit")).toThrow("limit must be a non-negative integer");
-    expect(() => readNumber("10files", "limit")).toThrow("limit must be a non-negative integer");
-    expect(() => readPositiveNumber("0", "limit")).toThrow("limit must be greater than 0");
-  });
-
   it("rejects loose numeric environment limits before generating files", () => {
     expect(
       withEnv(
@@ -278,34 +262,22 @@ describe("check-memory-fd-repro", () => {
     });
   });
 
-  it("treats signaled gateway children as exited", () => {
-    expect(hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
-    expect(hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);
-    expect(hasChildExited({ exitCode: null, signalCode: null })).toBe(false);
-  });
-
-  it("fails gateway readiness immediately after signal exits", async () => {
+  it.each([
+    { exitCode: null, signalCode: "SIGTERM" },
+    { exitCode: 0, signalCode: null },
+  ])("rejects readiness and skips signaling for an exited child (%j)", async (exitState) => {
     const child = {
-      exitCode: null,
-      signalCode: "SIGTERM",
+      ...exitState,
+      kill: vi.fn(),
       stderr: new EventEmitter(),
       stdout: new EventEmitter(),
-    };
-
-    await expect(
-      waitForGatewayReady({ child, port: 9, logPath: "gateway.log", timeoutMs: 10_000 }),
-    ).rejects.toThrow("gateway exited before ready");
-  });
-
-  it("does not signal already exited children during gateway cleanup", async () => {
-    const child = {
-      exitCode: null,
-      kill: vi.fn(),
-      signalCode: "SIGTERM",
     };
     const findGatewayPidFn = vi.fn(() => null);
     const killProcess = vi.fn();
 
+    await expect(
+      waitForGatewayReady({ child, port: 9, logPath: "gateway.log", timeoutMs: 10_000 }),
+    ).rejects.toThrow("gateway exited before ready");
     await expect(
       stopGatewayWithRuntime({ child, findGatewayPidFn, killProcess, port: 9 }),
     ).resolves.toBeUndefined();
@@ -377,45 +349,5 @@ describe("check-memory-fd-repro", () => {
 
     expect(state.readySeen).toBe(true);
     expect(state.tail).toBe("w output");
-  });
-
-  it("reads memory_search response bodies under the byte cap", async () => {
-    await expect(
-      readBoundedResponseText(
-        new Response("ok"),
-        "memory_search",
-        MEMORY_SEARCH_RESPONSE_MAX_BYTES,
-      ),
-    ).resolves.toBe("ok");
-  });
-
-  it("rejects oversized memory_search response bodies from content-length", async () => {
-    const response = new Response("ignored", {
-      headers: { "content-length": String(MEMORY_SEARCH_RESPONSE_MAX_BYTES + 1) },
-    });
-
-    await expect(
-      readBoundedResponseText(response, "memory_search", MEMORY_SEARCH_RESPONSE_MAX_BYTES),
-    ).rejects.toThrow(
-      `memory_search response body exceeded ${MEMORY_SEARCH_RESPONSE_MAX_BYTES} bytes`,
-    );
-  });
-
-  it("stops reading memory_search response streams after the byte cap", async () => {
-    const chunk = new Uint8Array(MEMORY_SEARCH_RESPONSE_MAX_BYTES + 1);
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(chunk);
-          controller.close();
-        },
-      }),
-    );
-
-    await expect(
-      readBoundedResponseText(response, "memory_search", MEMORY_SEARCH_RESPONSE_MAX_BYTES),
-    ).rejects.toThrow(
-      `memory_search response body exceeded ${MEMORY_SEARCH_RESPONSE_MAX_BYTES} bytes`,
-    );
   });
 });

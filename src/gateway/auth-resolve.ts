@@ -1,11 +1,15 @@
 // Gateway auth resolver.
 // Combines configured auth, overrides, environment credentials, and Tailscale policy.
+import { copyConfigResolutionFactsExcept } from "../config/resolution-facts.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type {
   GatewayAuthConfig,
   GatewayTailscaleMode,
   GatewayTrustedProxyConfig,
 } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { createGatewayCredentialPlan } from "./credential-planner.js";
 import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 
 /** Authentication modes after config, override, and credential inputs are combined. */
@@ -24,11 +28,60 @@ export type ResolvedGatewayAuth = {
   trustedProxy?: GatewayTrustedProxyConfig;
 };
 
-/** Shared-secret auth shape exposed to Gateway clients that support a single bearer secret. */
-type EffectiveSharedGatewayAuth = {
-  mode: "token" | "password";
-  secret: string | undefined;
-};
+function mergeGatewayAuthConfig(
+  base: GatewayAuthConfig | null | undefined,
+  override: GatewayAuthConfig | null | undefined,
+): GatewayAuthConfig {
+  const merged = { ...base };
+  if (!override) {
+    return merged;
+  }
+  for (const key of [
+    "mode",
+    "token",
+    "password",
+    "allowTailscale",
+    "rateLimit",
+    "trustedProxy",
+  ] as const) {
+    if (override[key] !== undefined) {
+      Object.assign(merged, { [key]: override[key] });
+    }
+  }
+  return merged;
+}
+
+function finalizeResolvedGatewayAuth(params: {
+  authConfig: GatewayAuthConfig;
+  authOverride?: GatewayAuthConfig;
+  token?: string;
+  password?: string;
+  tailscaleMode?: GatewayTailscaleMode;
+}): ResolvedGatewayAuth {
+  const { authConfig, authOverride, token, password } = params;
+  const mode =
+    authOverride?.mode ?? authConfig.mode ?? (password ? "password" : token ? "token" : "token");
+  const modeSource =
+    authOverride?.mode !== undefined
+      ? "override"
+      : authConfig.mode
+        ? "config"
+        : password
+          ? "password"
+          : token
+            ? "token"
+            : "default";
+  return {
+    mode,
+    modeSource,
+    token,
+    password,
+    allowTailscale:
+      authConfig.allowTailscale ??
+      (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy"),
+    trustedProxy: authConfig.trustedProxy,
+  };
+}
 
 /** Resolve Gateway auth mode, credentials, trusted-proxy policy, and Tailscale allowance. */
 export function resolveGatewayAuth(params: {
@@ -37,32 +90,17 @@ export function resolveGatewayAuth(params: {
   env?: NodeJS.ProcessEnv;
   tailscaleMode?: GatewayTailscaleMode;
 }): ResolvedGatewayAuth {
-  const baseAuthConfig = params.authConfig ?? {};
-  const authOverride = params.authOverride ?? undefined;
-  const authConfig: GatewayAuthConfig = { ...baseAuthConfig };
-  if (authOverride) {
-    // Runtime overrides are sparse field overlays; omitted fields keep the
-    // persisted config so callers can replace one auth knob without cloning all
-    // credential and proxy settings.
-    if (authOverride.mode !== undefined) {
-      authConfig.mode = authOverride.mode;
-    }
-    if (authOverride.token !== undefined) {
-      authConfig.token = authOverride.token;
-    }
-    if (authOverride.password !== undefined) {
-      authConfig.password = authOverride.password;
-    }
-    if (authOverride.allowTailscale !== undefined) {
-      authConfig.allowTailscale = authOverride.allowTailscale;
-    }
-    if (authOverride.rateLimit !== undefined) {
-      authConfig.rateLimit = authOverride.rateLimit;
-    }
-    if (authOverride.trustedProxy !== undefined) {
-      authConfig.trustedProxy = authOverride.trustedProxy;
-    }
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  if (runtimeConfig && runtimeConfig.gateway?.auth === params.authConfig) {
+    return resolveGatewayAuthForConfig({
+      config: runtimeConfig,
+      authOverride: params.authOverride,
+      env: params.env,
+      tailscaleMode: params.tailscaleMode,
+    });
   }
+  const authOverride = params.authOverride ?? undefined;
+  const authConfig = mergeGatewayAuthConfig(params.authConfig, authOverride);
   const env = params.env ?? process.env;
   const tokenRef = resolveSecretInputRef({ value: authConfig.token }).ref;
   const passwordRef = resolveSecretInputRef({ value: authConfig.password }).ref;
@@ -75,66 +113,70 @@ export function resolveGatewayAuth(params: {
     tokenPrecedence: "config-first",
     passwordPrecedence: "config-first", // pragma: allowlist secret
   });
-  const token = resolvedCredentials.token;
-  const password = resolvedCredentials.password;
-  const trustedProxy = authConfig.trustedProxy;
-
-  let mode: ResolvedGatewayAuth["mode"];
-  let modeSource: ResolvedGatewayAuth["modeSource"];
-  if (authOverride?.mode !== undefined) {
-    mode = authOverride.mode;
-    modeSource = "override";
-  } else if (authConfig.mode) {
-    mode = authConfig.mode;
-    modeSource = "config";
-  } else if (password) {
-    mode = "password";
-    modeSource = "password";
-  } else if (token) {
-    mode = "token";
-    modeSource = "token";
-  } else {
-    // Token remains the default so the config assertion can produce a clear
-    // missing-token diagnostic instead of silently disabling Gateway auth.
-    mode = "token";
-    modeSource = "default";
-  }
-
-  const allowTailscale =
-    // Tailscale serve can supply network-level access control, but password and
-    // trusted-proxy modes keep their stricter explicit auth boundary.
-    authConfig.allowTailscale ??
-    (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy");
-
-  return {
-    mode,
-    modeSource,
-    token,
-    password,
-    allowTailscale,
-    trustedProxy,
-  };
+  return finalizeResolvedGatewayAuth({
+    authConfig,
+    authOverride,
+    token: resolvedCredentials.token,
+    password: resolvedCredentials.password,
+    tailscaleMode: params.tailscaleMode,
+  });
 }
 
-/** Return the effective token/password secret for clients that cannot model every auth mode. */
-export function resolveEffectiveSharedGatewayAuth(params: {
-  authConfig?: GatewayAuthConfig | null;
+/** Credential edits may reload only while their resolved authentication mode stays fixed. */
+export function canHotReloadGatewayAuthCredentials(
+  previousConfig: OpenClawConfig | undefined,
+  candidateConfig: OpenClawConfig | undefined,
+): boolean {
+  if (!previousConfig || !candidateConfig) {
+    return false;
+  }
+  const modes = [previousConfig, candidateConfig].map((config) => {
+    const authConfig = config.gateway?.auth;
+    // Raw SecretRefs cannot establish an inferred mode before secret preparation.
+    if (
+      !authConfig?.mode &&
+      (resolveSecretInputRef({ value: authConfig?.token }).ref ||
+        resolveSecretInputRef({ value: authConfig?.password }).ref)
+    ) {
+      return undefined;
+    }
+    return resolveGatewayAuth({ authConfig, tailscaleMode: config.gateway?.tailscale?.mode }).mode;
+  });
+  return (modes[0] === "token" || modes[0] === "password") && modes[0] === modes[1];
+}
+
+/** Resolve auth from an env-substituted config while retaining its resolution facts. */
+export function resolveGatewayAuthForConfig(params: {
+  config: OpenClawConfig;
   authOverride?: GatewayAuthConfig | null;
   env?: NodeJS.ProcessEnv;
   tailscaleMode?: GatewayTailscaleMode;
-}): EffectiveSharedGatewayAuth | null {
-  const resolvedAuth = resolveGatewayAuth(params);
-  if (resolvedAuth.mode === "token") {
-    return {
-      mode: "token",
-      secret: resolvedAuth.token,
-    };
-  }
-  if (resolvedAuth.mode === "password") {
-    return {
-      mode: "password",
-      secret: resolvedAuth.password,
-    };
-  }
-  return null;
+}): ResolvedGatewayAuth {
+  const authOverride = params.authOverride ?? undefined;
+  const authConfig = mergeGatewayAuthConfig(params.config.gateway?.auth, authOverride);
+  const config = {
+    ...params.config,
+    gateway: { ...params.config.gateway, auth: authConfig },
+  };
+  const overriddenPaths = [
+    ...(authOverride?.token !== undefined ? ["gateway.auth.token"] : []),
+    ...(authOverride?.password !== undefined ? ["gateway.auth.password"] : []),
+  ];
+  copyConfigResolutionFactsExcept(params.config, config, overriddenPaths);
+  const plan = createGatewayCredentialPlan({ config, env: params.env });
+  const token = plan.localToken.hasSecretRef
+    ? undefined
+    : (plan.localToken.value ?? plan.envToken ?? plan.remoteToken.value);
+  const password = plan.localPassword.hasSecretRef
+    ? undefined
+    : (plan.localPassword.value ??
+      plan.envPassword ??
+      (plan.authMode === "trusted-proxy" ? undefined : plan.remotePassword.value));
+  return finalizeResolvedGatewayAuth({
+    authConfig,
+    authOverride,
+    token,
+    password,
+    tailscaleMode: params.tailscaleMode,
+  });
 }

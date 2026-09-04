@@ -22,6 +22,8 @@ export type CronFailureDestinationConfig = {
 
 export type CronConfig = {
   enabled?: boolean;
+  /** Skip missed recurring slots at startup; one-shot catch-up is unchanged. Default: false. */
+  skipMissedJobs?: boolean;
   triggers?: {
     enabled?: boolean;
   };
@@ -32,6 +34,7 @@ export type CronConfig = {
   /**
    * How long to retain completed cron run sessions before automatic pruning.
    * Accepts a duration string (e.g. "24h", "7d", "1h30m") or `false` to disable pruning.
+   * A zero duration (e.g. "0h") also disables pruning; negative durations are invalid.
    * Default: "24h".
    */
   sessionRetention?: string | false;

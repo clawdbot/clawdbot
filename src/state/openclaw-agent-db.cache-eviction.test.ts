@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { releaseOpenClawAgentDatabaseLease } from "./openclaw-agent-db-lease.js";
 import {
+  borrowOpenClawAgentDatabase,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
@@ -13,7 +16,10 @@ import {
   OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
 
 const BASE_AGENT_IDS = Array.from(
   { length: OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP },
@@ -108,6 +114,36 @@ describe("openclaw agent database handle cache", () => {
     expect(isOpenClawAgentDatabaseOpen(leastRecentlyUsed.path)).toBe(false);
   });
 
+  it("releases an evicted lease in its acquisition store after its environment changes", () => {
+    const env = requireFixtureEnv();
+    const stateDir = env.OPENCLAW_STATE_DIR;
+    const nextStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-lease-eviction-"));
+    const evicted = baseDatabases[0]!;
+    const { db: state } = openOpenClawStateDatabase({ env });
+    const leases = () =>
+      state.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?").all(evicted.path);
+    const acquiredLeases = leases();
+    expect(acquiredLeases).toHaveLength(1);
+    try {
+      env.OPENCLAW_STATE_DIR = nextStateDir;
+      openOpenClawAgentDatabase({
+        agentId: "lease-owner-evictor",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+      expect(evicted.db.isOpen).toBe(false);
+      expect(leases()).toEqual([]);
+      expect(fs.readdirSync(nextStateDir)).toEqual([]);
+    } finally {
+      env.OPENCLAW_STATE_DIR = stateDir;
+      // A failing regression must not leave its original UUID in the shared fixture.
+      for (const lease of acquiredLeases) {
+        releaseOpenClawAgentDatabaseLease(String(lease.lease_id), { env });
+      }
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(nextStateDir, { recursive: true, force: true });
+    }
+  });
+
   it("never evicts an LRU handle with an open transaction", () => {
     const env = requireFixtureEnv();
     const transactionOwner = baseDatabases[0]!;
@@ -126,6 +162,32 @@ describe("openclaw agent database handle cache", () => {
     }
   });
 
+  it("retries lease cleanup for a closed retained handle before evicting unrelated agents", () => {
+    const env = requireFixtureEnv();
+    const first = baseDatabases[0]!;
+    const borrowed = borrowOpenClawAgentDatabase({ agentId: first.agentId, env });
+    const { db: state } = openOpenClawStateDatabase({ env });
+    state.exec(`CREATE TEMP TRIGGER fail_agent_lease_release BEFORE DELETE ON agent_database_leases
+      BEGIN SELECT RAISE(ABORT, 'blocked lease release'); END`);
+    try {
+      expect(() => closeOpenClawAgentDatabaseByPath(first.path)).toThrow("blocked lease release");
+      expect(borrowed.db.isOpen).toBe(false);
+      state.exec("DROP TRIGGER fail_agent_lease_release");
+
+      evictAfterRefreshingBaseHandles("lease-recovery", env);
+      expect(listOpenClawAgentDatabasesForTest()).toHaveLength(OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP);
+      expect(
+        state
+          .prepare("SELECT lease_id FROM agent_database_leases WHERE agent_id = ?")
+          .all(first.agentId),
+      ).toEqual([]);
+    } finally {
+      state.exec("DROP TRIGGER IF EXISTS fail_agent_lease_release");
+      borrowed.release();
+      closeOpenClawAgentDatabaseByPath(first.path);
+    }
+  });
+
   it("reopens an evicted database without losing durable rows", () => {
     const env = requireFixtureEnv();
     const evicted = baseDatabases[0]!;
@@ -138,8 +200,22 @@ describe("openclaw agent database handle cache", () => {
     openOpenClawAgentDatabase({ agentId: "durability-evictor", env });
     expect(evicted.db.isOpen).toBe(false);
 
+    const { DatabaseSync } = requireNodeSqlite();
+    const divergent = new DatabaseSync(evicted.path);
+    try {
+      divergent.exec("ALTER TABLE session_nodes DROP COLUMN project_id;");
+    } finally {
+      divergent.close();
+    }
+
     const reopened = openOpenClawAgentDatabase({ agentId: evicted.agentId, env });
     expect(reopened).not.toBe(evicted);
+    expect(
+      reopened.db
+        .prepare("PRAGMA table_info(session_nodes)")
+        .all()
+        .some((row) => (row as { name?: unknown }).name === "project_id"),
+    ).toBe(true);
     expect(
       reopened.db
         .prepare("SELECT state_json, updated_at FROM auth_profile_state WHERE state_key = ?")

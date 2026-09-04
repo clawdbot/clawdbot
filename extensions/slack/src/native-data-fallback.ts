@@ -1,5 +1,6 @@
 import type { Block, KnownBlock } from "@slack/web-api";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { renderSlackBlockFallbackText } from "./blocks-fallback.js";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
@@ -33,37 +34,22 @@ type OrderedFallbackBlock = {
   continuesText?: boolean;
 };
 
-function sliceSlackTextChunk(text: string, start: number, limit: number): string {
-  return (
-    sliceUtf16Safe(text, start, Math.min(text.length, start + limit)) ||
-    Array.from(text.slice(start))[0] ||
-    ""
-  );
-}
-
 export function chunkSlackTextAtHardLimit(
   text: string,
   limit = SLACK_MESSAGE_TEXT_HARD_LIMIT,
 ): string[] {
-  const effectiveLimit = Math.max(1, Math.floor(limit));
-  const chunks: string[] = [];
-  let offset = 0;
-  while (offset < text.length) {
-    const chunk = sliceSlackTextChunk(text, offset, effectiveLimit);
-    if (!chunk) {
-      throw new Error("Slack plain-text fallback chunking made no progress.");
-    }
-    chunks.push(chunk);
-    offset += chunk.length;
+  if (!text) {
+    return [];
   }
-  return chunks;
+  const effectiveLimit = Math.max(1, Math.floor(limit));
+  return chunkTextForOutbound(text, effectiveLimit, { preserveWhitespace: true });
 }
 
 function fitsSlackTextLimit(text: string, limit: number): boolean {
   if (text.length <= limit) {
     return true;
   }
-  return sliceSlackTextChunk(text, 0, limit).length === text.length;
+  return truncateUtf16Safe(text, limit).length === text.length;
 }
 
 function buildPlainTextBlocks(text: string, textLimit: number): OrderedFallbackBlock[] {

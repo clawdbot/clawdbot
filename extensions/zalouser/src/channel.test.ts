@@ -1,23 +1,32 @@
 // Zalouser tests cover channel plugin behavior.
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import "./zalo-js.test-mocks.js";
-import {
-  zalouserAuthAdapter,
-  zalouserGroupsAdapter,
-  zalouserMessageActions,
-  zalouserOutboundAdapter,
-  zalouserPairingTextAdapter,
-  zalouserResolverAdapter,
-  zalouserSecurityAdapter,
-} from "./channel.adapters.js";
-import { setZalouserRuntime } from "./runtime.js";
-import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import {
   listZaloFriendsMatchingMock,
   startZaloQrLoginMock,
   waitForZaloQrLoginMock,
 } from "./zalo-js.test-mocks.js";
+import {
+  zalouserAuthAdapter,
+  zalouserGroupsAdapter,
+  zalouserMessageActions,
+  zalouserMessagingAdapter,
+  zalouserOutboundAdapter,
+  zalouserPairingTextAdapter,
+  zalouserResolverAdapter,
+  zalouserSecurityAdapter,
+} from "./channel.adapters.js";
+
+describe("zalouser target classification", () => {
+  it("distinguishes users from groups", () => {
+    expect(zalouserMessagingAdapter.inferTargetChatType({ to: "user:123" })).toBe("direct");
+    expect(zalouserMessagingAdapter.inferTargetChatType({ to: "group:456" })).toBe("group");
+  });
+});
+import { setZalouserRuntime } from "./runtime.js";
+import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 
 vi.mock("./qr-temp-file.js", () => ({
   writeQrDataUrlToTempFile: vi.fn(async () => null),

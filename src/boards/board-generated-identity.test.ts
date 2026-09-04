@@ -71,7 +71,7 @@ describe("generated BoardStore identity", () => {
     });
     expect(plain.resolvedWidgetName).toBe("cafe-menu-bbbbbbbb");
     expect(plain.widgets.map((widget) => widget.name)).toEqual(["cafe-menu", "cafe-menu-bbbbbbbb"]);
-    expect(store.readWidgetHtml("agent:main:board", "cafe-menu")?.html).toContain(
+    expect(store.readWidgetHtml({ sessionKey: "agent:main:board" }, "cafe-menu")?.html).toContain(
       "accented revised",
     );
 
@@ -115,7 +115,9 @@ describe("generated BoardStore identity", () => {
     });
     expect(generatedAfterTakeover.resolvedWidgetName).toBe("release-status-cccccccc");
     expect(generatedAfterTakeover.widgets).toHaveLength(2);
-    expect(store.readWidgetHtml("agent:main:board", "release-status")?.html).toContain("manual");
+    expect(
+      store.readWidgetHtml({ sessionKey: "agent:main:board" }, "release-status")?.html,
+    ).toContain("manual");
   });
 
   it("fails closed instead of overwriting an occupied deterministic fallback", () => {
@@ -142,7 +144,7 @@ describe("generated BoardStore identity", () => {
         generatedIdentity: generatedIdentity("d", "status-dddddddd"),
       }),
     ).toThrow("generated widget fallback name is already in use");
-    expect(store.getSnapshot("agent:main:board").widgets).toHaveLength(2);
+    expect(store.getSnapshot({ sessionKey: "agent:main:board" }).widgets).toHaveLength(2);
   });
 
   it("rejects a fallback that is not distinct even on an empty board", () => {
@@ -182,13 +184,15 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
     declared: { tools: ["menu.refresh"] },
   });
   store.grant(
-    sessionKey,
+    { sessionKey },
     "cafe-menu",
     "granted",
     1,
     legacy.widgets.find((widget) => widget.name === "cafe-menu")?.instanceId,
   );
-  store.applyOps(sessionKey, [{ kind: "widget_resize", name: "cafe-menu", sizeW: 8, sizeH: 6 }]);
+  store.applyOps({ sessionKey }, [
+    { kind: "widget_resize", name: "cafe-menu", sizeW: 8, sizeH: 6 },
+  ]);
   const seededDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
   seededDatabase.db
     .prepare(
@@ -216,7 +220,7 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
     sizeH: 6,
     position: 1,
   });
-  expect(reopened.readWidgetHtml(sessionKey, "cafe-menu")?.html).toContain("approved");
+  expect(reopened.readWidgetHtml({ sessionKey }, "cafe-menu")?.html).toContain("approved");
 
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -233,12 +237,12 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
   expect(reused.widgets.find((widget) => widget.name === "cafe-menu-eeeeeeee")).toMatchObject({
     revision: 2,
   });
-  expect(durable.readWidgetHtml(sessionKey, "cafe-menu")?.html).toContain("approved");
+  expect(durable.readWidgetHtml({ sessionKey }, "cafe-menu")?.html).toContain("approved");
   closeOpenClawAgentDatabasesForTest();
 
   expect(
     new SqliteBoardStore(options)
-      .getSnapshot(sessionKey)
+      .getSnapshot({ sessionKey })
       .widgets.find((widget) => widget.name === "cafe-menu"),
   ).toMatchObject({
     name: "cafe-menu",
@@ -290,7 +294,7 @@ it("does not infer generated ownership from a canonical unmarked title match", (
   });
   expect(generated.resolvedWidgetName).toBe("widget-f62b28f7");
   expect(generated.widgets).toHaveLength(2);
-  expect(reopened.readWidgetHtml(sessionKey, "widget-e3b21956")?.html).toContain("legacy");
+  expect(reopened.readWidgetHtml({ sessionKey }, "widget-e3b21956")?.html).toContain("legacy");
 });
 
 it("preserves unmarked rows whose absent or capped titles are ambiguous", () => {
@@ -339,8 +343,8 @@ it("preserves unmarked rows whose absent or capped titles are ambiguous", () => 
 
   expect(untitled.resolvedWidgetName).toBe("status-bbbbbbbb");
   expect(long.resolvedWidgetName).toBe("report-cccccccc");
-  expect(reopened.readWidgetHtml(sessionKey, "status")?.html).toContain("manual untitled");
-  expect(reopened.readWidgetHtml(sessionKey, "report")?.html).toContain("legacy long");
+  expect(reopened.readWidgetHtml({ sessionKey }, "status")?.html).toContain("manual untitled");
+  expect(reopened.readWidgetHtml({ sessionKey }, "report")?.html).toContain("legacy long");
 });
 
 it("persists explicit ownership across restart", () => {
@@ -368,5 +372,5 @@ it("persists explicit ownership across restart", () => {
     generatedIdentity: generatedIdentity("d", "status-dddddddd"),
   });
   expect(generated.resolvedWidgetName).toBe("status-dddddddd");
-  expect(reopened.readWidgetHtml(sessionKey, "status")?.html).toContain("manual");
+  expect(reopened.readWidgetHtml({ sessionKey }, "status")?.html).toContain("manual");
 });

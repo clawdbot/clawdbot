@@ -8,7 +8,6 @@ import {
 } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
-import { countChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import {
@@ -17,10 +16,7 @@ import {
   toBrowserErrorResponse,
 } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import {
-  refreshResolvedBrowserConfigFromDisk,
-  resolveBrowserProfileWithHotReload,
-} from "./resolved-config-refresh.js";
+import { refreshResolvedBrowserConfigFromDisk } from "./resolved-config-refresh.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import {
   getProfileLifecycle,
@@ -174,10 +170,10 @@ function createProfileContext(
         callerSignal,
         async (signal) => await rawAvailability.isHttpReachable(timeoutMs, signal),
       ),
-    isTransportAvailable: async (timeoutMs, callerSignal) =>
+    isTransportAvailable: async (timeoutMs, callerSignal, pageProbe) =>
       await withLease(
         callerSignal,
-        async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal),
+        async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal, pageProbe),
       ),
     isReachable: async (timeoutMs, options) =>
       await withLease(
@@ -228,17 +224,14 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     if (!isBrowserRuntimeRunning(current)) {
       throw new BrowserProfileUnavailableError("Browser runtime is stopping.");
     }
+    refreshResolvedBrowserConfigFromDisk({ current, refreshConfigFromDisk });
     return current;
   };
 
   const forProfile = (profileName?: string): ProfileContext => {
     const current = state();
     const name = profileName ?? current.resolved.defaultProfile;
-    const profile = resolveBrowserProfileWithHotReload({
-      current,
-      refreshConfigFromDisk,
-      name,
-    });
+    const profile = resolveProfile(current.resolved, name);
 
     if (!profile) {
       const available = Object.keys(current.resolved.profiles).join(", ");
@@ -252,10 +245,6 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
   const listProfiles = async (): Promise<ProfileStatus[]> => {
     const current = state();
-    refreshResolvedBrowserConfigFromDisk({
-      current,
-      refreshConfigFromDisk,
-    });
     const result: ProfileStatus[] = [];
 
     for (const name of listKnownProfileNames(current)) {
@@ -285,13 +274,9 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
               if (capabilities.usesChromeMcp) {
                 try {
-                  activeRunning = await profileCtx.isTransportAvailable(300);
-                  if (activeRunning) {
-                    activeTabCount = await countChromeMcpTabs(activeProfile.name, activeProfile, {
-                      ephemeral: true,
-                      signal,
-                    }).catch(() => 0);
-                  }
+                  activeRunning = await profileCtx.isTransportAvailable(300, signal, {
+                    onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
+                  });
                 } catch {
                   activeRunning = false;
                 }
@@ -311,11 +296,14 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
                   })
                     ? 200
                     : current.resolved.remoteCdpTimeoutMs;
-                  activeRunning = await isChromeReachable(
-                    activeProfile.cdpUrl,
-                    probeTimeoutMs,
-                    resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
-                  );
+                  activeRunning =
+                    capabilities.mode === "local-extension"
+                      ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
+                      : await isChromeReachable(
+                          activeProfile.cdpUrl,
+                          probeTimeoutMs,
+                          resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
+                        );
                   if (activeRunning) {
                     const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
                     activeTabCount = tabs.filter((tab) => tab.type === "page").length;

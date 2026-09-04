@@ -7,6 +7,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
+import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
 import { getSmsRuntime } from "./runtime.js";
 import {
   buildTwilioInboundMessage,
@@ -39,8 +40,41 @@ function parseSmsIngressForm(
   if (!message) {
     throw new SmsIngressPermanentError("SMS ingress payload is invalid.");
   }
-  if (message.accountSid && message.accountSid !== account.accountSid) {
+  if (!message.accountSid || message.accountSid !== account.accountSid) {
     throw new SmsIngressPermanentError("SMS ingress payload has an invalid Twilio account.");
+  }
+  const isRcsRecipient = /^rcs:/iu.test(message.to);
+  if (isRcsRecipient) {
+    if (!message.body) {
+      throw new SmsIngressPermanentError("SMS ingress payload is invalid.");
+    }
+    if (
+      account.messagingServiceSid &&
+      message.messagingServiceSid !== account.messagingServiceSid
+    ) {
+      throw new SmsIngressPermanentError(
+        "SMS ingress payload has an invalid Twilio Messaging Service.",
+      );
+    }
+    // Shipped fromNumber-only RCS callbacks use an agent address in `To`, so
+    // they cannot be bound to the phone number without a new RCS config contract.
+    // MMS support must not change shipped RCS text behavior. Ignore unsupported
+    // RCS media fields until the RCS owner defines its media contract.
+    const { unavailableMediaCount: _unavailableMediaCount, ...textMessage } = message;
+    return { ...textMessage, media: [] };
+  }
+  if (account.fromNumber) {
+    const recipient = normalizeSmsPhoneNumber(message.to);
+    if (!looksLikeSmsPhoneNumber(recipient) || recipient !== account.fromNumber) {
+      throw new SmsIngressPermanentError("SMS ingress payload has an invalid Twilio recipient.");
+    }
+  } else if (
+    !message.messagingServiceSid ||
+    message.messagingServiceSid !== account.messagingServiceSid
+  ) {
+    throw new SmsIngressPermanentError(
+      "SMS ingress payload has an invalid Twilio Messaging Service.",
+    );
   }
   return message;
 }

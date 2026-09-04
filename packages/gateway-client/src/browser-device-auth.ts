@@ -161,12 +161,18 @@ export class GatewayBrowserDeviceAuthLifecycle {
     if (!token || !plan.identity) {
       return;
     }
+    const role = hello.auth?.role ?? plan.role;
+    const stored = await this.deps.tokenStore.load({
+      clientId: plan.clientId,
+      deviceId: plan.identity.deviceId,
+      role,
+    });
     await this.deps.tokenStore.store({
       clientId: plan.clientId,
       deviceId: plan.identity.deviceId,
-      role: hello.auth?.role ?? plan.role,
+      role,
       token,
-      scopes: hello.auth?.scopes ?? [],
+      scopes: stored?.token === token ? stored.scopes : (hello.auth?.scopes ?? []),
     });
   }
 

@@ -17,6 +17,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { mergeDeep as mergeDeepValues } from "../infra/deep-merge.js";
+import { isMissingPathError } from "../infra/errno.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -86,6 +87,7 @@ export type ConfigIncludeOwnership = {
   kind: "single" | "multiple";
   hasSiblingOverrides: boolean;
   targetPath?: string;
+  targetPaths?: readonly string[];
 };
 
 export type ConfigIncludeResolutionEvent = ConfigIncludeOwnership & { value: unknown };
@@ -223,6 +225,7 @@ class IncludeProcessor {
       kind: Array.isArray(includeValue) ? "multiple" : "single",
       hasSiblingOverrides: otherKeys.length > 0,
       ...(resolved.targetPath ? { targetPath: resolved.targetPath } : {}),
+      ...(resolved.targetPaths ? { targetPaths: resolved.targetPaths } : {}),
     });
 
     if (otherKeys.length === 0) {
@@ -247,22 +250,29 @@ class IncludeProcessor {
   private resolveInclude(
     value: unknown,
     logicalPath: readonly string[],
-  ): { value: unknown; targetPath?: string } {
+  ): { value: unknown; targetPath?: string; targetPaths?: string[] } {
     if (typeof value === "string") {
       return this.loadFile(value, logicalPath);
     }
 
     if (Array.isArray(value)) {
-      const merged = value.reduce<unknown>((current, item) => {
+      const resolvedEntries = value.map((item) => {
         if (typeof item !== "string") {
           throw new ConfigIncludeError(
             `Invalid $include array item: expected string, got ${typeof item}`,
             String(item),
           );
         }
-        return deepMerge(current, this.loadFile(item, logicalPath).value);
-      }, {});
-      return { value: merged };
+        return this.loadFile(item, logicalPath);
+      });
+      const merged = resolvedEntries.reduce<unknown>(
+        (current, entry) => deepMerge(current, entry.value),
+        {},
+      );
+      return {
+        value: merged,
+        targetPaths: resolvedEntries.map((entry) => entry.targetPath),
+      };
     }
 
     throw new ConfigIncludeError(
@@ -344,7 +354,7 @@ class IncludeProcessor {
       if (err instanceof ConfigIncludeError) {
         throw err;
       }
-      if (isNotFoundError(err)) {
+      if (isMissingPathError(err)) {
         // File doesn't exist yet - lexical containment check above is sufficient.
         return { resolvedPath: normalized, root: lexicalMatch };
       }
@@ -467,15 +477,6 @@ function createConfigIncludeBoundary(
   };
 }
 
-function isNotFoundError(error: unknown): boolean {
-  return Boolean(
-    error &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT",
-  );
-}
-
 export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): string {
   const ioFs = params.ioFs ?? fs;
   const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
@@ -495,6 +496,10 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
     rootRealPath: params.rootRealDir,
     boundaryLabel: "config directory",
     skipLexicalRootCheck: true,
+    // Operator-authored config may symlink include files; fs-safe 0.5.2
+    // rejects symlinks by default, but the include resolution session owns
+    // the root policy and the pinned open keeps type/hardlink/byte checks.
+    rejectSymlinks: false,
     maxBytes,
     ioFs,
   });

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
@@ -59,6 +59,7 @@ describe("Skill Workshop SQLite store", () => {
       commitPendingSkillProposalTransition({
         expected: proposal.record,
         record: applied,
+        event,
         operationLabel: "skill-workshop.test.conflict",
       }),
     ).toMatchObject({ state: "conflict", current: { status: "applied" } });
@@ -71,9 +72,9 @@ describe("Skill Workshop SQLite store", () => {
     const existing = new DatabaseSync(databasePath);
     existing.exec(`
       DROP TABLE skill_workshop_proposal_events;
-      DROP TABLE skill_workshop_proposal_origin_runs;
       DROP TABLE skill_workshop_proposal_rollbacks;
       DROP TABLE skill_workshop_proposals;
+      DROP TABLE skill_workshop_collection_reviews;
     `);
     existing.close();
 
@@ -94,6 +95,50 @@ describe("Skill Workshop SQLite store", () => {
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("skill_workshop_proposal_events"),
     ).toEqual({ name: "skill_workshop_proposal_events" });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("skill_workshop_collection_reviews"),
+    ).toEqual({ name: "skill_workshop_collection_reviews" });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
+        .get("idx_skill_workshop_collection_reviews_workspace_time"),
+    ).toEqual({ name: "idx_skill_workshop_collection_reviews_workspace_time" });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT name, type, \"notnull\" FROM pragma_table_info('skill_workshop_proposals') WHERE name = ?",
+        )
+        .get("claim_released_time"),
+    ).toEqual({ name: "claim_released_time", type: "INTEGER", notnull: 0 });
+    expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+  });
+
+  it("lazily adds the ownership release column without changing the schema version", async () => {
+    const databasePath = openOpenClawStateDatabase().path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const existing = new DatabaseSync(databasePath);
+    existing.exec("ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;");
+    existing.close();
+
+    const reopened = openOpenClawStateDatabase();
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM pragma_table_info('skill_workshop_proposals') WHERE name = ?")
+        .get("claim_released_time"),
+    ).toBeUndefined();
+    await expect(listSkillProposals()).resolves.toMatchObject({ proposals: [] });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT name, type, \"notnull\" FROM pragma_table_info('skill_workshop_proposals') WHERE name = ?",
+        )
+        .get("claim_released_time"),
+    ).toEqual({ name: "claim_released_time", type: "INTEGER", notnull: 0 });
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });

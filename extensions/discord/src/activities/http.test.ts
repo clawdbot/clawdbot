@@ -3,7 +3,9 @@ import { createServer, request as createHttpRequest, type Server } from "node:ht
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivityCustomId } from "../component-custom-id.js";
 import { createDiscordActivityHttpHandler } from "./http.js";
@@ -11,7 +13,6 @@ import { DiscordActivitiesRuntime } from "./runtime.js";
 import {
   createActivityTestConfig,
   createActivityTestRuntime,
-  createMemoryActivityStore,
 } from "./test-helpers.test-support.js";
 
 const servers: Server[] = [];
@@ -244,10 +245,77 @@ function createWidgetFixture(
 }
 
 describe("Discord Activity HTTP OAuth", () => {
+  it.each([
+    {
+      name: "Activities are unconfigured",
+      config: { channels: { discord: { token: "testtok" } } },
+    },
+    {
+      name: "the client secret is unresolved",
+      config: createActivityTestConfig({ clientSecret: "" }),
+    },
+    {
+      name: "the bot token is unresolved",
+      config: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+            activities: {
+              clientSecret: "testsec",
+              applicationId: "123456789012345678",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    },
+  ])("leaves the public prefix externally absent when $name", async ({ config }) => {
+    const base = await startServer(createActivityTestRuntime(config));
+
+    const response = await fetch(`${base}/discord/activity/`);
+    await expect(response.text()).resolves.toBe("not found");
+    expect(response.status).toBe(404);
+  });
+
   it("terminates stalled token request bodies within the read timeout", async () => {
     const base = await startServer(createActivityTestRuntime(), { bodyTimeoutMs: 25 });
 
     await expect(observeStalledTokenRequest(base, 1_000)).resolves.toBe("server-terminated");
+  });
+
+  it.each([
+    {
+      name: "413 when the token body exceeds its limit",
+      bodyTimeoutMs: 5_000,
+      // Declared and sent in one write: the shape whose rejection used to race the flush.
+      body: JSON.stringify({ code: "x".repeat(8 * 1024) }),
+      contentLength: undefined,
+      statusLine: "HTTP/1.1 413 Payload Too Large",
+      error: "request body too large",
+    },
+    {
+      name: "408 when the sender stalls mid-upload",
+      bodyTimeoutMs: 50,
+      // Promises more than is ever sent, so the read deadline fires with the request open.
+      body: "{",
+      contentLength: 4 * 1024,
+      statusLine: "HTTP/1.1 408 Request Timeout",
+      error: "request body timeout",
+    },
+  ])("delivers $name and then closes the connection", async (scenario) => {
+    const base = await startServer(createActivityTestRuntime(), {
+      bodyTimeoutMs: scenario.bodyTimeoutMs,
+    });
+
+    const result = await postRawWebhook({
+      url: `${base}/discord/activity/api/token`,
+      body: scenario.body,
+      contentLength: scenario.contentLength,
+      headers: { "content-type": "application/json" },
+    });
+
+    expect(result.statusLine).toBe(scenario.statusLine);
+    expect(JSON.parse(result.body)).toEqual({ error: scenario.error });
+    expect(result.closedByServer).toBe(true);
   });
 
   it("exchanges a code, creates a session, and uses it on the widget endpoint", async () => {
@@ -353,14 +421,6 @@ describe("Discord Activity HTTP OAuth", () => {
     );
     expect(widgetResponse.status).toBe(200);
     await expect(widgetResponse.json()).resolves.toMatchObject({ id: widgetId });
-  });
-
-  it("returns 503 when the configured account no longer resolves a secret", async () => {
-    const cfg = createActivityTestConfig({ clientSecret: "" });
-    const runtime = new DiscordActivitiesRuntime(createMemoryActivityStore(), cfg, undefined, {});
-    const base = await startServer(runtime);
-    const response = await requestToken(base);
-    expect(response.status).toBe(503);
   });
 
   it("limits token requests to ten per source IP per minute", async () => {

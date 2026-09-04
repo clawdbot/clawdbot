@@ -53,6 +53,29 @@ function expectSafeguardRuntime(
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
+  it("uses the prepared context budget for safeguard sizing", () => {
+    const sessionManager = {} as SessionManager;
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: { compaction: { mode: "safeguard" } },
+        },
+      } as OpenClawConfig,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      model: {
+        id: "claude-sonnet-4-20250514",
+        contextWindow: 272_000,
+        contextTokens: 272_000,
+      } as Model,
+      contextTokenBudget: 128_000,
+      agentId: "capped",
+    });
+    expect(factories).toContain(compactionSafeguardExtension);
+    expect(getCompactionSafeguardRuntime(sessionManager)?.contextWindowTokens).toBe(128_000);
+  });
+
   it("enables quality-guard retries by default in safeguard mode", () => {
     const cfg = {
       agents: {

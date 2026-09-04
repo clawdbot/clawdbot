@@ -1,9 +1,11 @@
-import type { BoardWidgetAppViewState, BoardViewWidget } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
+import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 
 const REFRESH_LEAD_MS = 5_000;
 type AppViewMode = "cached" | "refresh" | "expired";
 
-function appViewKey(sessionKey: string, widget: BoardViewWidget): string {
+function appViewKey(sessionKey: string, widget: BoardWidget): string {
   return `${sessionKey}\0${widget.name}\0${widget.revision}\0${widget.instanceId ?? ""}\0${widget.grantState}`;
 }
 
@@ -68,15 +70,17 @@ class NearViewportObserver {
 }
 
 type AppViewCallbacks = {
+  appViewGeneration: () => number;
   widgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
   refreshWidgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
 };
 
 type LifecycleHost = {
+  active: () => boolean;
   connected: () => boolean;
   requestUpdate: () => void;
   sessionKey: () => string;
-  widget: () => BoardViewWidget | undefined;
+  widget: () => BoardWidget | undefined;
 };
 
 export class BoardMcpAppLifecycle {
@@ -84,6 +88,7 @@ export class BoardMcpAppLifecycle {
   loading = false;
 
   private callbacks?: AppViewCallbacks;
+  private appViewGeneration = 0;
   private key = "";
   private generation = 0;
   private renewalTimer?: number;
@@ -96,19 +101,28 @@ export class BoardMcpAppLifecycle {
     return this.visibility.nearVisible;
   }
 
-  update(widget: BoardViewWidget | undefined, callbacks: AppViewCallbacks | undefined): void {
+  update(widget: BoardWidget | undefined, callbacks: AppViewCallbacks | undefined): void {
     this.callbacks = callbacks;
     if (!widget || widget.contentKind !== "mcp-app" || !callbacks) {
       this.reset();
       return;
     }
     const key = appViewKey(this.host.sessionKey(), widget);
-    if (key !== this.key) {
+    const appViewGeneration = callbacks.appViewGeneration();
+    if (key !== this.key || appViewGeneration !== this.appViewGeneration) {
       this.clearTimers();
       this.generation += 1;
       this.loading = false;
       this.key = key;
+      this.appViewGeneration = appViewGeneration;
       this.state = undefined;
+    }
+  }
+
+  activityChanged(): void {
+    if (!this.host.active()) {
+      this.visibility.disconnect();
+      this.clearTimers();
     }
   }
 
@@ -123,7 +137,7 @@ export class BoardMcpAppLifecycle {
   sync(): void {
     const widget = this.host.widget();
     const callbacks = this.callbacks;
-    if (!widget || widget.contentKind !== "mcp-app" || !callbacks) {
+    if (!this.host.active() || !widget || widget.contentKind !== "mcp-app" || !callbacks) {
       this.renewalTimer = clearTimer(this.renewalTimer);
       return;
     }
@@ -153,7 +167,7 @@ export class BoardMcpAppLifecycle {
 
   retry(): void {
     const widget = this.host.widget();
-    if (widget && this.callbacks) {
+    if (this.host.active() && widget && this.callbacks) {
       void this.load(widget, this.callbacks, "refresh");
     }
   }
@@ -168,7 +182,7 @@ export class BoardMcpAppLifecycle {
     this.state = { status: "stale", error: "MCP App view expired" };
     this.loading = false;
     this.notify();
-    if (!wasLoading) {
+    if (this.host.active() && !wasLoading) {
       void this.load(widget, callbacks, "expired");
     }
   }
@@ -177,6 +191,7 @@ export class BoardMcpAppLifecycle {
     this.clearTimers();
     this.generation += 1;
     this.key = "";
+    this.appViewGeneration = 0;
     this.state = undefined;
     this.loading = false;
   }
@@ -198,11 +213,11 @@ export class BoardMcpAppLifecycle {
   }
 
   private async load(
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     callbacks: AppViewCallbacks,
     mode: AppViewMode,
   ): Promise<void> {
-    if (this.loading || !this.nearVisible) {
+    if (!this.host.active() || this.loading || !this.nearVisible) {
       return;
     }
     const key = appViewKey(this.host.sessionKey(), widget);
@@ -269,14 +284,14 @@ export class BoardMcpAppLifecycle {
       this.clearTimers();
       this.state = {
         status: "stale",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatUiError(error),
       };
       this.loading = false;
       this.notify();
     }
   }
 
-  private scheduleExpiry(widget: BoardViewWidget, appView: BoardWidgetAppViewState): void {
+  private scheduleExpiry(widget: BoardWidget, appView: BoardWidgetAppViewState): void {
     if (appView.status !== "ready") {
       return;
     }
@@ -305,13 +320,16 @@ export class BoardMcpAppLifecycle {
   }
 
   private scheduleRenewal(
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     callbacks: AppViewCallbacks,
     appView: BoardWidgetAppViewState,
     renewed: boolean,
   ): void {
     this.renewalTimer = clearTimer(this.renewalTimer);
     if (appView.status !== "ready") {
+      return;
+    }
+    if (!this.host.active()) {
       return;
     }
     const key = this.key;
@@ -335,6 +353,7 @@ export class BoardMcpAppLifecycle {
       const current = this.host.widget();
       if (
         this.host.connected() &&
+        this.host.active() &&
         this.nearVisible &&
         this.key === key &&
         current?.name === widget.name &&

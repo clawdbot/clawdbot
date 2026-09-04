@@ -18,12 +18,12 @@ interface JsonSchemaObject {
   oneOf?: JsonSchemaObject[];
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectBackedRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
-  return isRecord(value);
+  return isObjectBackedRecord(value);
 }
 
 function getSchemaTypes(schema: JsonSchemaObject): string[] {
@@ -51,14 +51,14 @@ function matchesJsonType(value: unknown, type: string): boolean {
     case "array":
       return Array.isArray(value);
     case "object":
-      return isRecord(value) && !Array.isArray(value);
+      return isObjectBackedRecord(value) && !Array.isArray(value);
     default:
       return false;
   }
 }
 
 function isValidatorSchema(value: unknown): value is Tool["parameters"] {
-  return isRecord(value);
+  return isObjectBackedRecord(value);
 }
 
 const JSON_NUMBER_TOKEN_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/iu;
@@ -293,7 +293,11 @@ function coerceWithJsonSchema(value: unknown, schema: JsonSchemaObject): unknown
     }
   }
 
-  if (schemaTypes.includes("object") && isRecord(nextValue) && !Array.isArray(nextValue)) {
+  if (
+    schemaTypes.includes("object") &&
+    isObjectBackedRecord(nextValue) &&
+    !Array.isArray(nextValue)
+  ) {
     applySchemaObjectCoercion(nextValue, schema);
   }
 
@@ -348,7 +352,7 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
     // mirror the provider-facing coercions so model-emitted string numbers validate.
     const coerced = coerceWithJsonSchema(args, tool.parameters);
     if (coerced !== args) {
-      if (isRecord(args) && isRecord(coerced)) {
+      if (isObjectBackedRecord(args) && isObjectBackedRecord(coerced)) {
         for (const key of Object.keys(args)) {
           delete args[key];
         }

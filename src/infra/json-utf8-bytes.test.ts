@@ -1,5 +1,5 @@
 // Tests JSON UTF-8 byte counting helpers.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -80,6 +80,17 @@ describe("boundedJsonUtf8Bytes", () => {
     },
     { name: "non-finite numbers", value: [Number.NaN, Number.POSITIVE_INFINITY] },
     { name: "date", value: { at: new Date("2026-04-25T12:00:00.000Z") } },
+    {
+      name: "omitted properties and escaped keys",
+      value: { 'a"\n': "\\", omitted: undefined, fn: () => 1, symbol: Symbol("value") },
+    },
+    {
+      name: "own enumerable properties only",
+      value: Object.defineProperties(Object.create({ inherited: "ignored" }), {
+        visible: { value: "included", enumerable: true },
+        hidden: { value: "ignored", enumerable: false },
+      }),
+    },
   ])("matches JSON.stringify byte length for $name", ({ value }) => {
     expect(boundedJsonUtf8Bytes(value, 100_000)).toEqual({
       bytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
@@ -92,6 +103,30 @@ describe("boundedJsonUtf8Bytes", () => {
       bytes: 8_193,
       complete: false,
     });
+  });
+
+  it("rejects over-limit CJK strings before JSON serialization", () => {
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    try {
+      expect(boundedJsonUtf8Bytes("中".repeat(3_000), 8_192)).toEqual({
+        bytes: 8_193,
+        complete: false,
+      });
+      expect(stringifySpy).not.toHaveBeenCalled();
+    } finally {
+      stringifySpy.mockRestore();
+    }
+  });
+
+  it("stops reading object fields once the byte limit is exceeded", () => {
+    const later = vi.fn(() => "not visited");
+    const value = Object.defineProperty({ first: "x".repeat(100) }, "later", {
+      enumerable: true,
+      get: later,
+    });
+
+    expect(boundedJsonUtf8Bytes(value, 16)).toEqual({ bytes: 17, complete: false });
+    expect(later).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -11,6 +11,7 @@ enum GatewayTLSFingerprintProbeFailure: Equatable {
 }
 
 enum GatewayTLSFingerprintProbeResult: Equatable {
+    case systemTrusted(fingerprint: String)
     case fingerprint(String)
     case failure(GatewayTLSFingerprintProbeFailure)
 }
@@ -87,9 +88,12 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
             return
         }
 
+        let systemTrusted = SecTrustEvaluateWithError(trust, nil)
         let fp = GatewayTLSFingerprintProbe.certificateFingerprint(trust)
         completionHandler(.cancelAuthenticationChallenge, nil)
-        if let fp {
+        if systemTrusted, let fp {
+            self.finish(.systemTrusted(fingerprint: fp))
+        } else if let fp {
             self.finish(.fingerprint(fp))
         } else {
             self.finish(.failure(.certificateUnavailable))

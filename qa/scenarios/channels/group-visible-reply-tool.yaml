@@ -111,4 +111,4 @@ flow:
             expr: matchingOutbound.length === 1
             message:
               expr: "`expected exactly one visible group reply, saw ${matchingOutbound.length}`"
-      detailsExpr: "`${outbound.conversation.kind}:${outbound.conversation.id}:${outbound.text}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', configuredGroupScope: 'per-group (default)', sessionKey, sessionKeysSeen: [sessionKey], reply: { kind: outbound.conversation.kind, id: outbound.conversation.id, text: outbound.text } })"

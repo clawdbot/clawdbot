@@ -9,7 +9,12 @@ final class ExecApprovalsGatewayPrompter {
     static let shared = ExecApprovalsGatewayPrompter()
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals.gateway")
+    private let gateway: GatewayConnection
     private var task: Task<Void, Never>?
+
+    init(gateway: GatewayConnection = .shared) {
+        self.gateway = gateway
+    }
 
     struct GatewayApprovalRequest: Codable {
         var id: String
@@ -29,17 +34,17 @@ final class ExecApprovalsGatewayPrompter {
     }
 
     private func run() async {
-        let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
-        for await push in stream {
+        let stream = await self.gateway.subscribe(bufferingNewest: 200)
+        for await delivery in stream {
             if Task.isCancelled {
                 return
             }
-            await self.handle(push: push)
+            await self.handle(delivery: delivery)
         }
     }
 
-    private func handle(push: GatewayPush) async {
-        guard case let .event(evt) = push else { return }
+    private func handle(delivery: GatewayConnection.PushDelivery) async {
+        guard delivery.isCurrent, let push = delivery.push, case let .event(evt) = push else { return }
         guard evt.event == "exec.approval.requested" || evt.event == "openclaw.approval.requested" else { return }
         guard let payload = evt.payload else { return }
         do {
@@ -58,24 +63,19 @@ final class ExecApprovalsGatewayPrompter {
             else {
                 return
             }
-            if evt.event == "openclaw.approval.requested" {
-                try await GatewayConnection.shared.requestVoid(
-                    method: .approvalResolve,
-                    params: [
-                        "id": AnyCodable(request.id),
-                        "kind": AnyCodable("system-agent"),
-                        "decision": AnyCodable(decision.rawValue),
-                    ],
-                    timeoutMs: 10000)
-            } else {
-                try await GatewayConnection.shared.requestVoid(
-                    method: .execApprovalResolve,
-                    params: [
-                        "id": AnyCodable(request.id),
-                        "decision": AnyCodable(decision.rawValue),
-                    ],
-                    timeoutMs: 10000)
+            guard delivery.isCurrent else {
+                self.logger.info("exec approval decision discarded after the Gateway connection changed")
+                return
             }
+            let isSystemAgent = evt.event == "openclaw.approval.requested"
+            var params = ["id": AnyCodable(request.id), "decision": AnyCodable(decision.rawValue)]
+            if isSystemAgent { params["kind"] = AnyCodable("system-agent") }
+            let method: GatewayConnection.Method = isSystemAgent ? .approvalResolve : .execApprovalResolve
+            _ = try await self.gateway.request(
+                method: method.rawValue,
+                params: params,
+                timeoutMs: 10000,
+                ifCurrentServerLease: delivery.serverLease)
         } catch {
             self.logger.error("exec approval handling failed \(error.localizedDescription, privacy: .public)")
         }

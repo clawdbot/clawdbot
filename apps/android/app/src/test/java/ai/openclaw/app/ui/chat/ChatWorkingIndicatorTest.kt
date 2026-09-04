@@ -28,15 +28,19 @@ class ChatWorkingIndicatorTest {
 
     assertEquals(1_000, counts.values.sum())
     assertEquals(WorkingClawStance.entries.toSet(), counts.keys)
-    assertEquals(630, counts[WorkingClawStance.Default])
-    assertEquals(190, counts[WorkingClawStance.Southpaw])
+    assertEquals(550, counts[WorkingClawStance.Default])
+    assertEquals(180, counts[WorkingClawStance.Southpaw])
     assertEquals(50, counts[WorkingClawStance.Flurry])
     assertEquals(40, counts[WorkingClawStance.Spin])
     assertEquals(30, counts[WorkingClawStance.Shadowbox])
     assertEquals(20, counts[WorkingClawStance.Backflip])
     assertEquals(20, counts[WorkingClawStance.Zen])
-    assertEquals(10, counts[WorkingClawStance.Drummer])
-    assertEquals(10, counts[WorkingClawStance.Peekaboo])
+    assertEquals(20, counts[WorkingClawStance.Drummer])
+    assertEquals(20, counts[WorkingClawStance.Peekaboo])
+    assertEquals(20, counts[WorkingClawStance.NodOff])
+    assertEquals(20, counts[WorkingClawStance.Curious])
+    assertEquals(20, counts[WorkingClawStance.OmNom])
+    assertEquals(10, counts[WorkingClawStance.FakeOut])
   }
 
   @Test
@@ -83,6 +87,35 @@ class ChatWorkingIndicatorTest {
       translationYDp = -1.5f,
       scale = 1.06f,
       jawRotation = -28f,
+    )
+
+    assertEquals(3_600L, workingClawCycleMs(WorkingClawStance.NodOff))
+    assertPose(
+      workingClawPose(WorkingClawStance.NodOff, 0.64f),
+      rotationZ = -3f,
+      translationYDp = -0.5f,
+      jawRotation = -6f,
+    )
+
+    assertEquals(2_400L, workingClawCycleMs(WorkingClawStance.Curious))
+    assertPose(
+      workingClawPose(WorkingClawStance.Curious, 0.40f),
+      rotationZ = -14f,
+      jawRotation = -16f,
+    )
+
+    assertEquals(2_400L, workingClawCycleMs(WorkingClawStance.OmNom))
+    assertPose(
+      workingClawPose(WorkingClawStance.OmNom, 0.36f),
+      translationXDp = 2.5f,
+      jawRotation = 8f,
+    )
+
+    assertEquals(2_400L, workingClawCycleMs(WorkingClawStance.FakeOut))
+    assertPose(
+      workingClawPose(WorkingClawStance.FakeOut, 0.58f),
+      rotationZ = 3f,
+      jawRotation = 4f,
     )
   }
 

@@ -1,6 +1,6 @@
 // Webhook memory guards keep in-process webhook dedupe and replay state bounded.
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
 type FixedWindowState = {
   count: number;
@@ -81,24 +81,20 @@ export function createFixedWindowRateLimiter(options: {
   /** Optional interval for expired-window pruning. Defaults to `windowMs`. */
   pruneIntervalMs?: number;
 }): FixedWindowRateLimiter {
-  const windowMs = resolveWebhookIntegerOption(
-    options.windowMs,
-    WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
-    {
-      min: 1,
-    },
-  );
-  const maxRequests = resolveWebhookIntegerOption(
+  const windowMs = resolveIntegerOption(options.windowMs, WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs, {
+    min: 1,
+  });
+  const maxRequests = resolveIntegerOption(
     options.maxRequests,
     WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
     { min: 1 },
   );
-  const maxTrackedKeys = resolveWebhookIntegerOption(
+  const maxTrackedKeys = resolveIntegerOption(
     options.maxTrackedKeys,
     WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
     { min: 1 },
   );
-  const pruneIntervalMs = resolveWebhookIntegerOption(options.pruneIntervalMs, windowMs, {
+  const pruneIntervalMs = resolveIntegerOption(options.pruneIntervalMs, windowMs, {
     min: 1,
   });
   const state = new Map<string, FixedWindowState>();
@@ -159,13 +155,13 @@ export function createBoundedCounter(options: {
   /** Optional interval for TTL pruning. */
   pruneIntervalMs?: number;
 }): BoundedCounter {
-  const maxTrackedKeys = resolveWebhookIntegerOption(
+  const maxTrackedKeys = resolveIntegerOption(
     options.maxTrackedKeys,
     WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
     { min: 1 },
   );
-  const ttlMs = resolveWebhookIntegerOption(options.ttlMs, 0, { min: 0 });
-  const pruneIntervalMs = resolveWebhookIntegerOption(
+  const ttlMs = resolveIntegerOption(options.ttlMs, 0, { min: 0 });
+  const pruneIntervalMs = resolveIntegerOption(
     options.pruneIntervalMs,
     ttlMs > 0 ? ttlMs : 60_000,
     { min: 1 },
@@ -228,17 +224,15 @@ export function createWebhookAnomalyTracker(options?: {
   /** HTTP status codes that should be counted as anomalies. */
   trackedStatusCodes?: readonly number[];
 }): WebhookAnomalyTracker {
-  const maxTrackedKeys = resolveWebhookIntegerOption(
+  const maxTrackedKeys = resolveIntegerOption(
     options?.maxTrackedKeys,
     WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
     { min: 1 },
   );
-  const ttlMs = resolveWebhookIntegerOption(
-    options?.ttlMs,
-    WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs,
-    { min: 0 },
-  );
-  const logEvery = resolveWebhookIntegerOption(
+  const ttlMs = resolveIntegerOption(options?.ttlMs, WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs, {
+    min: 0,
+  });
+  const logEvery = resolveIntegerOption(
     options?.logEvery,
     WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery,
     { min: 1 },

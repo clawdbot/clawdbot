@@ -55,6 +55,7 @@ function makeInput(
     terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
     activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
     provider: "openai",
+    providerOwner: undefined,
     modelId: "gpt-5.6-luna",
     model: "gpt-5.6-luna",
     thinkLevel: "off",
@@ -62,7 +63,6 @@ function makeInput(
     attemptedThinking: new Set(["off"]),
     fallbackConfigured: false,
     pluginHarnessOwnsTransport: false,
-    canRestartForLiveSwitch: false,
     authProfileStore: { version: 1, profiles: {} },
     runtimeAuthRetry: false,
     maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
@@ -70,15 +70,12 @@ function makeInput(
     emptyErrorRetries: options.emptyErrorRetries ?? 0,
     overloadProfileRotations: 0,
     overloadProfileRotationLimit: 1,
-    rateLimitProfileRotations: 0,
-    rateLimitProfileRotationLimit: 1,
-    sameModelIdleTimeoutRetries: 0,
     previousRetryFailoverReason: null,
     maybeMarkAuthProfileFailure: vi.fn(async () => {}),
-    maybeEscalateRateLimitProfileFallback: vi.fn(),
-    maybeRetrySameModelRateLimit: vi.fn(async () => false),
-    maybeBackoffBeforeOverloadFailover: vi.fn(async () => {}),
-    advanceAttemptAuthProfile: vi.fn(async () => false),
+    maybeRetryTransient: vi.fn(async () => false),
+    getTransientRetryCount: () => 0,
+    advanceAuthProfile: vi.fn(async () => false),
+    advanceRateLimitAuthProfile: vi.fn(async () => false),
     traceAttempts: [],
     suspendForFailure: vi.fn(),
     suspensionSessionId: "session:empty-error",
@@ -94,7 +91,6 @@ describe("silent assistant-error retry owner", () => {
     expect(outcome).toMatchObject({
       action: "retry",
       emptyErrorRetries: 1,
-      preserveSameModelRateLimitRetryCount: true,
     });
   });
 

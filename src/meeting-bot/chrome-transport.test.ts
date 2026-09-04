@@ -41,6 +41,8 @@ import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-
 type TestMode = "agent" | "transcribe";
 type TestConfig = MeetingRealtimeEngineConfig & {
   chrome: MeetingRealtimeEngineConfig["chrome"] & {
+    audioBackend: "auto";
+    audioBufferBytes: number;
     audioInputCommand: string[];
     audioOutputCommand: string[];
     autoJoin: boolean;
@@ -61,6 +63,8 @@ type TestConfig = MeetingRealtimeEngineConfig & {
 
 const config = {
   chrome: {
+    audioBackend: "auto",
+    audioBufferBytes: 4_096,
     audioFormat: "pcm16-24khz",
     audioInputCommand: [],
     audioOutputCommand: [],
@@ -152,7 +156,6 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
       isTalkBackMode: () => true,
       meetingLabel: `${testCase.name} meeting`,
       nodeCommandName: platform.nodeCommandName,
-      outputMentionsAudioDevice: () => true,
       platform,
       preserveTrackedBrowserOnEngineFailure: testCase.preserveTrackedBrowserOnEngineFailure,
       runtime: {
@@ -177,7 +180,6 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
         }) as unknown as typeof startMeetingAgentRealtimeEngine,
         startRealtimeEngine: vi.fn() as unknown as typeof startMeetingRealtimeEngine,
       },
-      systemProfilerCommand: "/usr/sbin/system_profiler",
     });
     const runtime = {
       system: {
@@ -232,7 +234,6 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
       isTalkBackMode: () => true,
       meetingLabel: `${testCase.name} meeting`,
       nodeCommandName: platform.nodeCommandName,
-      outputMentionsAudioDevice: () => true,
       platform,
       preserveTrackedBrowserOnEngineFailure: testCase.preserveTrackedBrowserOnEngineFailure,
       runtime: {
@@ -254,7 +255,6 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
         })) as unknown as typeof startMeetingAgentRealtimeEngine,
         startRealtimeEngine: vi.fn() as unknown as typeof startMeetingRealtimeEngine,
       },
-      systemProfilerCommand: "/usr/sbin/system_profiler",
     });
     const runtime = {
       nodes: {
@@ -283,6 +283,21 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
     });
 
     expect(result.audioBridge?.type).toBe("node-command-pair");
+    expect(runtime.nodes.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          action: "setup",
+          audioBackend: "auto",
+          audioBufferBytes: 4_096,
+          audioFormat: "pcm16-24khz",
+        }),
+      }),
+    );
+    const startCall = vi
+      .mocked(runtime.nodes.invoke)
+      .mock.calls.find(([call]) => (call.params as { action?: string }).action === "start")?.[0];
+    expect(startCall?.params).not.toHaveProperty("audioInputCommand");
+    expect(startCall?.params).not.toHaveProperty("audioOutputCommand");
     expect(
       Reflect.get(
         nodeAudioTransport,

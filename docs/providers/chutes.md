@@ -72,6 +72,18 @@ other non-2xx status, it falls back to the bundled static catalog (both API-key
 and OAuth discovery use this same path). If discovery fails at startup, the
 static catalog is used automatically.
 
+Token prices come from the native [Chutes model catalog](https://llm.chutes.ai/v1/models).
+Its numeric prompt, completion, and cached-input rates are already in USD per
+million tokens; they are not per-token OpenRouter rates. Unavailable or invalid
+price metadata does not establish that a model is free.
+
+In the default `models.mode: "merge"`, fresh onboarding records the provider and
+aliases without copying generated model rows or prices into your config. Live
+prices can then refresh without overwriting explicitly authored model costs.
+`models.mode: "replace"` disables discovery, so onboarding retains the bundled
+catalog as an explicit offline seed in that mode. Existing configured model rows
+and their prices are preserved when applying provider setup again.
+
 ## Default aliases
 
 OpenClaw registers two convenience aliases for the Chutes catalog:
@@ -98,6 +110,12 @@ pickers:
 | `chutes/Qwen/Qwen3.5-397B-A17B-TEE`    | Hidden        |
 
 Run `openclaw models list --all --provider chutes` for the full list.
+
+Fallback prices for starter models still listed by the native endpoint were
+refreshed from its August 31, 2026 response. An absent model keeps its previous
+seed snapshot: feed absence alone does not retire a shipped reference or change
+its picker status. Listing metadata is not proof that your account can invoke a
+model.
 
 ## Config example
 

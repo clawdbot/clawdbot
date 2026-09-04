@@ -21,6 +21,7 @@ data class BackgroundTask(
   val updatedAtMs: Long?,
   val startedAtMs: Long?,
   val endedAtMs: Long?,
+  val lastActivity: String? = null,
   val progress: String?,
   val terminal: String?,
   val error: String?,
@@ -46,9 +47,9 @@ data class BackgroundTask(
     get() {
       val candidates =
         if (status == "failed" || status == "timed_out") {
-          listOf(error, terminal, progress)
+          listOf(error, terminal, lastActivity, progress)
         } else {
-          listOf(terminal, error, progress)
+          listOf(terminal, error, lastActivity, progress)
         }
       return candidates.firstOrNull { !it.isNullOrBlank() }
     }
@@ -89,6 +90,7 @@ internal fun parseBackgroundTask(element: JsonElement): BackgroundTask? {
     updatedAtMs = objectValue["updatedAt"]?.let(::parseTaskTimestampMs),
     startedAtMs = objectValue["startedAt"]?.let(::parseTaskTimestampMs),
     endedAtMs = objectValue["endedAt"]?.let(::parseTaskTimestampMs),
+    lastActivity = string("lastActivity"),
     progress = string("progressSummary"),
     terminal = string("terminalSummary"),
     error = string("error"),
@@ -105,7 +107,7 @@ internal fun mergeBackgroundTasks(vararg groups: List<BackgroundTask>): List<Bac
     }.values
     .sortedWith(compareByDescending<BackgroundTask> { it.isActive }.thenByDescending { it.activityAtMs })
 
-private fun parseTaskTimestampMs(element: JsonElement): Long? {
+internal fun parseTaskTimestampMs(element: JsonElement): Long? {
   val primitive = element.jsonPrimitive
   primitive.doubleOrNull?.let { return it.toLong() }
   return primitive.contentOrNull?.let { raw -> runCatching { Instant.parse(raw).toEpochMilli() }.getOrNull() }

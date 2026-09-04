@@ -49,7 +49,10 @@ function normalizeGeminiProRequestId(id: string): string {
 }
 
 function googleFamilyModelId(id: string): string {
-  return id.startsWith(GOOGLE_PROVIDER_PREFIX) ? id.slice(GOOGLE_PROVIDER_PREFIX.length) : id;
+  const unqualified = id.startsWith(GOOGLE_PROVIDER_PREFIX)
+    ? id.slice(GOOGLE_PROVIDER_PREFIX.length)
+    : id;
+  return unqualified.startsWith("models/") ? unqualified.slice("models/".length) : unqualified;
 }
 
 export function isGoogleTextGenerationModelId(id: string): boolean {
@@ -69,6 +72,11 @@ export function isGoogleTextGenerationModelId(id: string): boolean {
     lower === GEMINI_FLASH_LITE_LATEST_ID ||
     lower.startsWith(GEMMA_PREFIX)
   );
+}
+
+export function isGoogleNativeVideoModelId(id: string): boolean {
+  const normalized = normalizeOptionalLowercaseString(googleFamilyModelId(id)) ?? "";
+  return normalized.startsWith("gemini-") && isGoogleTextGenerationModelId(normalized);
 }
 
 type GoogleForwardCompatFamily = readonly [

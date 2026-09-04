@@ -1,6 +1,7 @@
 // Tests follow-up queue message-id dedupe and drain scheduling behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
@@ -10,11 +11,11 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import {
-  createDeferred,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -31,7 +32,7 @@ function createFollowupCollector(expectedCalls = 1): {
   runFollowup: (run: FollowupRun) => Promise<void>;
 } {
   const calls: FollowupRun[] = [];
-  const done = createDeferred<void>();
+  const done = createDeferred();
   return {
     calls,
     done,
@@ -252,6 +253,47 @@ describe("followup queue deduplication", () => {
     }
   });
 
+  it("does not leave an empty registry entry when rejecting a redelivery after the queue drained", async () => {
+    const key = `test-dedup-registry-leak-${Date.now()}`;
+    const { calls, done, runFollowup } = createFollowupCollector();
+
+    expect(
+      enqueueFollowupRun(
+        key,
+        createRun({
+          prompt: "original",
+          messageId: "leak-1",
+          originatingChannel: "discord",
+          originatingTo: "channel:123",
+        }),
+        collectSettings,
+      ),
+    ).toBe(true);
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+    // Let the drain finish and self-delete the empty queue from the registry.
+    await vi.waitFor(() => {
+      expect(getExistingFollowupQueue(key)).toBeUndefined();
+    });
+    expect(calls).toHaveLength(1);
+
+    // A provider redelivery of the same message must be rejected without
+    // recreating a registry entry that nothing would ever delete again.
+    expect(
+      enqueueFollowupRun(
+        key,
+        createRun({
+          prompt: "original (redelivery)",
+          messageId: "leak-1",
+          originatingChannel: "discord",
+          originatingTo: "channel:123",
+        }),
+        collectSettings,
+      ),
+    ).toBe(false);
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
+  });
+
   it("does not collide recent message-id keys when routing contains delimiters", async () => {
     const key = `test-dedup-key-collision-${Date.now()}`;
     const { done, runFollowup } = createFollowupCollector();
@@ -381,12 +423,14 @@ describe("followup queue deduplication", () => {
     const key = `test-dedup-evicted-retry-${Date.now()}`;
     const evictSettings: QueueSettings = { mode: "collect", cap: 1, dropPolicy: "old" };
     const onAbandoned = vi.fn();
+    const onDisposition = vi.fn();
     const first = createRun({
       prompt: "first",
       messageId: "m1",
       originatingChannel: "line",
       originatingTo: "group:G1",
     });
+    first.onQueueDisposition = onDisposition;
     first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
     expect(enqueueFollowupRun(key, first, evictSettings)).toBe(true);
 
@@ -404,7 +448,8 @@ describe("followup queue deduplication", () => {
         evictSettings,
       ),
     ).toBe(true);
-    expect(onAbandoned).toHaveBeenCalledTimes(1);
+    expect(onDisposition).toHaveBeenCalledWith("queue-cap-old");
+    expect(onAbandoned).toHaveBeenCalledOnce();
 
     const retry = createRun({
       prompt: "first",
@@ -473,7 +518,7 @@ describe("followup queue deduplication", () => {
     try {
       vi.setSystemTime(new Date("2026-07-30T00:00:00Z"));
       const key = "test-dedup-stale-owner";
-      const stalledAdmission = createDeferred<void>();
+      const stalledAdmission = createDeferred();
       const first = createRun({
         prompt: "first",
         messageId: "same-id",

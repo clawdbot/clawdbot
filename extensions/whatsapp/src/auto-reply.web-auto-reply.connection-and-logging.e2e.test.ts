@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { getActiveWebListener } from "./active-listener.js";
@@ -29,11 +30,7 @@ import {
 } from "./auto-reply/deliver-reply.js";
 import { buildInboundLine } from "./auto-reply/monitor/message-line.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
-import {
-  createTestLegacyFlatWebInboundMessage,
-  createTestWebInboundMessage,
-} from "./inbound/test-message.test-helper.js";
-import type { WebInboundMessageInput } from "./inbound/types.js";
+import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 import { waitForWaConnection } from "./session.js";
 
 type DrainSelectionEntry = {
@@ -252,7 +249,7 @@ describe("web auto-reply connection", () => {
       },
     };
     const listenerFactory = vi.fn(async () => {
-      throw toLintErrorObject(boom428, "Non-Error thrown");
+      throw toErrorObject(boom428, "Non-Error thrown");
     });
 
     const sleep = vi.fn(async () => {});
@@ -863,71 +860,6 @@ describe("web auto-reply connection", () => {
     expect(capture.getLastOptions()?.debounceMs).toBe(250);
   });
 
-  it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
-    const capture = createWebListenerFactoryCapture();
-    const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
-    const resolver = vi.fn().mockResolvedValue(undefined);
-
-    await monitorWebChannel(false, capture.listenerFactory as never, false, resolver);
-    const onMessage = requireOnMessage(capture.getOnMessage());
-    const msg = createTestLegacyFlatWebInboundMessage({
-      from: "+1",
-      conversationId: "+1",
-      chatId: "+1",
-      to: "+2",
-      accessControlPassed: false,
-      reply,
-    });
-
-    expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
-    expect(
-      capture
-        .getLastOptions()
-        ?.shouldDebounce?.(createTestWebInboundMessage({ payload: { body: "   " } })),
-    ).toBe(false);
-    expect(
-      capture.getLastOptions()?.shouldDebounce?.(
-        createTestWebInboundMessage({
-          payload: {
-            body: "/stop\n\n[whatsapp attachment unavailable]",
-            commandBody: "/stop",
-          },
-          platform: { sendComposing, reply, sendMedia },
-        }),
-      ),
-    ).toBe(false);
-    await onMessage(msg);
-
-    expect(resolver).not.toHaveBeenCalled();
-    expect(reply).not.toHaveBeenCalled();
-    await expect(
-      onMessage({
-        event: { id: "canonical-no-admission" },
-        payload: { body: "canonical" },
-        platform: {
-          chatJid: "+3",
-          recipientJid: "+4",
-          sendComposing,
-          reply,
-          sendMedia,
-        },
-        from: "+3",
-        conversationId: "+3",
-        accountId: "default",
-        chatType: "direct",
-      }),
-    ).rejects.toThrow(/missing admission facts/);
-
-    expect(reply).not.toHaveBeenCalled();
-    await expect(
-      onMessage({
-        ...msg,
-        id: "partial-msg",
-        payload: { body: "partial nested" },
-      } as unknown as WebInboundMessageInput),
-    ).rejects.toThrow(/legacy flat or canonical nested/);
-  });
-
   it("raises the process listener budget before opening the web listener", async () => {
     const originalMax = process.getMaxListeners();
     process.setMaxListeners?.(1);
@@ -1068,17 +1000,3 @@ describe("web auto-reply connection", () => {
     expect(content).toMatch(/auto/);
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

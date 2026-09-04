@@ -1,7 +1,7 @@
 // Doctor runtime error tests cover error handling in core runtime checks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 
 const mocks = vi.hoisted(() => ({
   createBundleMcpToolRuntime: vi.fn(),
@@ -21,6 +21,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 

@@ -9,13 +9,11 @@ import {
   defineKeyMoveMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
-  stripRetiredChannelKeys,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   migrateLegacyFlatAllowPrivateNetworkAlias,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord } from "./record-shared.js";
+  stripRetiredChannelKeys,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixStreamingMode } from "./types.js";
 
 function parseMatrixStreamingMode(value: unknown): MatrixStreamingMode | null {

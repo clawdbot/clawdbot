@@ -1,12 +1,15 @@
 // Proves queue caps and depth describe pending work while active identities remain in shared state.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
+  FollowupRunDeferredError,
   getFollowupQueueDepth,
   scheduleFollowupDrain,
 } from "./queue.js";
-import { createDeferred, createQueueTestRun as createRun } from "./queue.test-helpers.js";
+import { createQueueTestRun as createRun } from "./queue.test-helpers.js";
+import { prepareStaleFollowupDrainRetirement } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./queue/types.js";
 
@@ -37,8 +40,8 @@ describe("followup queue in-flight ownership", () => {
     "keeps an active single delivery out of %s overflow victims",
     async (dropPolicy) => {
       const key = createKey(dropPolicy);
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
+      const entered = createDeferred();
+      const release = createDeferred();
       const activeComplete = vi.fn();
       const pendingComplete = vi.fn();
       const calls: FollowupRun[] = [];
@@ -105,8 +108,8 @@ describe("followup queue in-flight ownership", () => {
 
   it("admits one pending item under drop:new while another item is active", async () => {
     const key = createKey("new");
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const rejectedEnqueued = vi.fn();
     const rejectedComplete = vi.fn();
     const active = createRun({ prompt: "active" });
@@ -161,8 +164,8 @@ describe("followup queue in-flight ownership", () => {
 
   it("protects a collect group and counts only active identities still present", async () => {
     const key = createKey("collect");
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const groupCompletions = [vi.fn(), vi.fn()];
     const pendingComplete = vi.fn();
     const rejectedComplete = vi.fn();
@@ -246,5 +249,101 @@ describe("followup queue in-flight ownership", () => {
 
     await expect.poll(() => getExistingFollowupQueue(key)).toBeUndefined();
     expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([1, 1]);
+  });
+
+  it("moves pending overflow state without replaying an active summary delivery", async () => {
+    const key = createKey("summary-recovery");
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    const activeEntered = createDeferred();
+    const releaseZombie = createDeferred();
+    const calls: string[] = [];
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run.prompt);
+      if (calls.length === 1) {
+        activeEntered.resolve();
+        await releaseZombie.promise;
+      }
+    };
+
+    try {
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "summary-active" }),
+        settings,
+        "none",
+        undefined,
+        false,
+      );
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "summary-pending" }),
+        settings,
+        "none",
+        undefined,
+        false,
+      );
+      scheduleFollowupDrain(key, runFollowup);
+      await activeEntered.promise;
+      enqueueFollowupRun(key, createRun({ prompt: "item-pending" }), settings, "none", runFollowup);
+
+      const retire = prepareStaleFollowupDrainRetirement(key);
+      expect(retire).toBeTypeOf("function");
+      retire?.();
+      await vi.waitFor(() => expect(calls).toHaveLength(3));
+
+      expect(calls[0]).toContain("summary-active");
+      expect(calls[1]).toContain("summary-pending");
+      expect(calls[2]).toBe("item-pending");
+      releaseZombie.resolve();
+      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+      expect(calls).toHaveLength(3);
+    } finally {
+      releaseZombie.resolve();
+    }
+  });
+
+  it("rejects stale retirement after the same source enters a new drain generation", async () => {
+    const key = createKey("generation-recovery");
+    const settings = createSettings("old");
+    const firstEntered = createDeferred();
+    const secondEntered = createDeferred();
+    const releaseFirst = createDeferred();
+    const releaseSecond = createDeferred();
+    const run = createRun({ prompt: "retry-same-source" });
+    let attempts = 0;
+    const runFollowup = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        firstEntered.resolve();
+        await releaseFirst.promise;
+        throw new FollowupRunDeferredError();
+      }
+      secondEntered.resolve();
+      await releaseSecond.promise;
+    };
+
+    try {
+      enqueueFollowupRun(key, run, settings, "none", runFollowup);
+      await firstEntered.promise;
+      const queue = getExistingFollowupQueue(key);
+      const retireFirstGeneration = prepareStaleFollowupDrainRetirement(key);
+      releaseFirst.resolve();
+      await secondEntered.promise;
+
+      retireFirstGeneration?.();
+      expect(getExistingFollowupQueue(key)).toBe(queue);
+      expect(run.queueAbortSignal?.aborted).toBe(false);
+      expect(attempts).toBe(2);
+    } finally {
+      releaseFirst.resolve();
+      releaseSecond.resolve();
+    }
+    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+    expect(attempts).toBe(2);
   });
 });

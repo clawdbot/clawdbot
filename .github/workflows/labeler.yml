@@ -63,7 +63,7 @@ jobs:
           permission-members: read
           permission-metadata: read
           permission-pull-requests: write
-      - uses: actions/labeler@b8dd2d9be0f68b860e7dae5dae7d772984eacd6d # v6
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
         if: ${{ github.event.action != 'edited' || github.event.changes.base }}
         with:
           configuration-path: .github/labeler.yml
@@ -137,6 +137,7 @@ jobs:
               per_page: 100,
             });
 
+            let remainingLabelCount = currentLabels.length;
             for (const label of currentLabels) {
               const name = label.name ?? "";
               if (!sizeLabels.includes(name)) {
@@ -151,14 +152,28 @@ jobs:
                 issue_number: pullRequest.number,
                 name,
               });
+              remainingLabelCount -= 1;
             }
 
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pullRequest.number,
-              labels: [targetSizeLabel],
-            });
+            // actions/labeler already caps its result at GitHub's 100-label limit.
+            // Its optional area-label limit skips all new matches; it reserves no slots here.
+            if (remainingLabelCount >= 100 && !currentLabels.some((label) => label.name === targetSizeLabel)) {
+              core.warning(`Skipping ${targetSizeLabel}: PR #${pullRequest.number} already has 100 labels.`);
+              return;
+            }
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: [targetSizeLabel],
+              });
+            } catch (error) {
+              if (error?.status !== 422 || !/cannot have more than 100 labels/i.test(error.message ?? "")) {
+                throw error;
+              }
+              core.warning(`Skipping ${targetSizeLabel}: ${error.message}`);
+            }
       - name: Apply maintainer or trusted-contributor label
         if: ${{ github.event.action != 'edited' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9

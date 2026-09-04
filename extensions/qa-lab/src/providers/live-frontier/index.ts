@@ -39,7 +39,7 @@ export const liveFrontierProviderDefinition: QaProviderDefinition = {
   resolveModelParams: ({ modelRef, fastMode, thinkingDefault }) => ({
     transport: "sse",
     openaiWsWarmup: false,
-    ...(fastMode === true || isQaFastModeModelRef(modelRef) ? { fastMode: true } : {}),
+    ...((fastMode ?? isQaFastModeModelRef(modelRef)) ? { fastMode: true } : {}),
     ...(thinkingDefault ? { thinking: thinkingDefault } : {}),
   }),
   resolveTurnTimeoutMs: ({ fallbackMs, modelRef }) => {

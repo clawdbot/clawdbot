@@ -360,6 +360,21 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectRejectedForwardingResult(result, "APPROVAL_SOURCE_MISMATCH");
   });
 
+  test("rejects allow-always when delegated authority closes before forwarding", () => {
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    record.decision = "allow-always";
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      record,
+      execApprovalManager: {
+        getSnapshot: () => record,
+        projectDecisionIfActive: () => null,
+      },
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_REQUIRED");
+  });
+
   test("rejects stored auto-review provenance without a canonical execution plan", () => {
     const record = makeRecord(echoSafeCommand, echoSafeArgv);
     record.resolutionSource = "auto-review";

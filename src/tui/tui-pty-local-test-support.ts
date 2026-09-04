@@ -3,6 +3,85 @@ import { waitFor, type PtyRun } from "./tui-pty-test-support.js";
 const STARTUP_TIMEOUT_MS = 60_000;
 const OUTPUT_TIMEOUT_MS = 120_000;
 
+type CleanupRegistrar = (cleanup: () => Promise<void>) => void;
+
+export function createIdempotentCleanup(cleanup: () => Promise<void>) {
+  let cleanupPromise: Promise<void> | undefined;
+  return () => (cleanupPromise ??= cleanup());
+}
+
+// Register before setup starts so a timed-out test still owns partial resources.
+export function registerIdempotentCleanup(
+  registerCleanup: CleanupRegistrar,
+  cleanup: () => Promise<void>,
+) {
+  const registeredCleanup = createIdempotentCleanup(cleanup);
+  registerCleanup(registeredCleanup);
+  return registeredCleanup;
+}
+
+type ObservedChatTerminal = {
+  errorMessage?: string;
+  runId: string;
+  sessionKey: string;
+  state: "aborted" | "error" | "final";
+};
+
+// A completed-history assertion must wait for the run's terminal event first.
+// Polling history during the run can consume the RPC deadline and leak that run.
+export function createChatTerminalObserver() {
+  const terminals = new Map<string, ObservedChatTerminal>();
+  const keyFor = (sessionKey: string, runId: string) => `${sessionKey}\u0000${runId}`;
+
+  return {
+    onEvent: ({ event, payload }: { event: string; payload?: unknown }) => {
+      if (event !== "chat" || !payload || typeof payload !== "object") {
+        return;
+      }
+      const chatEvent = payload as {
+        errorMessage?: unknown;
+        runId?: unknown;
+        sessionKey?: unknown;
+        state?: unknown;
+      };
+      if (
+        typeof chatEvent.runId !== "string" ||
+        typeof chatEvent.sessionKey !== "string" ||
+        (chatEvent.state !== "aborted" &&
+          chatEvent.state !== "error" &&
+          chatEvent.state !== "final")
+      ) {
+        return;
+      }
+      terminals.set(keyFor(chatEvent.sessionKey, chatEvent.runId), {
+        ...(typeof chatEvent.errorMessage === "string"
+          ? { errorMessage: chatEvent.errorMessage }
+          : {}),
+        runId: chatEvent.runId,
+        sessionKey: chatEvent.sessionKey,
+        state: chatEvent.state,
+      });
+    },
+    waitForFinal: async (params: { runId: string; sessionKey: string; timeoutMs: number }) => {
+      const terminal = await waitFor({
+        timeoutMs: params.timeoutMs,
+        read: () => terminals.get(keyFor(params.sessionKey, params.runId)) ?? null,
+        onTimeout: () =>
+          new Error(`chat run ${params.runId} did not reach a terminal event before history load`),
+      });
+      terminals.delete(keyFor(params.sessionKey, params.runId));
+      if (terminal.state !== "final") {
+        throw new Error(
+          `chat run ${params.runId} ended as ${terminal.state}${
+            terminal.errorMessage ? `: ${terminal.errorMessage}` : ""
+          }`,
+        );
+      }
+      return terminal;
+    },
+  };
+}
+
 export async function waitForOutputAfter(
   run: PtyRun,
   needle: string,

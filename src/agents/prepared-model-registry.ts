@@ -2,13 +2,14 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { normalizeDiscoveredAgentModel } from "./agent-model-discovery.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveDefaultAgentId,
+  resolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   acquireReadOnlyPreparedModelRuntime,
   prepareModelRuntimeSnapshot,
@@ -101,7 +102,7 @@ function registryOwnerCandidates(
 async function loadReadSnapshot(
   input: PreparedModelRuntimeInput,
   allowConfiguredWorkspaceFallback: boolean,
-): Promise<PreparedModelRuntimeLease> {
+): Promise<Pick<PreparedModelRuntimeLease, "snapshot" | "release">> {
   for (const candidate of registryOwnerCandidates(input, allowConfiguredWorkspaceFallback)) {
     try {
       const prepared = await prepareModelRuntimeSnapshot(candidate);
@@ -120,14 +121,14 @@ function resolveInput(
   config: OpenClawConfig,
   options: LoadPreparedAgentModelRegistryOptions = {},
 ): PreparedModelRuntimeInput {
-  const agentId = options.agentId ?? resolveDefaultAgentId(config);
+  const agentId = options.agentId ?? resolveAmbientOwnerAgentId(config);
   const agentDir = options.agentDir ?? resolveAgentDir(config, agentId);
   const workspaceDir = options.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
   return {
     agentId,
     agentDir,
     config,
-    inheritedAuthDir: resolveDefaultAgentDir(config),
+    inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
     ...(usesCredentialFreeRegistry(options) ? { skipCredentials: true } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   };
@@ -137,7 +138,12 @@ function resolveInput(
 export async function loadPreparedAgentModelRegistry(
   config: OpenClawConfig,
   options: LoadPreparedAgentModelRegistryOptions = {},
-): Promise<{ agentDir: string; config: OpenClawConfig; registry: ModelRegistry }> {
+): Promise<{
+  agentDir: string;
+  authModes: PreparedAgentCredentialModes;
+  config: OpenClawConfig;
+  registry: ModelRegistry;
+}> {
   const input = resolveInput(config, options);
   const lease = await loadReadSnapshot(input, options.workspaceDir === undefined);
   try {
@@ -151,6 +157,7 @@ export async function loadPreparedAgentModelRegistry(
       : stores.modelRegistry;
     return {
       agentDir: snapshot.agentDir,
+      authModes: snapshot.authModes,
       config: snapshot.config,
       registry: createRegistryView({
         registry: modelRegistry,

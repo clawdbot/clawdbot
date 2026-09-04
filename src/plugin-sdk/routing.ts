@@ -21,6 +21,7 @@ export {
   isSubagentSessionKey,
   normalizeAccountId,
   normalizeAgentId,
+  normalizeAgentIdStrict,
   normalizeMainKey,
   normalizeOptionalAccountId,
   parseAgentSessionKey,

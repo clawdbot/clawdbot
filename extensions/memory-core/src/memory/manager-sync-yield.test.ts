@@ -7,7 +7,7 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   ensureMemoryIndexSchema,
   requireNodeSqlite,
@@ -49,25 +49,19 @@ vi.mock("undici", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-qmd")>();
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-sessions")>();
   const basename = (filePath: string) => filePath.split(/[\\/]/).pop() ?? filePath;
   return {
     ...actual,
     buildSessionEntry: buildSessionEntryMock,
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
-    listSessionFilesForAgent: vi.fn(async () => []),
     listSessionTranscriptCorpusEntriesForAgent: vi.fn(async () => []),
     parseCanonicalSessionSyncTargetFromPath: (filePath: string) => ({
       agentId: "main",
       sessionId: basename(filePath).replace(/\.jsonl$/, ""),
-    }),
-    resolveSessionFileForSyncTarget: (target: { agentId?: string; sessionId: string }) => ({
-      agentId: target.agentId ?? "main",
-      sessionFile: `/tmp/${target.sessionId}.jsonl`,
-      sessionId: target.sessionId,
     }),
     sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
     sessionPathForSessionIdentity: (agentId: string, sessionId: string) =>
@@ -76,13 +70,13 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", async (importOriginal
 });
 
 vi.mock("./embeddings.js", () => ({
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,
   createEmbeddingProvider: vi.fn(),
 }));
 
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
@@ -124,11 +118,10 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     pollIntervalMs: 0,
     timeoutMs: 0,
   };
-  protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
   protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected db = createDbMock();
+  protected publishedDatabase = new MemoryIndexDatabase(createDbMock());
 
   readonly indexedPaths: string[] = [];
   private corpusFiles: string[] = [];
@@ -200,11 +193,10 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 
 class EmbeddingCacheSeedHarness extends SessionSyncYieldHarness {
   protected override readonly cache = { enabled: true };
-  protected override db: DatabaseSync;
 
   constructor(db: DatabaseSync) {
     super(() => {});
-    this.db = db;
+    this.publishedDatabase = new MemoryIndexDatabase(db);
   }
 
   async seedCache(sourceDb: DatabaseSync): Promise<void> {
@@ -291,7 +283,7 @@ describe("embedding cache seed responsiveness", () => {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       );
       sourceDb.exec("BEGIN");
-      for (let index = 0; index < 1_001; index += 1) {
+      for (let index = 0; index < 101; index += 1) {
         insert.run("test", "model", "key", `hash-${index}`, "[0.5]", 1, index);
       }
       sourceDb.exec("COMMIT");
@@ -322,9 +314,9 @@ describe("embedding cache seed responsiveness", () => {
       expect(duringYield).toEqual({
         sourceInTransaction: false,
         targetInTransaction: false,
-        rows: 1_000,
+        rows: 100,
       });
-      expect(countCacheRows(targetDb)).toBe(1_001);
+      expect(countCacheRows(targetDb)).toBe(101);
     } finally {
       sourceDb.close();
       targetDb.close();

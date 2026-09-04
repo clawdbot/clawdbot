@@ -169,6 +169,45 @@ describe("fallback-skip-cache", () => {
     ).toBe(false);
   });
 
+  it("isolates entries across explicit and automatic auth scopes", () => {
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      authScope: "anthropic:profile-a",
+      reason: "auth",
+      now: 1_000,
+      ttlMs: 60_000,
+    });
+
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        authScope: "anthropic:profile-a",
+        now: 30_000,
+      }),
+    ).toBe(true);
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        authScope: "anthropic:profile-b",
+        now: 30_000,
+      }),
+    ).toBe(false);
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 30_000,
+      }),
+    ).toBe(false);
+  });
+
   it("re-marking the same triple refreshes the TTL", () => {
     markFallbackCandidateSkipped({
       sessionId: "s1",

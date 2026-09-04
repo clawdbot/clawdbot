@@ -4,11 +4,12 @@
  * Recovers flat or partial model/tool inputs into the structured cron job/patch shape.
  */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "command"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
   "text",
@@ -72,11 +73,7 @@ function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KIND
 }
 
 function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)[number] {
-  return value === "systemEvent" || value === "agentTurn" || value === "script";
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+  return isStringOption(value, CRON_PAYLOAD_KINDS);
 }
 
 function isStringArrayOrNull(value: unknown): boolean {
@@ -254,12 +251,13 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
     if (isNonEmptyString(payload.script)) {
       payload.kind = "script";
     } else {
+      // Timeout alone inherits the stored kind; text+timeout is an agent prompt shorthand.
       const hasAgentTurnSignal =
         isNonEmptyString(payload.message) ||
         isNonEmptyString(payload.model) ||
         payload.model === null ||
         isNonEmptyString(payload.thinking) ||
-        typeof payload.timeoutSeconds === "number" ||
+        (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
         typeof payload.lightContext === "boolean" ||
         typeof payload.allowUnsafeExternalContent === "boolean" ||
         (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
@@ -314,6 +312,31 @@ export function canonicalizeCronToolObject(
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);
   return next;
+}
+
+// cron.add accepts these nulls, and a null sessionKey intentionally suppresses
+// default creator-session binding on create.
+const CRON_CREATE_NULLABLE_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set(["agentId", "sessionKey"]);
+
+function deleteNullFields(record: Record<string, unknown>, keep?: ReadonlySet<string>): void {
+  for (const [key, entry] of Object.entries(record)) {
+    if (entry === null && !keep?.has(key)) {
+      delete record[key];
+    } else if (isRecord(entry)) {
+      deleteNullFields(entry);
+    }
+  }
+}
+
+/**
+ * Drops null-valued fields from a create job in place. The model-facing job
+ * schema is shared with update, where null means "clear this field"; on create
+ * there is nothing to clear, and the strict gateway cron.add contract rejects
+ * the nulls its update patch accepts.
+ */
+export function stripCronCreateNullClears(value: Record<string, unknown>): Record<string, unknown> {
+  deleteNullFields(value, CRON_CREATE_NULLABLE_TOP_LEVEL_KEYS);
+  return value;
 }
 
 /** Detects recovered update patches that contain no meaningful cron fields after normalization. */
