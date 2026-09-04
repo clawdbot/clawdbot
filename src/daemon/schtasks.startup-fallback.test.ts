@@ -1967,6 +1967,51 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("accepts an already-running Scheduled Task with its original wrapper", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const taskScriptPath = resolveTaskScriptPath(env);
+      const installedGatewayCommandLine =
+        '"C:\\Program Files\\nodejs\\node.exe" "C:\\openclaw\\dist\\index.js" gateway --port 18789';
+      spawnSync.mockImplementation((command, args) =>
+        command === getWindowsPowerShellExePath() &&
+        Array.isArray(args) &&
+        args.includes(NODE_PROCESS_QUERY)
+          ? makeSpawnSyncResult({
+              stdout: JSON.stringify([
+                { ProcessId: 4242, CommandLine: installedGatewayCommandLine },
+                {
+                  ProcessId: 4243,
+                  CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"`,
+                },
+              ]),
+            })
+          : makeSpawnSyncResult(),
+      );
+      addMissingTaskInstallResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        runningTaskSnapshot(),
+      ]);
+
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\openclaw\\dist\\index.js",
+          "gateway",
+          "--port",
+          "18789",
+        ],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      expect(sleepMock).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
   it("accepts a newly observed Windows gateway process after rejecting a pre-existing match", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");

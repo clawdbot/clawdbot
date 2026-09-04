@@ -67,8 +67,9 @@ function runtimeSignature(runtime: Awaited<ReturnType<typeof readScheduledTaskRu
 async function readPreLaunchTaskPids(
   env: GatewayServiceEnv,
   scriptPath: string,
-): Promise<ReadonlySet<number>> {
+): Promise<{ pids: ReadonlySet<number>; hadTaskScriptWrapper: boolean }> {
   const pids = new Set<number>();
+  let hadTaskScriptWrapper = false;
   try {
     const snapshot = readWindowsProcessSnapshot();
     const scriptPathNeedle = normalizeLowercaseStringOrEmpty(scriptPath.replaceAll("/", "\\"));
@@ -84,6 +85,7 @@ async function readPreLaunchTaskPids(
             .includes(scriptPathNeedle)
         ) {
           pids.add(pid);
+          hadTaskScriptWrapper = true;
         }
       }
     }
@@ -120,25 +122,26 @@ async function readPreLaunchTaskPids(
     // This runs before `schtasks /Run`; a probe failure must never block the launch.
     // A partial baseline only means evidence is judged as it was before.
   }
-  return pids;
+  return { pids, hadTaskScriptWrapper };
 }
 
 async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
   preLaunchGatewayPids: ReadonlySet<number>;
+  hadPreLaunchTaskScriptWrapper: boolean;
 }): Promise<boolean> {
   const readLaunchObservation = async (): Promise<{
     state: "running" | "not-yet-run" | "stopped-success" | "stopped-failure" | "other";
     signature: string;
   }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
-    // A listener-backed owner promotes `status` to `running` while the raw state stays
-    // stopped; only an owner that appeared after `/Run` is launch progress. Without the
-    // demotion a pre-existing gateway masks a task that never started as activity.
+    // A pre-existing wrapper proves a raw Running state belongs to this task. Otherwise a
+    // foreground owner can promote a transient or stopped task to running and mask failure.
     const promotedByPreLaunchOwner =
       runtime !== null &&
       runtime.status === "running" &&
+      (runtime.state !== "Running" || !params.hadPreLaunchTaskScriptWrapper) &&
       runtime.pid !== undefined &&
       params.preLaunchGatewayPids.has(runtime.pid);
     const status = promotedByPreLaunchOwner ? "stopped" : runtime?.status;
@@ -254,7 +257,7 @@ export async function runScheduledTaskOrThrow(params: {
   scriptPath: string;
   onMutation?: () => void;
 }): Promise<ScheduledTaskActivation> {
-  const preLaunchGatewayPids = await readPreLaunchTaskPids(params.env, params.scriptPath);
+  const preLaunch = await readPreLaunchTaskPids(params.env, params.scriptPath);
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
@@ -264,7 +267,8 @@ export async function runScheduledTaskOrThrow(params: {
     !(await shouldFallbackScheduledTaskLaunch({
       env: params.env,
       scriptPath: params.scriptPath,
-      preLaunchGatewayPids,
+      preLaunchGatewayPids: preLaunch.pids,
+      hadPreLaunchTaskScriptWrapper: preLaunch.hadTaskScriptWrapper,
     }))
   ) {
     return "scheduled-task";
