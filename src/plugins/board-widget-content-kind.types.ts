@@ -8,6 +8,10 @@ export type PluginBoardWidgetContentKind = {
   resources: {
     surface: string;
     paths: string[];
+    /** Public static renderer bytes only; these exact paths may also load on the isolated origin without Gateway credentials. */
+    readPublicResource?: (
+      path: string,
+    ) => Promise<{ body: Uint8Array; contentType: string } | undefined>;
   };
   /** Reject malformed or unsupported source before it reaches persistent storage. */
   validateSource: (source: string) => void;

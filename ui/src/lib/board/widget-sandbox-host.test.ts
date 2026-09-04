@@ -80,7 +80,7 @@ afterEach(() => {
 });
 
 describe("BoardWidgetSandboxHost", () => {
-  it("loads ticketed HTML only after the dedicated proxy is ready", async () => {
+  it("fetches ticketed HTML while the proxy starts and delivers it only after readiness", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
     const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
@@ -103,6 +103,10 @@ describe("BoardWidgetSandboxHost", () => {
       onLoaded,
       onError: vi.fn(),
     });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(onLoaded).not.toHaveBeenCalled();
 
     host.handleMessage(
       new MessageEvent("message", {
@@ -723,6 +727,7 @@ describe("BoardWidgetSandboxHost", () => {
   it("waits for the exact sandbox CSP navigation before delivering replacement HTML", async () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
     const wideSandboxUrl = `${SANDBOX_URL}?csp=wide`;
     const narrowSandboxUrl = `${SANDBOX_URL}?csp=narrow`;
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>policy</p>"));
@@ -756,7 +761,8 @@ describe("BoardWidgetSandboxHost", () => {
       );
 
     ready(wideSandboxUrl);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledOnce());
+    postMessage.mockClear();
     host.update({
       ...baseOptions,
       sandboxUrl: narrowSandboxUrl,
@@ -769,12 +775,19 @@ describe("BoardWidgetSandboxHost", () => {
       resolveFrameUrl: () => "/__openclaw__/board/session/weather/index.html?bt=replacement-ticket",
     });
 
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(postMessage).not.toHaveBeenCalled();
     ready(wideSandboxUrl);
     await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(postMessage).not.toHaveBeenCalled();
 
     ready(narrowSandboxUrl);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(baseOptions.onLoaded).toHaveBeenCalledTimes(2));
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "ui/notifications/sandbox-resource-ready" }),
+      "https://sandbox.example",
+    );
+    host.dispose();
   });
 
   it("reloads a deleted and recreated widget without reloading routine ticket renewals", async () => {

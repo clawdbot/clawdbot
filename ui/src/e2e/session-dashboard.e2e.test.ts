@@ -5,12 +5,14 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
+import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
@@ -170,6 +172,7 @@ function workboardConfigSnapshot(enabled = true) {
 }
 
 suite.define(() => {
+  const canvasView = useCanvasSandboxFixture();
   it("keeps widget documents in standards mode and cancels self-navigation", async () => {
     const sandboxHost = createSandboxHostHttpServer();
     await new Promise<void>((resolve, reject) => {
@@ -307,6 +310,9 @@ suite.define(() => {
         },
       ],
       methodResponses: {
+        "canvas.document.view": canvasView(
+          buildWidgetDocument("Release status", "<p>Release status</p>"),
+        ),
         "board.get": boardSnapshot,
         "board.widget.put": pinnedBoardSnapshot,
       },
@@ -483,6 +489,9 @@ suite.define(() => {
         },
       ],
       methodResponses: {
+        "canvas.document.view": canvasView(
+          buildWidgetDocument("Stale release status", "<p>Stale release status</p>"),
+        ),
         "board.get": boardSnapshot,
         "board.widget.put": {
           __mockError: {

@@ -575,6 +575,7 @@ enum class GatewayMethod(
   ToolsEffective("tools.effective"),
   ToolsInvoke("tools.invoke"),
   McpAppView("mcp.app.view"),
+  CanvasDocumentView("canvas.document.view"),
   McpAppListTools("mcp.app.listTools"),
   McpAppListResources("mcp.app.listResources"),
   McpAppListResourceTemplates("mcp.app.listResourceTemplates"),

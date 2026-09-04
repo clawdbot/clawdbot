@@ -453,6 +453,12 @@ their plugin is active; invalid, reserved, or duplicate kinds fail plugin load.
 Use `dashboard.dataBindings` and `dashboard.actionVerbs` for host capabilities,
 not for renderer registration.
 
+For inline rendering, `resources.readPublicResource(path)` can optionally return
+`{ body: Uint8Array, contentType: string }` for the registered resource paths.
+These bytes are public: the isolated sandbox listener serves them with no
+Gateway credentials. Return only static renderer assets, never user data or
+secrets. Unregistered paths and registrations without this callback stay private.
+
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway
 hello (`controlUiTabs`), so the tab appears only while the plugin is enabled.

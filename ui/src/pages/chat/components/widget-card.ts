@@ -387,6 +387,8 @@ const loadMcpAppView = async () => {
   registration.registerMcpAppView();
 };
 
+const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.ts");
+
 function renderMcpAppView(params: {
   sessionKey: string;
   viewId: string;
@@ -413,6 +415,27 @@ function renderWidgetContent(
 ) {
   switch (kind) {
     case "canvas-html": {
+      if (
+        preview.sandbox === "scripts" &&
+        options?.embedSandboxMode !== "strict" &&
+        isManagedCanvasDocumentPreview(preview)
+      ) {
+        void ensureCustomElementDefined("openclaw-canvas-widget-view", loadCanvasWidgetView).catch(
+          (error: unknown) => console.error("[openclaw] failed to load widget view", error),
+        );
+        return keyed(
+          `${preview.viewId}\0${getCanvasWidgetFrameConnectionGeneration()}`,
+          html`
+            <openclaw-canvas-widget-view
+              .docId=${preview.viewId!.trim()}
+              .sessionKey=${options?.sessionKey ?? ""}
+              .title=${preview.title?.trim() || t("chat.toolCards.canvas")}
+              .preferredHeight=${preview.preferredHeight}
+              .connectionGeneration=${getCanvasWidgetFrameConnectionGeneration()}
+            ></openclaw-canvas-widget-view>
+          `,
+        );
+      }
       const promptCapable = isInternalCanvasEntryUrl(preview.url);
       return renderPreviewFrame({
         title: preview.title?.trim() || t("chat.toolCards.canvas"),
@@ -483,7 +506,8 @@ function handleWidgetExportAction(
     showToast({ message: t("chat.toolCards.widgetExportFailed") });
     return;
   }
-  void exportWidget(value, frame, title)
+  const documentHtml = frame.closest("openclaw-canvas-widget-view")?.documentHtml;
+  void exportWidget(value, frame, title, { documentHtml })
     .then((result) => {
       if (result === "rerender-required") {
         showToast({ message: t("chat.toolCards.widgetExportRerender") });
