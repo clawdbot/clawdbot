@@ -645,7 +645,7 @@ describe("registerSlackAgentEvents", () => {
           await releaseMove.promise;
           return {
             ...(change === "reset" ? { sessionId: "reset-session" } : {}),
-            ...(change === "rotated" ? { lifecycleRevision: 1 } : {}),
+            ...(change === "rotated" ? { lifecycleRevision: "rotated-revision" } : {}),
             delivery: normalizeSessionDeliveryState({
               context: {
                 channel: "slack",
