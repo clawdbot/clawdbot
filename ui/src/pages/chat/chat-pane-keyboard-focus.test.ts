@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import {
@@ -9,6 +10,49 @@ import {
 } from "./chat-pane.test-support.ts";
 
 describe("chat pane keyboard focus", () => {
+  it.each([
+    ["range", "Home", html`<input type="range" />`, false],
+    ["input", "ArrowUp", html`<input />`, false],
+    [
+      "handled widget",
+      "PageUp",
+      html`<div @keydown=${(event: KeyboardEvent) => event.preventDefault()}>Widget</div>`,
+      false,
+    ],
+    ["transcript", "Home", html`<span>History</span>`, true],
+  ] as const)(
+    "loads older history only when %s yields navigation",
+    async (_name, key, content, loadsHistory) => {
+      vi.useFakeTimers();
+      const request = vi.fn(async () => ({ messages: [], hasMore: false }));
+      const { pane, state } = createTestChatPane({
+        client: createGatewayBrowserClientFixture({ request }),
+        sessions: createSessionCapabilityFixture(),
+      });
+      state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+      pane.historyAutoLoadBlocked = true;
+      vi.stubGlobal("IntersectionObserver", undefined);
+      const thread = document.createElement("div");
+      render(content, thread);
+      thread.addEventListener("keydown", (event) => pane.handleTranscriptHistoryIntent(event));
+      try {
+        thread.firstElementChild!.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        await Promise.resolve();
+        expect(request).toHaveBeenCalledTimes(loadsHistory ? 1 : 0);
+        expect(pane.historyAutoLoadBlocked).toBe(!loadsHistory);
+      } finally {
+        vi.unstubAllGlobals();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("keeps the letter-to-composer contract when a button is focused", () => {
     const { pane } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
