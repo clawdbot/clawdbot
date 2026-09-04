@@ -35,6 +35,12 @@ export type CronServiceRunOptions = {
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
   /** Synchronous caller-authority guard consumed before run reservation. */
   commitGuard?: () => void;
+  /**
+   * Set only by the gateway exit watcher's terminal fire so a payload error
+   * takes the terminal one-shot disposition (#131490). Operator force-runs
+   * must never set this: a manually paused on-exit job would be auto-disabled.
+   */
+  onExitWatcherCompletion?: boolean;
 };
 
 /** Public cron service facade used by gateway, plugin SDK, and tests. */

@@ -25,13 +25,19 @@ export function autoDisableCronJob(params: {
   atMs: number;
   consecutiveErrors: number;
   deferredNotifications?: DeferredCronNotifications;
+  // Terminal one-shot disables with a resolvable failure-alert route let the
+  // richer alert own the notification; the durable fact is still recorded here.
+  notify?: boolean;
+  // A completed on-exit watcher persists its job disabled BEFORE force-running
+  // the payload; that pre-disable must not swallow the terminal fact/notice.
+  completedOneShot?: boolean;
 }): boolean {
   const { state, job } = params;
   // Gateway convergence owns these jobs; clients cannot re-enable them, so failures stay visible while they retry on schedule.
   if (isSystemOwnedCronPayloadKind(job.payload.kind)) {
     return false;
   }
-  if (!job.enabled || job.state.autoDisabled) {
+  if ((!job.enabled && params.completedOneShot !== true) || job.state.autoDisabled) {
     return false;
   }
 
@@ -43,6 +49,9 @@ export function autoDisableCronJob(params: {
     consecutiveErrors: params.consecutiveErrors,
   };
 
+  if (params.notify === false) {
+    return true;
+  }
   const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
   const errorReason =
     params.reason === "consecutive-failures" ? job.state.lastErrorReason : undefined;

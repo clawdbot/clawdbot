@@ -619,10 +619,27 @@ describe("CronService", () => {
       await cron.run(job.id, "force");
 
       expect(runHeartbeatOnce).toHaveBeenCalledOnce();
-      expect(requestHeartbeat).not.toHaveBeenCalled();
-      const sessionKeys = getPostedSystemEventSessionKeys(enqueueSystemEvent);
+      // The failed one-shot now parks through the auto-disable owner, whose
+      // notification wake is the only remaining heartbeat request (#131490).
+      const heartbeatSources = requestHeartbeat.mock.calls.map(
+        ([opts]) => (opts as { source?: string }).source,
+      );
+      expect(heartbeatSources).toEqual(["notifications-event"]);
+      const payloadCalls = enqueueSystemEvent.mock.calls.filter(
+        ([text]) => !String(text).includes("auto-disabled"),
+      );
+      const sessionKeys = payloadCalls.map(([, options]) =>
+        resolveHarnessSessionKey(options as { agentId?: string; sessionKey?: string } | undefined),
+      );
       expect(sessionKeys).toHaveLength(1);
-      expectNoQueuedEvents(sessionKeys);
+      // The queued payload event is removed; only the auto-disable notice may remain.
+      for (const sessionKey of sessionKeys) {
+        expect(
+          peekSystemEventEntries(sessionKey).filter(
+            (event) => !event.text.includes("auto-disabled"),
+          ),
+        ).toHaveLength(0);
+      }
       const updated = (await cron.list({ includeDisabled: true })).find(
         (candidate) => candidate.id === job.id,
       );
@@ -818,8 +835,15 @@ describe("CronService", () => {
       status: "error",
     });
 
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    // The terminal-disable failure alert (#131490) is the only allowed post;
+    // the run summary must never fall back to the main session.
+    const posted = enqueueSystemEvent.mock.calls.map(([text]) => String(text));
+    expect(posted.every((text) => text.includes("failed 1 times"))).toBe(true);
+    expect(posted.some((text) => text.includes("last output"))).toBe(false);
+    const heartbeatSources = requestHeartbeat.mock.calls.map(
+      ([opts]) => (opts as { source?: string }).source,
+    );
+    expect(heartbeatSources).toEqual(["notifications-event"]);
     await stopCronAndCleanup(cron, store);
   });
 
@@ -886,8 +910,15 @@ describe("CronService", () => {
       status: "error",
     });
 
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
+    // The terminal-disable failure alert (#131490) is the only allowed post;
+    // the run summary must never fall back to the main session.
+    const posted = enqueueSystemEvent.mock.calls.map(([text]) => String(text));
+    expect(posted.every((text) => text.includes("failed 1 times"))).toBe(true);
+    expect(posted.some((text) => text.includes("last output"))).toBe(false);
+    const heartbeatSources = requestHeartbeat.mock.calls.map(
+      ([opts]) => (opts as { source?: string }).source,
+    );
+    expect(heartbeatSources).toEqual(["notifications-event"]);
     await stopCronAndCleanup(cron, store);
   });
 

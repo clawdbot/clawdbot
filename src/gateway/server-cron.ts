@@ -1250,7 +1250,14 @@ export function buildGatewayCronService(params: {
       await runWithGatewayIndependentRootWorkAdmission(
         async () =>
           fireOnExitJob(job, exit, {
-            run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
+            // onExitWatcherCompletion carries the watcher's terminal provenance
+            // so a payload error takes the terminal one-shot disposition; plain
+            // operator force-runs must not set it (#131490).
+            run: (jobId, payload) =>
+              cron.run(jobId, "force", {
+                onExitWatcherCompletion: true,
+                ...(payload ? { payload } : {}),
+              }),
           }),
         "cron:exit-hook",
       );

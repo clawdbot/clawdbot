@@ -64,6 +64,7 @@ type PreparedManualRun =
       streamScheduleKey?: string;
       streamSourceIdentity?: string;
       onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
+      onExitWatcherCompletion?: boolean;
     }
   | { ok: false };
 
@@ -91,6 +92,11 @@ export type ManualRunOptions = {
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
+  // Set ONLY by the gateway exit watcher's terminal fire: the watched command
+  // exited and the job was persisted disabled, so an error run takes the
+  // terminal one-shot disposition. Operator force-runs must never set this —
+  // a manually paused on-exit job would otherwise be auto-disabled (#131490).
+  onExitWatcherCompletion?: boolean;
 };
 
 export type ManualRunTerminalTracker = { emitted: boolean };
@@ -377,6 +383,7 @@ export async function prepareManualRun(
         ? { streamSourceIdentity: opts.streamSourceIdentity }
         : {}),
       ...(opts?.onTriggerDisposition ? { onTriggerDisposition: opts.onTriggerDisposition } : {}),
+      ...(opts?.onExitWatcherCompletion ? { onExitWatcherCompletion: true } : {}),
     } as const;
   });
 }

@@ -178,7 +178,10 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 /** Explicit execution-error disposition used consistently by retry, history, and alerts. */
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
-  | { kind: "permanent" };
+  | { kind: "permanent" }
+  // Operator cancel or lifecycle retirement: never retried, and the visible
+  // cancel/restart outcome already exists, so auto-disable stays quiet.
+  | { kind: "aborted" };
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
