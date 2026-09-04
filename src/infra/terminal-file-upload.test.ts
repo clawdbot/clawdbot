@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -149,5 +149,146 @@ describe("terminal file upload", () => {
         { tempRoot: root },
       ),
     ).rejects.toThrow("exceeds");
+  });
+
+  it("rejects the 65th retained upload under the default directory budget", async () => {
+    const root = tempDirs.make("openclaw-terminal-upload-default-dir-bound-");
+    const file = { name: "n.bin", contentBase64: Buffer.from("x").toString("base64") };
+    for (let index = 0; index < 64; index += 1) {
+      await stageTerminalUpload(file, { tempRoot: root, cleanupAfterMs: 60_000 });
+    }
+    await expect(
+      stageTerminalUpload(file, { tempRoot: root, cleanupAfterMs: 60_000 }),
+    ).rejects.toThrow("terminal upload staging limit reached");
+    expect(
+      (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()),
+    ).toHaveLength(64);
+  });
+
+  it("still accepts one file under the 16 MiB per-file limit", async () => {
+    const root = tempDirs.make("openclaw-terminal-upload-single-file-");
+    const content = Buffer.alloc(1024, 7);
+
+    const result = await stageTerminalUpload(
+      { name: "notes.bin", contentBase64: content.toString("base64") },
+      { tempRoot: root, cleanupAfterMs: 60_000 },
+    );
+
+    expect(result.size).toBe(content.length);
+    expect(await readFile(result.path)).toEqual(content);
+  });
+
+  it("accepts an under-bound batch and rejects later files that would exceed it", async () => {
+    const root = tempDirs.make("openclaw-terminal-upload-batch-bound-");
+    const file = (name: string, size: number) => ({
+      name,
+      contentBase64: Buffer.alloc(size, 9).toString("base64"),
+    });
+
+    const first = await stageTerminalUpload(file("a.bin", 8), {
+      tempRoot: root,
+      cleanupAfterMs: 60_000,
+      maxRetainedBytes: 20,
+      maxRetainedDirectories: 2,
+    });
+    const second = await stageTerminalUpload(file("b.bin", 8), {
+      tempRoot: root,
+      cleanupAfterMs: 60_000,
+      maxRetainedBytes: 20,
+      maxRetainedDirectories: 2,
+    });
+
+    await expect(
+      stageTerminalUpload(file("c.bin", 8), {
+        tempRoot: root,
+        cleanupAfterMs: 60_000,
+        maxRetainedBytes: 20,
+        maxRetainedDirectories: 2,
+      }),
+    ).rejects.toThrow("terminal upload staging limit reached");
+
+    expect(await readFile(first.path)).toHaveLength(8);
+    expect(await readFile(second.path)).toHaveLength(8);
+    expect(
+      (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()),
+    ).toHaveLength(2);
+  });
+
+  it("rejects a file that is under 16 MiB when retained bytes would exceed the budget", async () => {
+    const root = tempDirs.make("openclaw-terminal-upload-byte-bound-");
+    const first = await stageTerminalUpload(
+      { name: "kept.bin", contentBase64: Buffer.alloc(12, 3).toString("base64") },
+      { tempRoot: root, cleanupAfterMs: 60_000, maxRetainedBytes: 20, maxRetainedDirectories: 10 },
+    );
+
+    await expect(
+      stageTerminalUpload(
+        { name: "overflow.bin", contentBase64: Buffer.alloc(12, 4).toString("base64") },
+        {
+          tempRoot: root,
+          cleanupAfterMs: 60_000,
+          maxRetainedBytes: 20,
+          maxRetainedDirectories: 10,
+        },
+      ),
+    ).rejects.toThrow("terminal upload staging limit reached");
+    expect(await readFile(first.path)).toHaveLength(12);
+  });
+
+  it("enforces the retained directory budget across concurrent uploads", async () => {
+    const root = tempDirs.make("openclaw-terminal-upload-concurrent-");
+    const file = {
+      name: "report.bin",
+      contentBase64: Buffer.from("data").toString("base64"),
+    };
+
+    const results = await Promise.allSettled([
+      stageTerminalUpload(file, {
+        tempRoot: root,
+        cleanupAfterMs: 60_000,
+        maxRetainedBytes: 1024,
+        maxRetainedDirectories: 1,
+      }),
+      stageTerminalUpload(file, {
+        tempRoot: root,
+        cleanupAfterMs: 60_000,
+        maxRetainedBytes: 1024,
+        maxRetainedDirectories: 1,
+      }),
+    ]);
+
+    expect(results.map((result) => result.status).toSorted()).toEqual(["fulfilled", "rejected"]);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({
+      reason: expect.objectContaining({
+        message: "terminal upload staging limit reached",
+      }),
+    });
+    expect(
+      (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()),
+    ).toHaveLength(1);
+  });
+
+  it("evicts the oldest retained directory during restart recovery when over quota", async () => {
+    const root = tempDirs.make("openclaw-terminal-upload-recovery-quota-");
+    const oldestDirectory = path.join(root, "openclaw-terminal-upload-oldest");
+    const newestDirectory = path.join(root, "openclaw-terminal-upload-newest");
+    await mkdir(oldestDirectory, { mode: 0o700 });
+    await writeFile(path.join(oldestDirectory, "old.bin"), "old");
+    await mkdir(newestDirectory, { mode: 0o700 });
+    await writeFile(path.join(newestDirectory, "new.bin"), "new");
+    const now = Date.now();
+    await utimes(oldestDirectory, new Date(now - 2_000), new Date(now - 2_000));
+    await utimes(newestDirectory, new Date(now - 1_000), new Date(now - 1_000));
+
+    await ensureTerminalUploadCleanup({
+      tempRoot: root,
+      nowMs: now,
+      maxRetainedBytes: 50,
+      maxRetainedDirectories: 1,
+    });
+
+    await expect(stat(oldestDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(newestDirectory, "new.bin"), "utf8")).toBe("new");
   });
 });
