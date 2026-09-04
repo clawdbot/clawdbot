@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/llm-task",
-  "version": "2026.8.1",
+  "version": "2026.8.2",
   "private": true,
   "description": "OpenClaw JSON-only LLM task plugin",
   "type": "module",

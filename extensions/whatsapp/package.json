@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/whatsapp",
-  "version": "2026.8.1",
+  "version": "2026.8.2",
   "description": "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
   "repository": {
     "type": "git",
@@ -17,7 +17,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.8.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -69,11 +69,11 @@
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.8.2"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.8.1"
+      "openclawVersion": "2026.8.2"
     },
     "release": {
       "publishToClawHub": true,

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/slack",
-  "version": "2026.8.1",
+  "version": "2026.8.2",
   "description": "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
   "repository": {
     "type": "git",
@@ -23,7 +23,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.8.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -42,7 +42,11 @@
       "id": "slack",
       "configuredState": {
         "env": {
-          "anyOf": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"]
+          "anyOf": [
+            "SLACK_BOT_TOKEN",
+            "SLACK_APP_TOKEN",
+            "SLACK_USER_TOKEN"
+          ]
         },
         "specifier": "./configured-state",
         "exportName": "hasConfiguredSlackChannelState"
@@ -137,7 +141,9 @@
               "flags": "--use-env",
               "description": "Use Slack environment credentials"
             },
-            "envVars": ["SLACK_BOT_TOKEN"]
+            "envVars": [
+              "SLACK_BOT_TOKEN"
+            ]
           }
         ]
       }
@@ -149,10 +155,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.8.2"
     },
     "build": {
-      "openclawVersion": "2026.8.1",
+      "openclawVersion": "2026.8.2",
       "bundledDist": false
     },
     "release": {
