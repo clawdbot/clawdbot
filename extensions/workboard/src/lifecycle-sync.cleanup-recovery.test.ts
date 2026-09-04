@@ -124,7 +124,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
         ownerId: card.id,
       });
       const recovered = await restarted.store.get(card.id);
-      expect(recovered).toMatchObject({ status: "review", execution: { status: "review" } });
+      expect(recovered).toMatchObject({ status: "blocked", execution: { status: "blocked" } });
       expect(recovered?.metadata?.automation?.workspace).toEqual({
         kind: "worktree",
         path: SOURCE_PATH,

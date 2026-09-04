@@ -2,6 +2,7 @@
 import { definePluginEntry } from "./api.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardAutomationNudgeService } from "./src/automation-nudge.js";
+import { createWorkboardAutopilotService } from "./src/autopilot.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
 import {
@@ -12,10 +13,17 @@ import {
 } from "./src/lifecycle-sync.js";
 import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
+import { selectWorkboardTools } from "./src/worker-tools.js";
 import {
   guardWorkboardToolsForWorkspaceAccess,
+  WORKBOARD_REQUIRED_WORKER_TOOLS,
   WORKBOARD_TOOL_NAMES,
 } from "./src/workspace-access.js";
+
+const WORKBOARD_WORKER_TOOL_NAMES = new Set<string>(WORKBOARD_REQUIRED_WORKER_TOOLS);
+const WORKBOARD_OPTIONAL_TOOL_NAMES = WORKBOARD_TOOL_NAMES.filter(
+  (name) => !WORKBOARD_WORKER_TOOL_NAMES.has(name),
+);
 
 export default definePluginEntry({
   id: "workboard",
@@ -27,6 +35,7 @@ export default definePluginEntry({
       store,
       gateway: api.runtime.gateway,
     });
+    const autopilot = createWorkboardAutopilotService({ api, store });
     const lifecycleSync = createWorkboardLifecycleService({
       store,
       worktrees: api.runtime.worktrees,
@@ -64,6 +73,7 @@ export default definePluginEntry({
     registerWorkboardCommand({ api, store });
     api.registerService(createWorkboardChangeEventService(store));
     api.registerService(automationNudge);
+    api.registerService(autopilot);
     api.registerService(lifecycleSync);
     api.on("gateway_start", () => lifecycleSync.onGatewayStart());
     api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
@@ -98,15 +108,23 @@ export default definePluginEntry({
         ],
       },
     );
+    const resolveTools = (context: Parameters<typeof createWorkboardTools>[0]["context"]) =>
+      guardWorkboardToolsForWorkspaceAccess(
+        createWorkboardTools({ api, context, store }),
+        context,
+        api.runtime.sandbox.resolveWorkspaceAuthority,
+      );
     api.registerTool(
-      (context) =>
-        guardWorkboardToolsForWorkspaceAccess(
-          createWorkboardTools({ api, context, store }),
-          context,
-          api.runtime.sandbox.resolveWorkspaceAuthority,
-        ),
+      (context) => selectWorkboardTools(resolveTools(context), WORKBOARD_WORKER_TOOL_NAMES, true),
       {
-        names: [...WORKBOARD_TOOL_NAMES],
+        names: [...WORKBOARD_REQUIRED_WORKER_TOOLS],
+        optional: false,
+      },
+    );
+    api.registerTool(
+      (context) => selectWorkboardTools(resolveTools(context), WORKBOARD_WORKER_TOOL_NAMES, false),
+      {
+        names: [...WORKBOARD_OPTIONAL_TOOL_NAMES],
         optional: true,
       },
     );

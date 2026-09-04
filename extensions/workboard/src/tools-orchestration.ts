@@ -92,6 +92,11 @@ export function createWorkboardOrchestrationTools(params: {
         ),
         orchestration: Type.Optional(
           strictObject({
+            autopilotMode: Type.Optional(
+              Type.Union([Type.Literal("off"), Type.Literal("guarded")], {
+                description: "Automatically start explicitly assigned ready cards, one at a time.",
+              }),
+            ),
             autoDecompose: Type.Optional(
               Type.Boolean({ description: "Mark ready triage cards for decomposition." }),
             ),

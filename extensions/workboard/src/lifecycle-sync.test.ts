@@ -258,7 +258,7 @@ describe("Workboard gateway lifecycle sync", () => {
     ).resolves.toBe(1);
     await service.stop?.(context);
 
-    await expect(store.get(card.id)).resolves.toMatchObject({ status: "review" });
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "blocked" });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("workboard automation nudge failed"));
   });
 
@@ -282,13 +282,13 @@ describe("Workboard gateway lifecycle sync", () => {
     ).resolves.toBe(1);
     await service.stop?.(context);
 
-    await expect(store.get(card.id)).resolves.toMatchObject({ status: "review" });
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "blocked" });
     expect(warn).toHaveBeenCalledWith(
       "workboard automation nudge skipped for board planning: job job-categorize-planning disabled",
     );
   });
 
-  it("moves a linked running card to review from the subagent hook without UI involvement", async () => {
+  it("blocks a linked running card when the worker exits without completion evidence", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const sessionKey = "agent:main:subagent:workboard-default-card-1";
     const card = await createLinkedCard(store, {
@@ -306,10 +306,18 @@ describe("Workboard gateway lifecycle sync", () => {
     });
 
     await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "review",
-      execution: { status: "review" },
-      metadata: { lifecycleStatusSourceUpdatedAt: endedAt },
+      status: "blocked",
+      execution: { status: "blocked" },
+      metadata: {
+        lifecycleStatusSourceUpdatedAt: endedAt,
+        comments: [
+          expect.objectContaining({
+            body: "Worker session ended without submitting Workboard completion evidence.",
+          }),
+        ],
+      },
     });
+    expect((await store.get(card.id))?.metadata?.claim).toBeUndefined();
     expect(changes).toHaveBeenCalledOnce();
   });
 
@@ -412,7 +420,7 @@ describe("Workboard gateway lifecycle sync", () => {
   });
 
   it.each([
-    ["running", "review"],
+    ["running", "blocked"],
     ["todo", "review"],
     ["ready", "review"],
     ["triage", "triage"],
@@ -481,7 +489,7 @@ describe("Workboard gateway lifecycle sync", () => {
       event: { targetSessionKey: sessionKey, runId, endedAt: card.updatedAt + 1, outcome: "ok" },
     });
 
-    expect((await store.get(card.id))?.status).toBe("review");
+    expect((await store.get(card.id))?.status).toBe("blocked");
   });
 
   it("does not let a stale dispatcher event override an explicit session link", async () => {
@@ -627,7 +635,7 @@ describe("Workboard gateway lifecycle sync", () => {
 
     await service.start(context);
     service.onGatewayStart();
-    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("blocked"));
     service.onGatewayStop();
     await service.stop?.(context);
 
@@ -660,7 +668,7 @@ describe("Workboard gateway lifecycle sync", () => {
       ],
     });
 
-    expect((await store.get(card.id))?.status).toBe("review");
+    expect((await store.get(card.id))?.status).toBe("blocked");
   });
 
   it("does not suffix-match a uniquely wrong agent for an explicit target", async () => {
@@ -714,13 +722,13 @@ describe("Workboard gateway lifecycle sync", () => {
     });
 
     await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "review",
+      status: "blocked",
       sessionKey: canonicalSessionKey,
       runId: "provisional-run",
       execution: {
         sessionKey: canonicalSessionKey,
         runId: "provisional-run",
-        status: "review",
+        status: "blocked",
       },
     });
   });
@@ -748,13 +756,13 @@ describe("Workboard gateway lifecycle sync", () => {
 
     const recovered = await store.get(card.id);
     expect(recovered).toMatchObject({
-      status: "review",
+      status: "blocked",
       sessionKey: canonicalSessionKey,
       runId: "accepted-run",
       execution: {
         sessionKey: canonicalSessionKey,
         runId: "accepted-run",
-        status: "review",
+        status: "blocked",
       },
     });
     expect(recovered?.metadata?.attempts).toEqual([
@@ -762,7 +770,7 @@ describe("Workboard gateway lifecycle sync", () => {
         id: "accepted-run",
         sessionKey: canonicalSessionKey,
         runId: "accepted-run",
-        status: "succeeded",
+        status: "blocked",
       }),
     ]);
   });
@@ -869,7 +877,7 @@ describe("Workboard gateway lifecycle sync", () => {
       ],
     });
 
-    expect((await store.get(card.id))?.status).toBe("review");
+    expect((await store.get(card.id))?.status).toBe("blocked");
   });
 
   it("waits for gateway startup before beginning the lifecycle sweep", async () => {
@@ -935,7 +943,7 @@ describe("Workboard gateway lifecycle sync", () => {
 
     const replacement = createWorkboardLifecycleService({ store, readSessions });
     await replacement.start(context);
-    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"));
+    await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("blocked"));
     replacement.onGatewayStop();
     await replacement.stop?.(context);
 
@@ -971,7 +979,7 @@ describe("Workboard gateway lifecycle sync", () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.waitFor(async () => {
-      expect((await store.get(card.id))?.status).toBe("review");
+      expect((await store.get(card.id))?.status).toBe("blocked");
     });
     service.onGatewayStop();
     await service.stop?.({ logger: { warn: vi.fn() } } as never);

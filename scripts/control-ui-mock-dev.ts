@@ -1204,7 +1204,48 @@ function buildWorkboardMocks(baseTime: number) {
     card("card-brief", "Draft weekly product brief", "todo", "low", 2, ["writing"]),
     card("card-ready", "Prepare launch readiness checklist", "ready", "high", 1, ["launch"]),
     card("card-running", "Validate onboarding flow", "running", "urgent", 1, ["quality"]),
-    card("card-review", "Review accessibility audit", "review", "high", 1, ["frontend"]),
+    {
+      ...card("card-review", "Review accessibility audit", "review", "high", 1, ["frontend"]),
+      execution: {
+        id: "execution-review",
+        kind: "agent-session",
+        engine: "subagent",
+        mode: "autonomous",
+        status: "review",
+        startedAt: baseTime - 120_000,
+        updatedAt: baseTime - 1_000,
+      },
+      metadata: {
+        automation: {
+          boardId,
+          summary: "Improved keyboard navigation and documented the remaining contrast check.",
+          attemptSummary: "Verified keyboard navigation during the latest worker attempt.",
+          attemptProofIds: ["proof-keyboard"],
+        },
+        attempts: [
+          {
+            id: "attempt-review",
+            status: "succeeded",
+            startedAt: baseTime - 120_000,
+            endedAt: baseTime - 1_000,
+            mode: "autonomous",
+            model: "openai/gpt-5.5",
+          },
+        ],
+        proof: [
+          {
+            id: "proof-keyboard",
+            status: "passed",
+            label: "Keyboard navigation",
+            command: "pnpm test:ui",
+            createdAt: baseTime - 2_000,
+          },
+        ],
+        links: [
+          { id: "child-ready", type: "child", targetCardId: "card-ready", createdAt: baseTime },
+        ],
+      },
+    },
     card("card-blocked", "Confirm staging environment access", "blocked", "normal", 1, ["ops"]),
     card("card-done", "Publish support handoff notes", "done", "low", 1, ["docs"]),
   ];

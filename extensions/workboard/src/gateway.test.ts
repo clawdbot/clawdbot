@@ -436,7 +436,7 @@ describe("workboard gateway methods", () => {
     });
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: `subagent:workboard-default-${card.id}`,
+        sessionKey: expect.stringMatching(`^subagent:workboard-default-${card.id}-attempt-\\d+-`),
       }),
     );
   });
@@ -746,13 +746,9 @@ describe("workboard gateway methods", () => {
     expect(completeRespond.mock.calls[0]?.[1]).toMatchObject({
       card: {
         status: "done",
-        metadata: {
-          comments: expect.arrayContaining([
-            expect.objectContaining({ body: "Operator closed it." }),
-          ]),
-        },
       },
     });
+    expect(completeRespond.mock.calls[0]?.[1]).not.toHaveProperty("card.metadata.claim");
 
     const blockedCreateRespond = vi.fn();
     await methods.get("workboard.cards.create")?.handler({

@@ -20,7 +20,7 @@ import {
   resolveDispatchWorkspaceAccess,
   type ResolveAgentWorkspaceRuntime,
 } from "./dispatcher-workspace.js";
-import { workboardSessionKeyForCard } from "./session-link.js";
+import { workboardSessionKeyForAttempt, workboardSessionKeyForCard } from "./session-link.js";
 import { cardBoardId } from "./store-card-helpers.js";
 import { workboardCardConsumesOwnerSlot, workboardCardSlotOwner } from "./store-constants.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
@@ -45,6 +45,10 @@ export type WorkboardDispatchStartOptions = {
   boardId?: string;
   now?: number;
   materializeWorktree?: boolean;
+  requireAssigned?: boolean;
+  maxConcurrent?: number;
+  skipCardIds?: ReadonlySet<string>;
+  requireGuardedBoard?: boolean;
   resolveAgentWorkspace?: (agentId?: string) => string;
   resolveAgentWorkspaceRuntime?: ResolveAgentWorkspaceRuntime;
   workspaceAccess?: WorkboardWorkspaceAccess;
@@ -138,7 +142,7 @@ async function materializeWorkspace(params: {
   if (!canonicalSourcePath) {
     throw new Error("worktree workspace path is required");
   }
-  if (workspace.kind === "dir" || !params.workspaceAccess.unrestricted) {
+  if (workspace.kind === "dir" || (!params.workspaceAccess.unrestricted && !workspace.sourcePath)) {
     await assertCanonicalWorkboardRootAccess(canonicalSourcePath, params.workspaceAccess);
     return workspace.kind === "worktree"
       ? { cwd: canonicalSourcePath, workspace: { kind: "dir", path: canonicalSourcePath } }
@@ -191,7 +195,6 @@ function buildWorkerPrompt(params: {
   card: WorkboardCard;
   context: string;
   ownerId: string;
-  token: string;
 }): string {
   return [
     `Work on this OpenClaw Workboard card: ${params.card.title}`,
@@ -199,12 +202,15 @@ function buildWorkerPrompt(params: {
     "## Worker protocol",
     `Card id: ${params.card.id}`,
     `Claim ownerId: ${params.ownerId}`,
-    `Claim token: ${params.token}`,
     "",
-    "Heartbeat with workboard_heartbeat using the card id and token while working.",
-    "When done, call workboard_complete with the card id, token, summary, and proof.",
+    "Workboard authorization is bound to this worker session. Do not search for or transmit claim credentials.",
+    "The Workboard tools are granted to this run. Call them directly when surfaced. In code-mode, find the exact workboard_* entry in ALL_TOOLS and invoke it through functions.exec as tools.<tool_name>(params); never call Gateway RPC or inspect the Workboard database.",
+    "Begin with workboard_read using the card id so you are operating on current card state.",
+    "Heartbeat with workboard_heartbeat using the card id while working.",
+    "If the card contains multiple independently verifiable outcomes, call workboard_decompose with a small set of linked child cards and a summary, then stop. The parent will enter Review and the children stay gated until an operator accepts the plan.",
+    "When done, call workboard_complete with the card id, overallOutcome, attemptSummary, and proof. overallOutcome describes the resulting feature or fix; attemptSummary describes only work and verification performed in this run.",
     "If you recorded proof separately, pass its returned proofId to workboard_complete.",
-    "If blocked, call workboard_block with the card id, token, and reason.",
+    "If blocked, call workboard_block with the card id and reason.",
     "",
     params.context,
   ].join("\n");
@@ -231,6 +237,7 @@ function selectStartableCards(
   ownerOverride: string | undefined,
   now: number,
   mode: "scheduled" | "exact",
+  requireAssigned: boolean,
 ): { cards: WorkboardCard[]; rejection?: WorkboardStartFailure } {
   if (limit <= 0) {
     return { cards: [] };
@@ -251,18 +258,20 @@ function selectStartableCards(
     const owner = ownerOverride || workboardCardSlotOwner(card, now);
     const rejection = cardIsArchived(card)
       ? "Card is archived; restore it before starting."
-      : cardHasActiveClaim(card, now)
-        ? `Card is already claimed by ${card.metadata?.claim?.ownerId ?? "another worker"}.`
-        : mode === "scheduled" && card.status !== "ready"
-          ? ""
-          : mode === "exact" &&
-              card.status !== "backlog" &&
-              card.status !== "todo" &&
-              card.status !== "ready"
-            ? `Card cannot start from ${card.status}; move it to backlog, todo, or ready first.`
-            : (runningByOwner.get(owner) ?? 0) > 0
-              ? `Owner ${owner} already has active Workboard work; complete or stop it before starting another card.`
-              : undefined;
+      : requireAssigned && !card.agentId?.trim()
+        ? "Guarded Autopilot requires an explicitly assigned agent."
+        : cardHasActiveClaim(card, now)
+          ? `Card is already claimed by ${card.metadata?.claim?.ownerId ?? "another worker"}.`
+          : mode === "scheduled" && card.status !== "ready"
+            ? ""
+            : mode === "exact" &&
+                card.status !== "backlog" &&
+                card.status !== "todo" &&
+                card.status !== "ready"
+              ? `Card cannot start from ${card.status}; move it to backlog, todo, or ready first.`
+              : (runningByOwner.get(owner) ?? 0) > 0
+                ? `Owner ${owner} already has active Workboard work; complete or stop it before starting another card.`
+                : undefined;
     if (rejection !== undefined) {
       if (mode === "exact") {
         return {
@@ -315,7 +324,11 @@ async function runWorkboardDispatch(
   const directCard = directCardId ? await params.store.prepareStart(directCardId, now) : undefined;
   const dispatch = directCard
     ? { promoted: [], reclaimed: [], blocked: [], orchestrated: [], count: 0 }
-    : await params.store.dispatch({ now, boardId });
+    : await params.store.dispatch({
+        now,
+        boardId,
+        recordReady: params.options?.requireGuardedBoard !== true,
+      });
   const maxStarts = resolveNonNegativeIntegerOption(
     params.options?.maxStarts,
     DEFAULT_DISPATCH_MAX_STARTS,
@@ -323,34 +336,53 @@ async function runWorkboardDispatch(
   const started: WorkboardStartedRun[] = [];
   const startFailures: WorkboardStartFailure[] = [];
   const cards = await params.store.list();
-  const candidates = directCard ? [directCard] : await params.store.list({ boardId });
+  const concurrencyBoardId = boardId ?? (directCard ? cardBoardId(directCard) : undefined);
+  const boardCards = concurrencyBoardId
+    ? cards.filter((card) => cardBoardId(card) === concurrencyBoardId)
+    : cards;
+  const candidates = (directCard ? [directCard] : boardCards).filter(
+    (card) => !params.options?.skipCardIds?.has(card.id),
+  );
+  const activeConcurrentRuns = boardCards.filter(
+    (card) =>
+      !card.metadata?.archivedAt &&
+      card.status === "running" &&
+      card.execution?.mode === "autonomous" &&
+      card.execution.status === "running",
+  ).length;
+  const availableStarts =
+    params.options?.maxConcurrent === undefined
+      ? maxStarts
+      : Math.max(0, params.options.maxConcurrent - activeConcurrentRuns);
+  const startLimit = Math.min(maxStarts, availableStarts);
   const ownerOverride = params.options?.ownerId?.trim() || undefined;
   const startedOwners = new Set<string>();
   // Allow one fallback per worker slot without draining the queue during an outage.
-  const maxAttempts = maxStarts * 2;
+  const maxAttempts = startLimit * 2;
   let acceptedStarts = 0;
   let attemptedStarts = 0;
 
   const selection = selectStartableCards(
     cards,
-    maxStarts,
+    startLimit,
     candidates,
     ownerOverride,
     now,
     directCardId ? "exact" : "scheduled",
+    params.options?.requireAssigned === true,
   );
   if (selection.rejection) {
     startFailures.push(selection.rejection);
   }
   for (const card of selection.cards) {
     const ownerId = ownerOverride || workboardCardSlotOwner(card, now);
-    if (acceptedStarts >= maxStarts || attemptedStarts >= maxAttempts) {
+    if (acceptedStarts >= startLimit || attemptedStarts >= maxAttempts) {
       break;
     }
     if (startedOwners.has(ownerId)) {
       continue;
     }
-    const sessionKey = workboardSessionKeyForCard(card);
+    const sessionKey = workboardSessionKeyForAttempt(card, now, workboardSessionKeyForCard(card));
     let claimValue = "";
     let materializedWorkspace: WorkboardWorkspace | undefined;
     let implicitWorkspaceCwd: string | undefined;
@@ -452,6 +484,7 @@ async function runWorkboardDispatch(
             agentId: card.agentId,
             workspace: card.metadata?.automation?.workspace,
             workspaceAccess: card.metadata?.automation?.workspaceAccess,
+            requireGuardedBoard: params.options?.requireGuardedBoard,
           },
           adoptWorkspaceAccess: persistWorkspaceAccess ? workspaceAccess : undefined,
         },
@@ -460,7 +493,6 @@ async function runWorkboardDispatch(
       // Racing card changes never reached a worker and must not consume the
       // provider-outage budget or starve a later healthy candidate.
       attemptedStarts += 1;
-      const context = await params.store.buildWorkerContext(card.id);
       const materialized = await materializeWorkspace({
         card: claimed.card,
         worktrees: params.worktrees,
@@ -492,6 +524,8 @@ async function runWorkboardDispatch(
         );
         workspaceMutation = { before: workspaceBase, after: materializedCard };
       }
+      const workerCard = (await params.store.get(card.id)) ?? claimed.card;
+      const context = await params.store.buildWorkerContext(card.id);
       const prepared = await params.store.prepareExecutionLaunch(card.id, {
         requestedSessionKey: sessionKey,
         now,
@@ -503,10 +537,9 @@ async function runWorkboardDispatch(
       const run = await params.subagent.run({
         sessionKey,
         message: buildWorkerPrompt({
-          card: claimed.card,
+          card: workerCard,
           context,
           ownerId,
-          token: claimValue,
         }),
         toolsAlsoAllow: [...WORKBOARD_REQUIRED_WORKER_TOOLS],
         ...(params.options?.provider ? { provider: params.options.provider } : {}),

@@ -293,7 +293,7 @@ describe("registerWorkboardCli", () => {
     ).rejects.toThrow("Ambiguous card id prefix");
   });
 
-  it("moves claimed cards with operator authority and redacts JSON output", async () => {
+  it("moves claimed cards with operator authority and closes the worker claim", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Claimed card", status: "todo" });
     await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
@@ -308,7 +308,7 @@ describe("registerWorkboardCli", () => {
 
     const parsed = JSON.parse(output);
     expect(parsed).toMatchObject({ card: { id: card.id, status: "review" } });
-    expect(parsed.card.metadata.claim.token).toBe("[redacted]");
+    expect(parsed.card.metadata?.claim).toBeUndefined();
     expect(output).not.toContain("secret-token");
   });
 

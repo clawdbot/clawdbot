@@ -59,6 +59,19 @@ try {
     path: path.join(outputDir, "workboard-chip.png"),
   });
 
+  const reviewCard = page.locator(".workboard-card", {
+    hasText: "Review accessibility audit",
+  });
+  await reviewCard.getByRole("button", { name: "View details" }).click();
+  const detail = page.locator(".workboard-detail");
+  await detail.getByText("Work completed", { exact: true }).waitFor();
+  await detail.getByText("Verification", { exact: true }).waitFor();
+  await detail.getByText("Prepare launch readiness checklist", { exact: true }).waitFor();
+  await page.screenshot({
+    animations: "disabled",
+    path: path.join(outputDir, "workboard-review.png"),
+  });
+
   await page.goto(new URL("/dashboard", baseUrl).toString());
   const widget = page.locator('[data-test-id="workboard-board-widget"]');
   await widget.waitFor();

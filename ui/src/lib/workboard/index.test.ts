@@ -20,6 +20,7 @@ import {
   moveWorkboardCard,
   refreshWorkboard,
   saveWorkboardCardDraft,
+  setWorkboardAutopilot,
   startWorkboardCard,
   stopWorkboardLifecycleRefresh,
   stopWorkboardCard,
@@ -432,6 +433,13 @@ describe("workboard controller", () => {
               active: 1,
               archived: 0,
               byStatus: { todo: 1 },
+              orchestration: {
+                autopilotMode: "guarded",
+                autoDecompose: true,
+                autoDecomposePerDispatch: 2,
+                defaultAssignee: "writer",
+                orchestratorProfile: "planner",
+              },
             },
             {
               id: "archive",
@@ -464,6 +472,13 @@ describe("workboard controller", () => {
           active: 1,
           archived: 0,
           byStatus: { todo: 1 },
+          orchestration: {
+            autopilotMode: "guarded",
+            autoDecompose: true,
+            autoDecomposePerDispatch: 2,
+            defaultAssignee: "writer",
+            orchestratorProfile: "planner",
+          },
         },
         {
           id: "archive",
@@ -474,6 +489,33 @@ describe("workboard controller", () => {
           archivedAt: 7,
         },
       ]);
+    });
+
+    it("preserves persisted latest-attempt review context through card normalization", async () => {
+      const client = createClient({
+        "workboard.cards.list": {
+          cards: [
+            {
+              ...sampleCard,
+              metadata: {
+                automation: {
+                  attemptSummary: "Reproduced and verified the fix.",
+                  attemptProofIds: ["proof-focused"],
+                },
+              },
+            },
+          ],
+          boards: [],
+          statuses: ["todo", "review"],
+        },
+      });
+
+      await loadBoard(client);
+
+      expect(getWorkboardState(host).cards[0]?.metadata?.automation).toMatchObject({
+        attemptSummary: "Reproduced and verified the fix.",
+        attemptProofIds: ["proof-focused"],
+      });
     });
 
     it("rejects an invalidated generation after its replacement loads", async () => {
@@ -1768,6 +1810,68 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", { boardId: "ops" });
   });
 
+  it("persists guarded autopilot without losing board counts", async () => {
+    state.boards = [
+      {
+        id: "ops",
+        total: 3,
+        active: 2,
+        archived: 1,
+        byStatus: { ready: 2, done: 1 },
+        orchestration: {
+          autoDecompose: true,
+          autoDecomposePerDispatch: 2,
+          defaultAssignee: "writer",
+          orchestratorProfile: "planner",
+        },
+      },
+    ];
+    const client = createClient({
+      "workboard.boards.upsert": {
+        board: {
+          id: "ops",
+          orchestration: { autopilotMode: "guarded" },
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      },
+    });
+
+    await setWorkboardAutopilot({
+      host,
+      client,
+      boardId: "ops",
+      mode: "guarded",
+    });
+
+    expect(client.request).toHaveBeenCalledWith("workboard.boards.upsert", {
+      id: "ops",
+      orchestration: {
+        autopilotMode: "guarded",
+        autoDecompose: true,
+        autoDecomposePerDispatch: 2,
+        defaultAssignee: "writer",
+        orchestratorProfile: "planner",
+      },
+    });
+    expect(state.boards).toEqual([
+      expect.objectContaining({
+        id: "ops",
+        total: 3,
+        active: 2,
+        archived: 1,
+        byStatus: { ready: 2, done: 1 },
+        orchestration: {
+          autopilotMode: "guarded",
+          autoDecompose: true,
+          autoDecomposePerDispatch: 2,
+          defaultAssignee: "writer",
+          orchestratorProfile: "planner",
+        },
+      }),
+    ]);
+  });
+
   it("clears stale refresh errors after a recovered dispatch task scan", async () => {
     state.lastRefreshError = "poll unavailable";
     const linked = createLinkedCard({ taskId: undefined });
@@ -1887,11 +1991,13 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).draggedCardId).toBeNull();
   });
 
-  it.each(["card write", "dispatch"] as const)(
+  it.each(["card write", "autopilot write", "dispatch"] as const)(
     "does not refresh while a %s is active",
     async (mutation) => {
       if (mutation === "card write") {
         state.busyCardIds.add(sampleCard.id);
+      } else if (mutation === "autopilot write") {
+        state.busyCardIds.add("board:ops");
       } else {
         state.dispatching = true;
       }

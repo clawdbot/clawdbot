@@ -220,6 +220,48 @@ function renderLifecycle(
   `;
 }
 
+function renderWorkInsight(card: WorkboardCard) {
+  const summary = card.metadata?.automation?.summary?.trim();
+  const latestWorkerUpdate =
+    card.metadata?.workerLogs?.at(-1)?.message.trim() ??
+    card.metadata?.workerProtocol?.detail?.trim();
+  const proofCount = card.metadata?.proof?.length ?? 0;
+  const detail = clampText(
+    formatUiExternalText(summary || (card.status === "running" ? latestWorkerUpdate : "") || ""),
+    110,
+  );
+  if (card.status === "review") {
+    return html`
+      <div class="workboard-card__insight workboard-card__insight--review">
+        <strong>${t("workboard.cardNeedsReview")}</strong>
+        <span>${detail || t("workboard.cardReviewFallback")}</span>
+        ${
+          proofCount
+            ? html`<small
+                >${t("workboard.cardVerificationCount", { count: String(proofCount) })}</small
+              >`
+            : nothing
+        }
+      </div>
+    `;
+  }
+  if ((card.status === "running" || card.status === "done") && detail) {
+    return html`
+      <div class="workboard-card__insight">
+        <strong
+          >${t(
+            card.status === "running"
+              ? "workboard.cardLatestProgress"
+              : "workboard.cardCompletedWork",
+          )}</strong
+        >
+        <span>${detail}</span>
+      </div>
+    `;
+  }
+  return nothing;
+}
+
 type WorkboardCardSurface = "page" | "widget";
 
 function renderCard(props: WorkboardProps, card: WorkboardCard, surface: WorkboardCardSurface) {
@@ -357,7 +399,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
       </div>
       <h3>${card.title}</h3>
       ${card.notes ? html`<p>${card.notes}</p>` : nothing} ${renderLifecycle(card, props, task)}
-      ${renderDependencyBadges(dependencies)}
+      ${renderDependencyBadges(dependencies)} ${renderWorkInsight(card)}
       ${
         card.labels.length
           ? html`<div class="workboard-labels">

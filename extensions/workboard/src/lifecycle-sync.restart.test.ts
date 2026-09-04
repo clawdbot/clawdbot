@@ -243,7 +243,7 @@ describe("Workboard prepared launch restart recovery", () => {
     });
     const terminal = await interrupted.replacementStore.get(interrupted.card.id);
     expect(terminal).toMatchObject({
-      status: "review",
+      status: "blocked",
       sessionKey: canonicalSessionKey,
       runId: "accepted-run",
       metadata: {
@@ -251,7 +251,7 @@ describe("Workboard prepared launch restart recovery", () => {
         attempts: [
           expect.objectContaining({
             id: "accepted-run",
-            status: "succeeded",
+            status: "blocked",
             runId: "accepted-run",
           }),
         ],
@@ -261,7 +261,7 @@ describe("Workboard prepared launch restart recovery", () => {
 
     await stopLifecycleSweep(lifecycle);
     await rejectInterruptedDispatch(interrupted);
-    expect((await interrupted.replacementStore.get(interrupted.card.id))?.status).toBe("review");
+    expect((await interrupted.replacementStore.get(interrupted.card.id))?.status).toBe("blocked");
   });
 
   it("accepts a prepared launch from an explicit terminal session snapshot", async () => {
@@ -287,18 +287,18 @@ describe("Workboard prepared launch restart recovery", () => {
 
     lifecycle.service.onGatewayStart();
     await vi.waitFor(async () => {
-      expect((await interrupted.replacementStore.get(interrupted.card.id))?.status).toBe("review");
+      expect((await interrupted.replacementStore.get(interrupted.card.id))?.status).toBe("blocked");
     });
     await stopLifecycleSweep(lifecycle);
 
     await expect(interrupted.replacementStore.get(interrupted.card.id)).resolves.toMatchObject({
-      status: "review",
+      status: "blocked",
       sessionKey: canonicalSessionKey,
       metadata: {
         automation: {
           launch: { phase: "accepted", acceptedSessionKey: canonicalSessionKey },
         },
-        attempts: [expect.objectContaining({ status: "succeeded" })],
+        attempts: [expect.objectContaining({ status: "blocked" })],
       },
     });
     await rejectInterruptedDispatch(interrupted);

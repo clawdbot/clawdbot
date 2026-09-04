@@ -569,6 +569,22 @@ suite.define(() => {
       expect(await details.getByRole("button", { name: "Archive card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Delete card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Stop session" }).count()).toBe(0);
+      await writable.page.setViewportSize({ height: 520, width: viewport.width });
+      const drawerMetrics = await details.evaluate((element) => {
+        const styles = window.getComputedStyle(element);
+        return {
+          clientHeight: element.clientHeight,
+          overflowY: styles.overflowY,
+          scrollHeight: element.scrollHeight,
+          viewportHeight: window.innerHeight,
+        };
+      });
+      expect(drawerMetrics.overflowY).toBe("auto");
+      expect(drawerMetrics.clientHeight).toBeLessThanOrEqual(drawerMetrics.viewportHeight);
+      expect(drawerMetrics.scrollHeight).toBeGreaterThan(drawerMetrics.clientHeight);
+      await details.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+      await details.getByRole("button", { name: "Delete card" }).waitFor({ state: "visible" });
+      await writable.page.setViewportSize(viewport);
       await captureScreenshot(writable.page, artifacts, "05-detail-actions");
       await details.locator('button[aria-label="Cancel"]').click();
 

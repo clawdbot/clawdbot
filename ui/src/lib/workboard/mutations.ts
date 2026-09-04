@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { WorkboardAutopilotMode } from "@openclaw/workboard-contract";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   changedDraftPayload,
@@ -22,6 +23,45 @@ import {
 } from "./runtime.ts";
 import { applyTaskSummariesToState, listWorkboardTasks } from "./task-links.ts";
 import type { WorkboardDispatchSummary, WorkboardStatus } from "./types.ts";
+
+export async function setWorkboardAutopilot(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  boardId: string;
+  mode: WorkboardAutopilotMode;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  const board = state.boards.find((entry) => entry.id === params.boardId);
+  const busyId = `board:${params.boardId}`;
+  if (
+    !params.client ||
+    !board ||
+    !workboardMutationsReady(state) ||
+    state.dispatching ||
+    state.busyCardIds.has(busyId)
+  ) {
+    return;
+  }
+  invalidateWorkboardLoads(params.host);
+  state.busyCardIds.add(busyId);
+  state.error = null;
+  params.requestUpdate?.();
+  try {
+    await params.client.request("workboard.boards.upsert", {
+      id: board.id,
+      orchestration: { ...board.orchestration, autopilotMode: params.mode },
+    });
+    board.orchestration = { ...board.orchestration, autopilotMode: params.mode };
+    state.loaded = true;
+    state.mutationReadiness = "ready";
+  } catch (error) {
+    state.error = formatError(error);
+  } finally {
+    state.busyCardIds.delete(busyId);
+    params.requestUpdate?.();
+  }
+}
 
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   const countArray = (key: string) =>

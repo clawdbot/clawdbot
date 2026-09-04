@@ -54,6 +54,7 @@ export function normalizeAutomation(value: unknown): WorkboardAutomation | undef
   const workspaceAccess = normalizeWorkspaceAccess(value.workspaceAccess);
   const skills = normalizeStringArray(value.skills);
   const createdCardIds = normalizeStringArray(value.createdCardIds);
+  const attemptProofIds = normalizeStringArray(value.attemptProofIds);
   const automation: WorkboardAutomation = {
     ...(typeof value.tenant === "string" ? { tenant: value.tenant } : {}),
     ...(typeof value.boardId === "string" ? { boardId: value.boardId } : {}),
@@ -70,6 +71,8 @@ export function normalizeAutomation(value: unknown): WorkboardAutomation | undef
     ...(typeof value.maxRetries === "number" ? { maxRetries: value.maxRetries } : {}),
     ...(typeof value.scheduledAt === "number" ? { scheduledAt: value.scheduledAt } : {}),
     ...(typeof value.summary === "string" ? { summary: value.summary } : {}),
+    ...(typeof value.attemptSummary === "string" ? { attemptSummary: value.attemptSummary } : {}),
+    ...(attemptProofIds.length ? { attemptProofIds } : {}),
     ...(createdCardIds.length ? { createdCardIds } : {}),
     ...(typeof value.dispatchCount === "number" ? { dispatchCount: value.dispatchCount } : {}),
     ...(typeof value.lastDispatchAt === "number" ? { lastDispatchAt: value.lastDispatchAt } : {}),

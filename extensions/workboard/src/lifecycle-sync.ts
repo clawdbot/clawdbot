@@ -123,12 +123,19 @@ async function syncWorkboardCardLifecycle(params: {
   };
 }): Promise<boolean> {
   const target = LIFECYCLE_TARGETS[params.observation.state];
+  const terminalReason =
+    params.observation.state === "succeeded"
+      ? "Worker session ended without submitting Workboard completion evidence."
+      : params.observation.state === "failed"
+        ? "Worker session failed before submitting Workboard completion evidence."
+        : undefined;
   return await params.store.syncLifecycle(params.cardId, {
     targetStatus: "card" in target ? target.card : undefined,
     executionStatus: "execution" in target ? target.execution : undefined,
     sourceUpdatedAt: params.observation.sourceUpdatedAt,
     stale: params.observation.stale,
     now: params.now,
+    terminalReason,
     ...(params.association ? { association: params.association } : {}),
   });
 }

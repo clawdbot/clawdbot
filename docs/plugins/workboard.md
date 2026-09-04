@@ -203,8 +203,31 @@ OpenClaw subagent sessions still own execution. One dispatch pass:
 5. Claims a small batch of ready cards and starts worker runs through the
    Gateway subagent runtime.
 
-Workers get bounded card context plus the claim token needed to heartbeat,
-complete, or block the card through the Workboard tools.
+Workers get bounded card context. Claim authorization stays bound to the
+worker session, so claim credentials are not placed in the model-visible
+prompt or transcript.
+
+### Guarded Autopilot
+
+Each board can keep **Autopilot: Off** (the default) or enable
+**Autopilot: Guarded** from the dashboard. Guarded mode:
+
+- starts only `ready` cards with an explicitly assigned agent;
+- runs at most one autonomous worker at a time on that board;
+- uses the same claim, workspace-authority, runtime, and retry boundaries as
+  manual dispatch;
+- reacts to card changes and runs a 30-second reconciliation pass as a
+  recovery backstop; and
+- stops new starts as soon as the operator switches the board back to Off.
+
+If a Guarded worker determines that one card contains multiple independently
+verifiable outcomes, it can submit a small linked child-card breakdown. The
+parent moves to `review`, and the children remain gated until an operator
+accepts the parent by moving it to `done`.
+
+Active work is not cancelled when Guarded mode is turned off. Use the card's
+**Stop** action when the current run must also stop. Worker completion moves a
+card to `review`; Guarded mode does not move cards from `review` to `done`.
 
 Workspace paths follow the caller's existing filesystem authority. Gateway
 clients with `operator.write` can use configured agent workspaces;
@@ -274,10 +297,10 @@ permission, and validation failures from a reachable Gateway are not treated
 as unavailable; they surface as command errors, and so does any Gateway
 failure when an explicit `--url`/`--token` target was given.
 
-Board metadata can set `autoDecompose`, `autoDecomposePerDispatch`,
-`defaultAssignee`, and `orchestratorProfile`. OpenClaw records this intent and
-exposes it in worker context; actual specification/decomposition still runs
-through the normal Workboard tools.
+Board metadata can set `autopilotMode`, `autoDecompose`,
+`autoDecomposePerDispatch`, `defaultAssignee`, and `orchestratorProfile`.
+OpenClaw records this intent and exposes it in worker context; actual
+specification/decomposition still runs through the normal Workboard tools.
 
 ## CLI and slash command
 

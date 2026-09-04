@@ -26,6 +26,7 @@ import {
   retryBudgetExhausted,
   shouldSkipPersistedLifecycleStatusUpdate,
   shouldSyncWorkboardLifecycleStatus,
+  terminalExitMetadata,
 } from "./store-card-helpers.js";
 import {
   isWorkboardClaimReclaimable,
@@ -224,7 +225,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
             },
             metadata: {
               ...card.metadata,
-              automation: { ...card.metadata?.automation, launch },
+              automation: {
+                ...card.metadata?.automation,
+                attemptSummary: undefined,
+                attemptProofIds: [],
+                launch,
+              },
             },
           };
         },
@@ -317,6 +323,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       sourceUpdatedAt: number | undefined;
       stale: WorkboardStaleState | undefined;
       now: number;
+      terminalReason?: string;
       association?: WorkboardLifecycleAssociation;
     },
   ): Promise<boolean> {
@@ -339,6 +346,13 @@ export class WorkboardStore extends WorkboardNotificationStore {
                   input.association.acceptedAt >= launch.preparedAt)) &&
               cardSessionKey(card) === input.association.expectedSessionKey &&
               cardRunId(card) === input.association.expectedRunId);
+          const terminalExitWithoutCompletion =
+            associationIsCurrent && Boolean(input.terminalReason) && card.status === "running";
+          const executionStatus = terminalExitWithoutCompletion
+            ? "blocked"
+            : input.terminalReason
+              ? undefined
+              : input.executionStatus;
           // Recompute from the latest row after every cross-host CAS conflict.
           if (
             associationIsCurrent &&
@@ -359,8 +373,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
               card.execution.sessionKey !== input.association.sessionKey ||
               (input.association.runId !== undefined &&
                 card.execution.runId !== input.association.runId) ||
-              (input.executionStatus !== undefined &&
-                card.execution.status !== input.executionStatus) ||
+              (executionStatus !== undefined && card.execution.status !== executionStatus) ||
               Boolean(acceptedLaunch));
           if (associationIsCurrent && input.association && associationNeedsUpdate) {
             const associationPatch = executionAssociationPatch(card, {
@@ -368,7 +381,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
               execution: lifecycleExecution({
                 card,
                 association: input.association,
-                status: input.executionStatus,
+                status: executionStatus,
                 now: input.now,
               }),
               ...(acceptedLaunch ? { launch: acceptedLaunch } : {}),
@@ -380,12 +393,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
           } else if (
             !input.association &&
             card.execution &&
-            input.executionStatus &&
-            card.execution.status !== input.executionStatus
+            executionStatus &&
+            card.execution.status !== executionStatus
           ) {
             patch.execution = {
               ...card.execution,
-              status: input.executionStatus,
+              status: executionStatus,
               updatedAt: input.now,
             };
           }
@@ -406,6 +419,21 @@ export class WorkboardStore extends WorkboardNotificationStore {
             }
           } else if (associationIsCurrent && card.metadata?.stale) {
             metadata = { ...metadata, stale: null };
+          }
+          if (terminalExitWithoutCompletion) {
+            const reason = input.terminalReason!;
+            patch.status = "blocked";
+            const terminalExecution = patch.execution ?? card.execution;
+            patch.execution = terminalExecution
+              ? { ...terminalExecution, status: "blocked", updatedAt: input.now }
+              : patch.execution;
+            metadata = terminalExitMetadata({
+              card,
+              metadata: { ...card.metadata, ...metadata },
+              now: input.now,
+              reason,
+              notificationSequence: this.nextNotificationSequence(input.now),
+            });
           }
           if (metadata) {
             patch.metadata = metadata;
@@ -439,6 +467,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
   ): Promise<WorkboardDispatchResult> {
     const now = typeof input === "number" ? input : normalizeTimestamp(input.now, Date.now());
     const boardId = typeof input === "number" ? undefined : normalizeBoardId(input.boardId);
+    const recordReady = typeof input === "number" || input.recordReady !== false;
     return await this.enqueueMutation(async () => {
       const promoted: WorkboardCard[] = [];
       const reclaimed: WorkboardCard[] = [];
@@ -519,7 +548,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           });
           blocked.push(latest);
         }
-        if (latest.status === "ready" && !latest.metadata?.archivedAt) {
+        if (recordReady && latest.status === "ready" && !latest.metadata?.archivedAt) {
           latest = await this.recordDispatch(latest, now);
         }
         if (await this.shouldAutoOrchestrate(latest)) {

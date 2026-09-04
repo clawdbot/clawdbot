@@ -64,9 +64,13 @@ export const WORKBOARD_TOOL_NAMES = [
 ] as const;
 
 export const WORKBOARD_REQUIRED_WORKER_TOOLS = [
+  "workboard_read",
   "workboard_heartbeat",
+  "workboard_proof",
   "workboard_complete",
   "workboard_block",
+  "workboard_decompose",
+  "workboard_worker_log",
 ] as const;
 
 export function resolveWorkboardAgentWorkspace(config: WorkboardConfig, agentId?: string): string {
@@ -120,7 +124,7 @@ export async function resolveAgentWorkboardWorkspaceRuntime(params: {
     workspaceAccess: sandboxRuntime.sandboxed
       ? {
           unrestricted: false,
-          roots: [resolveAgentWorkspaceDir(params.config, agentId)],
+          roots: [params.workspaceDir],
           writable: sandboxRuntime.workspaceAccess === "rw",
         }
       : { unrestricted: true },

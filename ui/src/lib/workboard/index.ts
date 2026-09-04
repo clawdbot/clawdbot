@@ -11,6 +11,7 @@ export {
   type WorkboardHealthKey,
   type WorkboardHealthSummary,
   type WorkboardLifecycle,
+  type WorkboardLink,
   type WorkboardPriority,
   type WorkboardStatus,
   type WorkboardTaskSummary,
@@ -39,6 +40,7 @@ export {
   dispatchWorkboard,
   moveWorkboardCard,
   saveWorkboardCardDraft,
+  setWorkboardAutopilot,
 } from "./mutations.ts";
 export { startWorkboardCard, stopWorkboardCard } from "./execution.ts";
 export {

@@ -206,9 +206,7 @@ describe("workboard tools", () => {
     const token = (claimed.token as string | undefined) ?? "";
 
     const heartbeat = readPayload(
-      await byName
-        .get("workboard_heartbeat")
-        ?.execute("call-2", { id: "card-1", token, note: "alive" }),
+      await byName.get("workboard_heartbeat")?.execute("call-2", { id: "card-1", note: "alive" }),
     );
     expect(heartbeat).toMatchObject({
       metadata: { comments: [expect.objectContaining({ body: "alive" })] },
@@ -406,14 +404,10 @@ describe("workboard tools", () => {
       }),
     ).rejects.toThrow(/claimed/);
 
-    const claimed = readPayload(
-      await tools.get("workboard_claim")?.execute("call-3", { id: parent.id }),
-    );
-    const token = claimed.token as string;
+    await tools.get("workboard_claim")?.execute("call-3", { id: parent.id });
     const pendingProof = readPayload(
       await tools.get("workboard_proof")?.execute("call-proof", {
         id: parent.id,
-        token,
         status: "passed",
         command: "pnpm test extensions/workboard",
       }),
@@ -422,7 +416,6 @@ describe("workboard tools", () => {
     const completed = readPayload(
       await tools.get("workboard_complete")?.execute("call-4", {
         id: parent.id,
-        token,
         summary: "Done.",
         createdCardIds: [child.id],
         proofId: pendingProof.proofId,
@@ -658,5 +651,55 @@ describe("workboard tools", () => {
       }),
     );
     expect(claimed.card).toMatchObject({ status: "review" });
+  });
+
+  it("binds autonomous lifecycle mutations to the launched worker session", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const card = await store.create({
+      title: "Session-bound card",
+      status: "ready",
+      agentId: "agent-a",
+    });
+    const claimed = await store.claim(card.id, { ownerId: "agent-a", token: "session-token" });
+    await store.prepareExecutionLaunch(card.id, {
+      requestedSessionKey: "agent:agent-a:subagent:workboard-attempt",
+      now: Date.now(),
+      scope: { ownerId: "agent-a", token: claimed.token },
+    });
+
+    const siblingTools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: {
+          agentId: "agent-a",
+          sessionKey: "agent:agent-a:subagent:unrelated",
+        } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+    await expect(
+      siblingTools.get("workboard_heartbeat")?.execute("heartbeat-sibling", { id: card.id }),
+    ).rejects.toThrow("card is claimed by agent-a");
+    await expect(
+      store.heartbeat(card.id, {
+        ownerId: "agent-a",
+        sessionKey: "agent:agent-a:subagent:unrelated",
+      }),
+    ).rejects.toThrow("card is claimed by agent-a");
+
+    const workerTools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: {
+          agentId: "agent-a",
+          sessionKey: "agent:agent-a:subagent:workboard-attempt",
+        } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+    await expect(
+      workerTools.get("workboard_heartbeat")?.execute("heartbeat-worker", { id: card.id }),
+    ).resolves.toBeDefined();
   });
 });

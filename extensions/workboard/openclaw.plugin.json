@@ -102,16 +102,19 @@
       "optional": true
     },
     "workboard_read": {
-      "optional": true
+      "optional": false,
+      "profiles": ["coding"]
     },
     "workboard_claim": {
       "optional": true
     },
     "workboard_heartbeat": {
-      "optional": true
+      "optional": false,
+      "profiles": ["coding"]
     },
     "workboard_complete": {
-      "optional": true
+      "optional": false,
+      "profiles": ["coding"]
     },
     "workboard_attachment_add": {
       "optional": true
@@ -123,7 +126,8 @@
       "optional": true
     },
     "workboard_block": {
-      "optional": true
+      "optional": false,
+      "profiles": ["coding"]
     },
     "workboard_boards": {
       "optional": true
@@ -147,7 +151,8 @@
       "optional": true
     },
     "workboard_decompose": {
-      "optional": true
+      "optional": false,
+      "profiles": ["coding"]
     },
     "workboard_notify_subscribe": {
       "optional": true
@@ -183,10 +188,12 @@
       "optional": true
     },
     "workboard_proof": {
-      "optional": true
+      "optional": false,
+      "profiles": ["coding"]
     },
     "workboard_worker_log": {
-      "optional": true
+      "optional": false,
+      "profiles": ["coding"]
     },
     "workboard_protocol_violation": {
       "optional": true

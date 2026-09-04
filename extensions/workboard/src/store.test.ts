@@ -719,7 +719,14 @@ describe("WorkboardStore", () => {
         contentBase64: Buffer.alloc(70 * 1024).toString("base64"),
       });
       await store.update(card.id, {
-        metadata: { lifecycleStatusSourceUpdatedAt: 1234 },
+        metadata: {
+          lifecycleStatusSourceUpdatedAt: 1234,
+          automation: {
+            ...card.metadata?.automation,
+            attemptSummary: "Verified this SQLite attempt.",
+            attemptProofIds: ["proof-sqlite"],
+          },
+        },
       });
       const attachmentId = attached.metadata?.attachments?.[0]?.id;
       const subscription = await store.subscribeNotifications({
@@ -781,7 +788,11 @@ describe("WorkboardStore", () => {
         id: card.id,
         labels: ["sqlite", "doctor"],
         metadata: {
-          automation: { boardId: "planning" },
+          automation: {
+            boardId: "planning",
+            attemptSummary: "Verified this SQLite attempt.",
+            attemptProofIds: ["proof-sqlite"],
+          },
           lifecycleStatusSourceUpdatedAt: 1234,
           comments: [expect.objectContaining({ body: "round trip" })],
           attachments: expect.arrayContaining([
@@ -2186,6 +2197,9 @@ describe("WorkboardStore", () => {
     const released = await store.releaseClaim(card.id, { ownerId: "main", status: "review" });
     expect(released.status).toBe("review");
     expect(released.metadata?.claim).toBeUndefined();
+    await expect(store.heartbeat(card.id, { ownerId: "main" })).rejects.toThrow(
+      "card is not running",
+    );
 
     const tokenCard = await store.create({ title: "Token-authorized worker", status: "todo" });
     const tokenClaim = await store.claim(tokenCard.id, { ownerId: "main", ttlSeconds: 60 });
@@ -2790,21 +2804,31 @@ describe("WorkboardStore", () => {
     const completed = await store.complete(claimed.card.id, {
       ownerId: "main",
       token: "token-1",
-      summary: "Implemented and verified.",
+      overallOutcome: "Portal isolation is implemented.",
+      attemptSummary: "Implemented and verified the isolation in this run.",
       proof: { status: "passed", command: "pnpm test extensions/workboard" },
       artifacts: [{ path: "/tmp/log.txt", label: "log" }],
       createdCardIds: [child.id],
     });
 
     expect(completed).toMatchObject({
-      status: "done",
-      execution: { status: "done" },
+      status: "review",
+      execution: { status: "review" },
       metadata: {
-        attempts: [expect.objectContaining({ status: "succeeded", endedAt: expect.any(Number) })],
-        comments: [expect.objectContaining({ body: "Implemented and verified." })],
+        attempts: [
+          expect.objectContaining({
+            status: "succeeded",
+            endedAt: expect.any(Number),
+          }),
+        ],
         proof: [expect.objectContaining({ status: "passed" })],
         artifacts: [expect.objectContaining({ path: "/tmp/log.txt" })],
-        automation: { summary: "Implemented and verified.", createdCardIds: [child.id] },
+        automation: {
+          summary: "Portal isolation is implemented.",
+          attemptSummary: "Implemented and verified the isolation in this run.",
+          attemptProofIds: [expect.any(String)],
+          createdCardIds: [child.id],
+        },
         notifications: [expect.objectContaining({ kind: "completed" })],
       },
     });
@@ -2859,7 +2883,7 @@ describe("WorkboardStore", () => {
     expect(recovered.metadata?.failureCount).toBeUndefined();
   });
 
-  it("keeps long lifecycle handoffs in comments while capping notifications", async () => {
+  it("keeps long lifecycle handoffs in structured fields while capping notifications", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const completeCard = await store.create({ title: "Long complete" });
     const blockCard = await store.create({ title: "Long block" });
@@ -2869,7 +2893,7 @@ describe("WorkboardStore", () => {
     const completed = await store.complete(completeCard.id, { summary: longSummary });
     const blocked = await store.block(blockCard.id, { reason: longReason });
 
-    expect(completed.metadata?.comments?.[0]?.body).toBe(longSummary);
+    expect(completed.metadata?.automation?.summary).toBe(longSummary);
     expect(completed.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
     expect(blocked.metadata?.comments?.[0]?.body).toBe(longReason);
     expect(blocked.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
@@ -3179,6 +3203,7 @@ describe("WorkboardStore", () => {
     await expect(store.move(card.id, "review", undefined)).resolves.toMatchObject({
       status: "review",
     });
+    await expect(store.get(card.id)).resolves.not.toHaveProperty("metadata.claim");
   });
 
   it("checks matching claim tokens inside queued card writes", async () => {
@@ -3750,6 +3775,22 @@ describe("WorkboardStore", () => {
     await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toMatchObject({
       subscriptions: [expect.objectContaining({ id: subscription.id, cardId: card.id })],
     });
+  });
+
+  it("turns guarded autopilot off when a board is archived", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      boards: createMemoryStore<PersistedWorkboardBoard>(),
+    });
+    await store.upsertBoard({ id: "ops", orchestration: { autopilotMode: "guarded" } });
+
+    const archived = await store.archiveBoard("ops", true);
+    expect(archived).toMatchObject({
+      archivedAt: expect.any(Number),
+      orchestration: { autopilotMode: "off" },
+    });
+
+    const restored = await store.archiveBoard("ops", false);
+    expect(restored).toMatchObject({ orchestration: { autopilotMode: "off" } });
   });
 
   it("excludes archived cards from notification replay without discarding their history", async () => {
@@ -4452,6 +4493,58 @@ describe("WorkboardStore", () => {
       card: { id: parent.id },
       attempts: [],
     });
+  });
+
+  it("submits autonomous decompositions for review before releasing child work", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({
+      title: "Ship a broad outcome",
+      status: "running",
+      agentId: "main",
+      execution: {
+        id: "exec-plan",
+        kind: "agent-session",
+        engine: "subagent",
+        mode: "autonomous",
+        status: "running",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+    const claimed = await store.claim(parent.id, { ownerId: "main" });
+
+    const result = await store.decompose(
+      parent.id,
+      {
+        summary: "Proposed two independently verifiable tasks.",
+        children: [{ title: "Implement" }, { title: "Verify" }],
+      },
+      { ownerId: "main", token: claimed.token },
+    );
+
+    expect(result.parent).toMatchObject({
+      status: "review",
+      execution: { status: "review" },
+      metadata: {
+        automation: { summary: "Proposed two independently verifiable tasks." },
+      },
+    });
+    expect(result.parent.metadata?.claim).toBeUndefined();
+    expect(result.children).toEqual([
+      expect.objectContaining({ title: "Implement", status: "todo" }),
+      expect.objectContaining({ title: "Verify", status: "todo" }),
+    ]);
+
+    const firstChildId = result.children[0]?.id;
+    expect(firstChildId).toEqual(expect.any(String));
+    if (!firstChildId) {
+      throw new Error("first child id missing");
+    }
+    await store.promoteReady();
+    expect((await store.get(firstChildId))?.status).toBe("todo");
+    await store.move(parent.id, "done", undefined);
+    await store.promoteReady();
+    expect((await store.get(firstChildId))?.status).toBe("ready");
   });
 
   it("keeps specify as a todo-only clarification step", async () => {

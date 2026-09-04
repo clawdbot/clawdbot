@@ -93,6 +93,7 @@ export type WorkboardClaimOptions = {
     agentId?: string;
     workspace?: WorkboardWorkspace;
     workspaceAccess?: WorkboardWorkspaceAccess;
+    requireGuardedBoard?: boolean;
   };
   /** Trusted legacy-card adoption; applied only while expectedAuthority still matches. */
   adoptWorkspaceAccess?: WorkboardWorkspaceAccess;
@@ -100,6 +101,8 @@ export type WorkboardClaimOptions = {
 export type WorkboardHeartbeatInput = {
   token?: unknown;
   ownerId?: unknown;
+  /** Trusted runtime session identity; never accepted from public tool parameters. */
+  sessionKey?: unknown;
   note?: unknown;
 };
 export type WorkboardBulkInput = {
@@ -111,6 +114,8 @@ export type WorkboardCompleteInput = {
   ownerId?: unknown;
   token?: unknown;
   summary?: unknown;
+  overallOutcome?: unknown;
+  attemptSummary?: unknown;
   proof?: unknown;
   proofId?: unknown;
   artifacts?: unknown;
@@ -133,6 +138,8 @@ export type WorkboardListOptions = {
 };
 export type WorkboardDispatchOptions = WorkboardListOptions & {
   now?: unknown;
+  /** Internal callers can run lifecycle maintenance without marking every ready card dispatched. */
+  recordReady?: boolean;
 };
 export type WorkboardStatsResult = WorkboardBoardSummary & {
   byAgent: Record<string, number>;
@@ -193,6 +200,8 @@ export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions 
 export type WorkboardMutationScope = {
   ownerId?: unknown;
   token?: unknown;
+  /** Trusted runtime session identity; never accepted from public tool parameters. */
+  sessionKey?: unknown;
 };
 
 export type WorkboardDiagnosticsResult = {

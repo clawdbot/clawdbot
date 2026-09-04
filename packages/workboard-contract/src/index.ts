@@ -75,6 +75,7 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;
+export const WORKBOARD_AUTOPILOT_MODES = ["off", "guarded"] as const;
 export const WORKBOARD_BOARD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 
 export function isValidWorkboardBoardId(value: unknown): value is string {
@@ -94,6 +95,11 @@ export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
 export type WorkboardDiagnosticKind = (typeof WORKBOARD_DIAGNOSTIC_KINDS)[number];
 export type WorkboardDiagnosticSeverity = (typeof WORKBOARD_DIAGNOSTIC_SEVERITIES)[number];
 export type WorkboardNotificationKind = (typeof WORKBOARD_NOTIFICATION_KINDS)[number];
+export type WorkboardAutopilotMode = (typeof WORKBOARD_AUTOPILOT_MODES)[number];
+
+export function isWorkboardAutopilotMode(value: unknown): value is WorkboardAutopilotMode {
+  return typeof value === "string" && WORKBOARD_AUTOPILOT_MODES.some((mode) => mode === value);
+}
 
 export type WorkboardExecution = {
   id: string;
@@ -282,6 +288,8 @@ export type WorkboardAutomation = {
   maxRetries?: number;
   scheduledAt?: number;
   summary?: string;
+  attemptSummary?: string;
+  attemptProofIds?: string[];
   createdCardIds?: string[];
   dispatchCount?: number;
   lastDispatchAt?: number;
@@ -320,6 +328,7 @@ export type WorkboardBoardSummary = {
 };
 
 export type WorkboardOrchestrationSettings = {
+  autopilotMode?: WorkboardAutopilotMode;
   autoDecompose?: boolean;
   autoDecomposePerDispatch?: number;
   defaultAssignee?: string;

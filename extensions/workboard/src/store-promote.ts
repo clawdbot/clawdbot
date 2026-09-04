@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-import { assertCanMutateClaimedCard } from "./store-card-helpers.js";
+import { assertCanMutateClaimedCard, closeRunningAttempts } from "./store-card-helpers.js";
 import { MAX_CARD_COMMENTS } from "./store-constants.js";
 import { WorkboardEnrichmentStore } from "./store-enrichment.js";
 import type { WorkboardMutationScope, WorkboardPromoteInput } from "./store-inputs.js";
-import { clearDiagnostics, normalizeBoundedString } from "./store-normalizers.js";
+import { clearDiagnostics, normalizeBoundedString, normalizeStatus } from "./store-normalizers.js";
 
 export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
   async promoteReady(now = Date.now()): Promise<{ cards: WorkboardCard[]; count: number }> {
@@ -33,7 +33,36 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
           // Recheck after every cross-host CAS conflict so a worker cannot move
           // a card claimed between the read and write.
           assertCanMutateClaimedCard(current, scope);
-          return { status, position };
+          const nextStatus = normalizeStatus(status, current.status);
+          if (current.status !== "running" || nextStatus === "running") {
+            return { status: nextStatus, position };
+          }
+          const now = Date.now();
+          const attemptStatus =
+            nextStatus === "review" || nextStatus === "done"
+              ? "succeeded"
+              : nextStatus === "blocked"
+                ? "blocked"
+                : "stopped";
+          const executionStatus =
+            nextStatus === "review" || nextStatus === "done" || nextStatus === "blocked"
+              ? nextStatus
+              : undefined;
+          return {
+            status: nextStatus,
+            position,
+            execution:
+              current.execution?.status === "running"
+                ? executionStatus
+                  ? { ...current.execution, status: executionStatus, updatedAt: now }
+                  : null
+                : current.execution,
+            metadata: {
+              ...current.metadata,
+              claim: undefined,
+              attempts: closeRunningAttempts(current.metadata?.attempts, now, attemptStatus),
+            },
+          };
         },
         {
           allowMetadataDependencyLinks: false,

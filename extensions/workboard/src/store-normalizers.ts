@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   isValidWorkboardBoardId,
+  isWorkboardAutopilotMode,
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
@@ -119,6 +120,10 @@ export function normalizeBoardMetadata(
       ? undefined
       : now
     : fallback?.archivedAt;
+  const archiveSafeOrchestration =
+    archivedAt && orchestration?.autopilotMode === "guarded"
+      ? { ...orchestration, autopilotMode: "off" as const }
+      : orchestration;
   return {
     id,
     ...(name ? { name } : {}),
@@ -127,7 +132,7 @@ export function normalizeBoardMetadata(
     ...(color ? { color } : {}),
     ...(automationJobId ? { automationJobId } : {}),
     ...(defaultWorkspace ? { defaultWorkspace } : {}),
-    ...(orchestration ? { orchestration } : {}),
+    ...(archiveSafeOrchestration ? { orchestration: archiveSafeOrchestration } : {}),
     createdAt: fallback?.createdAt ?? now,
     updatedAt: now,
     ...(archivedAt ? { archivedAt } : {}),
@@ -142,6 +147,9 @@ function normalizeOrchestration(
     return fallback;
   }
   const record = value;
+  const autopilotMode = isWorkboardAutopilotMode(record.autopilotMode)
+    ? record.autopilotMode
+    : fallback?.autopilotMode;
   const autoDecompose =
     typeof record.autoDecompose === "boolean" ? record.autoDecompose : fallback?.autoDecompose;
   const autoDecomposePerDispatch =
@@ -162,6 +170,7 @@ function normalizeOrchestration(
     "orchestrator profile",
   );
   const next: WorkboardOrchestrationSettings = {
+    ...(autopilotMode ? { autopilotMode } : {}),
     ...(autoDecompose !== undefined ? { autoDecompose } : {}),
     ...(autoDecomposePerDispatch ? { autoDecomposePerDispatch } : {}),
     ...(defaultAssignee ? { defaultAssignee } : {}),
@@ -444,6 +453,12 @@ export function normalizeAutomation(
     "idempotency key",
   );
   const summary = normalizeBoundedString(record.summary, fallback.summary, 2000, "summary");
+  const attemptSummary = Object.hasOwn(record, "attemptSummary")
+    ? normalizeBoundedString(record.attemptSummary, undefined, 2000, "attempt summary")
+    : fallback.attemptSummary;
+  const attemptProofIds = Object.hasOwn(record, "attemptProofIds")
+    ? normalizeStringList(record.attemptProofIds, "attempt proof ids", 120)
+    : fallback.attemptProofIds;
   const skills = Object.hasOwn(record, "skills")
     ? normalizeStringList(record.skills, "skills")
     : fallback.skills;
@@ -485,6 +500,8 @@ export function normalizeAutomation(
     ...(maxRetries ? { maxRetries } : {}),
     ...(scheduledAt ? { scheduledAt } : {}),
     ...(summary ? { summary } : {}),
+    ...(attemptSummary ? { attemptSummary } : {}),
+    ...(attemptProofIds?.length ? { attemptProofIds } : {}),
     ...(createdCardIds?.length ? { createdCardIds } : {}),
     ...(dispatchCount ? { dispatchCount } : {}),
     ...(lastDispatchAt ? { lastDispatchAt } : {}),
@@ -1234,6 +1251,8 @@ function removeUndefinedAutomationFields(automation: WorkboardAutomation): Workb
     "maxRetries",
     "scheduledAt",
     "summary",
+    "attemptSummary",
+    "attemptProofIds",
     "createdCardIds",
     "dispatchCount",
     "lastDispatchAt",

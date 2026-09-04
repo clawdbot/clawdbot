@@ -221,7 +221,15 @@ describe("handleWorkboardCommand", () => {
     );
     expect(prepareWorkspaceAuthority).toHaveBeenCalledWith(
       expect.objectContaining({
-        requiredToolNames: ["workboard_heartbeat", "workboard_complete", "workboard_block"],
+        requiredToolNames: [
+          "workboard_read",
+          "workboard_heartbeat",
+          "workboard_proof",
+          "workboard_complete",
+          "workboard_block",
+          "workboard_decompose",
+          "workboard_worker_log",
+        ],
       }),
     );
   });
@@ -318,10 +326,8 @@ describe("handleWorkboardCommand", () => {
         context: { gatewayClientScopes: ["operator.write"] },
       }),
     ).resolves.toEqual(expect.objectContaining({ text: expect.stringContaining("review") }));
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "review",
-      metadata: { claim: { ownerId: "worker", token: "secret-token" } },
-    });
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "review" });
+    await expect(store.get(card.id)).resolves.not.toHaveProperty("metadata.claim");
   });
 
   it("rejects invalid slash-command move statuses", async () => {

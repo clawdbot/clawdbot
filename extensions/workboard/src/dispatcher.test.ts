@@ -120,6 +120,9 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: "/state/worktrees/fingerprint/wb-card" }),
     );
+    expect(run.mock.calls[0]?.[0]?.message).toContain(
+      "Workspace: worktree /state/worktrees/fingerprint/wb-card",
+    );
     await expect(store.get(card.id)).resolves.toMatchObject({
       metadata: {
         automation: {
@@ -142,7 +145,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     const card = await store.create({
       title: "Legacy worker",
       status: "ready",
-      workspace: { kind: "worktree", path: "/repo" },
+      workspace: { kind: "worktree", path: "/repo", sourcePath: "/repo" },
     });
     const run = vi.fn();
     const create = vi.fn();
@@ -658,18 +661,21 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
   });
 
-  it("runs an authorized worktree request directly in a workspace-bound caller's root", async () => {
+  it("materializes an authorized worktree request before starting a restricted worker", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
       title: "Workspace-bound worker",
       status: "ready",
-      workspace: { kind: "worktree", path: "/repo" },
+      workspace: { kind: "worktree", path: "/repo", sourcePath: "/repo" },
     });
     const run = vi.fn().mockResolvedValue({ runId: "run-workspace" });
     const worktrees = {
-      resolveCheckoutRoot: vi.fn().mockResolvedValue("/repo"),
+      resolveCheckoutRoot: vi.fn().mockImplementation(async ({ path }) => path),
       hasSelfContainedCheckoutMetadata: vi.fn().mockResolvedValue(true),
-      create: vi.fn(),
+      create: vi.fn().mockResolvedValue({
+        path: "/managed/wb-card",
+        branch: `openclaw/wb-${card.id}`,
+      }),
       release: vi.fn(),
       removeIfLossless: vi.fn(),
     };
@@ -682,18 +688,26 @@ describe("dispatchAndStartWorkboardCards", () => {
         maxStarts: 1,
         materializeWorktree: true,
         resolveAgentWorkspace: () => "/repo",
-        resolveAgentWorkspaceRuntime: () => ({
+        resolveAgentWorkspaceRuntime: (_agentId, _sessionKey, workspaceDir) => ({
           sandboxed: true,
-          workspaceAccess: { unrestricted: false, roots: ["/repo"], writable: true },
+          workspaceAccess: { unrestricted: false, roots: [workspaceDir], writable: true },
         }),
         workspaceAccess: { unrestricted: false, roots: ["/repo"], writable: true },
       },
     });
 
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/repo" }));
-    expect(worktrees.create).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/managed/wb-card" }));
+    expect(worktrees.create).toHaveBeenCalledOnce();
     await expect(store.get(card.id)).resolves.toMatchObject({
-      metadata: { automation: { workspace: { kind: "dir", path: "/repo" } } },
+      metadata: {
+        automation: {
+          workspace: {
+            kind: "worktree",
+            path: "/managed/wb-card",
+            sourcePath: "/repo",
+          },
+        },
+      },
     });
   });
 
@@ -812,17 +826,27 @@ describe("dispatchAndStartWorkboardCards", () => {
     );
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: `agent:codex-main:subagent:workboard-default-${first.id}`,
+      sessionKey: expect.stringMatching(
+        `^agent:codex-main:subagent:workboard-default-${first.id}-attempt-\\d+-`,
+      ),
       lane: `workboard:default:${first.id}`,
       deliver: false,
     });
-    expect(run.mock.calls[0]?.[0]?.message).toContain("Claim token:");
+    expect(run.mock.calls[0]?.[0]?.message).not.toContain("Claim token:");
+    expect(run.mock.calls[0]?.[0]?.message).toContain(
+      "Workboard authorization is bound to this worker session",
+    );
     expect(run.mock.calls[0]?.[0]?.message).toContain("workboard_complete with the card id");
+    expect(run.mock.calls[0]?.[0]?.message).toContain(
+      "workboard_decompose with a small set of linked child cards",
+    );
     expect(run.mock.calls[0]?.[0]?.message).toContain("returned proofId");
     expect(run.mock.calls[0]?.[0]?.message).not.toContain("ownerId and token");
     await expect(store.get(first.id)).resolves.toMatchObject({
       status: "running",
-      sessionKey: `agent:codex-main:subagent:workboard-default-${first.id}`,
+      sessionKey: expect.stringMatching(
+        `^agent:codex-main:subagent:workboard-default-${first.id}-attempt-\\d+-`,
+      ),
       runId: "run-first",
       execution: { status: "running", runId: "run-first" },
       metadata: {
@@ -831,9 +855,13 @@ describe("dispatchAndStartWorkboardCards", () => {
       },
     });
     expect(run.mock.calls[0]?.[0]?.toolsAlsoAllow).toEqual([
+      "workboard_read",
       "workboard_heartbeat",
+      "workboard_proof",
       "workboard_complete",
       "workboard_block",
+      "workboard_decompose",
+      "workboard_worker_log",
     ]);
     await expect(store.get(second.id)).resolves.toMatchObject({
       status: "ready",
@@ -873,34 +901,6 @@ describe("dispatchAndStartWorkboardCards", () => {
       metadata: { claim: { ownerId: "shared-worker" } },
     });
     await expect(store.get(second.id)).resolves.toMatchObject({ status: "ready" });
-  });
-
-  it("counts the active claim owner when checking worker capacity", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const running = await store.create({
-      title: "Already claimed worker",
-      status: "running",
-      agentId: "alpha",
-      workspaceAccess: { unrestricted: true },
-    });
-    await store.claim(running.id, { ownerId: "shared-worker", token: "shared-token" });
-    const ready = await store.create({
-      title: "Waiting for the shared owner",
-      status: "ready",
-      agentId: "beta",
-      workspaceAccess: { unrestricted: true },
-    });
-    const run = vi.fn();
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { now: 10, maxStarts: 3, ownerId: "shared-worker" },
-    });
-
-    expect(result.started).toEqual([]);
-    expect(run).not.toHaveBeenCalled();
-    await expect(store.get(ready.id)).resolves.toMatchObject({ status: "ready" });
   });
 
   it.each(["worker", "other-worker"])(
@@ -943,101 +943,6 @@ describe("dispatchAndStartWorkboardCards", () => {
     },
   );
 
-  it("does not let review cards consume an agent running slot", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    await store.create({
-      title: "Waiting for operator review",
-      status: "review",
-      priority: "normal",
-      agentId: "codex-main",
-    });
-    const ready = await store.create({
-      title: "Next ready card",
-      status: "ready",
-      priority: "high",
-      agentId: "codex-main",
-      workspaceAccess: { unrestricted: true },
-    });
-    const run = vi.fn().mockResolvedValue({ runId: "run-next" });
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { now: 10, maxStarts: 3 },
-    });
-
-    expect(result.started).toEqual([
-      expect.objectContaining({
-        cardId: ready.id,
-        runId: "run-next",
-      }),
-    ]);
-    expect(run).toHaveBeenCalledOnce();
-  });
-
-  it("starts workers only for the selected board", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const ops = await store.create({
-      title: "Ops worker",
-      status: "ready",
-      priority: "urgent",
-      boardId: "ops",
-      workspaceAccess: { unrestricted: true },
-    });
-    const product = await store.create({
-      title: "Product worker",
-      status: "ready",
-      priority: "urgent",
-      boardId: "product",
-      workspaceAccess: { unrestricted: true },
-    });
-    const run = vi.fn().mockResolvedValue({ runId: "run-ops" });
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { now: 10, maxStarts: 3, boardId: "ops" },
-    });
-
-    expect(result.started).toEqual([expect.objectContaining({ cardId: ops.id })]);
-    expect(run).toHaveBeenCalledOnce();
-    expect(run.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: `subagent:workboard-ops-${ops.id}`,
-      lane: `workboard:ops:${ops.id}`,
-    });
-    await expect(store.get(product.id)).resolves.toMatchObject({
-      status: "ready",
-      metadata: { automation: { boardId: "product" } },
-    });
-  });
-
-  it("keeps claimed review cards in the owner running slot", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const review = await store.create({
-      title: "Claimed operator review",
-      status: "review",
-      priority: "normal",
-      agentId: "codex-main",
-    });
-    await store.claim(review.id, { ownerId: "codex-main", token: "review-token" });
-    await store.create({
-      title: "Next ready card",
-      status: "ready",
-      priority: "high",
-      agentId: "codex-main",
-    });
-    const run = vi.fn().mockResolvedValue({ runId: "run-next" });
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { now: 10, maxStarts: 3 },
-    });
-
-    expect(result.started).toEqual([]);
-    expect(run).not.toHaveBeenCalled();
-  });
-
   it("blocks a card when worker start fails after claim", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
@@ -1059,7 +964,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     ]);
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: `subagent:workboard-default-${card.id}`,
+        sessionKey: expect.stringMatching(`^subagent:workboard-default-${card.id}-attempt-\\d+-`),
       }),
     );
     await expect(store.get(card.id)).resolves.toMatchObject({

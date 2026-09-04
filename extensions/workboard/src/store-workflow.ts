@@ -60,13 +60,24 @@ import {
 } from "./store-normalizers.js";
 import { WorkboardPromoteStore } from "./store-promote.js";
 
-function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInput): void {
+function assertClaimIdentity(
+  card: WorkboardCard,
+  claim: WorkboardClaim,
+  input: WorkboardHeartbeatInput,
+): void {
   const token = normalizeOptionalString(input.token);
-  const ownerId = normalizeOptionalString(input.ownerId);
-  if (token && !safeEqualSecret(token, claim.token)) {
-    throw new Error("claim token does not match.");
+  if (token) {
+    if (!safeEqualSecret(token, claim.token)) {
+      throw new Error("claim token does not match.");
+    }
+    return;
   }
-  if (!token && ownerId && ownerId !== claim.ownerId) {
+  if (card.execution?.mode === "autonomous" && card.execution.sessionKey) {
+    assertCanMutateClaimedCard(card, input);
+    return;
+  }
+  const ownerId = normalizeOptionalString(input.ownerId);
+  if (ownerId && ownerId !== claim.ownerId) {
     throw new Error("claim owner does not match.");
   }
 }
@@ -98,6 +109,16 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         throw new Error("card is archived.");
       }
       const expectedAuthority = options.expectedAuthority;
+      if (expectedAuthority?.requireGuardedBoard) {
+        const board = await this.boardStore.lookup(expectedAuthority.boardId);
+        if (
+          board?.version !== 1 ||
+          board.board.archivedAt ||
+          board.board.orchestration?.autopilotMode !== "guarded"
+        ) {
+          throw new Error("board guarded autopilot is no longer enabled.");
+        }
+      }
       if (
         expectedAuthority &&
         (guarded.status !== expectedAuthority.status ||
@@ -163,12 +184,15 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
   async heartbeat(id: string, input: WorkboardHeartbeatInput): Promise<WorkboardCard> {
     const note = normalizeBoundedString(input.note, undefined, 400, "heartbeat note");
     const card = await this.updateMetadata(id, (existing) => {
+      if (existing.status !== "running") {
+        throw new Error("card is not running.");
+      }
       const claim = existing.metadata?.claim;
       if (!claim) {
         throw new Error("card is not claimed.");
       }
       const now = Math.max(Date.now(), claim.lastHeartbeatAt + 1);
-      assertClaimIdentity(claim, input);
+      assertClaimIdentity(existing, claim, input);
       const nextClaim = {
         ...claim,
         lastHeartbeatAt: now,
@@ -213,7 +237,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           : normalizeStatus(input.status, existing.status);
       const claim = existing.metadata?.claim;
       if (claim) {
-        assertClaimIdentity(claim, input);
+        assertClaimIdentity(existing, claim, input);
       }
       return await this.updateCard(
         id,
@@ -258,7 +282,19 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         throw new Error(`created card is not linked to this card: ${createdCardId}`);
       }
     }
-    const summary = normalizeBoundedString(input.summary, undefined, 2000, "summary");
+    const legacySummary = normalizeBoundedString(input.summary, undefined, 2000, "summary");
+    const overallOutcome = normalizeBoundedString(
+      input.overallOutcome,
+      legacySummary,
+      2000,
+      "overall outcome",
+    );
+    const attemptSummary = normalizeBoundedString(
+      input.attemptSummary,
+      legacySummary,
+      2000,
+      "attempt summary",
+    );
     const proofInput =
       input.proof && typeof input.proof === "object" && !Array.isArray(input.proof)
         ? (input.proof as WorkboardProofInput)
@@ -268,6 +304,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       throw new Error("proofId must be a non-empty string.");
     }
     const proof = proofInput ? normalizeProofInput(proofInput, now) : undefined;
+    const completionProofId = proofId ?? proof?.id;
     const artifacts = Array.isArray(input.artifacts)
       ? input.artifacts
           .map((artifact) => normalizeArtifact({ ...artifact, createdAt: now }))
@@ -275,41 +312,48 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           .slice(-MAX_CARD_ARTIFACTS)
       : [];
     const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+    const submitsForReview = existing.execution?.mode === "autonomous";
+    const targetStatus = submitsForReview ? "review" : "done";
     const notification: WorkboardNotification = {
       id: randomUUID(),
       kind: "completed",
       createdAt: now,
       sequence: this.nextNotificationSequence(now),
-      message: capText(summary, 240) ?? "Workboard card completed.",
+      message:
+        capText(overallOutcome ?? attemptSummary, 240) ??
+        (submitsForReview ? "Workboard card submitted for review." : "Workboard card completed."),
       ...(cardSessionKey(existing) ? { sessionKey: cardSessionKey(existing) } : {}),
       ...(cardRunId(existing) ? { runId: cardRunId(existing) } : {}),
     };
     const execution =
       existing.execution?.status === "running"
-        ? { ...existing.execution, status: "done" as const, updatedAt: now }
+        ? { ...existing.execution, status: targetStatus, updatedAt: now }
         : existing.execution;
+    const attempts = closeRunningAttempts(metadata.attempts, now, "succeeded");
     return await this.updateCard(
       id,
       {
-        status: "done",
+        status: targetStatus,
         ...(execution ? { execution } : {}),
         metadata: {
           ...metadata,
           claim: undefined,
-          attempts: closeRunningAttempts(metadata.attempts, now, "succeeded"),
+          attempts,
           failureCount: 0,
           automation: normalizeAutomation(
             {
               ...metadata.automation,
-              summary,
+              summary: overallOutcome,
+              attemptSummary,
+              attemptProofIds: completionProofId ? [completionProofId] : [],
               createdCardIds,
             },
             metadata.automation,
           ),
-          comments: summary
+          comments: legacySummary
             ? [
                 ...(metadata.comments ?? []),
-                { id: randomUUID(), body: summary, createdAt: now },
+                { id: randomUUID(), body: legacySummary, createdAt: now },
               ].slice(-MAX_CARD_COMMENTS)
             : metadata.comments,
           proof: appendCompletionProof(metadata.proof, proof, proofId),

@@ -979,6 +979,27 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-select__trigger")).toBeNull();
   });
 
+  it("shows one board-level guarded autopilot switch", () => {
+    const { state, container, renderView } = createWorkboardView({ canWrite: true });
+    state.boards = [
+      {
+        id: "default",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+        orchestration: { autopilotMode: "guarded" },
+      },
+    ];
+
+    renderView();
+
+    const control = container.querySelector<HTMLButtonElement>('button[role="switch"]');
+    expect(control?.getAttribute("role")).toBe("switch");
+    expect(control?.getAttribute("aria-checked")).toBe("true");
+    expect(control?.textContent).toContain("Autopilot: Guarded");
+  });
+
   it("supports showing, collapsing, and hiding empty columns", () => {
     const { state, container, renderView } = createWorkboardView({
       onRequestUpdate: () => undefined,
@@ -1002,7 +1023,6 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-column--todo")?.classList).not.toContain(
       "workboard-column--collapsed",
     );
-
     buttonByLabel(container, "Collapse Todo column")?.click();
     renderView();
     expect(state.collapsedStatuses).toContain("todo");
@@ -2016,9 +2036,17 @@ describe("renderWorkboard", () => {
     state.cards = [
       createWorkboardCard({
         title: "Metadata rich",
+        status: "review",
         metadata: {
           templateId: "plugin",
-          attempts: [{ id: "run-1", status: "blocked", startedAt: 1, endedAt: 2 }],
+          attempts: [
+            {
+              id: "run-1",
+              status: "blocked",
+              startedAt: 1,
+              endedAt: 2,
+            },
+          ],
           failureCount: 1,
           comments: [{ id: "comment-1", body: "Needs owner check", createdAt: 3 }],
           links: [{ id: "link-1", type: "relates_to", url: "https://example.com", createdAt: 4 }],
@@ -2034,6 +2062,8 @@ describe("renderWorkboard", () => {
             workspace: { kind: "worktree", path: "/tmp/workboard", branch: "proof" },
             dispatchCount: 3,
             summary: "Ready for review.",
+            attemptSummary: "Reran CI and confirmed the existing pull request.",
+            attemptProofIds: ["proof-7"],
           },
           proof: Array.from({ length: 7 }, (_, index) => ({
             id: `proof-${index + 1}`,
@@ -2064,6 +2094,8 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("1 comments");
     expect(container.textContent).toContain("7 proof");
     expect(container.textContent).toContain("stale");
+    expect(container.textContent).toContain("Needs review");
+    expect(container.textContent).toContain("Ready for review.");
     expect(container.textContent).not.toContain("Archived task");
 
     container
@@ -2073,13 +2105,25 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Archived task");
     expect(container.querySelector<HTMLButtonElement>(".workboard-archive-toggle")).not.toBeNull();
 
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
+    [...container.querySelectorAll<HTMLElement>(".workboard-card")]
+      .find((card) => card.textContent?.includes("Metadata rich"))
+      ?.querySelector<HTMLButtonElement>('button[aria-label="View details"]')
       ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     renderView();
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 attempts");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 links");
-    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain("pnpm test 1");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Work completed");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("This attempt");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
+      "Reran CI and confirmed the existing pull request.",
+    );
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Progress");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Verification");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
+      "Verified this attempt",
+    );
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Overall evidence");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Related work");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 1");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 7");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "https://example.com/proof-7",
@@ -2088,14 +2132,68 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "Worker asked for owner input.",
     );
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Automation");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Tenant: ops");
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "Skills: review, test",
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("Branch: proof");
+  });
+
+  it("does not turn unsafe related-work URLs into links", () => {
+    const { state, container, renderView } = createWorkboardView();
+    state.cards = [
+      createWorkboardCard({
+        title: "Review links",
+        status: "review",
+        metadata: {
+          links: [
+            {
+              id: "unsafe-link",
+              type: "relates_to",
+              title: "Unsafe link",
+              url: "javascript:alert(1)",
+              createdAt: 1,
+            },
+          ],
+        },
+      }),
+    ];
+    renderView();
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    renderView();
+
+    expect(container.querySelector(".workboard-detail__related")?.textContent).toContain(
+      "Unsafe link",
     );
-    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
-      "Workspace: worktree /tmp/workboard proof",
-    );
+    expect(
+      container.querySelector<HTMLAnchorElement>(
+        '.workboard-detail__related a[href^="javascript:"]',
+      ),
+    ).toBeNull();
+  });
+
+  it("shows decomposed child cards by title in the review details", () => {
+    const { state, container, renderView } = createWorkboardView();
+    state.cards = [
+      createWorkboardCard({
+        id: "plan",
+        title: "Plan the release",
+        status: "review",
+        metadata: {
+          automation: { summary: "Proposed a two-card release plan." },
+          links: [{ id: "child-link", type: "child", targetCardId: "implement", createdAt: 1 }],
+        },
+      }),
+      createWorkboardCard({ id: "implement", title: "Implement the release", status: "todo" }),
+    ];
+    renderView();
+    [...container.querySelectorAll<HTMLElement>(".workboard-card")]
+      .find((card) => card.textContent?.includes("Plan the release"))
+      ?.querySelector<HTMLButtonElement>('button[aria-label="View details"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    renderView();
+
+    const related = container.querySelector(".workboard-detail__related")?.textContent;
+    expect(related).toContain("Child task");
+    expect(related).toContain("Implement the release");
   });
 
   it("filters cards by persisted boards and keeps empty archived boards selectable", () => {
@@ -2150,6 +2248,10 @@ describe("renderWorkboard", () => {
     expect(onBoardFilterChange).toHaveBeenCalledWith("ops");
     expect(container.textContent).not.toContain("Default work");
     expect(container.textContent).toContain("Ops work");
+
+    state.boardFilter = "archive";
+    renderView();
+    expect(container.querySelector(".workboard-autopilot")).toBeNull();
   });
 
   it("shows the board switcher at two boards with icon, color, and fallback glyphs", () => {

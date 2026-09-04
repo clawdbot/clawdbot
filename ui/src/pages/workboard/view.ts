@@ -11,10 +11,12 @@ import {
   filterWorkboardCardsForPreset,
   getWorkboardState,
   refreshWorkboard,
+  setWorkboardAutopilot,
   summarizeWorkboardHealth,
   workboardHasActiveWrites,
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
+  type WorkboardBoardSummary,
   type WorkboardHealthKey,
   type WorkboardHealthSummary,
   type WorkboardStatus,
@@ -119,6 +121,37 @@ function renderRefreshStatus(state: WorkboardUiState) {
     : nothing;
 }
 
+function renderAutopilotControl(
+  props: WorkboardProps,
+  state: WorkboardUiState,
+  board: WorkboardBoardSummary | undefined,
+) {
+  if (!board || board.archivedAt || !canMutate(props)) {
+    return nothing;
+  }
+  const guarded = board.orchestration?.autopilotMode === "guarded";
+  const label = t(guarded ? "workboard.autopilotGuarded" : "workboard.autopilotOff");
+  return html`
+    <button
+      class="btn workboard-autopilot ${guarded ? "workboard-autopilot--guarded" : ""}"
+      type="button"
+      role="switch"
+      aria-checked=${guarded ? "true" : "false"}
+      ?disabled=${state.busyCardIds.has(`board:${board.id}`) || workboardHasActiveWrites(state)}
+      @click=${() =>
+        setWorkboardAutopilot({
+          host: props.host,
+          client: props.client,
+          boardId: board.id,
+          mode: guarded ? "off" : "guarded",
+          requestUpdate: props.onRequestUpdate,
+        })}
+    >
+      ${icons.lock} ${label}
+    </button>
+  `;
+}
+
 const viewPresetOptions: Array<{ value: WorkboardUiState["viewPreset"]; labelKey: string }> = [
   { value: "all", labelKey: "workboard.viewAll" },
   { value: "default_agent", labelKey: "workboard.viewDefaultAgent" },
@@ -180,6 +213,12 @@ export function renderWorkboard(props: WorkboardProps) {
   // A valid route can outlive a deleted board. Keep that id as the active
   // filter so the page becomes empty instead of silently showing every card.
   const activeBoardFilter = state.boardFilter;
+  const autopilotBoard =
+    activeBoardFilter !== WORKBOARD_ALL_BOARDS_FILTER
+      ? state.boards.find((board) => board.id === activeBoardFilter)
+      : state.boards.length === 1
+        ? state.boards[0]
+        : undefined;
   const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
@@ -384,6 +423,7 @@ export function renderWorkboard(props: WorkboardProps) {
             })}
           </div>
           <div class="workboard-toolbar__actions">
+            ${renderAutopilotControl(props, state, autopilotBoard)}
             <button
               class="btn"
               type="button"
