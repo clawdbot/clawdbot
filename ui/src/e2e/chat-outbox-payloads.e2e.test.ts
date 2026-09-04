@@ -16,7 +16,10 @@ import {
 } from "./chat-flow.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
-const suite = createChatFlowE2eSuite();
+const plainHttpHost = "plain-http.test";
+const suite = createChatFlowE2eSuite({
+  args: [`--host-resolver-rules=MAP ${plainHttpHost} 127.0.0.1`],
+});
 const file = {
   name: "mock-original.txt",
   mimeType: "text/plain",
@@ -79,6 +82,58 @@ async function stage(page: Page, message: string) {
 }
 
 suite.define(() => {
+  it("sends an attachment from a non-local plain HTTP origin", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const url = new URL("chat", suite.server.baseUrl);
+        url.hostname = plainHttpHost;
+        await page.route(`${url.origin}/**`, async (route) => {
+          const target = new URL(route.request().url());
+          target.hostname = "127.0.0.1";
+          const response = await route.fetch({ url: target.href });
+          await route.fulfill({ response });
+        });
+        const gateway = await installMockGateway(page, {
+          historyMessages: history,
+          sessionInfo: { key: "main", hasActiveRun: false, status: "done" },
+        });
+        await page.goto(url.href, { waitUntil: "domcontentloaded" });
+        await waitForControlUiGatewayReady(page);
+        expect(
+          await page.evaluate(() => ({
+            indexedDB: typeof indexedDB,
+            isSecureContext,
+            locks: typeof navigator.locks,
+            randomUUID: typeof crypto.randomUUID,
+          })),
+        ).toEqual({
+          indexedDB: "object",
+          isSecureContext: false,
+          locks: "undefined",
+          randomUUID: "undefined",
+        });
+        const message = "Mock Gateway: plain HTTP attachment";
+        await stage(page, message);
+        await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
+        const sent = await gateway.waitForRequest("chat.send");
+        expect(sent.params).toEqual(
+          expect.objectContaining({
+            message,
+            attachments: [
+              {
+                type: "file",
+                mimeType: file.mimeType,
+                fileName: file.name,
+                content: file.buffer.toString("base64"),
+              },
+            ],
+          }),
+        );
+      },
+    );
+  });
+
   it.each(["agent:main:topic", "global"])(
     "preserves landed v3 %s Blobs through migration, reload, explicit retry and retirement",
     async (legacySessionKey) => {

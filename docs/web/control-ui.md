@@ -872,8 +872,9 @@ the captured queue metadata owns its destination, even when configured main-sess
 must be stored before the message is admitted, and all must be readable before sending. Failed admission leaves the draft
 unsent. Missing or unreadable queued payloads leave a visible row with recovery guidance; the
 browser never sends just the remaining attachments. Binary outbox storage requires browser
-storage access and Web Locks, available over HTTPS or localhost. Gateway attachment limits
-still apply.
+storage access. On plain HTTP, each page load uses a fresh payload owner because Web Locks are
+unavailable; reloads and duplicated tabs copy payloads before sending and leave the old bounded
+payload for browser-storage cleanup. Gateway attachment limits still apply.
 
 The outbox retains up to 25 MiB of attachments per message and 250 MiB across this browser origin,
 subject to the browser's own quota. Queued payloads have no age-based expiry. Delivery or discard
