@@ -221,7 +221,43 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
     content: [{ type: "text", text }],
     timestamp,
   });
+  const leadIn = Array.from({ length: 10 }, (_, index) => [
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `Review batch ${index + 1} of the launch materials and keep the visual findings grouped by file type.`,
+        },
+      ],
+      timestamp: baseTime - (20 - index * 2) * 60_000,
+    },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Batch ${index + 1} is indexed. I kept the source labels and accessibility notes so this long transcript can exercise virtualized remounts.`,
+        },
+      ],
+      timestamp: baseTime - (19 - index * 2) * 60_000,
+    },
+  ]).flat();
+  const followUp = Array.from({ length: 8 }, (_, index) => ({
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: [
+      {
+        type: "text",
+        text:
+          index % 2 === 0
+            ? `Compare the attachment previews after scroll pass ${index / 2 + 1}.`
+            : "The preview dimensions and download labels remain stable after the virtualized row remounted.",
+      },
+    ],
+    timestamp: baseTime + (20 + index) * 60_000,
+  }));
   return [
+    ...leadIn,
     {
       role: "assistant",
       content: [
@@ -401,6 +437,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 16,
     },
+    ...followUp,
   ];
 }
 

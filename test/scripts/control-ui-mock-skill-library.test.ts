@@ -27,9 +27,9 @@ async function installPreview(
   await Promise.all(
     sockets.map(
       (socket) =>
-        new Promise<void>((resolve) =>
-          socket.addEventListener("open", () => resolve(), { once: true }),
-        ),
+        new Promise<void>((resolve) => {
+          socket.addEventListener("open", () => resolve(), { once: true });
+        }),
     ),
   );
   let nextId = 0;
@@ -107,6 +107,39 @@ describe("skill library preview catalogs", () => {
     expect(denied).toMatchObject({
       ok: false,
       error: { code: "INVALID_REQUEST", details: { code: "SKILL_LIBRARY_FORBIDDEN" } },
+    });
+  });
+
+  it("accepts a chunked archive upload through the current browser contract", async ({
+    gatewayPage,
+  }) => {
+    const { request } = await installPreview(gatewayPage.window, gatewayPage.execute);
+    const begin = await request("skills.library.upload", {
+      action: "begin",
+      slug: "release-notes",
+      sizeBytes: 5,
+      sha256: "a".repeat(64),
+    });
+    expect(begin).toMatchObject({
+      ok: true,
+      payload: { uploadId: "mock-upload-release-notes", offset: 0 },
+    });
+    expect(
+      await request("skills.library.upload", {
+        action: "chunk",
+        uploadId: "mock-upload-release-notes",
+        offset: 0,
+        data: "aGVsbG8=",
+      }),
+    ).toMatchObject({ ok: true, payload: { offset: 5 } });
+    expect(
+      await request("skills.library.upload", {
+        action: "commit",
+        uploadId: "mock-upload-release-notes",
+      }),
+    ).toMatchObject({
+      ok: true,
+      payload: { state: "published", entry: { slug: "release-notes" } },
     });
   });
 });

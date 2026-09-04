@@ -9,10 +9,11 @@ function historyMessage(role: "assistant" | "user", text: string, timestamp: num
 }
 
 function finishedTask(n: number, now: number) {
+  const status = n === 3 ? "failed" : n === 4 ? "cancelled" : n === 5 ? "timed_out" : "completed";
   const task = {
     id: `task-mock-finished-${n}`,
     taskId: `task-mock-finished-${n}`,
-    status: n === 3 ? "failed" : "completed",
+    status,
     runtime: "subagent",
     agentId: "openclaw-mock",
     title: `Finished mock task number ${n} with a fairly long title`,
@@ -21,9 +22,21 @@ function finishedTask(n: number, now: number) {
     endedAt: now - n * 500_000,
     updatedAt: now - n * 500_000,
   };
-  return n === 3
-    ? { ...task, error: "Mock task stopped after finding an invalid event scope." }
-    : { ...task, terminalSummary: `Mock task ${n} completed its assigned inspection.` };
+  if (status === "failed") {
+    return { ...task, error: "The fixture audit found an invalid event scope." };
+  }
+  if (status === "cancelled") {
+    return { ...task, terminalSummary: "Cancelled after the parent session changed direction." };
+  }
+  if (status === "timed_out") {
+    return { ...task, error: "Timed out while waiting for the remote preview to become ready." };
+  }
+  return {
+    ...task,
+    deliveryStatus: n === 2 ? "session_queued" : "delivered",
+    diffStat: { files: n + 1, added: n * 3, removed: n },
+    terminalSummary: `Mock task ${n} completed its assigned inspection.`,
+  };
 }
 
 function taskDetailCase(task: { id: string; title: string } & Record<string, unknown>) {
@@ -44,6 +57,19 @@ export function buildBackgroundTasksMock(baseTime: number) {
   const secondTaskSessionKey = "agent:openclaw-mock:subagent:mock-task-2";
   const requesterSessionKey = "agent:main:main";
   const tasks = [
+    {
+      id: "task-mock-queued",
+      taskId: "task-mock-queued",
+      status: "queued",
+      runtime: "subagent",
+      agentId: "openclaw-mock",
+      title: "Capture the narrow mobile layout",
+      createdAt: now - 8_000,
+      updatedAt: now - 8_000,
+      progressSummary: "Waiting for a background-task slot",
+      sessionKey: requesterSessionKey,
+      ownerKey: requesterSessionKey,
+    },
     {
       id: "task-mock-running",
       taskId: "task-mock-running",
@@ -120,8 +146,51 @@ export function buildBackgroundTasksMock(baseTime: number) {
     },
     methodResponses: {
       // One live subagent task exercises the rail, collapsed badge, and running-task status row.
-      "tasks.list": { tasks },
+      "tasks.list": {
+        cases: [
+          {
+            match: { status: ["queued", "running"], sessionKey: requesterSessionKey },
+            response: {
+              tasks: tasks.filter((task) => task.status === "queued" || task.status === "running"),
+            },
+          },
+          {
+            match: {
+              status: ["completed", "failed", "timed_out", "cancelled"],
+              sessionKey: requesterSessionKey,
+              sortBy: "endedAt",
+            },
+            response: {
+              tasks: tasks.filter(
+                (task) =>
+                  task.status === "completed" ||
+                  task.status === "failed" ||
+                  task.status === "timed_out" ||
+                  task.status === "cancelled",
+              ),
+            },
+          },
+          { response: { tasks } },
+        ],
+      },
       "tasks.get": { cases: tasks.map(taskDetailCase) },
+      "tasks.cancel": {
+        cases: tasks.map((task) => ({
+          match: { taskId: task.id },
+          response: {
+            found: true,
+            cancelled: task.status === "queued" || task.status === "running",
+            reason:
+              task.status === "queued" || task.status === "running"
+                ? "Cancelled from the Control UI mock."
+                : "Task is already terminal.",
+            task:
+              task.status === "queued" || task.status === "running"
+                ? { ...task, status: "cancelled", endedAt: now, updatedAt: now }
+                : task,
+          },
+        })),
+      },
     },
   };
 }
