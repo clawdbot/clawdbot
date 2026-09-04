@@ -904,7 +904,10 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 - **Deterministic tab control**: `tabs` returns `suggestedTargetId` first, then
   stable `tabId` handles such as `t1`, optional labels, and the raw `targetId`.
   Agents should reuse `suggestedTargetId`; raw ids remain available for
-  debugging and compatibility.
+  debugging and compatibility. Profiles configured with `driver: "extension"`
+  can also return a runtime-scoped numeric `webExtensionTabId` for Chrome
+  WebExtensions API calls. It is omitted for other drivers and must not replace
+  `suggestedTargetId` or `tabId` in OpenClaw browser actions.
 
 ## Browser selection
 

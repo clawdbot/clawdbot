@@ -233,6 +233,13 @@ openclaw browser close t1
 
 `tabs` returns `suggestedTargetId` first, then the stable `tabId` (such as `t1`), the optional label, and the raw `targetId`. Pass `suggestedTargetId` back into `focus`, `close`, snapshots, and actions. Assign a label with `open --label`, `tab new --label`, or `tab label`; labels, tab ids, raw target ids, and unique target-id prefixes are all accepted. The request field is still named `targetId` for compatibility, but it accepts any of these tab references.
 
+Profiles configured with `driver: "extension"` can additionally return a numeric
+`webExtensionTabId`. It is scoped to the current browser runtime and is intended
+only for calls into Chrome's WebExtensions API. It can change after the browser
+or extension reconnects and is omitted for other drivers or when extension
+metadata is unavailable. Do not pass it to OpenClaw browser commands; keep using
+`suggestedTargetId` or `tabId` there.
+
 Raw target ids are volatile diagnostic handles, not durable agent memory: when Chromium replaces the underlying raw target during a navigation or form submit, OpenClaw keeps the stable `tabId`/label attached to the replacement tab when it can prove the match. Prefer `suggestedTargetId`.
 
 ## Snapshot / screenshot / actions

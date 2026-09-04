@@ -618,7 +618,12 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         });
         const liveTabs = (
           liveTabsResponse.body as {
-            tabs?: Array<{ targetId?: string; url?: string; webExtensionTabId?: number }>;
+            tabs?: Array<{
+              tabId?: string;
+              targetId?: string;
+              url?: string;
+              webExtensionTabId?: number;
+            }>;
           }
         ).tabs;
         const selectedTab = liveTabs?.find((tab) => tab.url === controlled.url());
@@ -634,6 +639,14 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           .find((tab) => tab.url === controlled.url())?.tabId;
         expect(nativeSelectedTabId).toBeTypeOf("number");
         expect(selectedTab.webExtensionTabId).toBe(nativeSelectedTabId);
+        process.stderr.write(
+          `[browser-extension-tab-id-e2e] ${JSON.stringify({
+            tabId: selectedTab.tabId,
+            webExtensionTabId: selectedTab.webExtensionTabId,
+            relayTabId: nativeSelectedTabId,
+            match: selectedTab.webExtensionTabId === nativeSelectedTabId,
+          })}\n`,
+        );
         const previousSsrfPolicy = browserState.resolved.ssrfPolicy;
         browserState.resolved.ssrfPolicy = { allowPrivateNetwork: true };
         const extensionCdpUrl = routeContext.forProfile("e2e").profile.cdpUrl;
