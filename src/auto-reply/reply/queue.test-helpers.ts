@@ -8,6 +8,7 @@ import type { FollowupRun } from "./queue.js";
 export function createQueueTestRun(params: {
   prompt: string;
   messageId?: string;
+  messageIds?: string[];
   originatingChannel?: FollowupRun["originatingChannel"];
   originatingTo?: string;
   originatingAccountId?: string;
@@ -20,6 +21,7 @@ export function createQueueTestRun(params: {
   return {
     prompt: params.prompt,
     messageId: params.messageId,
+    messageIds: params.messageIds,
     enqueuedAt: Date.now(),
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,

@@ -39,6 +39,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     run.inputProvenance.sourceTool === "restart-sentinel"
       ? queued.originatingReplyToId
       : queued.messageId;
+  const messageIds = queued.messageIds?.length ? queued.messageIds : undefined;
   return {
     Provider: run.messageProvider,
     Surface: surface,
@@ -51,6 +52,9 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     RuntimePolicySessionKey: run.runtimePolicySessionKey ?? sessionKey,
     MessageSid: currentMessageId,
     MessageSidFull: currentMessageId,
+    MessageSids: messageIds,
+    MessageSidFirst: messageIds?.[0],
+    MessageSidLast: messageIds?.[messageIds.length - 1],
     MessageThreadId: queued.originatingThreadId,
     ReplyToId: queued.originatingReplyToId,
     SenderId: run.senderId,

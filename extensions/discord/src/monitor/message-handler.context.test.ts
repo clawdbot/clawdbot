@@ -282,6 +282,25 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
     );
   });
 
+  it("projects queued batch message ids into the finalized payload", async () => {
+    const ctx = await createBaseDiscordMessageContext({
+      batchMessageIds: ["m-2", "m-3"],
+    });
+
+    const result = await buildDiscordMessageProcessContext({
+      ctx,
+      text: "current",
+      mediaList: [],
+    });
+    if (!result) {
+      throw new Error("expected a built Discord message context");
+    }
+
+    expect(result.ctxPayload.MessageSids).toEqual(["m-2", "m-3"]);
+    expect(result.ctxPayload.MessageSidFirst).toBe("m-2");
+    expect(result.ctxPayload.MessageSidLast).toBe("m-3");
+  });
+
   it("pluralizes the unavailable notice and skips it when all media resolved", async () => {
     const ctx = await createBaseDiscordMessageContext();
 

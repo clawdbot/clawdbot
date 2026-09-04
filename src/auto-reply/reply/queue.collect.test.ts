@@ -128,6 +128,21 @@ async function drainRecordedQueue(
 }
 
 describe("followup queue collect routing", () => {
+  it("preserves source message ids on core-owned collect batches", async () => {
+    const key = `test-collect-message-ids-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+    enqueueTestRun(key, { prompt: "first queued turn", messageId: "m-1" }, settings);
+    enqueueTestRun(key, { prompt: "second queued turn", messageId: "m-2" }, settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.messageId).toBe("m-2");
+    expect(calls[0]?.messageIds).toEqual(["m-1", "m-2"]);
+  });
+
   it("carries queued local cron-authority unavailability through a followup drain", async () => {
     const key = `test-followup-cron-authority-${Date.now()}`;
     const { calls, done, runFollowup } = createDrainRecorder();

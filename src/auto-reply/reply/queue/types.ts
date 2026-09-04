@@ -123,6 +123,8 @@ export type FollowupRun = {
   queuedFollowupReplyDisposition?: QueuedFollowupReplyDisposition;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
+  /** Provider message IDs represented by an aggregate queued turn. */
+  messageIds?: string[];
   summaryLine?: string;
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];

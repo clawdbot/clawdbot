@@ -171,6 +171,34 @@ describe("executeFollowupTurn", () => {
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
+  it("projects aggregate queued message ids into the execution context", async () => {
+    const baseTurn = createTurn();
+    const turn = createTurn({
+      queued: {
+        ...baseTurn.queued,
+        messageId: "message-2",
+        messageIds: ["message-1", "message-2"],
+      },
+    });
+
+    await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+
+    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
+    expect(call.sessionCtx.MessageSid).toBe("message-2");
+    expect(call.sessionCtx.MessageSids).toEqual(["message-1", "message-2"]);
+    expect(call.sessionCtx.MessageSidFirst).toBe("message-1");
+    expect(call.sessionCtx.MessageSidLast).toBe("message-2");
+  });
+
   it("ignores verbosity loaded from a replacement session generation", async () => {
     const currentEntry = {
       sessionId: "session",

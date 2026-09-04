@@ -87,6 +87,7 @@ export async function buildDiscordMessageProcessContext(params: {
     isGroupDm,
     baseText,
     preflightAudioTranscript,
+    batchMessageIds,
     threadChannel,
     threadParentId,
     threadParentName,
@@ -548,6 +549,11 @@ export async function buildDiscordMessageProcessContext(params: {
     logVerbose(
       `discord inbound: channel=${messageChannelId} deliver=${deliverTarget} from=${ctxPayload.From} preview="${preview}"`,
     );
+  }
+  if (batchMessageIds && batchMessageIds.length > 1) {
+    ctxPayload.MessageSids = batchMessageIds;
+    ctxPayload.MessageSidFirst = batchMessageIds[0];
+    ctxPayload.MessageSidLast = batchMessageIds.at(-1);
   }
 
   return {
