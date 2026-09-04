@@ -1,3 +1,4 @@
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -78,6 +79,8 @@ function itemsForWidgets(
 }
 
 class OpenClawBoardView extends OpenClawLightDomElement {
+  // Snapshots acknowledge an observer-scoped key; native views retain the query's exact owner.
+  @property({ attribute: false }) session: BoardGetParams = { sessionKey: "" };
   @property({ attribute: false }) snapshot?: BoardSnapshot;
   @property({ attribute: false }) activeTabId = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
@@ -223,8 +226,8 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     },
     movePointerDown: (widget, event) => this.beginGesture("move", widget, event),
     resizePointerDown: (widget, event) => this.beginGesture("resize", widget, event),
-    moveToTab: async (widget, tabId) => {
-      await this.applyOps(
+    moveToTab: async (widget, tabId) =>
+      this.applyOps(
         [
           {
             kind: "widget_move",
@@ -234,14 +237,12 @@ class OpenClawBoardView extends OpenClawLightDomElement {
           },
         ],
         t("board.announcement.moved", { title: widget.title || widget.name }),
-      );
-    },
-    resizeTo: async (widget, w, h) => {
-      await this.applyOps(
+      ),
+    resizeTo: async (widget, w, h) =>
+      this.applyOps(
         [{ kind: "widget_resize", name: widget.name, sizeW: w, sizeH: h, heightMode: "fixed" }],
         t("board.announcement.resized", { title: widget.title || widget.name }),
-      );
-    },
+      ),
     setHeightMode: async (widget, mode) => {
       // Pinning keeps the currently rendered auto height, not the stale stored
       // sizeH, so "fixed" freezes exactly what the user sees.
@@ -278,20 +279,17 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         this.requestUpdate();
       }
     },
-    remove: async (widget) => {
-      await this.applyOps(
+    remove: async (widget) =>
+      this.applyOps(
         [{ kind: "widget_remove", name: widget.name }],
         t("board.announcement.removed", { title: widget.title || widget.name }),
-      );
-    },
+      ),
     nudge: async (widget, direction) => this.nudgeWidget(widget, direction),
     focus: (widget, direction) => this.focusWidget(widget, direction),
     focusChanged: (name) => {
       this.focusName = name;
     },
-    frameLoadFailed: async (name) => {
-      await this.callbacks?.frameLoadFailed?.(name);
-    },
+    frameLoadFailed: async (name) => this.callbacks?.frameLoadFailed?.(name),
     widgetAppView: async (name, revision) =>
       (await this.callbacks?.widgetAppView?.(name, revision)) ?? {
         status: "stale",
@@ -602,6 +600,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .contentHeightPx=${this.contentHeights.get(widget.name)}
                 .fitAutoContent=${this.fitAutoContent}
                 .tabs=${tabs}
+                .session=${this.session}
                 .sessionKey=${sessionKey}
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}

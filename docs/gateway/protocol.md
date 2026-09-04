@@ -249,6 +249,16 @@ accepted by the active Gateway runtime. Clients can compare it with
 needs a restart. `config.get.hash` remains the raw root-file revision used by
 config write conflict guards.
 
+The snapshot's optional `controlUiIdentityUrl` advertises the active Gateway's
+HTTPS dashboard URL when it uses trusted-proxy or Tailscale Serve identity.
+Operator clients can open this URL for personal browser sign-in instead of
+forwarding shared device credentials. The URL includes the Control UI base path;
+clients must use normal HTTPS trust instead of native TLS pins and must not send
+native connection tokens or passwords to it. Re-read it from each authenticated
+hello snapshot and discard it when that connection closes. If the managed Serve
+route exits or is replaced, the Gateway closes connections that received its
+identity URL with code `1012`; reconnect to discover the current route.
+
 `openclaw.setup.verify` additionally checks the Gateway's current application and
 restart state before and after its live inference probe. It returns
 `{ ok: false, status: "unavailable", error }` while saved settings are not active,

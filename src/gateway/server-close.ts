@@ -18,6 +18,7 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   collectGatewayProcessMemoryUsageMb,
+  markGatewayRestartTrace,
   measureGatewayRestartTrace,
   recordGatewayRestartTrace,
 } from "./restart-trace.js";
@@ -49,6 +50,13 @@ type ShutdownResult = {
   durationMs: number;
   warnings: string[];
 };
+
+function createCloseStepTimer(reason: string) {
+  return <T>(name: string, run: () => Promise<T> | T) => {
+    markGatewayRestartTrace(`restart.close.${name}.begin`);
+    return measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
+  };
+}
 
 /** Run one shutdown step and record a warning instead of aborting the whole close. */
 async function shutdownStep(
@@ -284,8 +292,7 @@ export async function prepareGatewayClose(
   const notice = resolveGatewayShutdownNotice(opts);
   const { reason } = notice;
   const restartExpectedMs = notice.restartExpectedMs ?? null;
-  const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
-    measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
+  const measureCloseStep = createCloseStepTimer(reason);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
   // Debug-level: the signal handler already announced the stop/restart at
@@ -367,8 +374,7 @@ export async function completeGatewayClose(
   const restartExpectedMs = notice.restartExpectedMs ?? null;
   let pluginServicesCleanup: Promise<void> | undefined;
   let mediaCleanupStopResult: MediaCleanupStopResult = "timed-out";
-  const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
-    measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
+  const measureCloseStep = createCloseStepTimer(reason);
   try {
     if (params.drainActiveSessionsForShutdown) {
       await measureCloseStep("session-end-drain", () =>

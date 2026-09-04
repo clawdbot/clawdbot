@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { markGatewayRestartTrace, measureGatewayRestartTrace } from "./restart-trace.js";
 import type { GatewayCloseOptions } from "./server-public.js";
 
 /** Create a timeout promise plus cleanup hook for shutdown races. */
@@ -46,7 +47,10 @@ export async function runGatewayShutdownSteps(params: {
   const errors: Error[] = [];
   for (const step of params.steps) {
     try {
-      await step.run();
+      // Trace consumers parse one phase token; keep the human label for errors.
+      const phase = `shutdown.${step.name.replace(/\s+/gu, "-")}`;
+      markGatewayRestartTrace(`${phase}.begin`);
+      await measureGatewayRestartTrace(phase, () => step.run());
     } catch (error) {
       const message = `shutdown step failed (${step.name}): ${formatErrorMessage(error)}`;
       params.onError(message);

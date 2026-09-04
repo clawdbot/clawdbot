@@ -635,6 +635,16 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["transcripts.get", "transcripts", "operator.read", "2026.8"],
   ["models.authOrderSet", "models-auth-order", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
   ["canvas.document.view", "canvas", "operator.read", "2026.8"],
+  ["plugins.controlUi.list", "plugins-control-ui", "operator.read", "2026.8"],
+  [
+    "plugins.controlUi.reload",
+    "plugins-control-ui",
+    "operator.admin",
+    "2026.8",
+    CONTROL_PLANE_WRITE,
+  ],
+  ["plugins.controlUi.report", "plugins-control-ui", "operator.read", "2026.8"],
+  ["plugins.controlUi.status", "plugins-control-ui", "operator.admin", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

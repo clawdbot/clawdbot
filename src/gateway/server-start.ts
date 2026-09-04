@@ -88,6 +88,8 @@ export async function startGatewayServerCore(
     });
     startupSettled = startup.startupSettled;
   } catch (err) {
+    // Failed startup must release work whose normal timer was never armed.
+    releasePostReadyWork();
     return await rethrowGatewayStartupError(err, closeOnStartupFailure);
   }
   // The public server is fully initialized now. Leave a short I/O window before
@@ -120,7 +122,6 @@ export async function startGatewayServerCore(
                 run: () => gatewayKernel.connectionWork.drain(),
                 required: true,
               },
-              { name: "startup settlement", run: () => startupSettled },
               { name: "terminal sessions", run: () => terminalSessions.disposeAll() },
               { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
               { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
