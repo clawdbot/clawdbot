@@ -352,7 +352,11 @@ describe("memory watcher kernel capacity degrade", () => {
     // Replace the watched root, then let the replacement main attach succeed
     // while every later watch (its parent) throws EMFILE — the exact finding
     // scenario: the reattach must not erase the armed degradation state.
+    // The decoy consumes the freed inode first: tmpfs allocates freed inodes
+    // eagerly, and a reused inode would make the parent callback legitimately
+    // treat the root as unchanged (Linux CI only).
     await fs.rm(memoryDir, { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "inode-decoy"), { recursive: true });
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.writeFile(path.join(memoryDir, "note.md"), "hello");
     let allowedLeft = 1;
