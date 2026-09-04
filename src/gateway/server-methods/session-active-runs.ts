@@ -225,7 +225,7 @@ export function resolveVisibleActiveSessionRunState(params: {
     runIds.push(directSubagent.runId);
   }
   const subagentCapacityWait =
-    hasQueuedSubagent &&
+    (hasLiveSubagent || hasQueuedSubagent) &&
     directSubagent &&
     (isAgentRunWaitingForCapacity(directSubagent.runId) ||
       isSwarmRunWaitingForCapacity(
@@ -244,8 +244,7 @@ export function resolveVisibleActiveSessionRunState(params: {
   // Connection, worker-lifecycle, and embedded registries are independent owners.
   // Settlement in one must not hide live work owned by another.
   const running =
-    hasLiveSubagent ||
-    (hasQueuedSubagent && !subagentCapacityWait) ||
+    ((hasLiveSubagent || hasQueuedSubagent) && !subagentCapacityWait) ||
     matchingTrackedRuns.some((active) => !isAgentRunWaitingForCapacity(active.runId)) ||
     projectedRunState === "running" ||
     embeddedRunState === "running";

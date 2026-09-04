@@ -15,6 +15,7 @@ import {
   createReplyOperation,
   markReplyOperationExecutionStarted,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
   buildProjectedAgentRunIndex,
@@ -60,7 +61,7 @@ it("projects ordinary startup as active before execution starts", () => {
   registration.cleanup();
 });
 
-it("projects a live subagent on its own session without activating its parent", () => {
+it("projects direct subagent activity only for its own current-lifecycle session", () => {
   const parentKey = "agent:main:main";
   const childKey = "agent:main:subagent:attachment-fix";
   resetSubagentRegistryForTests({ persist: false });
@@ -86,11 +87,36 @@ it("projects a live subagent on its own session without activating its parent", 
         agentId: "main",
       }),
     ).toEqual({ active: true, runIds: ["run-attachment-fix"] });
+    const releaseCapacityWait = registerAgentRunCapacityWait(
+      "run-attachment-fix",
+      getAgentRunLifecycleGeneration(),
+    );
+    try {
+      expect(
+        resolveVisibleActiveSessionRunState({
+          context: {},
+          requestedKey: childKey,
+          canonicalKey: childKey,
+          agentId: "main",
+        }),
+      ).toMatchObject({ active: true, status: "queued" });
+    } finally {
+      releaseCapacityWait?.();
+    }
     expect(
       resolveVisibleActiveSessionRunState({
         context: {},
         requestedKey: parentKey,
         canonicalKey: parentKey,
+        agentId: "main",
+      }),
+    ).toEqual({ active: false, runIds: [] });
+    rotateAgentEventLifecycleGeneration();
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: childKey,
+        canonicalKey: childKey,
         agentId: "main",
       }),
     ).toEqual({ active: false, runIds: [] });
