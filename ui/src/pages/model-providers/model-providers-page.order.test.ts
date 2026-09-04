@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ModelsAuthOrderSetParams } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
@@ -78,6 +80,83 @@ describe("ModelProvidersPage profile order", () => {
     await vi.waitFor(() => expect(orderRequests).toBe(2));
     await vi.waitFor(() => expect(page.profileOrders.openai).toBeUndefined());
     expect(page.messages.openai).toBeUndefined();
+  });
+
+  it("discards a detached page's queued order before a replacement page saves", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    snapshot.hello = {
+      type: "hello-ok",
+      protocol: 3,
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    };
+    const originalRequest = request.getMockImplementation()!;
+    const firstSave = deferred<unknown>();
+    let savedOrder = ["openai:one", "openai:two", "openai:three"];
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "models.authOrderSet") {
+        savedOrder = [...((params as ModelsAuthOrderSetParams).profileIds ?? [])];
+        return requestCount(request, method) === 1 ? firstSave.promise : {};
+      }
+      if (method === "models.authStatus") {
+        return {
+          ts: 1,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              status: "ok",
+              profiles: ["openai:one", "openai:two", "openai:three"].map((profileId) => ({
+                profileId,
+                type: "oauth",
+                status: "ok",
+              })),
+              profileOrder: [...savedOrder],
+              profileOrderStored: true,
+            },
+          ],
+        } satisfies ModelAuthStatusResult;
+      }
+      return originalRequest(method);
+    });
+    const rows = (page: HTMLElement) =>
+      [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
+        (row) => row.dataset.profileId,
+      );
+    const moveFirstAccount = (page: HTMLElement, key: string) => {
+      const grip = page.querySelector<HTMLButtonElement>(
+        '[data-profile-id="openai:one"] .model-providers__profile-grip',
+      )!;
+      expect(grip.disabled).toBe(false);
+      grip.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    };
+    const oldPage = appendPage(context);
+    await waitForFast(() => expect(rows(oldPage)).toHaveLength(3));
+    moveFirstAccount(oldPage, "ArrowDown");
+    await oldPage.updateComplete;
+    moveFirstAccount(oldPage, "ArrowDown");
+    await oldPage.updateComplete;
+    expect(rows(oldPage)).toEqual(["openai:two", "openai:three", "openai:one"]);
+    expect(requestCount(request, "models.authOrderSet")).toBe(1);
+
+    oldPage.remove();
+    const replacementPage = appendPage(context);
+    await waitForFast(() =>
+      expect(rows(replacementPage)).toEqual(["openai:two", "openai:one", "openai:three"]),
+    );
+    moveFirstAccount(replacementPage, "ArrowUp");
+    await waitForFast(() => expect(replacementPage.profileOrders.openai).toBeUndefined());
+    expect(savedOrder).toEqual(["openai:one", "openai:two", "openai:three"]);
+
+    // The first write already reached the server; only its response is delayed.
+    // Let its continuation finish before checking for an obsolete queued write.
+    firstSave.resolve({});
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(savedOrder).toEqual(["openai:one", "openai:two", "openai:three"]);
+    expect(requestCount(request, "models.authOrderSet")).toBe(2);
+    expect(rows(replacementPage)).toEqual(["openai:one", "openai:two", "openai:three"]);
   });
 
   it("keeps a saved auth-owner order on every alias route", async () => {

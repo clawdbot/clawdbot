@@ -206,6 +206,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
+    // Pending orders belong to this page; a delayed save must not dispatch
+    // them after navigation over a replacement page's newer order.
+    this.profileActions.resetOrders();
     this.subscriptions.clear();
     this.refreshPolicy.dispose();
     super.disconnectedCallback();
