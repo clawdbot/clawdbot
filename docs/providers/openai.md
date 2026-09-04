@@ -955,7 +955,7 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     path. Access and quota errors are reported without switching credential
     classes; OAuth support does not imply included or unlimited transcription.
     Custom endpoints and request overrides require an API-key profile.
-    See [Audio and voice notes](/nodes/audio#openai-transcription-alongside-chatgptcodex-oauth)
+    See [Audio and voice notes](/nodes/audio#openai-transcription-alongside-chatgpt%2Fcodex-oauth)
     for selecting a separate audio API-key profile when desired.
 
     - Default model: `gpt-4o-transcribe`
