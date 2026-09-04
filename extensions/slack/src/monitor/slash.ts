@@ -66,6 +66,7 @@ import {
   SLACK_EXTERNAL_ARG_MENU_PREFIX,
   type SlackExternalArgMenuChoice,
 } from "./external-arg-menu-store.js";
+import { resolveSlackSessionEventRoutingContext } from "./message-handler/prepare-routing.js";
 import { escapeSlackMrkdwn } from "./mrkdwn.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import {
@@ -73,7 +74,6 @@ import {
   isSlackResponseAlreadyReportedError,
 } from "./response-url-budget.js";
 import { resolveSlackRoomContextHints } from "./room-context.js";
-import { resolveSlackSessionEventRoute } from "./session-event-route.js";
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
 const SLACK_COMMAND_ARG_ACTION_LISTENER = /^openclaw_cmdarg/;
@@ -423,9 +423,10 @@ export function createSlackCommandHandler(params: {
     threadTs?: string;
     eventTs?: string;
     builtInCommand?: "stop";
-    onAdmitted?: () => void;
+    sessionTarget?: ResolvedAgentRoute;
+    onAdmitted?: () => boolean | void;
     ack: SlackCommandMiddlewareArgs["ack"];
-    respond: SlackCommandMiddlewareArgs["respond"];
+    respond: (message: Parameters<SlackCommandMiddlewareArgs["respond"]>[0]) => Promise<unknown>;
     responseTransport?: "response-url" | "web-api";
     body?: unknown;
     eventScope?: SlackEventScope;
@@ -638,17 +639,28 @@ export function createSlackCommandHandler(params: {
           return resolvedSlashRoute;
         }
         if (p.threadTs) {
-          resolvedSlashRoute = await resolveSlackSessionEventRoute({
+          if (p.sessionTarget) {
+            resolvedSlashRoute = p.sessionTarget;
+            return resolvedSlashRoute;
+          }
+          const routing = await resolveSlackSessionEventRoutingContext({
             ctx: { ...ctx, cfg },
             account,
-            channelId: command.channel_id,
-            userId: command.user_id,
-            eventTs: p.eventTs,
-            threadTs: p.threadTs,
-            channelType,
+            message: {
+              type: "message",
+              channel: command.channel_id,
+              user: command.user_id,
+              ts: p.eventTs,
+              thread_ts: p.threadTs,
+            },
+            isDirectMessage,
+            isGroupDm,
+            isRoom,
+            isRoomish,
             channelConfig,
             eventScope,
           });
+          resolvedSlashRoute = { ...routing.route, sessionKey: routing.sessionKey };
           return resolvedSlashRoute;
         }
         const { resolveAgentRoute } = await loadSlashDispatchRuntime();
@@ -850,7 +862,13 @@ export function createSlackCommandHandler(params: {
           }
         : undefined;
       if (commandAuthorized) {
-        p.onAdmitted?.();
+        if (p.onAdmitted?.() === false) {
+          await respond({
+            text: "The selected run has already finished.",
+            response_type: "ephemeral",
+          });
+          return true;
+        }
       }
       await dispatchChannelInboundTurn({
         cfg,
@@ -933,6 +951,7 @@ export function createSlackCommandHandler(params: {
           ...builtInDispatch,
         },
       });
+      return true;
     } catch (err) {
       runtime.error?.(danger(`slack slash handler failed: ${formatErrorMessage(err)}`));
       if (!isSlackResponseAlreadyReportedError(err) && responseBudget.remaining() !== 0) {
@@ -942,6 +961,7 @@ export function createSlackCommandHandler(params: {
         });
       }
     }
+    return undefined;
   };
 }
 

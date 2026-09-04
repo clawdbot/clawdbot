@@ -154,6 +154,7 @@ function selectConversationRows(
     conversationRef?: string;
     limit?: number;
     primarySession?: { sessionId: string; sessionKey: string };
+    currentBindingOnly?: boolean;
   } = {},
 ): ConversationRecord[] {
   const resolved = resolveSqliteReadScope({
@@ -214,6 +215,22 @@ function selectConversationRows(
       .where("sn.entry_valid", "=", 1)
       .whereRef("s.primary_conversation_id", "=", "c.conversation_id")
       .where("sc.role", "=", "primary");
+  }
+  if (options.currentBindingOnly) {
+    // Native controls need the current owner, not an address's historical activity.
+    // Related rows refresh when a session moves to another conversation.
+    query = query
+      .whereRef("s.session_id", "=", "sn.current_session_id")
+      .where("sn.entry_valid", "=", 1)
+      .where((eb) =>
+        eb.or([
+          eb("sc.role", "=", "participant"),
+          eb.and([
+            eb("sc.role", "=", "primary"),
+            eb("s.primary_conversation_id", "=", eb.ref("c.conversation_id")),
+          ]),
+        ]),
+      );
   }
   const rows = executeSqliteQuerySync(
     database.db,
@@ -300,6 +317,21 @@ export function resolveConversation(
     conversationRef: normalizeConversationRef(conversationRef),
     limit: 1,
   })[0];
+}
+
+/** Reads only an authoritative association on an address's current session window. */
+export function resolveCurrentConversationSession(
+  scope: ConversationRegistryScope,
+  conversationRef: string,
+): { sessionKey: string; sessionId: string } | undefined {
+  const [conversation] = selectConversationRows(scope, {
+    conversationRef: normalizeConversationRef(conversationRef),
+    currentBindingOnly: true,
+    limit: 1,
+  });
+  return conversation?.sessionKey && conversation.sessionId
+    ? { sessionKey: conversation.sessionKey, sessionId: conversation.sessionId }
+    : undefined;
 }
 
 /** Reads only the primary address bound to this exact current session window. */

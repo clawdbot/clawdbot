@@ -8,6 +8,8 @@ import {
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
+import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
+import { resolveCurrentConversationSession } from "../config/sessions/conversation-registry.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -386,6 +388,21 @@ export function resolveSessionStoreEntry(params: {
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
+}
+
+/** Reads the current session binding of one canonical transport address. */
+export function getConversationSession(params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+  channel: string;
+  accountId: string;
+  kind: "channel" | "direct" | "group";
+  peerId: string;
+  threadId?: string;
+}): { sessionKey: string; sessionId: string } | undefined {
+  const identity = buildConversationIdentity({ ...params, deliveryTarget: params.peerId });
+  return identity ? resolveCurrentConversationSession(params, identity.conversationRef) : undefined;
 }
 
 /**

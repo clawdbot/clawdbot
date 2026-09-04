@@ -1,14 +1,24 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { WebClient } from "@slack/web-api";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
-import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 // Slack tests cover Agent View lifecycle handling.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSlackAccount } from "../../accounts.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appendSlackStream, markSlackStreamsStopped, startSlackStream } from "../../streaming.js";
-import { resolveSlackRoutingContext } from "../message-handler/prepare-routing.js";
 import { deliverSlackSlashReplies } from "../replies.js";
+import { getSlackSessionRuns, registerSlackSessionRun } from "../session-run-targets.js";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "../slash.test-harness.js";
 import { registerSlackAgentEvents } from "./agent.js";
 import { createSlackSystemEventTestHarness } from "./system-event-test-harness.js";
@@ -29,6 +39,8 @@ vi.mock("../../streaming.js", async (importOriginal) => {
 
 const slashMocks = getSlackSlashMocks();
 
+let tempDir: string;
+
 function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im") {
   const harness = createSlackSystemEventTestHarness({ channelType, allowFrom: ["*"] });
   const client = new WebClient("xoxb-synthetic");
@@ -37,10 +49,15 @@ function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im"
     ts: "1712345679.000001",
   });
   const postEphemeral = vi.spyOn(client.chat, "postEphemeral").mockResolvedValue({ ok: true });
+  const readThread = vi.spyOn(client.conversations, "replies").mockResolvedValue({
+    ok: true,
+    messages: [],
+  });
   const setSlackSessionStatus = vi.fn(async () => {});
   const recordSlackSessionTitle = vi.fn();
+  const storePath = path.join(tempDir, "sessions.sqlite");
   Object.assign(harness.ctx, {
-    cfg: {},
+    cfg: { session: { store: storePath } },
     accountId: "default",
     threadInheritParent: false,
     threadHistoryScope: "thread",
@@ -49,14 +66,53 @@ function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im"
     runtime: { error: vi.fn() },
     setSlackSessionStatus,
     recordSlackSessionTitle,
+    getSlackAssistantThreadContext: () => undefined,
+    isSlackAgentView: async () => true,
+    isSlackManagedViewThread: async () => false,
   });
   Object.assign(harness.ctx.app, { client });
+  setRuntimeConfigSnapshot(harness.ctx.cfg);
   registerSlackAgentEvents({ ctx: harness.ctx });
-  return { ...harness, postMessage, postEphemeral, setSlackSessionStatus, recordSlackSessionTitle };
+  return {
+    ...harness,
+    storePath,
+    recordSession: async (params: {
+      sessionKey: string;
+      peerId: string;
+      threadId?: string;
+      sessionId?: string;
+      updatedAt?: number;
+    }) => {
+      await upsertSessionEntry({
+        agentId: "main",
+        storePath,
+        sessionKey: params.sessionKey,
+        entry: {
+          sessionId: params.sessionId ?? params.sessionKey,
+          updatedAt: params.updatedAt ?? Date.now(),
+          chatType: channelType === "im" ? "direct" : channelType === "mpim" ? "group" : "channel",
+          delivery: normalizeSessionDeliveryState({
+            context: {
+              channel: "slack",
+              accountId: "default",
+              to: params.peerId,
+              threadId: params.threadId,
+            },
+          }),
+        },
+      });
+    },
+    postMessage,
+    postEphemeral,
+    readThread,
+    setSlackSessionStatus,
+    recordSlackSessionTitle,
+  };
 }
 
 describe("registerSlackAgentEvents", () => {
   beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "slack-session-events-"));
     vi.clearAllMocks();
     clearRuntimeConfigSnapshot();
     resetSlackSlashMocks();
@@ -64,6 +120,10 @@ describe("registerSlackAgentEvents", () => {
     slashMocks.deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
       await deliverSlackSlashReplies(params as Parameters<typeof deliverSlackSlashReplies>[0]);
     });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("records Agent View for app_context_changed", async () => {
@@ -109,17 +169,31 @@ describe("registerSlackAgentEvents", () => {
     {
       channelType: "im" as const,
       channel: "D123",
+      managedView: false,
+      sessionKey: "agent:main:main",
+    },
+    {
+      channelType: "im" as const,
+      channel: "D123",
+      managedView: true,
       sessionKey: "agent:main:main:thread:1712345678.000001",
     },
     {
       channelType: "channel" as const,
       channel: "C123",
+      managedView: false,
       sessionKey: "agent:main:slack:channel:c123:thread:1712345678.000001",
     },
   ])(
     "dispatches native Stop to the owning $channelType thread and replies there",
-    async ({ channelType, channel, sessionKey }) => {
+    async ({ channelType, channel, sessionKey, managedView }) => {
       const harness = createSessionEventHarness(channelType);
+      harness.ctx.isSlackAgentView = async () => managedView;
+      await harness.recordSession({
+        sessionKey,
+        peerId: channelType === "im" ? "U123" : channel,
+        threadId: managedView || channelType !== "im" ? "1712345678.000001" : undefined,
+      });
       slashMocks.dispatchMock.mockImplementation(
         async (params: {
           dispatcherOptions: {
@@ -143,6 +217,7 @@ describe("registerSlackAgentEvents", () => {
         body: {},
       });
 
+      expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
       expect(slashMocks.dispatchMock).toHaveBeenCalledOnce();
       expect(slashMocks.dispatchMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -239,105 +314,322 @@ describe("registerSlackAgentEvents", () => {
     },
   );
 
-  it.each(["im", "mpim"] as const)(
-    "routes native events to the original %s session",
-    async (channelType) => {
-      const harness = createSessionEventHarness(channelType);
-      const channelId = channelType === "im" ? "D123" : "G123";
-      harness.ctx.isSlackAgentView = async () => false;
-      harness.ctx.isSlackManagedViewThread = async () => false;
-      harness.ctx.getSlackAssistantThreadContext = () => undefined;
-      const threadTs = "1712345678.000001";
-      const owner = resolveSlackRoutingContext({
-        ctx: harness.ctx,
-        account: resolveSlackAccount({ cfg: harness.ctx.cfg, accountId: harness.ctx.accountId }),
-        message: { type: "message", channel: channelId, user: "U123", ts: threadTs },
-        isDirectMessage: channelType === "im",
-        isGroupDm: channelType === "mpim",
-        isRoom: false,
-        isRoomish: channelType === "mpim",
-      });
-      if (channelType === "mpim") {
-        harness.ctx.getSlackSessionRoute = () => ({ ...owner.route, sessionKey: owner.sessionKey });
-      }
-
-      await harness.getHandler("agent_session_stopped")?.({
-        event: {
-          type: "agent_session_stopped",
-          channel: channelId,
-          thread_ts: threadTs,
-          user: "U123",
-          event_ts: "1712345679.000001",
-          streaming_message_ts: ["1712345678.000002"],
-        },
-        body: {},
+  it.each([
+    { managedView: false, sessionKey: "agent:main:main" },
+    { managedView: true, sessionKey: "agent:main:main:thread:1712345678.000001" },
+  ])(
+    "patches the owning session display name with managed view $managedView",
+    async ({ managedView, sessionKey }) => {
+      const harness = createSessionEventHarness();
+      harness.ctx.isSlackAgentView = async () => managedView;
+      await harness.recordSession({
+        sessionKey,
+        peerId: "U123",
+        threadId: managedView ? "1712345678.000001" : undefined,
       });
 
-      expect(slashMocks.dispatchMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ctx: expect.objectContaining({ CommandTargetSessionKey: owner.sessionKey }),
-        }),
-      );
       await harness.getHandler("agent_session_title_changed")?.({
         event: {
           type: "agent_session_title_changed",
-          channel: channelId,
-          thread_ts: threadTs,
+          channel: "D123",
+          thread_ts: "1712345678.000001",
           user: "U123",
-          event_ts: "1712345680.000001",
+          event_ts: "1712345679.000001",
           team_id: "T_TEST",
-          title: "Renamed conversation",
+          title: "Renamed in Slack",
         },
         body: {},
       });
-      expect(patchSessionEntry).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey: owner.sessionKey }),
-      );
+
+      expect(patchSessionEntry).toHaveBeenCalledOnce();
+      const patch = patchSessionEntry.mock.calls[0]?.[0];
+      expect(patch).toEqual({
+        agentId: "main",
+        storePath: harness.storePath,
+        sessionKey,
+        preserveActivity: true,
+        update: expect.any(Function),
+      });
+      expect(
+        await patch?.update(
+          { sessionId: "session", updatedAt: 1, displayName: "Old", label: "Operator label" },
+          {},
+        ),
+      ).toEqual({
+        displayName: "Renamed in Slack",
+      });
+      expect(harness.recordSlackSessionTitle).toHaveBeenCalledWith({
+        channelId: "D123",
+        threadTs: "1712345678.000001",
+        title: "Renamed in Slack",
+        eventScope: undefined,
+      });
+      expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
     },
   );
 
-  it("patches the thread display name without changing its operator label and records the title", async () => {
-    const harness = createSessionEventHarness();
-    harness.ctx.cfg = { session: { store: "/tmp/slack-session-title-store.sqlite" } };
+  it.each(["agent_session_stopped", "agent_session_title_changed"])(
+    "reads a recorded Assistant thread owner after restart for %s",
+    async (type) => {
+      const harness = createSessionEventHarness();
+      harness.ctx.isSlackAgentView = async () => false;
+      await harness.recordSession({
+        sessionKey: "agent:main:main:thread:1712345678.000001",
+        peerId: "U123",
+        threadId: "1712345678.000001",
+      });
+      harness.readThread.mockResolvedValue({
+        ok: true,
+        messages: [{ metadata: { event_type: "assistant_thread_context", event_payload: {} } }],
+      });
+      await harness.getHandler(type)?.({
+        event: {
+          type,
+          channel: "D123",
+          thread_ts: "1712345678.000001",
+          user: "U123",
+          event_ts: "1712345679.000001",
+          title: "Assistant session",
+          streaming_message_ts: [],
+        },
+        body: {},
+      });
+      const sessionKey = "agent:main:main:thread:1712345678.000001";
+      if (type === "agent_session_stopped") {
+        expect(slashMocks.dispatchMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }),
+          }),
+        );
+      } else {
+        expect(patchSessionEntry).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
+      }
+    },
+  );
 
-    await harness.getHandler("agent_session_title_changed")?.({
+  it("reports a failed thread lookup without stopping another DM session or clearing its status", async () => {
+    const harness = createSessionEventHarness();
+    harness.ctx.isSlackAgentView = async () => false;
+    harness.readThread.mockRejectedValue(new Error("Slack temporarily unavailable"));
+    await harness.getHandler("agent_session_stopped")?.({
       event: {
-        type: "agent_session_title_changed",
+        type: "agent_session_stopped",
         channel: "D123",
         thread_ts: "1712345678.000001",
         user: "U123",
         event_ts: "1712345679.000001",
-        team_id: "T_TEST",
-        title: "Renamed in Slack",
+        streaming_message_ts: [],
       },
       body: {},
     });
+    expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
+    expect(markSlackStreamsStopped).not.toHaveBeenCalled();
+    expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
+    expect(harness.postEphemeral).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Sorry, something went wrong handling that command.",
+      }),
+    );
+  });
 
-    expect(patchSessionEntry).toHaveBeenCalledOnce();
-    const patch = patchSessionEntry.mock.calls[0]?.[0];
-    expect(patch).toEqual({
-      agentId: "main",
-      storePath: "/tmp/slack-session-title-store.sqlite",
-      sessionKey: "agent:main:main:thread:1712345678.000001",
-      preserveActivity: true,
-      update: expect.any(Function),
+  it.each(["agent_session_stopped", "agent_session_title_changed"])(
+    "keeps the MPIM thread owner after a later top-level root for %s",
+    async (type) => {
+      const harness = createSessionEventHarness("mpim");
+      const event = {
+        type,
+        channel: "G123",
+        thread_ts: "1712345678.000001",
+        user: "U123",
+        event_ts: "1712345679.000001",
+        title: "Group session",
+        streaming_message_ts: [],
+      };
+      const rootSessionKey = "agent:main:slack:group:g123";
+      const now = Date.now();
+      for (const [index, sessionKey] of [
+        rootSessionKey,
+        `${rootSessionKey}:thread:1712345678.000001`,
+      ].entries()) {
+        await harness.recordSession({
+          sessionKey,
+          peerId: "G123",
+          threadId: event.thread_ts,
+          updatedAt: now + index * 1000,
+        });
+        if (index === 1) {
+          await harness.recordSession({
+            sessionKey: rootSessionKey,
+            peerId: "G123",
+            threadId: "1712345680.000001",
+            updatedAt: now + 2000,
+          });
+        }
+        await harness.getHandler(type)?.({ event, body: {} });
+        if (type === "agent_session_stopped") {
+          expect(slashMocks.dispatchMock).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+              ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }),
+            }),
+          );
+        } else {
+          expect(patchSessionEntry).toHaveBeenLastCalledWith(
+            expect.objectContaining({ sessionKey }),
+          );
+        }
+      }
+      expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "does not acknowledge a missing managed session (Assistant: %s)",
+    async (assistant) => {
+      const harness = createSessionEventHarness();
+      await harness.recordSession({ sessionKey: "agent:main:main", peerId: "U123" });
+      harness.ctx.isSlackAgentView = async () => !assistant;
+      if (assistant) {
+        harness.readThread.mockResolvedValue({
+          ok: true,
+          messages: [{ metadata: { event_type: "assistant_thread_context", event_payload: {} } }],
+        });
+      }
+      await harness.getHandler("agent_session_stopped")?.({
+        event: {
+          type: "agent_session_stopped",
+          channel: "D123",
+          thread_ts: "1712345678.000001",
+          user: "U123",
+          event_ts: "1712345679.000001",
+          streaming_message_ts: [],
+        },
+        body: {},
+      });
+      expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
+      expect(markSlackStreamsStopped).not.toHaveBeenCalled();
+      expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
+      expect(harness.postEphemeral).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Sorry, something went wrong handling that command." }),
+      );
+    },
+  );
+
+  it("renames the live first-mode root owner when its registry address is unthreaded", async () => {
+    const harness = createSessionEventHarness("mpim");
+    const address = { channelId: "G123", threadTs: "1712345678.000001" };
+    const route = resolveAgentRoute({
+      cfg: harness.ctx.cfg,
+      channel: "slack",
+      accountId: "default",
+      peer: { kind: "group", id: address.channelId },
+    });
+    await harness.recordSession({ sessionKey: route.sessionKey, peerId: address.channelId });
+    const runtimeContext = Object.create(harness.ctx);
+    runtimeContext.cfg = { ...harness.ctx.cfg };
+    const release = registerSlackSessionRun(runtimeContext, address, route);
+    try {
+      await harness.getHandler("agent_session_title_changed")?.({
+        event: {
+          type: "agent_session_title_changed",
+          channel: address.channelId,
+          thread_ts: address.threadTs,
+          user: "U123",
+          event_ts: "1712345679.000001",
+          title: "First root",
+        },
+        body: {},
+      });
+      expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
+      expect(patchSessionEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey: route.sessionKey }),
+      );
+    } finally {
+      release();
+    }
+  });
+
+  it("stops every active MPIM publisher before delivering confirmations", async () => {
+    const harness = createSessionEventHarness("mpim");
+    const address = { channelId: "G123", threadTs: "1712345678.000001" };
+    const route = resolveAgentRoute({
+      cfg: harness.ctx.cfg,
+      channel: "slack",
+      accountId: "default",
+      peer: { kind: "group", id: "G123" },
+    });
+    const keys = [route.sessionKey, `${route.sessionKey}:thread:${address.threadTs}`];
+    const releases = keys.map((sessionKey) =>
+      registerSlackSessionRun(harness.ctx, address, { ...route, sessionKey }),
+    );
+    const other = { channelId: "G123", threadTs: "1712345000.000001" };
+    const releaseOther = registerSlackSessionRun(harness.ctx, other, {
+      ...route,
+      sessionKey: "other-session",
+    });
+    slashMocks.dispatchMock.mockImplementation(async (params) => {
+      expect(harness.postMessage).not.toHaveBeenCalled();
+      const index = keys.indexOf(params.ctx.CommandTargetSessionKey);
+      expect(index).toBeGreaterThanOrEqual(0);
+      releases[index]?.();
+      await params.dispatcherOptions.deliver({ text: "Stopped." }, { kind: "final" });
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
+    await harness.getHandler("agent_session_stopped")?.({
+      event: {
+        type: "agent_session_stopped",
+        channel: address.channelId,
+        thread_ts: address.threadTs,
+        user: "U123",
+        event_ts: "1712345679.000001",
+        streaming_message_ts: [],
+      },
+      body: {},
     });
     expect(
-      await patch?.update(
-        { sessionId: "session", updatedAt: 1, displayName: "Old", label: "Operator label" },
-        {},
-      ),
-    ).toEqual({
-      displayName: "Renamed in Slack",
-    });
-    expect(harness.recordSlackSessionTitle).toHaveBeenCalledWith({
-      channelId: "D123",
-      threadTs: "1712345678.000001",
-      title: "Renamed in Slack",
-      eventScope: undefined,
-    });
-    expect(harness.ctx.runtime.error).not.toHaveBeenCalled();
+      slashMocks.dispatchMock.mock.calls.map(([params]) => params.ctx.CommandTargetSessionKey),
+    ).toEqual(keys);
+    expect(harness.postMessage).toHaveBeenCalledTimes(2);
+    expect(getSlackSessionRuns(harness.ctx, address)).toEqual([]);
+    expect(getSlackSessionRuns(harness.ctx, other)).toHaveLength(1);
+    expect(harness.setSlackSessionStatus).toHaveBeenCalledOnce();
+    releaseOther();
   });
+
+  it.each(["agent_session_stopped", "agent_session_title_changed"])(
+    "keeps Enterprise DM %s events on the workspace-scoped session",
+    async (type) => {
+      const harness = createSessionEventHarness();
+      harness.ctx.installationIdentity = { kind: "enterprise", enterpriseId: "E_TEST" };
+      await harness.recordSession({
+        sessionKey: "agent:main:main:account:default:team:t_other",
+        peerId: "team:T_OTHER:user:U123",
+      });
+      await harness.getHandler(type)?.({
+        event: {
+          type,
+          channel: "D123",
+          thread_ts: "1712345678.000001",
+          user: "U123",
+          event_ts: "1712345679.000001",
+          title: "Ordinary Enterprise DM",
+          streaming_message_ts: [],
+        },
+        body: {},
+        context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T_OTHER" },
+        client: harness.ctx.app.client,
+      });
+      const sessionKey = "agent:main:main:account:default:team:t_other";
+      if (type === "agent_session_stopped") {
+        expect(slashMocks.dispatchMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }),
+          }),
+        );
+      } else {
+        expect(patchSessionEntry).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
+      }
+    },
+  );
 
   it.each(["agent_session_stopped", "agent_session_title_changed"])(
     "drops mismatched workspace %s events before dispatch or patch",

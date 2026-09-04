@@ -1154,7 +1154,7 @@ extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	6
 extensions/slack/src/monitor/message-handler/dispatch.ts	2
 extensions/slack/src/monitor/message-handler/prepare-dm-history.ts	1
 extensions/slack/src/monitor/message-handler/prepare-thread-context.ts	1
-extensions/slack/src/monitor/message-handler/prepare.ts	3
+extensions/slack/src/monitor/message-handler/prepare.ts	2
 extensions/slack/src/monitor/message-handler/preview-finalize.ts	3
 extensions/slack/src/monitor/message-handler/subteam-mentions.ts	1
 extensions/slack/src/monitor/provider-support.ts	3
