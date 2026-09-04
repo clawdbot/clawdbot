@@ -35,7 +35,7 @@ import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
 import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
-import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
+import { RealtimeAudioPacer, type RealtimeAudioDrainResult } from "./realtime-audio-pacer.js";
 import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 import {
   type StreamFrameAdapter,
@@ -320,10 +320,13 @@ type RealtimeCallEndCause = "completed" | "disconnect" | "shutdown" | "inactivit
 // Each socket keeps its exact binding; the call map only grants current-generation
 // record termination. Replacement can retire old audio without a late close killing its successor.
 type RealtimeTelephonyBinding = {
+  acknowledgePlaybackMark: (name?: string) => void;
   bridge: ActiveRealtimeVoiceBridge;
   close: (cause: RealtimeCallEndCause) => Promise<void>;
+  drainPlaybackBeforeEndCall: () => Promise<RealtimeAudioDrainResult>;
   endCall: () => void;
   noteMediaActivity: () => void;
+  resumeAfterEndCallFailure: () => void;
   retire: () => void;
 };
 
@@ -519,7 +522,8 @@ export class RealtimeCallHandler {
             return;
           }
           if (frame.kind === "mark") {
-            telephonyBinding.bridge.acknowledgeMark();
+            telephonyBinding.acknowledgePlaybackMark(frame.name);
+            telephonyBinding.bridge.acknowledgeMark(frame.name);
             return;
           }
           if (frame.kind === "error") {
@@ -866,8 +870,10 @@ export class RealtimeCallHandler {
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw) => {
+          if (!audioPacer.sendAudio(muLaw)) {
+            return;
+          }
           harness.recordOutputAudio(muLaw);
-          audioPacer.sendAudio(muLaw);
         },
         clearAudio: (reason) => {
           harness.flushOutput(() => {
@@ -1215,8 +1221,10 @@ export class RealtimeCallHandler {
       return termination;
     };
     const telephonyBinding: RealtimeTelephonyBinding = {
+      acknowledgePlaybackMark: (name) => audioPacer.acknowledgeMark(name),
       bridge: session,
       close: (cause) => closeBinding(telephonyBinding, cause),
+      drainPlaybackBeforeEndCall: () => audioPacer.beginTerminalDrain(`end-call-${randomUUID()}`),
       endCall: () => {
         // Close the provider session before the carrier socket so no pending
         // response can reach the caller after the hang-up request succeeds.
@@ -1247,6 +1255,7 @@ export class RealtimeCallHandler {
         }, REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
         livenessTimer.unref?.();
       },
+      resumeAfterEndCallFailure: () => audioPacer.resumeAfterTerminalDrain(),
       retire: () => {
         void closeBinding(telephonyBinding);
       },
@@ -1774,6 +1783,19 @@ export class RealtimeCallHandler {
       return;
     }
 
+    const drainResult = await binding.drainPlaybackBeforeEndCall();
+    if (
+      this.activeTelephonyBindingsByCallId.get(params.callId) !== binding ||
+      !this.isActiveBridgeOwner(params.callId, params.bridge)
+    ) {
+      return;
+    }
+    if (drainResult === "timed-out") {
+      console.warn(
+        `[voice-call] realtime end-call playback mark timed out callId=${params.callId}`,
+      );
+    }
+
     let result: { success: boolean; error?: string };
     try {
       result = await this.manager.endCall(params.callId);
@@ -1788,6 +1810,7 @@ export class RealtimeCallHandler {
       return;
     }
     if (!result.success) {
+      binding.resumeAfterEndCallFailure();
       const detail = result.error?.trim() || "the telephony provider returned no reason";
       const toolResult = {
         error: `Could not end the current phone call: ${detail}. Tell the caller the call could not be ended and they can hang up or ask you to try again.`,

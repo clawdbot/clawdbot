@@ -321,10 +321,12 @@ phone connection from remaining open after its voice session has finished.
 
 The realtime model can also call `openclaw_end_call` when the caller asks to
 hang up. The model must speak any final words before calling the tool: a
-successful call ends the current provider session and phone connection
-immediately, so no later reply is spoken. If the carrier cannot end the call,
-the bridge stays connected and the model receives an error it can explain to
-the caller. Configured `realtime.tools` cannot replace this built-in by name.
+successful call waits for the carrier to confirm that buffered speech finished
+playing, then ends the current provider session and phone connection. The wait
+has a bounded timeout, and no later reply is spoken. If the carrier cannot end
+the call, the bridge stays connected and the model receives an error it can
+explain to the caller. Configured `realtime.tools` cannot replace this built-in
+by name.
 
 For inbound Twilio numbers, also configure a Status Callback using `POST` to
 your public webhook URL with `?type=status` appended, for example
