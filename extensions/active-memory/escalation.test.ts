@@ -175,6 +175,7 @@ describe("active-memory escalation", () => {
     "Você lembra de enviar o relatório amanhã?",
     "Você lembra o que temos que fazer amanhã?",
     "Você lembra o que fazer antes de amanhã?",
+    "Você lembra o que fazer semana que vem?",
     "Vamos discutir o upgrade amanhã",
     "Decidiremos isso na próxima semana",
     "A conversa de amanhã será sobre memória",

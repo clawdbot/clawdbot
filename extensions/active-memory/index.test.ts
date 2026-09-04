@@ -1707,6 +1707,7 @@ describe("active-memory plugin", () => {
       "Você lembra de enviar o relatório amanhã?",
       "Você lembra o que temos que fazer amanhã?",
       "Você lembra o que fazer antes de amanhã?",
+      "Você lembra o que fazer semana que vem?",
       "Sem olhar a conversa atual, escreva uma mensagem de desculpas.",
     ]) {
       const ordinary = await runPromptBuild({ prompt }, context);
