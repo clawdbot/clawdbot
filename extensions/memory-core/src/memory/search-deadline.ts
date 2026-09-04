@@ -1,4 +1,21 @@
-export const DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 15_000;
+const DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 15_000;
+const MIN_MEMORY_SEARCH_TIMEOUT_MS = 1_000;
+const MAX_MEMORY_SEARCH_TIMEOUT_MS = 120_000;
+
+export function normalizeMemorySearchTimeoutMs(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_MEMORY_SEARCH_TIMEOUT_MS;
+  }
+  return Math.max(
+    MIN_MEMORY_SEARCH_TIMEOUT_MS,
+    Math.min(MAX_MEMORY_SEARCH_TIMEOUT_MS, Math.floor(value)),
+  );
+}
+
+export function formatMemorySearchTimeout(timeoutMs: number): string {
+  return timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}s` : `${timeoutMs}ms`;
+}
+
 export function resolveMemorySearchAbortError(signal: AbortSignal): Error {
   const { reason } = signal;
   if (reason instanceof Error) {
@@ -23,7 +40,7 @@ export function createMemorySearchDeadlineError(message: string): Error {
 
 function createMemorySearchTimeoutError(timeoutMs: number): Error {
   return createMemorySearchDeadlineError(
-    `memory_search timed out after ${Math.round(timeoutMs / 1000)}s`,
+    `memory_search timed out after ${formatMemorySearchTimeout(timeoutMs)}`,
   );
 }
 

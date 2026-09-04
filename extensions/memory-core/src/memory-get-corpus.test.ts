@@ -333,6 +333,36 @@ describe("memory_get corpus outcomes", () => {
     });
   });
 
+  it("applies the configured deadline to the default memory read", async () => {
+    vi.useFakeTimers();
+    setMemoryReadFileImpl(async () => await new Promise<never>(() => {}));
+    const tool = createMemoryGetToolOrThrow(
+      asOpenClawConfig({
+        memory: { search: { timeoutMs: 1_501 } },
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+    );
+
+    const pending = tool.execute("call_get_configured_deadline", { path: lookup });
+    await vi.advanceTimersByTimeAsync(1_500);
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({
+      details: {
+        path: lookup,
+        text: "",
+        disabled: true,
+        error: "memory_get timed out after 1501ms",
+      },
+    });
+  });
+
   it("cancels a hanging exact supplement read", async () => {
     registerMemoryCorpusSupplement("memory-wiki", {
       search: async () => [],
@@ -342,6 +372,18 @@ describe("memory_get corpus outcomes", () => {
     const pending = createMemoryGetToolOrThrow().execute(
       "call_get_abort",
       { path: lookup, corpus: "all" },
+      controller.signal,
+    );
+    controller.abort(new Error("cancelled"));
+    await expect(pending).rejects.toThrow("cancelled");
+  });
+
+  it("cancels a hanging default memory read", async () => {
+    setMemoryReadFileImpl(async () => await new Promise<never>(() => {}));
+    const controller = new AbortController();
+    const pending = createMemoryGetToolOrThrow().execute(
+      "call_get_default_abort",
+      { path: lookup },
       controller.signal,
     );
     controller.abort(new Error("cancelled"));

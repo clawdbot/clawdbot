@@ -389,6 +389,37 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("honors the configured memory search timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemorySearchImpl(async () => await new Promise(() => {}));
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          memory: { search: { timeoutMs: 45_000 } },
+          agents: { list: [{ id: "main", default: true }] },
+        }),
+      });
+
+      const resultPromise = tool.execute("configured-search-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(15_000);
+      let settled = false;
+      void resultPromise.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await resultPromise;
+      expect(result.details).toMatchObject({
+        error: "memory_search timed out after 45s",
+        unavailable: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the timeout result when an abort-aware search rejects on abort", async () => {
     vi.useFakeTimers();
     try {

@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { jsonResult } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
@@ -10,6 +9,7 @@ import {
 } from "./memory-corpus.js";
 
 type MemoryReadRequest = {
+  timeoutMs: number;
   requestedCorpus?: "memory" | "wiki" | "all";
   relPath: string;
   from?: number;
@@ -39,6 +39,7 @@ function attemptValue<T>(attempt: MemoryCorpusAttempt<T>): T | null {
 export async function executeWikiMemoryReadResult(params: MemoryReadRequest) {
   return await runMemoryCorpusDeadline({
     operation: "memory_get",
+    timeoutMs: params.timeoutMs,
     parentSignal: params.signal,
     run: async (signal) => {
       const wiki = await readWiki(params, signal);
@@ -56,19 +57,32 @@ export async function executeMemoryReadResult(
   params: MemoryReadRequest & { read: () => Promise<MemoryReadResult> },
 ) {
   if (params.requestedCorpus !== "all") {
-    try {
-      return jsonResult(await params.read());
-    } catch (error) {
-      return jsonResult({
-        path: params.relPath,
-        text: "",
-        disabled: true,
-        error: formatErrorMessage(error),
-      });
-    }
+    return await runMemoryCorpusDeadline({
+      operation: "memory_get",
+      timeoutMs: params.timeoutMs,
+      parentSignal: params.signal,
+      run: async (signal) => {
+        const memory = await attemptMemoryCorpus({
+          corpus: "memory",
+          signal,
+          unavailableValue: null,
+          run: params.read,
+        });
+        if (memory.outcome === "ok") {
+          return jsonResult(memory.value);
+        }
+        return jsonResult({
+          path: params.relPath,
+          text: "",
+          disabled: true,
+          error: memory.error,
+        });
+      },
+    });
   }
   return await runMemoryCorpusDeadline({
     operation: "memory_get",
+    timeoutMs: params.timeoutMs,
     parentSignal: params.signal,
     run: async (signal) => {
       const [memory, wiki] = await Promise.all([
