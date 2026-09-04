@@ -150,8 +150,9 @@ describe("worker environment service", () => {
   });
 
   it("closes idle allocation recovery before tunnel teardown", async () => {
+    const stopAll = vi.fn(async () => {});
     const tunnelManager = {
-      stopAll: vi.fn(async () => {}),
+      stopAll,
     } as unknown as WorkerTunnelManager;
     const workerService = support.createService(support.createProvider(), { tunnelManager });
     const closeRecoveryAdmission = vi.spyOn(
@@ -162,9 +163,9 @@ describe("worker environment service", () => {
     await workerService.stop();
 
     expect(closeRecoveryAdmission).toHaveBeenCalledTimes(2);
-    expect(tunnelManager.stopAll).toHaveBeenCalledOnce();
+    expect(stopAll).toHaveBeenCalledOnce();
     expect(closeRecoveryAdmission.mock.invocationCallOrder[0]).toBeLessThan(
-      tunnelManager.stopAll.mock.invocationCallOrder[0]!,
+      stopAll.mock.invocationCallOrder[0]!,
     );
   });
 

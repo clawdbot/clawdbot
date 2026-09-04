@@ -202,6 +202,7 @@ export function createService(
       | "closeNodeEnrollment"
       | "retireNodeEnrollment"
       | "stopNodeEnrollmentWaits"
+      | "stopNodeWorkerBundleTransfers"
       | "tunnelManager"
       | "generateWorkerCredential"
       | "liveEvents"
