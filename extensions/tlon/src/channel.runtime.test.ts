@@ -21,6 +21,11 @@ const account = {
   code: "sample-code",
 } as never;
 
+const sendText = tlonRuntimeOutbound.sendText;
+if (!sendText) {
+  throw new Error("Tlon runtime outbound sendText is unavailable");
+}
+
 describe("tlonRuntimeOutbound", () => {
   it.each([
     {
@@ -45,7 +50,7 @@ describe("tlonRuntimeOutbound", () => {
     },
   ])("reports $name when outbound setup is incomplete", async ({ cfg, accountId, expected }) => {
     await expect(
-      tlonRuntimeOutbound.sendText({
+      sendText({
         cfg,
         to: "~sampel-palnet",
         text: "hello",
