@@ -7,6 +7,12 @@ export const MAX_TERMINAL_UPLOAD_BASE64_LENGTH = Math.ceil(MAX_TERMINAL_UPLOAD_B
 /** Browser-provided file name bound before filesystem sanitization. */
 export const MAX_TERMINAL_UPLOAD_NAME_LENGTH = 255;
 
+/**
+ * `details.code` on a terminal.upload rejection whose retained staging budget is
+ * full. Retrying cannot free that budget, so clients must not offer a retry.
+ */
+export const TERMINAL_UPLOAD_STAGING_EXHAUSTED_CODE = "TERMINAL_UPLOAD_STAGING_EXHAUSTED";
+
 function base64Value(code: number): number {
   if (code >= 65 && code <= 90) {
     return code - 65;

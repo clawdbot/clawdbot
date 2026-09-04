@@ -6,7 +6,11 @@ import {
   isCanonicalTerminalUploadBase64,
 } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
+import {
+  ensureTerminalUploadCleanup,
+  stageTerminalUpload,
+  TerminalUploadStagingExhaustedError,
+} from "./terminal-file-upload.js";
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
@@ -173,7 +177,11 @@ describe("terminal file upload", () => {
     }
     await expect(
       stageTerminalUpload(file, { tempRoot: root, cleanupAfterMs: 60_000 }),
-    ).rejects.toThrow("terminal upload staging limit reached");
+    ).rejects.toMatchObject({
+      constructor: TerminalUploadStagingExhaustedError,
+      code: "TERMINAL_UPLOAD_STAGING_EXHAUSTED",
+      message: "terminal upload staging limit reached",
+    });
     expect(
       (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()),
     ).toHaveLength(64);
@@ -185,7 +193,7 @@ describe("terminal file upload", () => {
 
     await expect(
       stageTerminalUpload(file, { tempRoot: root, cleanupAfterMs: 60_000, maxRetainedBytes: 4 }),
-    ).rejects.toThrow("terminal upload staging limit reached");
+    ).rejects.toBeInstanceOf(TerminalUploadStagingExhaustedError);
     expect(await readdir(root)).toEqual([]);
 
     const result = await stageTerminalUpload(file, { tempRoot: root, cleanupAfterMs: 60_000 });
@@ -222,7 +230,7 @@ describe("terminal file upload", () => {
         cleanupAfterMs: 60_000,
         maxRetainedDirectories: 1,
       }),
-    ).rejects.toThrow("terminal upload staging limit reached");
+    ).rejects.toBeInstanceOf(TerminalUploadStagingExhaustedError);
     expect(await readFile(first.path, "utf8")).toBe("x");
     expect(await readFile(path.join(foreign, "keep.txt"), "utf8")).toBe("keep");
   });

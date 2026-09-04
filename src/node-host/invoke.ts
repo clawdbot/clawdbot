@@ -48,6 +48,7 @@ import {
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_WORKER_DESKTOP_COMPUTER_COMMAND,
 } from "../infra/node-commands.js";
+import { isTerminalUploadStagingExhaustedError } from "../infra/terminal-file-upload.js";
 import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
@@ -796,7 +797,11 @@ async function dispatchInvoke(
   const fileCommand = await invokeNodeFileCommand(command, frame.paramsJSON);
   if (fileCommand) {
     if ("error" in fileCommand) {
-      await sendInvalidRequestResult(client, frame, fileCommand.error);
+      if (isTerminalUploadStagingExhaustedError(fileCommand.error)) {
+        await sendErrorResult(client, frame, fileCommand.error.code, fileCommand.error.message);
+      } else {
+        await sendInvalidRequestResult(client, frame, fileCommand.error);
+      }
     } else {
       await sendJsonPayloadResult(client, frame, fileCommand.payload);
     }

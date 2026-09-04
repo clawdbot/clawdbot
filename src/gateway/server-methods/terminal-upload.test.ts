@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { TerminalUploadStagingExhaustedError } from "../../infra/terminal-file-upload.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { terminalHandlers } from "./terminal.js";
 import { installCatalog, makeOpts } from "./terminal.test-helpers.js";
@@ -84,6 +85,38 @@ describe("terminal.upload", () => {
     );
   });
 
+  it("returns an exhausted staging budget as a typed non-retryable error", async () => {
+    const { opts, sessions, respond } = makeOpts(
+      { sessionId: "s1", name: "report.pdf", contentBase64: "dGVzdA==" },
+      { enabled: true },
+    );
+    sessions.upload.mockRejectedValueOnce(new TerminalUploadStagingExhaustedError());
+
+    await expectDefined(terminalHandlers["terminal.upload"], "terminal.upload")(opts);
+
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "terminal upload staging limit reached",
+      details: { code: "TERMINAL_UPLOAD_STAGING_EXHAUSTED" },
+      retryable: false,
+    });
+  });
+
+  it("leaves other staging failures as plain unavailable errors", async () => {
+    const { opts, sessions, respond } = makeOpts(
+      { sessionId: "s1", name: "report.pdf", contentBase64: "dGVzdA==" },
+      { enabled: true },
+    );
+    sessions.upload.mockRejectedValueOnce(new Error("ENOSPC: no space left on device"));
+
+    await expectDefined(terminalHandlers["terminal.upload"], "terminal.upload")(opts);
+
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "ENOSPC: no space left on device",
+    });
+  });
+
   it("binds paired-node uploads to the catalog terminal host", async () => {
     const command = "codex.terminal.resume.v1";
     const uploadCommand = "terminal.upload";
@@ -138,5 +171,53 @@ describe("terminal.upload", () => {
       timeoutMs: 120_000,
     });
     expect(result).toEqual({ path: "/tmp/node/report.pdf", size: 4 });
+  });
+
+  it("maps a paired-node staging exhaustion back to the typed error", async () => {
+    const command = "codex.terminal.resume.v1";
+    installCatalog({
+      id: "codex",
+      label: "Codex",
+      list: async () => [],
+      read: async (request) => ({ ...request, items: [] }),
+      openTerminal: async () => ({
+        kind: "node",
+        nodeId: "node-1",
+        command,
+        paramsJSON: JSON.stringify({ threadId: "thread" }),
+      }),
+    });
+    const node = {
+      nodeId: "node-1",
+      connId: "conn-node",
+      pairingGeneration: "generation-node",
+      commands: [command, "terminal.upload"],
+    };
+    const invoke = vi.fn(async () => ({
+      ok: false,
+      error: {
+        code: "TERMINAL_UPLOAD_STAGING_EXHAUSTED",
+        message: "terminal upload staging limit reached",
+      },
+    }));
+    const { opts, sessions } = makeOpts(
+      {
+        cols: 80,
+        rows: 24,
+        catalog: { catalogId: "codex", hostId: "node:node-1", threadId: "thread" },
+      },
+      { enabled: true },
+      undefined,
+      { get: () => node, invoke },
+    );
+
+    await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+    const openRequest = sessions.open.mock.calls[0]?.[0] as
+      | { stageUpload?: (file: { name: string; contentBase64: string }) => Promise<unknown> }
+      | undefined;
+
+    await expect(
+      openRequest?.stageUpload?.({ name: "report.pdf", contentBase64: "dGVzdA==" }),
+    ).rejects.toBeInstanceOf(TerminalUploadStagingExhaustedError);
   });
 });

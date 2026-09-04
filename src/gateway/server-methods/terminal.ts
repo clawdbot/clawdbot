@@ -20,11 +20,15 @@ import {
   validateTerminalResizeParams,
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { TERMINAL_UPLOAD_STAGING_EXHAUSTED_CODE } from "../../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
-import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
+import {
+  TerminalUploadStagingExhaustedError,
+  type TerminalUploadFile,
+} from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -110,6 +114,9 @@ async function stageNodeTerminalUpload(
     timeoutMs: 120_000,
   });
   if (!result.ok) {
+    if (result.error?.code === TERMINAL_UPLOAD_STAGING_EXHAUSTED_CODE) {
+      throw new TerminalUploadStagingExhaustedError();
+    }
     throw new Error(result.error?.message ?? "terminal node upload failed");
   }
   const payload = parseNodePayload(result.payload, result.payloadJSON);

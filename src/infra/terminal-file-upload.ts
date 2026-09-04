@@ -5,6 +5,7 @@ import {
   isCanonicalTerminalUploadBase64,
   MAX_TERMINAL_UPLOAD_BASE64_LENGTH,
   MAX_TERMINAL_UPLOAD_BYTES,
+  TERMINAL_UPLOAD_STAGING_EXHAUSTED_CODE,
   terminalUploadDecodedSize,
 } from "../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { logWarn } from "../logger.js";
@@ -72,6 +73,22 @@ export type TerminalUploadResult = {
   path: string;
   size: number;
 };
+
+/** Thrown when the retained staging budget cannot admit another upload. */
+export class TerminalUploadStagingExhaustedError extends Error {
+  readonly code = TERMINAL_UPLOAD_STAGING_EXHAUSTED_CODE;
+
+  constructor() {
+    super("terminal upload staging limit reached");
+    this.name = "TerminalUploadStagingExhaustedError";
+  }
+}
+
+export function isTerminalUploadStagingExhaustedError(
+  error: unknown,
+): error is TerminalUploadStagingExhaustedError {
+  return error instanceof TerminalUploadStagingExhaustedError;
+}
 
 function truncateUtf8(value: string, maxBytes: number): string {
   let result = "";
@@ -379,7 +396,7 @@ export async function stageTerminalUpload(
       retained.length >= limits.maxRetainedDirectories ||
       retainedBytes + bytes.length + TERMINAL_UPLOAD_MARKER_BYTES > limits.maxRetainedBytes
     ) {
-      throw new Error("terminal upload staging limit reached");
+      throw new TerminalUploadStagingExhaustedError();
     }
     const directory = await mkdtemp(path.join(tempRoot, TERMINAL_UPLOAD_PREFIX));
     const targetPath = path.join(directory, sanitizeTerminalUploadName(file.name));

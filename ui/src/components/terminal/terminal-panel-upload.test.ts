@@ -231,6 +231,58 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     ).toEqual(["scan final.pdf", "notes.txt", "notes.txt"]);
   });
 
+  it("does not offer retry when the staging budget is exhausted", async () => {
+    const controller = createTerminalController();
+    createGhosttyTerminalMock.mockResolvedValue(controller);
+    let uploads = 0;
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string) => {
+        if (method === "terminal.open") {
+          return terminalOpenResult("session-1") as T;
+        }
+        if (method === "terminal.upload") {
+          uploads += 1;
+          throw Object.assign(new Error("terminal upload staging limit reached"), {
+            gatewayCode: "UNAVAILABLE",
+            details: { code: "TERMINAL_UPLOAD_STAGING_EXHAUSTED" },
+            retryable: false,
+          });
+        }
+        return {} as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    panel.toggle();
+    await waitForFast(() => {
+      expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
+    });
+
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: {
+        types: ["Files"],
+        files: [terminalUploadFile("notes.txt", "note")],
+        dropEffect: "none",
+      },
+    });
+    panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
+
+    await waitForFast(() => {
+      const failed = panel.renderRoot.querySelector(".tp-upload-card--failed");
+      expect(failed?.textContent).toContain("Upload failed");
+      expect(failed?.textContent).toContain("terminal upload staging limit reached");
+    });
+    expect(panel.renderRoot.querySelector(".tp-upload-retry")).toBeNull();
+    expect(panel.renderRoot.querySelector(".tp-upload-cancel")).not.toBeNull();
+    expect(uploads).toBe(1);
+    expect(controller.terminal.paste).not.toHaveBeenCalled();
+  });
+
   it("cancels an active batch without pasting staged paths", async () => {
     const controller = createTerminalController();
     createGhosttyTerminalMock.mockResolvedValue(controller);

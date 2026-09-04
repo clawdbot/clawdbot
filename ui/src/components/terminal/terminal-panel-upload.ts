@@ -1,5 +1,6 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { html, nothing } from "lit";
+import { TERMINAL_UPLOAD_STAGING_EXHAUSTED_CODE } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { renderDockDestinations } from "../dock-destination-controls.ts";
@@ -48,9 +49,27 @@ type TerminalUploadProgress = {
   total: number;
 };
 
+function isStagingExhaustedDetails(details: unknown): boolean {
+  return (
+    typeof details === "object" &&
+    details !== null &&
+    "code" in details &&
+    details.code === TERMINAL_UPLOAD_STAGING_EXHAUSTED_CODE
+  );
+}
+
 function isRetryableUploadError(error: unknown): boolean {
   if (typeof error === "object" && error !== null && "retryable" in error) {
-    const gatewayError = error as { gatewayCode?: unknown; code?: unknown; retryable?: unknown };
+    const gatewayError = error as {
+      gatewayCode?: unknown;
+      code?: unknown;
+      details?: unknown;
+      retryable?: unknown;
+    };
+    // A full staging budget stays full until staged files expire; Retry cannot fix it.
+    if (isStagingExhaustedDetails(gatewayError.details)) {
+      return false;
+    }
     if (gatewayError.gatewayCode === "UNAVAILABLE" || gatewayError.code === "UNAVAILABLE") {
       return true;
     }

@@ -4,7 +4,11 @@ import {
   type TerminalUploadParams,
   validateTerminalUploadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { isCanonicalTerminalUploadBase64 } from "../../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import {
+  isCanonicalTerminalUploadBase64,
+  TERMINAL_UPLOAD_STAGING_EXHAUSTED_CODE,
+} from "../../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import { isTerminalUploadStagingExhaustedError } from "../../infra/terminal-file-upload.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -47,6 +51,20 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
       }
       respond(true, result);
     } catch (error) {
+      if (isTerminalUploadStagingExhaustedError(error)) {
+        // The Control UI offers Retry for every UNAVAILABLE upload failure. A full
+        // retained budget only clears when staged files expire, so mark it typed
+        // and non-retryable instead of letting the generic mapping below run.
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+            details: { code: TERMINAL_UPLOAD_STAGING_EXHAUSTED_CODE },
+            retryable: false,
+          }),
+        );
+        return;
+      }
       respond(
         false,
         undefined,
