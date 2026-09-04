@@ -74,6 +74,8 @@ In **New session** or an existing chat, open the model menu and use **Account fo
 
 The account control shows a collaborator a person-level label for someone else's personal account, not its private email, provider account label, or account id. The label describes the selection, not a billing receipt: configured shared failover accounts can still be used.
 
+Chat status and model listings identify a selected personal credential as **personal account**, without exposing its private label, email, or account id.
+
 The CLI uses the same Gateway operations through [`openclaw models accounts`](/cli/models#personal-model-accounts). Run `openclaw models accounts login` to choose a provider and method, or supply `login <provider> --method <id>` directly. Use `list` to inspect saved accounts. Each command shows the selected Gateway, verified person, and Personal scope. It targets that person, not `--agent` or the operating-system username.
 
 Ask OpenClaw (Custodian) requires administrator access and a working configured inference route. Ask it to manage your personal model accounts, or enter `model accounts`. In the Control UI it opens **Settings → Profile → Connected accounts**; in a terminal it gives the CLI commands. If Custodian is unavailable, open **Connected accounts** or use the CLI directly. The handoff makes no change by itself. Complete sign-in in the protected controls or hidden terminal prompt, never in the conversation. Delegated agent requests cannot open or complete the human sign-in flow.

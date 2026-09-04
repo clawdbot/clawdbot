@@ -172,7 +172,6 @@ type ResolvedActiveRecallPluginConfig = {
   agents: string[];
   model?: string;
   modelFallback?: string;
-  modelFallbackPolicy: "default-remote" | "resolved-only";
   allowedChatTypes: Array<"direct" | "group" | "channel" | "explicit">;
   allowedChatIds: string[];
   deniedChatIds: string[];

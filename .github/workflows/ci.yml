@@ -1922,7 +1922,14 @@ jobs:
             pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
+        run: |
+          audit_exit=0
+          node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high || audit_exit=$?
+          if [ "$audit_exit" -eq 2 ]; then
+            echo "::warning::npm advisory service unavailable; production dependency audit incomplete. CI is continuing without full advisory coverage."
+          else
+            exit "$audit_exit"
+          fi
 
   # Prime the lockfile- and pnpm-pinned store for fork PRs, manual runs, the
   # GitHub backend, and docs-only same-repo PRs. This job restores only; the
@@ -2528,6 +2535,32 @@ jobs:
 
       - *cache_playwright_chromium
       - *install_playwright_chromium
+
+      - name: Restore Chrome MCP npm cache
+        id: chrome-mcp-cache
+        if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: &chrome_mcp_npm_cache
+          path: |
+            ~/.npm/_cacache
+            ~/.npm/_npx
+          key: ${{ runner.os }}-${{ runner.arch }}-chrome-devtools-mcp@1.8.0-node24-v1
+
+      # Populate metadata and the executable before the 30-second MCP handshake.
+      - name: Pre-warm Chrome MCP
+        if: matrix.task == 'browser-extension' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
+        run: npx -y chrome-devtools-mcp@1.8.0 --version
+
+      - name: Save Chrome MCP npm cache
+        if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: *chrome_mcp_npm_cache
+
+      - name: Configure offline Chrome MCP
+        if: matrix.task == 'browser-extension'
+        # npx revalidates cached pins; MCP filters npm_config_* and Vitest changes
+        # HOME. Project config keeps the warmed cache reachable without the registry.
+        run: npm config set cache="$HOME/.npm" offline=true --location=project
 
       - name: Test Control UI end-to-end
         if: matrix.task == 'control-ui'

@@ -470,11 +470,11 @@ importers:
         specifier: 2.0.3
         version: 2.0.3
       markdown-it:
-        specifier: 15.0.0
-        version: 15.0.0
+        specifier: 15.0.1
+        version: 15.0.1
       markdown-it-anchor:
         specifier: 9.2.1
-        version: 9.2.1(@types/markdown-it@14.2.0)(markdown-it@15.0.0)
+        version: 9.2.1(@types/markdown-it@14.2.0)(markdown-it@15.0.1)
       marked:
         specifier: 18.0.11
         version: 18.0.11
@@ -1393,8 +1393,8 @@ importers:
         specifier: 6.2.5
         version: 6.2.5
       markdown-it:
-        specifier: 15.0.0
-        version: 15.0.0
+        specifier: 15.0.1
+        version: 15.0.1
       matrix-js-sdk:
         specifier: 42.2.0
         version: 42.2.0(patch_hash=9e97147d99b86977d6665a676cdf853434ef61eee7cfb176bb66c9c48da599b4)
@@ -1681,8 +1681,8 @@ importers:
         specifier: 3.3.1
         version: 3.3.1
       markdown-it:
-        specifier: 15.0.0
-        version: 15.0.0
+        specifier: 15.0.1
+        version: 15.0.1
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -2428,11 +2428,11 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
       markdown-it:
-        specifier: 15.0.0
-        version: 15.0.0
+        specifier: 15.0.1
+        version: 15.0.1
       markdown-it-cjk-friendly:
         specifier: 3.0.0
-        version: 3.0.0(@types/markdown-it@14.2.0)(markdown-it@15.0.0)
+        version: 3.0.0(@types/markdown-it@14.2.0)(markdown-it@15.0.1)
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3(supports-color@10.2.2)
@@ -2671,8 +2671,8 @@ importers:
         specifier: 3.3.3
         version: 3.3.3
       markdown-it:
-        specifier: 15.0.0
-        version: 15.0.0
+        specifier: 15.0.1
+        version: 15.0.1
       markdown-it-task-lists:
         specifier: 2.1.1
         version: 2.1.1
@@ -7802,8 +7802,8 @@ packages:
   markdown-it-task-lists@2.1.1:
     resolution: {integrity: sha512-TxFAc76Jnhb2OUu+n3yz9RMu4CwGfaT788br6HhEDlvWfdeJcLUsxk1Hgw2yJio0OXsxv7pyIPmvECY7bMbluA==}
 
-  markdown-it@15.0.0:
-    resolution: {integrity: sha512-Lf8ajvVNdRpzSNB4VegxNy7gjs8gU35l4b4+ET49LrQC5PKYwLZ72u60LeJ9gv3qiaesuYjJWCyVeQmv/QWKQw==}
+  markdown-it@15.0.1:
+    resolution: {integrity: sha512-9/7gE95FNPkfUWrjJIoHZza2iLmuJlPD0UNMxPi7bxUrbCR525YZY0r+zyfes0dZI5ZZ/uNIXUJca0pJvtw41g==}
     hasBin: true
 
   markdown-table@3.0.4:
@@ -15182,21 +15182,21 @@ snapshots:
 
   markdown-extensions@2.0.0: {}
 
-  markdown-it-anchor@9.2.1(@types/markdown-it@14.2.0)(markdown-it@15.0.0):
+  markdown-it-anchor@9.2.1(@types/markdown-it@14.2.0)(markdown-it@15.0.1):
     dependencies:
       '@types/markdown-it': 14.2.0
-      markdown-it: 15.0.0
+      markdown-it: 15.0.1
 
-  markdown-it-cjk-friendly@3.0.0(@types/markdown-it@14.2.0)(markdown-it@15.0.0):
+  markdown-it-cjk-friendly@3.0.0(@types/markdown-it@14.2.0)(markdown-it@15.0.1):
     dependencies:
       get-east-asian-width: 1.6.0
-      markdown-it: 15.0.0
+      markdown-it: 15.0.1
     optionalDependencies:
       '@types/markdown-it': 14.2.0
 
   markdown-it-task-lists@2.1.1: {}
 
-  markdown-it@15.0.0:
+  markdown-it@15.0.1:
     dependencies:
       argparse: 3.0.0
       entities: 8.0.0
