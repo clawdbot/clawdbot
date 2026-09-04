@@ -251,9 +251,9 @@ export async function prepareGatewayLifecycle(params: {
       activeTaskCount.get = handles.getActiveTaskCount;
       runtimeState.skillsChangeUnsub = handles.skillsChangeUnsub;
     },
-    swapBonjourStop: (next: typeof runtimeState.bonjourStop) => {
-      const previous = runtimeState.bonjourStop;
-      runtimeState.bonjourStop = next;
+    swapDiscovery: (next: typeof runtimeState.discovery) => {
+      const previous = runtimeState.discovery;
+      runtimeState.discovery = next;
       return previous;
     },
     setScheduledServiceHandles: (handles: {
@@ -491,7 +491,7 @@ export async function prepareGatewayLifecycle(params: {
       const transport = transportBridge.current();
       await transport?.portalService.closeAll();
       await shutdownRuntime.createGatewayCloseHandler({
-        bonjourStop: kernel.swapBonjourStop(null),
+        bonjourStop: kernel.swapDiscovery(null)?.stop ?? null,
         tailscaleCleanup: runtimeState.tailscaleCleanup,
         clearSecretsRuntimeSnapshot: clearSecretsRuntimeSnapshotState,
         channelIds,
