@@ -422,7 +422,7 @@ async function waitForAcpRuntimeBackendReady(params: {
   const { getAcpRuntimeBackend } = await import("../acp/runtime/registry.js");
   const timeoutMs = params.timeoutMs ?? ACP_BACKEND_READY_TIMEOUT_MS;
   const pollMs = params.pollMs ?? ACP_BACKEND_READY_POLL_MS;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
 
   do {
     const backend = getAcpRuntimeBackend(params.backendId);
@@ -436,7 +436,7 @@ async function waitForAcpRuntimeBackendReady(params: {
       }
     }
     await sleep(pollMs, undefined, { ref: false });
-  } while (Date.now() < deadline);
+  } while (performance.now() < deadline);
 
   return false;
 }
