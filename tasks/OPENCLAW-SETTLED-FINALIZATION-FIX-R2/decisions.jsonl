@@ -1,2 +1,0 @@
-{"ts":"2026-09-03T21:51:47.877Z","kind":"reset_agent","actor":"dispatcher","payload":{"agent":"planner","force":true,"eagerRestart":true}}
-{"ts":"2026-09-03T21:52:11.607Z","kind":"terminate","actor":"planner","payload":{"reason":"Planner agy returned empty before planning twice, including after forced session reset; no subagents spawned and no implementation mutations."}}
