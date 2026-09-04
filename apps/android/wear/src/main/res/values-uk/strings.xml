@@ -11,13 +11,13 @@
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Гілка"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Відкрити гілку"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Проведіть →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Призупинити"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Утримуйте"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Торкніться"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Подвійне торкання"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Показати нові повідомлення"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Увімкніть режим наживо, щоб побачити розмову тут."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Новий"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Тип"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Введіть"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Повідомлення"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Написати агенту"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Надіслати"</string>

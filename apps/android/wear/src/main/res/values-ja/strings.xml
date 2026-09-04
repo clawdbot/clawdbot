@@ -11,13 +11,13 @@
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スレッド"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"スレッドを開く"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← スワイプ →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"保留"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"長押し"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"タップ"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ダブルタップ"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"新しいメッセージを表示"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ライブを開始すると、ここに会話が表示されます。"</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"新規"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"種類"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"入力"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"メッセージ"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"エージェントにメッセージを送信"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"送信"</string>

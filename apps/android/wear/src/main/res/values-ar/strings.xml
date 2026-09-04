@@ -11,13 +11,13 @@
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"سلسلة محادثة"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"فتح المحادثة"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← اسحب →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعليق"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اضغط مطولًا"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"انقر"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نقر مزدوج"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"عرض الرسائل الجديدة"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ابدأ الوضع المباشر لرؤية المحادثة هنا."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جديد"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"النوع"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اكتب"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"رسالة"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مراسلة الوكيل"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إرسال"</string>

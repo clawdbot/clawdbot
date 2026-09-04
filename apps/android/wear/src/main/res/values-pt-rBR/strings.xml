@@ -11,13 +11,13 @@
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversa"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Abrir conversa"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Deslize →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Reter"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mantenha pressionado"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Toque"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Toque duplo"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Mostrar novas mensagens"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inicie o modo ao vivo para ver a conversa aqui."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Novo"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tipo"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Digitar"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mensagem"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Enviar mensagem ao agente"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Enviar"</string>

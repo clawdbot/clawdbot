@@ -11,13 +11,13 @@
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tråd"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Öppna tråd"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Svep →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pausa"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Håll"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tryck"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dubbeltryck"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Visa nya meddelanden"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Starta liveläget för att se konversationen här."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ny"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Typ"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skriv"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Meddelande"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skriv till agent"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skicka"</string>

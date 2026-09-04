@@ -11,13 +11,13 @@
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ветка"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Открыть ветку"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Смахните →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Удерживать"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Удерживайте"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Нажать"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Двойное касание"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Показать новые сообщения"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запустите общение в реальном времени, чтобы увидеть беседу здесь."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Новый"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Тип"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Введите текст"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Сообщение"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Написать агенту"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Отправить"</string>

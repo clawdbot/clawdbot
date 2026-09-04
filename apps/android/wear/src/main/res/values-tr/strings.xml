@@ -11,13 +11,13 @@
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşma"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Konuşmayı aç"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Kaydır →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Beklet"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Basılı tut"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dokun"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Çift dokun"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Yeni mesajları göster"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşmayı burada görmek için canlı modu başlatın."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yeni"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tür"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yazın"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mesaj"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ajana mesaj gönder"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gönder"</string>

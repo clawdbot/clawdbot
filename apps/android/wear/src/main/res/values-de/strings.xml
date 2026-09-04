@@ -17,7 +17,7 @@
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Neue Nachrichten anzeigen"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Starten Sie den Live-Modus, um die Unterhaltung hier zu sehen."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Neu"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Typ"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eingeben"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nachricht"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agenten eine Nachricht senden"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Senden"</string>

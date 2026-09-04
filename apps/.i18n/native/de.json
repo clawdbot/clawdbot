@@ -1260,7 +1260,7 @@
     "native.android.c81431ac22026d3c": "Anzeigen",
     "native.android.c83463d615ab1395": "Die Anhänge sind zu groß, um sie für eine einzelne Nachricht in die Warteschlange aufzunehmen; entferne einige und versuche es erneut.",
     "native.android.c85a367478139473": "Gateway-Zugriff muss überprüft werden",
-    "native.android.c868590127e7e403": "Typ",
+    "native.android.c868590127e7e403": "Eingeben",
     "native.android.c8944f55899c5928": "${durationMs}ms",
     "native.android.c8b6ec8fbf52bb36": "${summary.promotedToday} heute · ${summary.promotedTotal} insgesamt",
     "native.android.c8ca81a0679305e2": "Die Denkstufe konnte nicht aktualisiert werden.",

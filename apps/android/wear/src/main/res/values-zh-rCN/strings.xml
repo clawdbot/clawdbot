@@ -11,13 +11,13 @@
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"会话"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"打开讨论串"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← 滑动 →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"暂缓"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"按住"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"轻点"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"轻点两下"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"显示新消息"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"开启实时模式以在此处查看对话。"</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"新建"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"类型"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"输入"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"消息"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"向智能体发消息"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"发送"</string>

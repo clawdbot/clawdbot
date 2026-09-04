@@ -17,7 +17,7 @@
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Hiển thị tin nhắn mới"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bắt đầu chế độ trực tiếp để xem cuộc trò chuyện tại đây."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mới"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Loại"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nhập"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tin nhắn"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nhắn tin cho tác nhân"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gửi"</string>

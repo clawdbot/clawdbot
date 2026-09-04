@@ -17,7 +17,7 @@
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Tampilkan pesan baru"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mulai mode Langsung untuk melihat percakapan di sini."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Baru"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Jenis"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ketik"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pesan"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kirim pesan ke agen"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kirim"</string>

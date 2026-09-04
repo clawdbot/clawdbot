@@ -11,13 +11,13 @@
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"스레드"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"스레드 열기"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← 스와이프 →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보류"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"길게 누르기"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"탭"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"두 번 탭"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"새 메시지 보기"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"라이브를 시작하면 여기에 대화가 표시됩니다."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"새로 만들기"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"유형"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"입력"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"메시지"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"에이전트에 메시지 보내기"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"보내기"</string>

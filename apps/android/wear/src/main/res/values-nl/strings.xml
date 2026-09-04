@@ -11,13 +11,13 @@
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gesprek"</string>
     <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Open gesprek"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Veeg →"</string>
-    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Vasthouden"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ingedrukt houden"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tikken"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dubbel tikken"</string>
     <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Nieuwe berichten tonen"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Start Live om het gesprek hier te zien."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nieuw"</string>
-    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Type"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Typen"</string>
     <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bericht"</string>
     <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Stuur de agent een bericht"</string>
     <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verzenden"</string>
