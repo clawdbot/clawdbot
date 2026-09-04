@@ -1966,7 +1966,7 @@ src/agents/sessions/package-manager.ts	3
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	3
 src/agents/sessions/session-manager-branching.ts	1
-src/agents/sessions/session-manager-codec.ts	7
+src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	3
 src/agents/sessions/session-manager-persistence.ts	2
