@@ -305,26 +305,51 @@ describe("createGatewayControlUiRootLifecycle", () => {
     expect(warn).toHaveBeenCalledWith("gateway: Control UI assets build failed: spawn failed");
   });
 
-  test("does not publish a late build result after its Gateway generation stops", async () => {
-    let finishBuild: (() => void) | undefined;
-    controlUiAssetsMocks.ensureControlUiAssetsBuilt.mockReturnValue(
-      new Promise((resolve) => {
-        finishBuild = () => resolve({ ok: true, built: true });
-      }),
-    );
-    const { lifecycle, warn } = createLifecycle();
-    const build = lifecycle.start();
-    await vi.waitFor(() =>
-      expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).toHaveBeenCalledOnce(),
-    );
+  test.each([false, true])(
+    "does not publish a late build result after shutdown (initially failed=%s)",
+    async (initiallyFailed) => {
+      if (initiallyFailed) {
+        controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue("/repo/dist/control-ui");
+        vi.mocked(fs.realpathSync).mockImplementationOnce(() => {
+          throw new Error("root unavailable");
+        });
+      }
+      const { lifecycle, warn } = createLifecycle();
+      if (initiallyFailed) {
+        expect(lifecycle.state).toEqual({ kind: "failed" });
+        controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue(null);
+        lifecycle.setEnabled(false);
+        warn.mockClear();
+      }
+      let finishBuild: (() => void) | undefined;
+      controlUiAssetsMocks.ensureControlUiAssetsBuilt.mockReturnValue(
+        new Promise((resolve) => {
+          finishBuild = () => resolve({ ok: true, built: true });
+        }),
+      );
+      if (initiallyFailed) {
+        lifecycle.setEnabled(true);
+      }
+      const build = lifecycle.start();
+      await vi.waitFor(() =>
+        expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).toHaveBeenCalledOnce(),
+      );
 
-    const stopped = lifecycle.stop();
-    finishBuild?.();
-    await Promise.all([build, stopped]);
+      const stopped = lifecycle.stop();
+      expect(
+        controlUiAssetsMocks.ensureControlUiAssetsBuilt.mock.calls[0]?.[1].signal.aborted,
+      ).toBe(true);
+      finishBuild?.();
+      await Promise.all([build, stopped]);
 
-    expect(lifecycle.state).toEqual({ kind: "preparing" });
-    expect(warn).not.toHaveBeenCalled();
-  });
+      expect(lifecycle.state).toEqual({ kind: "preparing" });
+      expect(warn).not.toHaveBeenCalled();
+      lifecycle.setEnabled(false);
+      lifecycle.setEnabled(true);
+      await lifecycle.start();
+      expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).toHaveBeenCalledOnce();
+    },
+  );
 
   test("retires an interrupted build before preparing a re-enabled dashboard", async () => {
     let finishBuild!: () => void;

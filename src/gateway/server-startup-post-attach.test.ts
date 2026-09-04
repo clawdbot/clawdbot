@@ -1446,6 +1446,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it.each([
     { name: "preparing", state: { kind: "preparing" } as const },
+    { name: "initially failed", state: { kind: "failed" } as const },
     {
       name: "already-ready bundled",
       state: { kind: "bundled", path: "/repo/dist/control-ui" } as const,
