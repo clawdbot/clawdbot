@@ -41,6 +41,7 @@ import {
   compactToolSearchCatalogEntry,
   isDirectVisibleCatalogTool,
 } from "./tool-search-catalog.js";
+import { withUnavailableMcpServers } from "./tool-search-lookup-miss.js";
 import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -254,7 +255,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
-      return formatToolSearchControlResult(result, runtime, {
+      return formatToolSearchControlResult(withUnavailableMcpServers(result, ctx), runtime, {
         terminalBatchStatus: result.status,
         compact: true,
       });
@@ -293,7 +294,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
         }),
       );
       markCodeModePermissionChangeResult(result, signal);
-      return formatToolSearchControlResult(result, runtime, {
+      return formatToolSearchControlResult(withUnavailableMcpServers(result, ctx), runtime, {
         terminalBatchStatus: result.status,
         compact: true,
       });

@@ -11,11 +11,11 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type {
   ToolSearchCatalogEntry,
   ToolSearchCatalogSession,
+  ToolSearchToolContext,
   UnknownToolErrorOptions,
 } from "./tool-search-types.js";
 
@@ -55,26 +55,33 @@ export function describeUnavailableMcpServers(
 }
 
 /**
- * Recorded failed server a lookup names through an encoded MCP identifier:
- * the catalog id `mcp:<server>:…` or the generated tool name `<server>__…`.
- * A bare name is never attributed, so an unrelated or policy-hidden tool that
- * happens to share a server's name keeps the generic unknown-tool recovery.
+ * Adds the recorded failed servers to a search-capable tool result (Code Mode
+ * exec/wait, tool_search_code) so the first exec already carries the outage;
+ * the in-guest `search` keeps returning a plain array for user code.
+ */
+export function withUnavailableMcpServers<T extends object>(
+  payload: T,
+  ctx: Pick<ToolSearchToolContext, "catalogRef">,
+): T | (T & UnavailableMcpServersNote) {
+  const catalog = ctx.catalogRef?.current;
+  const outage = catalog ? describeUnavailableMcpServers(catalog) : undefined;
+  return outage ? { ...payload, ...outage } : payload;
+}
+
+/**
+ * Recorded failed server a lookup names through its catalog id, `mcp:<server>:…`.
+ * Only that encoded form proves MCP ownership: a bare or `<server>__…`-shaped
+ * name has no catalog entry behind it, so an unrelated or policy-hidden tool
+ * keeps the generic unknown-tool recovery.
  */
 function findUnavailableMcpServer(
   needle: string,
   catalog: ToolSearchCatalogSession,
 ): McpToolCatalogDiagnostic | undefined {
-  const diagnostics = catalog.mcpDiagnostics;
-  if (!diagnostics?.length) {
-    return undefined;
-  }
-  const separatorIndex = needle.indexOf(TOOL_NAME_SEPARATOR);
-  const server =
-    MCP_CATALOG_ID_SERVER_RE.exec(needle)?.[1] ??
-    (separatorIndex > 0 ? needle.slice(0, separatorIndex) : undefined);
+  const server = MCP_CATALOG_ID_SERVER_RE.exec(needle)?.[1];
   return server === undefined
     ? undefined
-    : diagnostics.find((diagnostic) => diagnostic.safeServerName === server);
+    : catalog.mcpDiagnostics?.find((diagnostic) => diagnostic.safeServerName === server);
 }
 
 function formatUnavailableMcpToolError(

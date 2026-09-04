@@ -123,11 +123,9 @@ describe("Tool Search with an unavailable MCP server", () => {
     }
   });
 
-  it.each([
-    { label: "catalog id", id: "mcp:memos:memos__read_note" },
-    { label: "tool name", id: "memos__read_note" },
-  ])("reports the outage for a $label lookup on the failed server", async ({ id }) => {
+  it("reports the outage for a catalog-id lookup on the failed server", async () => {
     const { control } = await createControls(makeOutageCatalog());
+    const id = "mcp:memos:memos__read_note";
 
     for (const name of [TOOL_CALL_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME]) {
       const error = await control(name)
@@ -146,6 +144,10 @@ describe("Tool Search with an unavailable MCP server", () => {
   it.each([
     { label: "a server without a recorded failure", id: "mcp:other:other__read" },
     { label: "a bare name that only matches the failed server", id: "memos" },
+    {
+      label: "a name-shaped id with no catalog entry proving MCP ownership",
+      id: "memos__read_note",
+    },
   ])("keeps the generic unknown-tool recovery for $label", async ({ id }) => {
     const { control } = await createControls(makeOutageCatalog());
 
@@ -170,6 +172,24 @@ describe("Tool Search with an unavailable MCP server", () => {
         args: {},
       }),
     ).rejects.toThrow("Unknown tool id: mcp:memos:memos__read_note");
+  });
+
+  it("carries the outage on a code mode exec whose only action is a search", async () => {
+    const { control } = await createControls(makeOutageCatalog(), "code");
+
+    const result = await control(TOOL_SEARCH_CODE_MODE_TOOL_NAME).execute("code-mode-search", {
+      code: `return await openclaw.tools.search("memos");`,
+    });
+
+    // The in-guest search stays a plain array for user code; the exec result
+    // itself names the failed server so the first search already stops a loop.
+    expect(result.details).toMatchObject({
+      ok: true,
+      value: [],
+      unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }],
+      note: expect.stringContaining("memos"),
+    });
+    expect(JSON.stringify(result)).not.toContain(LAUNCH_SUMMARY);
   });
 
   it("surfaces the outage to code mode calls", async () => {
