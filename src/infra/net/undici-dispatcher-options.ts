@@ -23,6 +23,13 @@ const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
   allowH2: false as const,
 });
 
+const OPENCLAW_AGENT_DEFAULT_KEEPALIVE = Object.freeze({
+  connections: 1,
+  pipelining: 0,
+  keepAliveTimeout: 1_000,
+  keepAliveMaxTimeout: 5_000,
+});
+
 export function loadUndiciModule(
   requiredExports: ReadonlyArray<keyof typeof import("undici")>,
 ): typeof import("undici") {
@@ -134,6 +141,9 @@ function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
   const base = {} as (T extends object ? T : Record<never, never>) & { allowH2: false };
   if (options) {
     Object.assign(base, options);
+  }
+  for (const [key, value] of Object.entries(OPENCLAW_AGENT_DEFAULT_KEEPALIVE)) {
+    if (!(key in base)) (base as Record<string, unknown>)[key] = value;
   }
   Object.assign(base, HTTP1_ONLY_DISPATCHER_OPTIONS);
   const baseRecord = base as Record<string, unknown>;
