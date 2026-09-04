@@ -58,6 +58,7 @@ export type SystemAgentCommandDeps = {
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
+  gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;
   runPluginUninstall?: (
     pluginId: string,
     runtime: RuntimeEnv,
@@ -72,7 +73,7 @@ export type SystemAgentCommandDeps = {
     historyLimit?: number;
     message?: string;
   }) => Promise<TuiResult | void>;
-  /** Where setup side effects run; the gateway surface never manages its own daemon. */
+  /** Where setup side effects run; hosted lifecycle actions require the exact host capability. */
   setupSurface?: "cli" | "gateway";
   applySetup?: typeof import("./setup-apply.js").applySystemAgentSetup;
   verifyInferenceConfig?: typeof import("./setup-inference.js").verifySetupInferenceConfig;
