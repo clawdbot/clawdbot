@@ -83,7 +83,8 @@ never needs the agent.
   **Collapse** to bring the chat back beside it, or close it for chat alone.
 - **Agent parity.** The agent's `dashboard` tool creates or updates trusted
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
-  the visible tab, and requests a split or expanded dashboard. The `show_widget` tool
+  the visible tab, and requests a split or expanded dashboard with
+  `set_presentation` and `presentation: "split"` or `"expanded"`. The `show_widget` tool
   creates or refreshes custom HTML and registered-source widgets; updating an
   existing widget uses `pin: true`, the same `name`, and new `widget_code`.
   Board snapshots identify each widget's `contentOwner` and, when applicable,
@@ -94,9 +95,9 @@ never needs the agent.
   Switching the visible tab or dashboard presentation requires a connected
   Control UI. If none is connected, the command returns `UNAVAILABLE`; open the
   Control UI and retry.
-  `focus_tab` opens the side panel. `set_chat_dock` with `dock: "hidden"` expands
-  it; `"left"`, `"right"`, and `"bottom"` all show it beside chat using the current
-  panel layout.
+  `focus_tab` opens the side panel. Call `set_presentation` after focusing the tab:
+  `presentation: "expanded"` expands it; `"split"` shows it beside chat using the
+  current panel layout.
 
 ## What widgets are allowed to do
 

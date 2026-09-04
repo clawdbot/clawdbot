@@ -374,8 +374,11 @@ presentation?, capabilities? }` — create/update by name; `kind` defaults to `h
   Headless scheduled authoring requires `pin: true`, cannot select a presentation
   target, and is unavailable to detached cron-run sessions.
 - `dashboard { action, ... }` — board management verbs: `read`, `tab_create`,
-  `tab_update`, `tab_delete`, `tabs_reorder`, `widget_move`, `widget_remove`,
-  `unpin`, `focus_tab`, `set_chat_dock`.
+  `tab_update`, `tab_delete`, `tabs_reorder`, `widget_put`, `widget_move`,
+  `widget_resize`, `widget_remove`, `focus_tab`, `set_presentation`.
+  Presentation is `split` or `expanded`; the Control UI owns the panel's dock
+  position. The tool maps presentation onto the existing `set_chat_dock` wire
+  command without changing the Gateway protocol.
 - The existing `automations` tool covers the automation tier; no new tool needed.
 
 Tool descriptions teach the size/anchor vocabulary and the tier model. The

@@ -12,6 +12,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { assertDashboardToolPresentation } from "./dashboard-presentation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session dashboard stitch",
@@ -256,7 +257,17 @@ suite.define(() => {
     if (recordProof) {
       await mkdir(path.join(suite.artifactDir, "workboard-pin"), { recursive: true });
     }
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const context = await suite.browser.newContext({
+      viewport: { height: 900, width: 1280 },
+      ...(recordProof
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "workboard-pin"),
+              size: { height: 900, width: 1280 },
+            },
+          }
+        : {}),
+    });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionKey,
@@ -381,6 +392,13 @@ suite.define(() => {
     });
     const researchTab = page.locator('[data-board-tab-id="research"]');
     await expect.poll(() => researchTab.getAttribute("active")).not.toBeNull();
+
+    await assertDashboardToolPresentation({
+      page,
+      gateway,
+      sessionKey,
+      proofDir: recordProof ? path.join(suite.artifactDir, "workboard-pin") : undefined,
+    });
 
     const expand = page.getByRole("button", { name: "Expand side panel" });
     await expand.click();
