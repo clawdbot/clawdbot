@@ -33,19 +33,30 @@ To move supported credentials out of plaintext, follow this three-step workflow:
     ```bash
     openclaw secrets configure --apply
     ```
-
-    If the migration includes exec SecretRefs or providers, use this exec-aware variant so both audits resolve them:
-
-    ```bash
-    openclaw secrets audit --check --allow-exec
-    openclaw secrets configure --apply --allow-exec
-    openclaw secrets audit --check --allow-exec
-    ```
-
   </Step>
   <Step title="Re-audit">
     ```bash
     openclaw secrets audit --check
+    ```
+  </Step>
+</Steps>
+
+If the migration includes exec SecretRefs or providers, use this complete exec-aware variant so both audits resolve them:
+
+<Steps>
+  <Step title="Audit current state">
+    ```bash
+    openclaw secrets audit --check --allow-exec
+    ```
+  </Step>
+  <Step title="Configure and apply SecretRefs">
+    ```bash
+    openclaw secrets configure --apply --allow-exec
+    ```
+  </Step>
+  <Step title="Re-audit">
+    ```bash
+    openclaw secrets audit --check --allow-exec
     ```
   </Step>
 </Steps>
