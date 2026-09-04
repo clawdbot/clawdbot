@@ -1,8 +1,7 @@
 // Fast-path /reset appearance coverage lives here so get-reply.fast-path.test.ts
 // stays under the max-lines ratchet. Native slash still calls initFastReplySessionState.
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -32,16 +31,10 @@ describe("initFastReplySessionState reset appearance", () => {
       env: { OPENCLAW_TEST_FAST: "1" },
     });
     isolatedStorePath = path.join(state.sessionsDir("main"), "sessions.json");
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
-      resolveRuntimeCliBackends: () => [],
-    });
+  });
+
+  afterEach(async () => {
+    await state.cleanup();
   });
 
   it("preserves custom session appearance during fast reset bootstrap", async () => {
