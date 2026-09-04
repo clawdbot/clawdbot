@@ -78,6 +78,7 @@ import {
   resolveSessionSelectedModelRef,
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
+import { resolveGatewaySessionReasoningLevel } from "./session-utils-reasoning.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
@@ -349,6 +350,7 @@ export function buildGatewaySessionRow(params: {
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
   const thinkingModelCatalog = rowModelCatalog ?? (lightweight ? [] : undefined);
+  const reasoningModelCatalog = rowModelCatalog;
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,
@@ -401,6 +403,16 @@ export function buildGatewaySessionRow(params: {
     agentHarnessId: thinkingProjection.agentRuntime.id,
     resolvedContextTokens: resolvedCurrentContextTokens,
     authoredContextTokens,
+  });
+
+  const effectiveReasoningLevel = resolveGatewaySessionReasoningLevel({
+    cfg,
+    agentId: sessionAgentId,
+    provider: thinkingProvider,
+    model: thinkingModel,
+    entry,
+    modelCatalog: reasoningModelCatalog,
+    effectiveThinkingLevel: thinkingProjection.effectiveThinkingLevel,
   });
   const fastModeState = resolveFastModeState({
     cfg,
@@ -520,6 +532,7 @@ export function buildGatewaySessionRow(params: {
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
+    ...(effectiveReasoningLevel !== undefined ? { effectiveReasoningLevel } : {}),
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,

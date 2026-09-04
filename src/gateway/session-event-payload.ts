@@ -41,7 +41,6 @@ export function buildGatewaySessionEventFields(params: {
     archived: sessionRow.archived ?? false,
     archivedAt: sessionRow.archivedAt ?? null,
     archivedBy: sessionRow.archivedBy ?? null,
-    archiveReason: sessionRow.archiveReason ?? null,
     pinned: sessionRow.pinned ?? false,
     pinnedAt: sessionRow.pinnedAt ?? null,
     unread: sessionRow.unread ?? false,
@@ -89,6 +88,10 @@ export function buildGatewaySessionEventFields(params: {
     verboseLevel: sessionRow.verboseLevel,
     traceLevel: sessionRow.traceLevel,
     reasoningLevel: sessionRow.reasoningLevel,
+    // Effective reasoning level drives UI visibility; omitting it from event
+    // fields left already-open transcripts with stale visibility after a
+    // model/default update (reconciliation only overlays event fields).
+    effectiveReasoningLevel: sessionRow.effectiveReasoningLevel ?? null,
     elevatedLevel: sessionRow.elevatedLevel,
     sendPolicy: sessionRow.sendPolicy,
     systemSent: sessionRow.systemSent,

@@ -92,7 +92,11 @@ export function projectChatTranscript(
     (sessionHost !== null &&
       isUiGlobalScopeConfigured(sessionHost) &&
       resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
-  const showReasoning = props.showThinking && activeSession?.reasoningLevel === "on";
+  const reasoningLevel =
+    activeSession?.effectiveReasoningLevel ?? activeSession?.reasoningLevel ?? "off";
+  // The accepted reasoning contract is only on/off/stream. Unknown legacy
+  // values must not bypass the completed-reasoning gate; require canonical on.
+  const showReasoning = props.showThinking && reasoningLevel === "on";
   const assistantIdentity = {
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),

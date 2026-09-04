@@ -683,7 +683,9 @@ export async function projectSessionPatchResult(params: {
     provider: resolved.provider,
     model: resolved.model,
   });
-  const modelCatalog = await params.modelCatalogByAgent.get(params.targetAgentId);
+  const modelCatalog = await params.modelCatalogByAgent
+    .get(params.targetAgentId)
+    ?.catch(() => undefined);
   const thinking = resolveGatewaySessionThinkingProjectionInternal({
     cfg: params.cfg,
     agentId,

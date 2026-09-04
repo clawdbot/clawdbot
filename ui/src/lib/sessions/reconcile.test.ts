@@ -60,6 +60,28 @@ describe("preserveRosterPresentationMetadata", () => {
   });
 });
 
+test("sessions.changed replaces a prior effective reasoning value", () => {
+  const result = buildResult([
+    {
+      key: "agent:main:reasoning-peer",
+      kind: "direct",
+      sessionId: "reasoning-peer-session",
+      updatedAt: 1,
+      effectiveReasoningLevel: "on",
+    },
+  ]);
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: "agent:main:reasoning-peer",
+    reason: "patch",
+    updatedAt: 2,
+    effectiveReasoningLevel: "off",
+  });
+
+  expect(reconciled.applied).toBe(true);
+  expect(reconciled.result?.sessions[0]?.effectiveReasoningLevel).toBe("off");
+});
+
 test("sessions.changed removes a label when the event carries null", () => {
   const result: SessionsListResult = {
     ts: 1,
@@ -483,6 +505,31 @@ describe("reconcileSessionChanged", () => {
     });
     expect(next.applied).toBe(true);
     expect(next.row?.category).toBe("Research");
+  });
+
+  it("preserves a catalog-derived reasoning level from a session event", () => {
+    const key = "agent:main:main";
+    const result = buildResult([
+      {
+        key,
+        kind: "global",
+        updatedAt: 1,
+        sessionId: "s1",
+        effectiveReasoningLevel: "on",
+      },
+    ]);
+
+    const next = reconcileSessionChanged(result, {
+      sessionKey: key,
+      key,
+      kind: "global",
+      updatedAt: 2,
+      sessionId: "s1",
+      effectiveReasoningLevel: "on",
+    });
+
+    expect(next.row?.effectiveReasoningLevel).toBe("on");
+    expect(next.result?.sessions[0]?.effectiveReasoningLevel).toBe("on");
   });
 
   it("replaces thinking metadata when the same model changes runtime", () => {
