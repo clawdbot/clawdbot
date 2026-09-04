@@ -632,7 +632,9 @@ and release proof. Before the next tag, prepare the shared mobile release with
 When preparing the core and mobile release together, use
 `pnpm release:prepare --version YYYY.M.PATCH --android --write`; its Android
 selection uses the same shared mobile preparation and reads pending notes from
-`apps/ios/CHANGELOG.md`. iOS App Store finalization remains a separate step.
+`apps/ios/CHANGELOG.md`. The generated Android notes must fit
+[Google Play's 500 Unicode character limit](https://support.google.com/googleplay/android-developer/answer/9859348),
+including the final newline. iOS App Store finalization remains a separate step.
 A matching pin still requires successful native qualification; a failed run is
 never recorded as a pin mismatch skip.
 
