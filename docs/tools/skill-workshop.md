@@ -155,10 +155,12 @@ skills stay untouched.
 
 ### When an older backup cannot be restored automatically
 
-Restore also refuses when it cannot read the complete current result tree, including
-content beyond sixteen path components. This check leaves the current skill files
-and the retained backup intact. Older backups may contain result hashes that
-omitted deeper files, so those hashes cannot establish whether the files changed.
+Restore also refuses when it cannot completely read the included content in a
+current result tree or its saved original, including content beyond sixteen path
+components. This leaves the current skill files and retained backup intact. Older
+backups may contain hashes that omitted deeper files, so deleting that content
+from the current tree cannot make the backup verifiable. A skill dropped by the
+cleanup can still be restored to its absent path, including deep support files.
 Do not edit backup hashes or delete or flatten live files merely to make restore pass.
 
 For operator-led recovery:
@@ -355,10 +357,11 @@ traversal, overlapping paths, executable files, non-UTF-8 text, null bytes,
 and paths outside the standard support folders.
 
 Directory drafts must be completely readable and fit within eight path
-components, including the filename. Evaluator bundles require a completely
-readable target skill tree within sixteen path components. Unreadable directories or
-deeper content produce an error; they are not silently omitted from the proposal
-or evaluation. Fix the reported directory or reduce its nesting, then retry.
+components, including the filename. Evaluator bundles require all included target
+content to be readable and within sixteen path components. Root `.clawhub`,
+`.clawdhub`, and `.openclaw` metadata entries are excluded; those names nested
+elsewhere remain included. Unreadable included directories or deeper content
+produce an error. Fix the reported directory or reduce its nesting, then retry.
 For a collection restore failure, follow the
 [manual recovery guidance](#when-an-older-backup-cannot-be-restored-automatically)
 instead of restructuring the live tree.
