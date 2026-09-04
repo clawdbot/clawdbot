@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import {
   createControlUiSessionPullRequestSubscriptions,
@@ -117,7 +118,7 @@ describe("control UI session PR subscriptions", () => {
     ).toEqual(["only-a", "only-b", "shared"]);
   });
 
-  it("limits initial hydration and polling to four simultaneous session loads", async () => {
+  it("shares the four-load limit across connections, hydration, and polling", async () => {
     vi.useFakeTimers();
     const releases: Array<() => void> = [];
     const load = vi.fn(
@@ -132,21 +133,29 @@ describe("control UI session PR subscriptions", () => {
     });
     const sessionKeys = Array.from({ length: 6 }, (_value, index) => `session-${index}`);
 
-    const finishLimitedLoads = async (operation: Promise<void>) => {
+    const finishLimitedLoads = async (operation: Promise<unknown>, total = 6) => {
       await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(4));
       for (const release of releases.splice(0)) {
         release();
       }
-      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(6));
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(total));
       for (const release of releases.splice(0)) {
         release();
       }
       await operation;
     };
 
-    await finishLimitedLoads(active.replace("conn-a", sessionKeys));
+    await finishLimitedLoads(
+      Promise.all([
+        active.replace("conn-a", sessionKeys.slice(0, 3)),
+        active.replace("conn-b", sessionKeys.slice(3)),
+      ]),
+    );
     load.mockClear();
-    await finishLimitedLoads(active.pollNow());
+    await finishLimitedLoads(
+      Promise.all([active.pollNow(), active.replace("conn-c", ["new-1", "new-2"])]),
+      8,
+    );
   });
 
   it("hydrates and broadcasts only newly added keys across replacement sets", async () => {
@@ -262,6 +271,39 @@ describe("control UI session PR subscriptions", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it.each(["stop", "disconnect", "empty replace"])(
+    "retires queued forced refreshes on %s while settling their callers",
+    async (cleanup) => {
+      vi.useFakeTimers();
+      const normal = createDeferred<ControlUiSessionPullRequests>();
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce(READY)
+        .mockImplementationOnce(() => normal.promise)
+        .mockResolvedValue(READY);
+      const broadcastToConnIds = vi.fn();
+      active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+      await active.replace("conn-a", ["session"]);
+      const poll = active.pollNow();
+      const refresh = active.replace("conn-a", ["session"], new Set(["session"]));
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+
+      if (cleanup === "stop") {
+        active.stop();
+      } else if (cleanup === "disconnect") {
+        active.unsubscribe("conn-a");
+      } else {
+        await active.replace("conn-a", []);
+      }
+      broadcastToConnIds.mockClear();
+      normal.resolve(READY);
+      await Promise.all([poll, refresh]);
+
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects replace-sets from inactive connections before loading", async () => {
     const load = vi.fn(async () => READY);
     const broadcastToConnIds = vi.fn();
@@ -320,11 +362,13 @@ describe("control UI session PR subscriptions", () => {
       "shared",
     ]);
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(4));
+    const replacement = active.replace("conn-a", ["blocked-1"]);
+    resolveBlocked(READY);
+    await replacement;
     await active.replace("conn-b", ["shared"]);
     broadcastToConnIds.mockClear();
 
     await active.replace("conn-a", ["shared"]);
-    resolveBlocked(READY);
     await oldReplace;
 
     expect(load).toHaveBeenCalledTimes(5);
