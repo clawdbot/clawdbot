@@ -271,7 +271,7 @@ export async function spawnAcpDirect(
   }
   const { agentId: harnessAgentId, backendId } = targetAgentResult;
   const sessionOwnerAgentId = targetAgentResult.configAgentId ?? requesterAgentId;
-  const requesterRoutingAgentId = targetAgentResult.configAgentId ?? harnessAgentId;
+  const admissionTargetAgentId = targetAgentResult.configAgentId ?? harnessAgentId;
   const agentPolicyError = resolveAcpAgentPolicyError(cfg, harnessAgentId);
   if (agentPolicyError) {
     return createAcpSpawnFailure({
@@ -287,7 +287,7 @@ export async function spawnAcpDirect(
     cfg,
     parentSessionKey,
     requesterAgentId,
-    targetAgentId: requesterRoutingAgentId,
+    targetAgentId: sessionOwnerAgentId,
     ctx,
   });
   const hasSubagentEnvelope = isSubagentEnvelopeSession(requesterInternalKey, {
@@ -300,7 +300,7 @@ export async function spawnAcpDirect(
       enabled: hasSubagentEnvelope,
       requesterSessionKey: requesterInternalKey,
       requesterAgentId,
-      targetAgentId: requesterRoutingAgentId,
+      targetAgentId: admissionTargetAgentId,
       requestedAgentId: params.agentId,
       configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(cfg),
       additionalActiveChildren: hasSubagentEnvelope

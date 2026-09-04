@@ -3042,6 +3042,49 @@ describe("spawnAcpDirect", () => {
     }
   });
 
+  it("keeps requester account routing for an unconfigured external ACP harness", async () => {
+    const boundRoom = "!external-harness-room:example.org";
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex"],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "codex",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: boundRoom },
+            accountId: "harness-account",
+          },
+        },
+      ],
+    });
+
+    const result = await spawnAcpDirect(
+      { task: "Keep requester routing", agentId: "codex", mode: "run" },
+      {
+        agentSessionKey: "agent:main:matrix:room:requester",
+        agentChannel: "matrix",
+        agentAccountId: "requester-account",
+        agentTo: `room:${boundRoom}`,
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterOrigin: expect.objectContaining({
+          channel: "matrix",
+          accountId: "requester-account",
+          to: `room:${boundRoom}`,
+        }),
+      }),
+    );
+  });
+
   it("falls back to the backend cwd when the configured owner workspace is missing", async () => {
     const fixture = await createCrossAgentWorkspaceFixture({
       targetDirName: "claude-code-missing",
@@ -3261,7 +3304,15 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       acp: {
         ...hoisted.state.cfg.acp,
-        allowedAgents: ["codex", "bot-alpha"],
+        allowedAgents: ["codex"],
+      },
+      agents: {
+        list: [
+          {
+            id: "bot-alpha",
+            runtime: { type: "acp", acp: { agent: "codex" } },
+          },
+        ],
       },
       channels: {
         ...hoisted.state.cfg.channels,
