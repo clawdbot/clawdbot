@@ -24,6 +24,11 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import type { GatewayClient } from "../../gateway/server-methods/types.js";
+import {
+  canReceiveSessionEvent,
+  createSessionListEntryFilter,
+} from "../../gateway/session-sharing.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -194,6 +199,30 @@ function expectEntryFields(
   for (const [key, value] of Object.entries(expected)) {
     expect((entry as unknown as Record<string, unknown>)[key], label ?? key).toEqual(value);
   }
+}
+
+function identifiedGatewayClient(profileId: string): GatewayClient {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: "openclaw-control-ui",
+        version: "test",
+        platform: "test",
+        mode: "webchat",
+      },
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+    },
+    authenticatedUserId: `${profileId}@example.test`,
+    authenticatedUserProfile: {
+      profileId,
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+  };
 }
 
 describe("resolveReplySessionPreprocessingState", () => {
@@ -4137,8 +4166,14 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       color: "green",
       category: "Operations",
       boardFace: "dashboard",
-      visibility: "shared",
+      visibility: "draft",
     } as const;
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const nonCreatorClient = identifiedGatewayClient("reset-visibility-outsider");
+    const nonCreatorEntryFilter = createSessionListEntryFilter({
+      cfg,
+      client: nonCreatorClient,
+    });
     const cases = await runExplicitResetCases({
       storePath,
       sessionKey,
@@ -4151,6 +4186,17 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.resetTriggered, name).toBe(true);
       expect(result.sessionId, name).toBe(existingSessionId);
       expectEntryFields(result.sessionEntry, overrides, name);
+      expect(nonCreatorEntryFilter?.(sessionKey, result.sessionEntry) ?? true, name).toBe(false);
+      expect(
+        canReceiveSessionEvent({
+          cfg,
+          client: nonCreatorClient,
+          sessionKeys: [sessionKey],
+          agentId: "main",
+          event: "sessions.changed",
+        }),
+        name,
+      ).toBe(false);
     }
   });
 
