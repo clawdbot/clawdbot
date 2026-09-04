@@ -940,6 +940,8 @@ describe("successful update finalization ordering", () => {
       },
     ])("canonical sealed post-update $name", async ({ activated, unloaded }) => {
       const serviceEnv = { MANAGED_VALUE: "revalidated" };
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-retention-fact-") };
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
       const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
       mocks.readServiceState.mockResolvedValueOnce({
         installed: true,
@@ -947,7 +949,12 @@ describe("successful update finalization ordering", () => {
         env: serviceEnv,
         command: { programArguments, environment: serviceEnv },
       });
-      mocks.restartService.mockResolvedValueOnce(activated);
+      mocks.restartService.mockImplementationOnce(async (params) => {
+        if (!activated) {
+          params.onVerificationFailure?.("readyz-unhealthy");
+        }
+        return activated;
+      });
       const finishing = finishSuccessfulPackageSwitch({
         previousRoot: "/tmp/openclaw-update",
         packageRoot: "/tmp/openclaw-update",
@@ -955,6 +962,7 @@ describe("successful update finalization ordering", () => {
         sealed: true,
         updateMode: unloaded ? "git" : "npm",
         stoppedForUpdate: !unloaded,
+        run,
       });
       if (activated) {
         await finishing;
@@ -962,11 +970,12 @@ describe("successful update finalization ordering", () => {
         await expect(finishing).rejects.toMatchObject({
           name: "UpdateCommandFailure",
           exitCode: 1,
-          result: { status: "error", reason: "restart-unhealthy" },
+          result: { status: "error", reason: "readyz-unhealthy" },
         });
       }
 
       expect(mocks.revalidateService).toHaveBeenCalledOnce();
+      expect(mocks.restartService).toHaveBeenCalledOnce();
       expect(mocks.prepareRestartScript).not.toHaveBeenCalled();
       expect(mocks.restartService).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -997,13 +1006,25 @@ describe("successful update finalization ordering", () => {
         expect(mocks.writeSentinel).toHaveBeenCalledOnce();
         expect(mocks.printResult).toHaveBeenCalledOnce();
         expect(mocks.printResult).toHaveBeenCalledWith(
-          expect.objectContaining({ status: "error", reason: "restart-unhealthy" }),
+          expect.objectContaining({ status: "error", reason: "readyz-unhealthy" }),
           expect.any(Object),
           expect.any(Object),
         );
         expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-          expect.objectContaining({ reason: "restart-unhealthy" }),
+          expect.objectContaining({ reason: "readyz-unhealthy" }),
         );
+        expect(getUpdateRun(run.runId, { env })).toMatchObject({
+          status: "failed",
+          reason: "readyz-unhealthy",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "package rollback",
+              status: "skipped",
+              detail:
+                "No retained previous package transaction is available; automatic package restoration was not attempted.",
+            }),
+          ]),
+        });
         expect(defaultRuntime.exit).not.toHaveBeenCalled();
       }
     });

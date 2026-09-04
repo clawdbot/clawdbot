@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 describe("update restart verification ownership", () => {
-  it.each(["validating", "activating", "restarting", "verifying"] as const)(
+  it.each(["staging", "validating", "repairing", "activating", "restarting", "verifying"] as const)(
     "does not let sentinel expiry finish the orchestrator during %s",
     (phase) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", directories.make("update-boot-owner-"));

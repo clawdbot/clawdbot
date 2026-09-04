@@ -69,7 +69,8 @@ export async function finalizeRestartUpdateRun(
     // its validation finished; preserve the sentinel's existing retry flow.
     const orchestratorOwnsVerification =
       updateRun.status === "running" &&
-      ["validating", "activating", "restarting", "verifying"].includes(updateRun.phase);
+      updateRun.phase !== "requested" &&
+      updateRun.phase !== "finished";
     if (
       !orchestratorOwnsVerification &&
       (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload))

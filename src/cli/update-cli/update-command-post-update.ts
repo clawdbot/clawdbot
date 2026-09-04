@@ -15,6 +15,7 @@ import {
   getUpdateRun,
   finishUpdateRun,
   recordUpdateRunPhase,
+  recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -187,6 +188,23 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (result.status === "error" && params.rollbackBlockedReason) {
       result = { ...result, reason: params.rollbackBlockedReason };
       recoverService = false;
+    } else if (
+      result.status === "error" &&
+      params.result.status === "ok" &&
+      !params.packageTransaction &&
+      params.opts.run
+    ) {
+      recordUpdateRunStep(
+        params.opts.run.runId,
+        {
+          step: "package rollback",
+          status: "skipped",
+          endedAtMs: Date.now(),
+          detail:
+            "No retained previous package transaction is available; automatic package restoration was not attempted.",
+        },
+        { env: params.opts.run.env },
+      );
     }
     let restoreFailure = initialRestoreFailure;
     const finalResult = completedResult({
