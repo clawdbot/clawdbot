@@ -12,7 +12,7 @@ import type { InlineDirectives } from "./directive-handling.parse.js";
  * (e.g. `/model <ref>` resolving to a disallowed model); other directive
  * categories fall back to their type with no raw token.
  */
-export function deriveRejectedDirectiveFacts(directives: InlineDirectives): {
+function deriveRejectedDirectiveFacts(directives: InlineDirectives): {
   directiveType?: string;
   rawToken?: string;
 } {
