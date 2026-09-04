@@ -426,11 +426,19 @@ describe("managed llama-server", () => {
     const secondPath = path.join(tempRoot, "second.gguf");
     const first = {
       id: "first",
+      name: "First",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       params: { modelPath: firstPath, contextSize: 16_384 },
       maxTokens: 1024,
     };
     const second = {
       id: "second",
+      name: "Second",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       params: { modelPath: secondPath, contextSize: 32_768 },
       maxTokens: 2048,
     };

@@ -1,4 +1,3 @@
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type {
   OpenClawPluginApi,
   ProviderAuthMethodNonInteractiveContext,
@@ -36,7 +35,7 @@ import { wrapLlamaServerStream } from "./external-server/stream.js";
 import { ensureManagedLlamaServerForChat, reconcileManagedLlamaServer } from "./managed-server.js";
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
-function wrapManagedLlamaCppStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+function wrapManagedLlamaCppStream(ctx: ProviderWrapStreamFnContext) {
   const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   if (!providerConfig?.localService) {
     return undefined;
@@ -46,12 +45,12 @@ function wrapManagedLlamaCppStream(ctx: ProviderWrapStreamFnContext): StreamFn |
   if (!inner || !selectedModel) {
     return undefined;
   }
-  return async (model, context, options) => {
+  return async (...args: Parameters<typeof inner>) => {
     await ensureManagedLlamaServerForChat({
       provider: providerConfig,
       model: selectedModel,
     });
-    return inner(model, context, options);
+    return inner(...args);
   };
 }
 

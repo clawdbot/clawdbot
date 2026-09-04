@@ -15,7 +15,10 @@ import {
   getRegisteredEmbeddingProvider,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ModelProviderConfig,
+  ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -370,7 +373,7 @@ describe("llama.cpp provider plugin", () => {
   it("reapplies embedding A to B to A and injects preset reconciliation", async () => {
     const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
     const options = Object.assign(configuredOptions(), { acquireLocalService });
-    const provider = options.config.models.providers[LLAMA_CPP_PROVIDER_ID];
+    const provider: ModelProviderConfig = options.config.models.providers[LLAMA_CPP_PROVIDER_ID];
     provider.baseUrl = "http://127.0.0.1:29434/v1";
     provider.params = { modelCacheDir: "/models/embedding-transition-cache" };
     mocks.ensureModel.mockImplementation(async ({ source }) => source);

@@ -12,7 +12,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
+import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { getDeterministicFreePortBlock, getFreePort } from "../test-utils/ports.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
 import {
@@ -191,7 +193,7 @@ describe("provider local service", () => {
   it("starts an on-demand local service and stops it after idle", async () => {
     const port = await getFreePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
-    const reconcile = vi.fn(async () => {
+    const reconcile = vi.fn<NonNullable<ProviderPlugin["reconcileLocalService"]>>(async () => {
       expect((await fetch(healthUrl)).ok).toBe(true);
     });
     const model = attachModelProviderRuntimePluginHandle(
@@ -233,8 +235,8 @@ describe("provider local service", () => {
     });
     await expect(acquire(controller.signal)).rejects.toThrow(abort.message);
 
-    const reconciliation = Promise.withResolvers<void>();
-    const reconcileStarted = Promise.withResolvers<void>();
+    const reconciliation = createDeferredCore();
+    const reconcileStarted = createDeferredCore();
     const lateController = new AbortController();
     const lateAbort = new Error("late reconcile abort");
     reconcile.mockImplementationOnce(() => {
