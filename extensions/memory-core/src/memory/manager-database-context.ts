@@ -72,14 +72,12 @@ export abstract class MemoryManagerDatabaseContext {
     try {
       const result = await reindexDatabase.run({ manager: this, database }, run);
       // Publication attaches the finished file only after its writer closes.
-      closeMemoryDatabase(database.db);
+      database.release();
       return result;
     } finally {
-      if (database.db.isOpen) {
-        try {
-          closeMemoryDatabase(database.db);
-        } catch {}
-      }
+      try {
+        database.release();
+      } catch {}
     }
   }
 }
