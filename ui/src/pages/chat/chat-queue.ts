@@ -225,7 +225,7 @@ export function updateQueuedMessage(
 type QueuedMessageMoveRow = {
   id: string;
   scope: StoredChatOutboxScope;
-  durable: ChatQueueItem | undefined;
+  durable: ChatQueueItem | null | undefined;
   current: ChatQueueItem;
   next: ChatQueueItem;
 };

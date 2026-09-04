@@ -159,13 +159,16 @@ function serializeQueueItemForScope(
   return applyStoredChatOutboxScope(serialized, scope);
 }
 
-function queueItemVersionMatches(
+export function queueItemVersionMatches(
   stored: ChatQueueItem,
   expected: ChatQueueItem,
   scope: StoredChatOutboxScope,
 ): boolean {
+  const canonicalStored = serializeQueueItemForScope(stored, scope);
   const canonicalExpected = serializeQueueItemForScope(expected, scope);
-  return Boolean(canonicalExpected && sameQueuedDeliveryVersion(stored, canonicalExpected));
+  return canonicalStored && canonicalExpected
+    ? sameQueuedDeliveryVersion(canonicalStored, canonicalExpected)
+    : false;
 }
 
 function queueItemsEqual(

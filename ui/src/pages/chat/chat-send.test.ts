@@ -6883,6 +6883,80 @@ describe("handleSendChat", () => {
     expect(host.request).not.toHaveBeenCalled();
   });
 
+  it("retires a waiting-model submission removed by a peer pane during the input yield", async () => {
+    const settings = createDeferred<boolean>();
+    const host = makeChatHost({
+      chatMessage: "discard from peer",
+      pendingSettingsPatches: { "agent:main": settings.promise },
+      requestHandlers: {},
+    });
+    const peer = makeChatHost({ client: host.client });
+    await submitAcrossBrowserInput(host, (queued) => {
+      expect(removeQueuedMessage(peer, queued.id)).toBe("removed");
+      expect(host.chatQueue[0]?.sendState).toBe("waiting-model");
+      settings.resolve(true);
+    });
+
+    expect(host.lastError).toBeNull();
+    expect(host.chatQueue).toEqual([]);
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver a waiting-model submission advanced by a peer pane", async () => {
+    const settings = createDeferred<boolean>();
+    const host = makeChatHost({
+      chatMessage: "peer advances this row",
+      pendingSettingsPatches: { "agent:main": settings.promise },
+      requestHandlers: {},
+    });
+    const peer = makeChatHost({ client: host.client });
+    await submitAcrossBrowserInput(host, (queued) => {
+      const outbox = expectDefined(listStoredChatOutboxes(peer)[0], "peer outbox");
+      const stored = expectDefined(
+        outbox.queue.find((entry) => entry.id === queued.id),
+        "stored row",
+      );
+      expect(
+        updateStoredChatComposerQueueItem(
+          peer,
+          outbox.sessionKey,
+          stored,
+          { ...stored, sendAttempts: 1 },
+          outbox.agentId,
+        ),
+      ).toBe(true);
+      expect(host.chatQueue[0]?.sendState).toBe("waiting-model");
+      settings.resolve(true);
+    });
+
+    expect(host.lastError).toBeNull();
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
+  it("surfaces one storage error when a durable admission becomes unreadable at delivery", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("sessionStorage", storage);
+    const host = makeChatHost({ requestHandlers: {}, chatMessage: "fail the delivery read" });
+    const surfaced: string[] = [];
+    Object.defineProperty(host, "chatError", {
+      set: (error: string | null) => error && surfaced.push(error),
+    });
+    await submitAcrossBrowserInput(host, () => {
+      vi.spyOn(storage, "getItem").mockImplementation(() => {
+        throw new DOMException("storage unavailable", "SecurityError");
+      });
+      const unsubscribe = subscribeStoredChatOutboxChanges(() => undefined);
+      const storageEvent = new StorageEvent("storage", { key: null });
+      Object.defineProperty(storageEvent, "storageArea", { value: storage });
+      window.dispatchEvent(storageEvent);
+      unsubscribe();
+    });
+
+    expect(surfaced).toEqual([chatSendSupport.OFFLINE_QUEUE_STORAGE_ERROR]);
+    expect(host.lastError).toBe(chatSendSupport.OFFLINE_QUEUE_STORAGE_ERROR);
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
   it.each(["client", "epoch", "session", "recovery owner"])(
     "retires an event-backed continuation after its %s changes during the browser input yield",
     async (change) => {

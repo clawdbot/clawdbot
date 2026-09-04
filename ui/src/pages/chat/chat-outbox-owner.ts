@@ -4,6 +4,7 @@ import {
   outboxPayloadMatchesOwner,
   observeOutboxRecoveryOwner,
 } from "../../lib/chat/outbox-payload-store.runtime.ts";
+import { readStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   applyStoredChatOutboxScope,
   subscribeStoredChatOutboxChanges,
@@ -75,15 +76,17 @@ class ChatOutboxGatewayOwner {
     return listStoredChatOutboxes(host).find(({ queue }) => queue.some((item) => item.id === id));
   }
   locate(host: Host, id: string) {
-    const outbox = this.durable(host, id);
-    const captured = outbox ?? this.local(this.state(host), id)?.scope;
-    if (!captured) {
+    const outboxes = readStoredChatOutboxes(host);
+    const outbox = outboxes?.find(({ queue }) => queue.some((item) => item.id === id));
+    const local = this.local(this.state(host), id);
+    const scope = outbox ?? local?.scope;
+    if (!scope) {
       return undefined;
     }
-    const { sessionKey, agentId } = captured;
-    const scope = { sessionKey, agentId };
-    const item = this.snapshot(host, scope, outbox?.queue ?? []).find((row) => row.id === id);
-    return item ? { item, scope, durable: outbox?.queue.find((row) => row.id === id) } : undefined;
+    const visible = outbox?.queue ?? (outboxes ? [] : (local?.queue ?? []));
+    const item = this.snapshot(host, scope, visible).find((row) => row.id === id);
+    const durable = outboxes ? outbox?.queue.find((row) => row.id === id) : null;
+    return item ? { item, scope, durable } : undefined;
   }
   private project(item: ChatQueueItem, local: ChatQueueItem): ChatQueueItem {
     const projected: ChatQueueItem = { ...item };

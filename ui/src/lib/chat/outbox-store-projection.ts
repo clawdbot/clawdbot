@@ -22,10 +22,10 @@ export type StoredChatOutbox = StoredChatOutboxScope & { queue: ChatQueueItem[] 
 
 function listStoredComposerRows(
   state: ChatComposerScope,
-): Array<{ scope: StoredChatOutboxScope; session: StoredComposerSession }> {
+): Array<{ scope: StoredChatOutboxScope; session: StoredComposerSession }> | undefined {
   const storage = getSafeSessionStorage();
   if (!storage) {
-    return [];
+    return undefined;
   }
   try {
     const target = storageTargetForGateway(state.settings?.gatewayUrl);
@@ -52,13 +52,13 @@ function listStoredComposerRows(
         : [];
     });
   } catch {
-    return [];
+    return undefined;
   }
 }
 
-export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutbox[] {
+export function readStoredChatOutboxes(state: ChatComposerScope): StoredChatOutbox[] | undefined {
   return listStoredComposerRows(state)
-    .flatMap(({ scope, session }) =>
+    ?.flatMap(({ scope, session }) =>
       session.queue?.length
         ? [
             {
@@ -76,10 +76,13 @@ export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutb
     );
 }
 
+export const listStoredChatOutboxes = (state: ChatComposerScope): StoredChatOutbox[] =>
+  readStoredChatOutboxes(state) ?? [];
+
 export function summarizeStoredChatOutboxes(state: ChatComposerScope) {
   const idsByScope = new Map<string, { all: Set<string>; attention: Set<string> }>();
   const draftScopes = new Set<string>();
-  for (const { scope, session } of listStoredComposerRows(state)) {
+  for (const { scope, session } of listStoredComposerRows(state) ?? []) {
     const scopeKey = storedChatOutboxScopeKey(scope);
     if (session.draft) {
       draftScopes.add(scopeKey);

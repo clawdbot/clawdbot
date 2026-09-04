@@ -8,7 +8,6 @@ import { extractCompanionCommandQuestion } from "../../lib/chat/companion-questi
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
-import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
@@ -20,6 +19,7 @@ import {
   shouldQueueLocalSlashCommand,
 } from "./chat-commands.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   admitQueuedMessageForSession,
   enqueueChatMessage,
@@ -61,6 +61,7 @@ import {
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
 import { withChatSubmitGuard, yieldChatSubmitToInput } from "./chat-submit-guard.ts";
+import { queueItemVersionMatches } from "./composer-persistence.ts";
 import {
   recordNonTranscriptInputHistory,
   resetChatInputHistoryNavigation,
@@ -93,6 +94,7 @@ export type ChatSendSubmitOptions = {
   /** Lets request-scoped UI actions recover from rejected local commands. */
   onLocalCommandSendRejected?: () => void;
 };
+type ChatReplyTarget = NonNullable<ChatHost["chatReplyTarget"]>;
 
 function isChatResetCommand(text: string) {
   const parsed = parseSlashCommand(text);
@@ -680,19 +682,19 @@ export async function handleSendChat(
     }
     let deliveryItem: typeof queued | null = queued;
     if (admittedDurably && submissionAction && typeof MessageChannel !== "undefined") {
-      // The outbox now owns the prompt across reloads. Return control before
-      // delivery work so the browser can accept the operator's next input.
+      // Only the same durable version may cross yielded input; retire pane-local absent rows.
       await yieldChatSubmitToInput();
-      const current =
-        submissionOwnerIsCurrent() &&
-        visibleSessionMatches(host, queued.sessionKey!, queued.agentId)
-          ? readQueuedMessageById(host, queued.id)
-          : null;
-      // Input may retire this admission or another drain may advance it. Only
-      // position changes preserve the handoff; the drain owns ordering/edit holds.
+      const owner = chatOutboxOwner(host);
+      const current = submissionOwnerIsCurrent() ? owner.locate(host, queued.id) : undefined;
+      if (current && current.durable === undefined) {
+        owner.change(host, queued.id);
+      }
+      const version = current?.durable ?? current?.item;
       deliveryItem =
-        current && sameQueuedDeliveryVersion(queued, { ...current, orderKey: queued.orderKey })
-          ? current
+        current?.durable !== undefined &&
+        version &&
+        queueItemVersionMatches(version, { ...queued, orderKey: version.orderKey }, current.scope)
+          ? current.item
           : null;
     }
     const sendResult = deliveryItem
@@ -737,18 +739,7 @@ export async function handleSendChat(
   return accepted;
 }
 
-function prependReplyQuote(
-  message: string,
-  replyTarget: NonNullable<ChatHost["chatReplyTarget"]>,
-): string {
-  const label = (replyTarget.senderLabel ?? "User").replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
+function prependReplyQuote(message: string, replyTarget: ChatReplyTarget): string {
   const text = replyTarget.text.trim();
-  if (!text.includes("\n")) {
-    return `> **${label}:** ${text}\n\n${message}`;
-  }
-  const quoted = text
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
-  return `> **${label}:**\n${quoted}\n\n${message}`;
+  return `> **${(replyTarget.senderLabel ?? "User").replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1")}:**${text.includes("\n") ? `\n> ${text.replaceAll("\n", "\n> ")}` : ` ${text}`}\n\n${message}`;
 }
