@@ -205,14 +205,22 @@ export function phoneProofIdentity(): Pick<
 
 export async function startPhoneProofServer(buildId: string) {
   const buildDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-login-gate-e2e-"));
-  const server = await startProductionControlUiE2eServer(buildDir, buildId);
-  return {
-    baseUrl: server.baseUrl,
-    close: async () => {
-      await server.close();
-      await rm(buildDir, { force: true, recursive: true });
-    },
-  };
+  try {
+    const server = await startProductionControlUiE2eServer(buildDir, buildId);
+    return {
+      baseUrl: server.baseUrl,
+      close: async () => {
+        try {
+          await server.close();
+        } finally {
+          await rm(buildDir, { force: true, recursive: true });
+        }
+      },
+    };
+  } catch (error) {
+    await rm(buildDir, { force: true, recursive: true });
+    throw error;
+  }
 }
 
 export async function observePhoneProofServiceWorker(
