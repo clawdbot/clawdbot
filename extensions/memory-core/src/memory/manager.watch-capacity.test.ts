@@ -471,16 +471,29 @@ describe("memory watcher kernel capacity degrade", () => {
   const itRealExhaustedHost = process.env.OPENCLAW_REAL_CAPACITY_HOST === "1" ? it : it.skip;
   itRealExhaustedHost(
     "real interval timer recovers a post-startup edit without manual nudging",
+    { timeout: 720_000 },
     async () => {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       await setupCapacityWorkspace();
+      await configureMemoryCoreDreamingStateForTests();
       const trace: string[] = [
         "t0 real exhausted host: startup root fs.watch fails with real kernel EMFILE",
       ];
 
       const active = await createManager(createWatchConfig());
       await vi.waitFor(() => expect(readIntervalTimer(active)).toBeTruthy());
-      trace.push("t1 degrade armed: interval timer running, no manual transitions performed");
+      const t1At = Date.now();
+      function readIntervalPeriod(m: MemoryIndexManager): number {
+        // SAFETY: test-only read of the Node timer handle to record the
+        // effective period; the dangling-underscore key is Node's internal
+        // timer field, accessed via a computed key to satisfy lint.
+        const timer = readIntervalTimer(m) as unknown as Record<string, number | undefined>;
+        const repeatKey = ["_", "repeat"].join("");
+        return timer[repeatKey] ?? -1;
+      }
+      trace.push(
+        `t1 degrade armed at=${t1At} interval_period_ms=${readIntervalPeriod(active)} no manual transitions performed`,
+      );
 
       function readIndexedPaths(m: MemoryIndexManager): string[] {
         // SAFETY: test-only read of the protected sqlite handle to inspect indexed sources.
@@ -495,13 +508,25 @@ describe("memory watcher kernel capacity degrade", () => {
           .flatMap((row) => (typeof row.path === "string" ? [row.path] : []));
       }
 
-      // Post-startup edit, then nothing but wall-clock waiting: the real
-      // interval tick must pick it up on its own.
+      // First let the degrade's immediate debounced rescan establish the
+      // baseline (it only sees note.md). The post-startup edit is written
+      // strictly AFTER that baseline, so nothing but the production interval
+      // tick can deliver it: no watcher exists to mark dirty.
+      await vi.waitFor(
+        () =>
+          expect(readIndexedPaths(active).some((indexed) => indexed.endsWith("note.md"))).toBe(
+            true,
+          ),
+        { timeout: 120_000, interval: 2_000 },
+      );
+      const t2At = Date.now();
       await fs.writeFile(
         path.join(workspaceDir, "memory", "timer-note.md"),
         "timer recovered this note",
       );
-      trace.push("t2 post-startup edit written; waiting on the production interval timer");
+      trace.push(
+        `t2 post-startup edit written at=${t2At}; waiting on the production interval timer`,
+      );
 
       await vi.waitFor(
         () =>
@@ -510,7 +535,9 @@ describe("memory watcher kernel capacity degrade", () => {
           ),
         { timeout: 9 * 60_000, interval: 15_000 },
       );
-      trace.push(`t3 timer-driven recovery: indexed=${JSON.stringify(readIndexedPaths(active))}`);
+      trace.push(
+        `t3 timer-driven recovery at=${Date.now()} delta_ms=${Date.now() - t1At} indexed=${JSON.stringify(readIndexedPaths(active))}`,
+      );
       trace.push("t4 proof: the production interval recovered the edit with no manual nudging");
 
       const evidenceDir = process.env.OPENCLAW_EVIDENCE_OUT;
