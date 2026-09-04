@@ -894,6 +894,30 @@ describe("containerSendMessage", () => {
     expect(body.message).toBe("**Bold** C:\\Temp\\file and /foo\\bar/");
   });
 
+  it.each(["custom", "constructor", "__proto__", "toString"])(
+    "keeps inherited %s style names from wrapping Signal container text",
+    async (style) => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        ...bodyStream(JSON.stringify({})),
+      });
+
+      await containerSendMessage({
+        baseUrl: "http://localhost:8080",
+        account: "+14259798283",
+        recipients: ["+15550001111"],
+        message: "Bold text",
+        textStyles: [{ start: 0, length: 4, style }],
+      });
+
+      const body = parseFetchBody();
+      expect(typeof body.message).toBe("string");
+      expect(typeof body.message).not.toBe("function");
+      expect(body.message).toBe("Bold text");
+    },
+  );
+
   it("includes attachments as base64 data URIs", async () => {
     const fs = await import("node:fs/promises");
     const os = await import("node:os");

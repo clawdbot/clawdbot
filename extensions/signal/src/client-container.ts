@@ -591,7 +591,12 @@ function renderContainerStyledText(
 ): string {
   const spans = styles
     .map((style) => {
-      const marker = CONTAINER_TEXT_STYLE_MARKERS[style.style];
+      // Style names come from text-style ranges; an unguarded index returns
+      // inherited Object.prototype values (`constructor`) that stringify into
+      // the container payload as Function source instead of leaving text plain.
+      const marker = Object.hasOwn(CONTAINER_TEXT_STYLE_MARKERS, style.style)
+        ? CONTAINER_TEXT_STYLE_MARKERS[style.style]
+        : undefined;
       if (!marker) {
         return null;
       }
