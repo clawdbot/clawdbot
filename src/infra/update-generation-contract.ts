@@ -1,0 +1,591 @@
+/** Durable transaction vocabulary for generation-addressed package updates. */
+import { isDeepStrictEqual } from "node:util";
+import { updateGenerationTransactionReceiptSchema } from "./update-generation-contract-schema.js";
+import type {
+  UpdateGenerationProjection,
+  UpdateGenerationSelection,
+  UpdateGenerationTransactionReceipt,
+  UpdateGenerationTransactionRecord,
+} from "./update-generation-contract-types.js";
+import { isSafeUpdateGenerationEntrypointPath } from "./update-generation-entrypoint-path.js";
+import {
+  assertBrokerEvidenceChain,
+  assertBrokerEvidenceOperationIds,
+  assertParentSyncFollows,
+  assertRetainedPairEvidence,
+  brokerReceiptsInEvidence,
+} from "./update-generation-evidence.js";
+export type * from "./update-generation-contract-types.js";
+
+const RECEIPT_ID_SAFE = /^[A-Za-z0-9._:@/-]+$/u;
+const SHA256 = /^[a-f0-9]{64}$/u;
+
+export function buildUpdateGenerationReceiptId(params: {
+  transactionId: string;
+  sequence: number;
+  kind: UpdateGenerationTransactionReceipt["kind"];
+}): string {
+  return `${params.transactionId}:${params.sequence}:${params.kind}`;
+}
+
+function assertReceiptIdentity(receipt: UpdateGenerationTransactionReceipt): void {
+  if (
+    receipt.formatVersion !== 2 ||
+    !receipt.transactionId ||
+    !RECEIPT_ID_SAFE.test(receipt.transactionId) ||
+    !Number.isSafeInteger(receipt.sequence) ||
+    receipt.sequence < 0 ||
+    !Number.isSafeInteger(receipt.recordedAtMs) ||
+    receipt.recordedAtMs < 0
+  ) {
+    throw new TypeError("Invalid update generation receipt identity");
+  }
+  const expected = buildUpdateGenerationReceiptId(receipt);
+  if (receipt.receiptId !== expected) {
+    throw new TypeError(`Invalid update generation receipt id: expected ${expected}`);
+  }
+}
+
+function selectionsEqual(
+  left: UpdateGenerationSelection | null,
+  right: UpdateGenerationSelection | null,
+): boolean {
+  return (
+    left?.formatVersion === right?.formatVersion &&
+    left?.generationId === right?.generationId &&
+    left?.manifestSha256 === right?.manifestSha256 &&
+    left?.entrypointRelativePath === right?.entrypointRelativePath
+  );
+}
+
+function assertSelection(selection: UpdateGenerationSelection): void {
+  if (
+    selection.formatVersion !== 1 ||
+    !/^[a-f0-9]{32}$/u.test(selection.generationId) ||
+    !SHA256.test(selection.manifestSha256) ||
+    !isSafeUpdateGenerationEntrypointPath(selection.entrypointRelativePath)
+  ) {
+    throw new TypeError("Invalid update generation selection");
+  }
+}
+
+export function pendingUpdateGenerationBrokerMutationKind(
+  transition: UpdateGenerationProjection["latestTransition"],
+): "materialize-generation" | "switch-selector" | "cleanup-generations" | null {
+  if (transition.kind === "generation-materialization-intent") {
+    return "materialize-generation";
+  }
+  if (
+    transition.kind === "baseline-selection-intent" ||
+    transition.kind === "candidate-selection-intent" ||
+    transition.kind === "rollback-intent"
+  ) {
+    return "switch-selector";
+  }
+  return transition.kind === "cleanup-intent" ? "cleanup-generations" : null;
+}
+
+function assertReceiptFollowsLatest(
+  projection: UpdateGenerationProjection,
+  receipt: UpdateGenerationTransactionReceipt,
+): void {
+  if (receipt.kind === "failure") {
+    if (projection.latest.kind === "failure") {
+      throw new Error("Update generation failure cannot be appended twice");
+    }
+    if (["completion", "rolled-back", "cleanup-completed"].includes(projection.latest.kind)) {
+      throw new Error(`Failure cannot follow terminal ${projection.latest.kind} receipt`);
+    }
+    return;
+  }
+  if (projection.latest.kind === "failure") {
+    const pending = projection.latestTransition;
+    if (pending.kind === "candidate-selected" && receipt.kind === "rollback-intent") {
+      return;
+    }
+    if (receipt.kind === "failure-adjudicated") {
+      return;
+    }
+    const pendingMutationKind = pendingUpdateGenerationBrokerMutationKind(pending);
+    const reconcilesPendingBrokerMutation =
+      projection.latest.operation === pendingMutationKind &&
+      ((pending.kind === "generation-materialization-intent" &&
+        receipt.kind === "generation-materialized") ||
+        (pending.kind === "baseline-selection-intent" && receipt.kind === "baseline-selected") ||
+        (pending.kind === "candidate-selection-intent" && receipt.kind === "candidate-selected") ||
+        (pending.kind === "rollback-intent" && receipt.kind === "rolled-back") ||
+        (pending.kind === "cleanup-intent" && receipt.kind === "cleanup-completed"));
+    if (!reconcilesPendingBrokerMutation) {
+      throw new Error("Unresolved update generation failure requires durable adjudication");
+    }
+  }
+  if (receipt.kind === "failure-adjudicated") {
+    throw new Error("Failure adjudication requires an unresolved failure receipt");
+  }
+  const latest = projection.latestTransition;
+  const follows =
+    (latest.kind === "intent" &&
+      receipt.kind === "generation-materialization-intent" &&
+      receipt.role === (latest.stableBindingAlreadyVerified ? "candidate" : "previous")) ||
+    (latest.kind === "generation-materialization-intent" &&
+      receipt.kind === "generation-materialized" &&
+      receipt.role === latest.role) ||
+    (latest.kind === "generation-materialized" &&
+      ((latest.role === "previous" && receipt.kind === "baseline-selection-intent") ||
+        (latest.role === "candidate" && receipt.kind === "candidate-selection-intent"))) ||
+    (latest.kind === "baseline-selection-intent" && receipt.kind === "baseline-selected") ||
+    (latest.kind === "baseline-selected" && receipt.kind === "binding-intent") ||
+    (latest.kind === "binding-intent" && receipt.kind === "binding-completed") ||
+    (latest.kind === "binding-completed" &&
+      receipt.kind === "generation-materialization-intent" &&
+      receipt.role === "candidate") ||
+    (latest.kind === "candidate-selection-intent" && receipt.kind === "candidate-selected") ||
+    (latest.kind === "candidate-selected" &&
+      (receipt.kind === "completion" || receipt.kind === "rollback-intent")) ||
+    (latest.kind === "rollback-intent" && receipt.kind === "rolled-back") ||
+    ((latest.kind === "completion" || latest.kind === "rolled-back") &&
+      receipt.kind === "cleanup-intent") ||
+    (latest.kind === "cleanup-intent" && receipt.kind === "cleanup-completed");
+  if (!follows) {
+    throw new Error(`Update generation ${receipt.kind} cannot follow ${latest.kind}`);
+  }
+}
+
+function assertReceiptTransition(
+  record: UpdateGenerationTransactionRecord | null,
+  receipt: UpdateGenerationTransactionReceipt,
+): void {
+  assertReceiptIdentity(receipt);
+  if (!record) {
+    if (receipt.kind !== "intent" || receipt.sequence !== 0) {
+      throw new Error("An update generation transaction must start with intent sequence 0");
+    }
+    if (Boolean(receipt.previousSelection) !== Boolean(receipt.previousPackageVersion)) {
+      throw new Error(
+        "Previous generation selection and package version must be recorded together",
+      );
+    }
+    if (receipt.stableBindingAlreadyVerified && !receipt.previousSelection) {
+      throw new Error("A verified stable binding requires a previous generation selection");
+    }
+    if (receipt.previousSelection && !receipt.stableBindingAlreadyVerified) {
+      throw new Error("An existing generation selection requires a verified stable binding");
+    }
+    if (!receipt.brokerId || receipt.brokerRevision === "") {
+      throw new Error("A generation transaction requires broker identity and revision state");
+    }
+    if (receipt.previousSelection) {
+      assertSelection(receipt.previousSelection);
+    }
+    return;
+  }
+  if (
+    record.transactionId !== receipt.transactionId ||
+    record.namespaceKey !== projectUpdateGenerationTransaction(record).intent.namespaceKey
+  ) {
+    throw new Error("Update generation receipt does not belong to this transaction");
+  }
+  if (receipt.sequence !== record.receipts.length) {
+    throw new Error(`Expected update generation receipt sequence ${record.receipts.length}`);
+  }
+  if (receipt.kind === "intent") {
+    throw new Error("Update generation intent cannot be appended twice");
+  }
+  const projection = projectUpdateGenerationTransaction(record);
+  assertReceiptFollowsLatest(projection, receipt);
+  if (projection.cleanupCompleted) {
+    throw new Error("Cannot append to a cleaned update generation transaction");
+  }
+  if (receipt.kind === "failure-adjudicated") {
+    if (
+      receipt.failedReceiptId !== projection.latest.receiptId ||
+      receipt.resumeFromReceiptId !== projection.latestTransition.receiptId
+    ) {
+      throw new Error("Failure adjudication does not match the unresolved transition");
+    }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, projection.latest.receiptId);
+  }
+  if (receipt.kind === "generation-materialization-intent" && receipt.role === "candidate") {
+    const retained = projection.baselineSelection ?? projection.intent.previousSelection;
+    if (retained?.generationId === receipt.generationId) {
+      throw new Error("Candidate materialization requires a distinct retained generation");
+    }
+  }
+  if (receipt.kind === "generation-materialized") {
+    const planned = projection.materializationIntents[receipt.role];
+    if (!planned || planned.generationId !== receipt.generation.generationId) {
+      throw new Error(`No matching ${receipt.role} generation materialization intent`);
+    }
+    assertSelection(receipt.generation);
+    if (
+      planned.manifest.digest !== receipt.generation.manifestSha256 ||
+      planned.entrypointRelativePath !== receipt.generation.entrypointRelativePath ||
+      planned.packageVersion !== receipt.generation.packageVersion
+    ) {
+      throw new Error(`${receipt.role} generation descriptor does not match its intent`);
+    }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, planned.receiptId);
+    if (
+      receipt.evidence.materialization.role !== receipt.role ||
+      receipt.evidence.materialization.sourceArtifactId !== planned.sourceArtifactId ||
+      !isDeepStrictEqual(receipt.evidence.materialization.manifest, planned.manifest) ||
+      !selectionsEqual(receipt.evidence.materialization.generation, receipt.generation) ||
+      receipt.evidence.materialization.generation.packageVersion !==
+        receipt.generation.packageVersion
+    ) {
+      throw new Error("Materialization broker evidence differs from its durable intent");
+    }
+    assertParentSyncFollows(
+      receipt.evidence.parentDirectorySync,
+      receipt.evidence.materialization,
+      "generations",
+    );
+  }
+  if (receipt.kind === "baseline-selection-intent") {
+    const previous = projection.generations.previous;
+    if (!previous || !selectionsEqual(previous, receipt.selection)) {
+      throw new Error("Baseline selection must select the materialized previous generation");
+    }
+  }
+  if (receipt.kind === "baseline-selected") {
+    const pending = [...record.receipts]
+      .toReversed()
+      .find((entry) => entry.kind === "baseline-selection-intent");
+    if (!pending || pending.kind !== "baseline-selection-intent") {
+      throw new Error("Baseline selection has no durable intent");
+    }
+    if (!selectionsEqual(pending.selection, receipt.selection)) {
+      throw new Error("Baseline selection receipt differs from its intent");
+    }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, pending.receiptId);
+    if (
+      !selectionsEqual(
+        receipt.evidence.selectorSwitch.previous,
+        projection.intent.previousSelection,
+      ) ||
+      !selectionsEqual(receipt.evidence.selectorSwitch.selected, receipt.selection)
+    ) {
+      throw new Error("Baseline selector broker evidence differs from its intent");
+    }
+    assertParentSyncFollows(
+      receipt.evidence.parentDirectorySync,
+      receipt.evidence.selectorSwitch,
+      "selector",
+    );
+  }
+  if (receipt.kind === "binding-completed") {
+    const pending = [...record.receipts]
+      .toReversed()
+      .find((entry) => entry.kind === "binding-intent");
+    const completedBindings = receipt.bindings.map(
+      ({ fingerprint: _fingerprint, ...binding }) => binding,
+    );
+    if (
+      !pending ||
+      pending.kind !== "binding-intent" ||
+      !isDeepStrictEqual(pending.bindings, completedBindings)
+    ) {
+      throw new Error("Binding completion differs from its durable intent");
+    }
+  }
+  if (receipt.kind === "binding-intent") {
+    const identities = receipt.bindings.map((binding) => `${binding.kind}:${binding.identity}`);
+    if (identities.length === 0 || new Set(identities).size !== identities.length) {
+      throw new Error("Binding intent must name distinct managed bindings");
+    }
+  }
+  if (receipt.kind === "candidate-selection-intent") {
+    const candidate = projection.generations.candidate;
+    const baseline = projection.baselineSelection ?? projection.intent.previousSelection;
+    if (!candidate || !baseline || !selectionsEqual(candidate, receipt.to)) {
+      throw new Error("Candidate selection requires durable previous and candidate generations");
+    }
+    if (!selectionsEqual(baseline, receipt.from) || !projection.bindingCompleted) {
+      throw new Error("Candidate selection requires a verified stable binding");
+    }
+    if (baseline.generationId === candidate.generationId) {
+      throw new Error("Candidate selection requires distinct retained generations");
+    }
+  }
+  if (receipt.kind === "candidate-selected") {
+    const pending = [...record.receipts]
+      .toReversed()
+      .find((entry) => entry.kind === "candidate-selection-intent");
+    if (
+      !pending ||
+      pending.kind !== "candidate-selection-intent" ||
+      !selectionsEqual(pending.to, receipt.selection)
+    ) {
+      throw new Error("Candidate selection receipt differs from its intent");
+    }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, pending.receiptId);
+    if (
+      !selectionsEqual(receipt.evidence.selectorSwitch.previous, pending.from) ||
+      !selectionsEqual(receipt.evidence.selectorSwitch.selected, pending.to)
+    ) {
+      throw new Error("Candidate selector broker evidence differs from its intent");
+    }
+    assertParentSyncFollows(
+      receipt.evidence.parentDirectorySync,
+      receipt.evidence.selectorSwitch,
+      "selector",
+    );
+    assertRetainedPairEvidence({
+      evidence: receipt.evidence,
+      selected: pending.to,
+      rollback: pending.from,
+    });
+  }
+  if (receipt.kind === "completion") {
+    const candidate = projection.generations.candidate;
+    if (!projection.candidateSelection || !candidate) {
+      throw new Error("Completion requires a selected candidate generation");
+    }
+    if (
+      receipt.packageVersion !== candidate.packageVersion ||
+      receipt.launcherVersion !== candidate.packageVersion ||
+      receipt.serviceRunning !== projection.intent.serviceBefore.running ||
+      receipt.serviceEnabled !== projection.intent.serviceBefore.enabled
+    ) {
+      throw new Error("Completion does not prove candidate and service convergence");
+    }
+    const previous = projection.baselineSelection ?? projection.intent.previousSelection;
+    if (!previous) {
+      throw new Error("Completion requires a retained rollback generation");
+    }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, receipt.receiptId);
+    assertRetainedPairEvidence({
+      evidence: receipt.evidence,
+      selected: projection.candidateSelection,
+      rollback: previous,
+    });
+  }
+  if (receipt.kind === "rollback-intent") {
+    const previous = projection.baselineSelection ?? projection.intent.previousSelection;
+    const candidate = projection.candidateSelection ?? projection.generations.candidate;
+    if (!previous || !candidate) {
+      throw new Error("Rollback requires durable previous and candidate generations");
+    }
+    if (!selectionsEqual(candidate, receipt.from) || !selectionsEqual(previous, receipt.to)) {
+      throw new Error("Rollback intent does not match the durable generation pair");
+    }
+  }
+  if (receipt.kind === "rolled-back") {
+    const pending = [...record.receipts]
+      .toReversed()
+      .find((entry) => entry.kind === "rollback-intent");
+    if (!pending || pending.kind !== "rollback-intent") {
+      throw new Error("Rollback completion has no durable intent");
+    }
+    if (!selectionsEqual(pending.to, receipt.selection)) {
+      throw new Error("Rollback completion differs from its intent");
+    }
+    const previousPackageVersion =
+      projection.generations.previous?.packageVersion ?? projection.intent.previousPackageVersion;
+    if (
+      !previousPackageVersion ||
+      receipt.launcherVersion !== previousPackageVersion ||
+      receipt.serviceRunning !== projection.intent.serviceBefore.running ||
+      receipt.serviceEnabled !== projection.intent.serviceBefore.enabled
+    ) {
+      throw new Error(
+        "Rollback completion does not prove previous runtime and service convergence",
+      );
+    }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, pending.receiptId);
+    if (
+      !selectionsEqual(receipt.evidence.selectorSwitch.previous, pending.from) ||
+      !selectionsEqual(receipt.evidence.selectorSwitch.selected, pending.to)
+    ) {
+      throw new Error("Rollback selector broker evidence differs from its intent");
+    }
+    assertParentSyncFollows(
+      receipt.evidence.parentDirectorySync,
+      receipt.evidence.selectorSwitch,
+      "selector",
+    );
+    assertRetainedPairEvidence({
+      evidence: receipt.evidence,
+      selected: pending.to,
+      rollback: pending.from,
+    });
+  }
+  if (receipt.kind === "cleanup-intent") {
+    const protectedIds = new Set(receipt.protectedGenerationIds);
+    if (
+      protectedIds.size !== receipt.protectedGenerationIds.length ||
+      new Set(receipt.generationIds).size !== receipt.generationIds.length
+    ) {
+      throw new Error("Cleanup intent contains duplicate generation ids");
+    }
+    const requiredProtectedIds = [
+      projection.baselineSelection?.generationId,
+      projection.candidateSelection?.generationId ?? projection.generations.candidate?.generationId,
+    ].filter((generationId): generationId is string => Boolean(generationId));
+    if (requiredProtectedIds.some((generationId) => !protectedIds.has(generationId))) {
+      throw new Error("Cleanup must protect the durable active and rollback generations");
+    }
+    if (receipt.generationIds.some((generationId) => protectedIds.has(generationId))) {
+      throw new Error("Cleanup cannot include a protected generation");
+    }
+  }
+  if (receipt.kind === "cleanup-completed") {
+    const pending = [...record.receipts]
+      .toReversed()
+      .find((entry) => entry.kind === "cleanup-intent");
+    const removedIds = receipt.removedGenerationIds;
+    const deferredIds = receipt.deferred.map((entry) => entry.generationId);
+    const completedIds = [...removedIds, ...deferredIds];
+    if (
+      !pending ||
+      pending.kind !== "cleanup-intent" ||
+      new Set(completedIds).size !== completedIds.length ||
+      !isDeepStrictEqual(completedIds.toSorted(), pending.generationIds.toSorted())
+    ) {
+      throw new Error("Cleanup completion differs from its durable intent");
+    }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, pending.receiptId);
+    if (
+      !isDeepStrictEqual(receipt.evidence.cleanup.generationIds, pending.generationIds) ||
+      !isDeepStrictEqual(
+        receipt.evidence.cleanup.removedGenerationIds,
+        receipt.removedGenerationIds,
+      ) ||
+      !isDeepStrictEqual(receipt.evidence.cleanup.deferred, receipt.deferred) ||
+      !isDeepStrictEqual(
+        receipt.evidence.cleanup.protectedGenerationIds.toSorted(),
+        pending.protectedGenerationIds.toSorted(),
+      )
+    ) {
+      throw new Error("Cleanup broker evidence differs from its durable intent");
+    }
+    assertParentSyncFollows(
+      receipt.evidence.parentDirectorySync,
+      receipt.evidence.cleanup,
+      "generations",
+    );
+    const selected = projection.rolledBack
+      ? (projection.baselineSelection ?? projection.intent.previousSelection)
+      : projection.candidateSelection;
+    const rollback = projection.rolledBack
+      ? projection.candidateSelection
+      : (projection.baselineSelection ?? projection.intent.previousSelection);
+    if (!selected || !rollback) {
+      throw new Error("Cleanup completion requires a retained generation pair");
+    }
+    assertRetainedPairEvidence({ evidence: receipt.evidence, selected, rollback });
+  }
+}
+
+export function appendUpdateGenerationReceipt(
+  record: UpdateGenerationTransactionRecord | null,
+  receipt: UpdateGenerationTransactionReceipt,
+): UpdateGenerationTransactionRecord {
+  const decoded = updateGenerationTransactionReceiptSchema.parse(receipt);
+  assertReceiptTransition(record, decoded);
+  if (!record) {
+    if (decoded.kind !== "intent") {
+      throw new Error("Unreachable update generation receipt state");
+    }
+    return {
+      formatVersion: 2,
+      transactionId: decoded.transactionId,
+      namespaceKey: decoded.namespaceKey,
+      receipts: [structuredClone(decoded)],
+    };
+  }
+  return {
+    ...record,
+    receipts: [...record.receipts, structuredClone(decoded)],
+  };
+}
+
+/** Parser-only append path for already-decoded receipts whose object identity must be retained. */
+export function appendDecodedUpdateGenerationReceipt(
+  record: UpdateGenerationTransactionRecord | null,
+  receipt: UpdateGenerationTransactionReceipt,
+): UpdateGenerationTransactionRecord {
+  assertReceiptTransition(record, receipt);
+  if (!record) {
+    if (receipt.kind !== "intent") {
+      throw new Error("Unreachable update generation receipt state");
+    }
+    return {
+      formatVersion: 2,
+      transactionId: receipt.transactionId,
+      namespaceKey: receipt.namespaceKey,
+      receipts: [receipt],
+    };
+  }
+  return { ...record, receipts: [...record.receipts, receipt] };
+}
+
+export function projectUpdateGenerationTransaction(
+  record: UpdateGenerationTransactionRecord,
+): UpdateGenerationProjection {
+  const intent = record.receipts[0];
+  if (!intent || intent.kind !== "intent") {
+    throw new TypeError("Update generation transaction is missing its intent receipt");
+  }
+  const projection: UpdateGenerationProjection = {
+    intent,
+    latest: intent,
+    latestTransition: intent,
+    materializationIntents: {},
+    generations: {},
+    baselineSelection: intent.previousSelection,
+    bindingCompleted: intent.stableBindingAlreadyVerified,
+    candidateSelection: null,
+    completed: false,
+    rolledBack: false,
+    cleanupCompleted: false,
+    terminalServiceState: null,
+    brokerOperationIds: new Set(),
+    brokerRevision: intent.brokerRevision,
+  };
+  for (const receipt of record.receipts.slice(1)) {
+    projection.latest = receipt;
+    if (receipt.kind !== "failure" && receipt.kind !== "failure-adjudicated") {
+      projection.latestTransition = receipt;
+    }
+    if (receipt.kind === "generation-materialization-intent") {
+      projection.materializationIntents[receipt.role] = receipt;
+    } else if (receipt.kind === "generation-materialized") {
+      projection.generations[receipt.role] = receipt.generation;
+    } else if (receipt.kind === "baseline-selected") {
+      projection.baselineSelection = receipt.selection;
+    } else if (receipt.kind === "binding-completed") {
+      projection.bindingCompleted = true;
+    } else if (receipt.kind === "candidate-selected") {
+      projection.candidateSelection = receipt.selection;
+    } else if (receipt.kind === "completion") {
+      projection.completed = true;
+      projection.terminalServiceState = {
+        running: receipt.serviceRunning,
+        enabled: receipt.serviceEnabled,
+      };
+    } else if (receipt.kind === "rolled-back") {
+      projection.rolledBack = true;
+      projection.terminalServiceState = {
+        running: receipt.serviceRunning,
+        enabled: receipt.serviceEnabled,
+      };
+    } else if (receipt.kind === "cleanup-completed") {
+      projection.cleanupCompleted = true;
+    }
+    if ("evidence" in receipt) {
+      for (const brokerReceipt of brokerReceiptsInEvidence(receipt.evidence)) {
+        projection.brokerOperationIds.add(brokerReceipt.operationId);
+        projection.brokerRevision = brokerReceipt.revision;
+      }
+    }
+  }
+  return projection;
+}
