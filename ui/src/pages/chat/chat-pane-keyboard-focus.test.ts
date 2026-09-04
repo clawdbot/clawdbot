@@ -67,7 +67,11 @@ describe("chat pane keyboard focus", () => {
     },
   );
 
-  it("keeps the letter-to-composer contract when a button is focused", () => {
+  it.each([
+    ["accented character", { key: "ç" }],
+    ["quotation mark", { key: '"', shiftKey: true }],
+    ["dead key", { key: "Dead", altKey: true }],
+  ] as const)("keeps the %s-to-composer contract when a button is focused", (_name, init) => {
     const { pane } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture(),
@@ -84,11 +88,16 @@ describe("chat pane keyboard focus", () => {
     button.focus();
 
     try {
-      button.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "x", bubbles: true, composed: true }),
-      );
+      const event = new KeyboardEvent("keydown", {
+        ...init,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+      button.dispatchEvent(event);
 
       expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+      expect(event.defaultPrevented).toBe(false);
     } finally {
       button.remove();
     }

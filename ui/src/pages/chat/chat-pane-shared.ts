@@ -231,8 +231,8 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "Escape",
 ]);
 
-// Shortcut menus own only advertised, enabled keys; every other printable key
-// can still transfer to the composer through the normal browser input pipeline.
+// Shortcut menus own only advertised, enabled keys; printable and Dead keys
+// must transfer focus before the browser's normal input/composition pipeline.
 function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
   return (
     /^[a-z0-9]$/iu.test(key) &&
@@ -279,9 +279,9 @@ export function focusChatComposerFromPrintableKeydown(
     event.isComposing ||
     event.metaKey ||
     event.ctrlKey ||
-    event.altKey ||
+    (event.altKey && event.key !== "Dead") ||
     openDropdownOwnsKey(root, event.key) ||
-    event.key.length !== 1 ||
+    (event.key !== "Dead" && event.key.length !== 1) ||
     keyboardEventPathHasInteractiveTarget(event) ||
     document.openClawModalLayers?.size ||
     document.querySelector("dialog[open], [aria-modal='true']")
