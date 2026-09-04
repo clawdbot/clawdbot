@@ -1,0 +1,89 @@
+title: Approve command rejects Object.prototype names as decisions
+
+scenario:
+  id: approve-command-prototype-decision-usage
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  regressionRefs:
+    - openclaw/openclaw#137877
+  objective: Verify a chat /approve whose decision token is an inherited Object.prototype name gets the usage reply instead of being submitted as a decision.
+  successCriteria:
+    - Sending /approve abc constructor replies with the /approve usage text.
+    - The usage reply is produced without a model request.
+    - Sending /approve abc deny still reaches the Gateway approval resolver.
+  docsRefs:
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/auto-reply/reply/commands-approve.ts
+    - src/auto-reply/reply/fast-approve.ts
+  execution:
+    kind: flow
+    summary: Send /approve with a prototype-name decision over a DM and verify the usage reply, then send a real decision and verify it is submitted.
+    config:
+      conversationId: approve-prototype-dm
+      prototypeCommandText: /approve abc constructor
+      realCommandText: /approve abc deny
+      usageNeedle: "Usage: /approve"
+
+flow:
+  steps:
+    - name: prototype decision name gets the usage reply
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            senderId: qa-approver
+            senderName: QA Approver
+            text: { ref: config.prototypeCommandText }
+        - waitForOutbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            sinceIndex: { ref: startIndex }
+            timeoutMs: 60000
+          saveAs: reply
+        - assert:
+            expr: "reply.text.includes(config.usageNeedle)"
+            message:
+              expr: "`prototype decision was not rejected with usage: ${reply.text}`"
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`) : []"
+        - assert:
+            expr: "!env.mock || scenarioRequests.length === 0"
+            message:
+              expr: "`/approve usage reply unexpectedly invoked the model ${String(scenarioRequests.length)} time(s)`"
+      detailsExpr: reply.text
+
+    - name: real decision still reaches the approval resolver
+      actions:
+        - set: realStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            senderId: qa-approver
+            senderName: QA Approver
+            text: { ref: config.realCommandText }
+        - waitForOutbound:
+            conversation: { id: { ref: config.conversationId }, kind: direct }
+            sinceIndex: { ref: realStartIndex }
+            textIncludes: Failed to submit approval
+            timeoutMs: 60000
+          saveAs: realReply
+        - assert:
+            expr: "!realReply.text.includes(config.usageNeedle)"
+            message:
+              expr: "`real decision was rejected as usage: ${realReply.text}`"
+      detailsExpr: "formatTransportTranscript(state, { conversationId: config.conversationId })"
