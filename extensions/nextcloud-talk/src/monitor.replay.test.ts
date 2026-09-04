@@ -441,3 +441,204 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
     expect(lastResponse?.status).toBe(200);
   });
 });
+
+describe("createNextcloudTalkWebhookServer pre-authentication concurrency", () => {
+  // The per-request budget bounds one unauthenticated read. Nothing bounded how many ran at
+  // once, and the auth limiter cannot: it counts recorded failures, and a caller that never
+  // finishes a body never reaches the signature check that records one.
+  function holdBodyReads(): {
+    readBody: NextcloudTalkWebhookServerOptions["readBody"];
+    entered: () => number;
+    release: () => void;
+  } {
+    let entered = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return {
+      readBody: async (req) => {
+        entered += 1;
+        await gate;
+        // Read what the caller actually sent once released, so a request that arrives after
+        // the gate opens is still verified against its own body.
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(chunk as Buffer);
+        }
+        return Buffer.concat(chunks).toString("utf-8");
+      },
+      entered: () => entered,
+      release: () => release(),
+    };
+  }
+
+  const preAuthHeaders = {
+    "content-type": "application/json",
+    "x-nextcloud-talk-random": "0".repeat(64),
+    "x-nextcloud-talk-signature": "unverified-at-this-point",
+    "x-nextcloud-talk-backend": "https://cloud.example.com",
+  };
+
+  // Poll for the target rather than for a quiet interval: a loaded runner can leave the
+  // count unchanged between two samples while connections are still arriving, which would
+  // assert capacity against a half-filled budget.
+  async function waitForReaders(entered: () => number, target: number): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    while (entered() < target) {
+      if (Date.now() >= deadline) {
+        throw new Error(`only ${String(entered())} of ${String(target)} pre-auth readers started`);
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10);
+      });
+    }
+  }
+
+  it("answers 503 on the wire once the pre-auth read budget is full", async () => {
+    const gate = holdBodyReads();
+    const harness = await startWebhookServer({
+      path: "/nextcloud-preauth-in-flight",
+      readBody: gate.readBody,
+      onMessage: vi.fn(),
+    });
+
+    // 64 is the cap; hold exactly that many so the next one has to be refused.
+    const held = Array.from({ length: 64 }, () =>
+      postRawWebhook({
+        url: harness.webhookUrl,
+        body: "{}",
+        idleTimeoutMs: 3_000,
+        headers: preAuthHeaders,
+      }),
+    );
+    // Release and drain from a finally: a failed assertion must not leave afterEach waiting
+    // on 64 requests that are still parked inside their body read.
+    try {
+      await waitForReaders(gate.entered, 64);
+
+      const overflow = await postRawWebhook({
+        url: harness.webhookUrl,
+        body: "{}",
+        idleTimeoutMs: 3_000,
+        headers: preAuthHeaders,
+      });
+
+      expect(overflow.statusLine).toBe("HTTP/1.1 503 Service Unavailable");
+      expect(overflow.headers.connection).toBe("close");
+      expect(overflow.body).toBe(
+        JSON.stringify({ error: "Pre-authentication capacity exhausted" }),
+      );
+      expect(overflow.closedByServer).toBe(true);
+      // The refusal must happen before the read, not after it.
+      expect(gate.entered()).toBe(64);
+    } finally {
+      gate.release();
+      await Promise.all(held);
+    }
+  }, 30_000);
+
+  it("returns every over-limit body's slot, so later deliveries still land", async () => {
+    // The 413 answer was moved inside the guarded region so a rejected request keeps its slot
+    // until the shared rejection lifecycle has finished answering. What is asserted here is the
+    // deterministic half of that: the slots all come back. The hold itself is bounded by
+    // REJECTION_CLOSE_TIMEOUT_MS, a wall-clock grace in a shared owner, and any assertion that
+    // it is still held would have to win a race against that clock on the runner - so it is
+    // deliberately not asserted here.
+    const oversized = JSON.stringify({ type: "Create", padding: "x".repeat(70 * 1024) });
+    const harness = await startWebhookServer({
+      path: "/nextcloud-preauth-in-flight-oversized",
+      onMessage: vi.fn(),
+    });
+
+    const rejected = await Promise.all(
+      Array.from({ length: 64 }, () =>
+        postRawWebhook({
+          url: harness.webhookUrl,
+          body: oversized,
+          idleTimeoutMs: 3_000,
+          headers: { ...preAuthHeaders, "x-nextcloud-talk-signature": "not-checked-yet" },
+        }),
+      ),
+    );
+    for (const answer of rejected) {
+      expect(answer.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+    }
+
+    // Past the grace, every one of the 64 slots must be available again.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1_500);
+    });
+    const { body, headers } = createSignedCreateMessageRequest();
+    const delivered = await fetch(harness.webhookUrl, { method: "POST", headers, body });
+    expect(delivered.status).toBe(200);
+  }, 30_000);
+
+  it("answers a stalled upload with 408 on the wire and does not wedge the route", async () => {
+    // The 408 branch was moved into the guarded region alongside 413, so it needs its own
+    // trigger rather than inheriting the oversized case's coverage: a body that never
+    // arrives, declared but not sent, until the pre-auth read timeout fires.
+    //
+    // Scope: this holds one request against a budget of 64, so the follow-up 200 shows the
+    // route still serves after a timed-out read - it does NOT establish that the timed-out
+    // request returned its slot, because 63 were free regardless. The release ordering for
+    // this block is covered by the oversized case above, which does saturate the budget;
+    // both branches are the same rejectWebhookRequest call in the same position.
+    const harness = await startWebhookServer({
+      path: "/nextcloud-preauth-in-flight-stalled",
+      onMessage: vi.fn(),
+    });
+
+    const stalled = await postRawWebhook({
+      url: harness.webhookUrl,
+      body: "{",
+      contentLength: 4096,
+      idleTimeoutMs: 15_000,
+      headers: { ...preAuthHeaders, "x-nextcloud-talk-signature": "not-checked-yet" },
+    });
+
+    expect(stalled.statusLine).toBe("HTTP/1.1 408 Request Timeout");
+    expect(stalled.closedByServer).toBe(true);
+
+    // The route still serves after the timeout (see the scope note above).
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1_500);
+    });
+    const { body, headers } = createSignedCreateMessageRequest();
+    const delivered = await fetch(harness.webhookUrl, { method: "POST", headers, body });
+    expect(delivered.status).toBe(200);
+  }, 30_000);
+
+  it("releases the slot a rejected signature took, so later deliveries still land", async () => {
+    const gate = holdBodyReads();
+    const harness = await startWebhookServer({
+      path: "/nextcloud-preauth-in-flight-release",
+      readBody: gate.readBody,
+      // The 64 held requests all fail their signature check, which is the point: the failure
+      // path is where a slot leak would hide. Keep the (separate) failed-auth limiter out of
+      // the way so the recovery below measures slot release and nothing else.
+      authRateLimit: { maxRequests: 1_000 },
+      onMessage: vi.fn(),
+    });
+
+    const held = Array.from({ length: 64 }, () =>
+      postRawWebhook({
+        url: harness.webhookUrl,
+        body: "{}",
+        idleTimeoutMs: 3_000,
+        headers: preAuthHeaders,
+      }),
+    );
+    try {
+      await waitForReaders(gate.entered, 64);
+    } finally {
+      gate.release();
+      // Every held request fails its signature check; each must hand its slot back.
+      await Promise.all(held);
+    }
+
+    const { body, headers } = createSignedCreateMessageRequest();
+    const delivered = await fetch(harness.webhookUrl, { method: "POST", headers, body });
+    expect(delivered.status).toBe(200);
+  }, 30_000);
+});
