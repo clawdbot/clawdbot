@@ -564,9 +564,10 @@ export function createOpenAIServiceTierWrapper(
   };
 }
 
-// OpenAI caps safety identifiers well above this, but a stable hashed value is
-// the documented shape; anything longer is almost certainly raw PII by mistake.
-const OPENAI_SAFETY_IDENTIFIER_MAX_LENGTH = 256;
+// OpenAI documents `safety_identifier` as a stable per-user string with a
+// maximum length of 64 characters (see the SDK field docs); longer values are
+// rejected upstream and are almost certainly raw PII sent by mistake.
+const OPENAI_SAFETY_IDENTIFIER_MAX_LENGTH = 64;
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function resolveOpenAISafetyIdentifier(

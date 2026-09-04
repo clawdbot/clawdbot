@@ -3466,6 +3466,18 @@ describe("applyExtraParamsToAgent", () => {
       } as Model<"openai-responses">,
     },
     {
+      name: "skips safety_identifier injection for values over OpenAI's 64-character limit",
+      applyProvider: "openai",
+      configKey: "openai/gpt-5.4",
+      safetyIdentifier: "x".repeat(65),
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+    },
+    {
       name: "skips safety_identifier injection for non-string values",
       applyProvider: "openai",
       configKey: "openai/gpt-5.4",
