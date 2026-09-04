@@ -68,7 +68,7 @@ function channelEntryCanSend(
   entry: PluginChannelRegistration | undefined,
   requiredAction?: ChannelMessageActionName,
 ): boolean {
-  if (Boolean(entry?.plugin?.outbound?.sendText ?? entry?.plugin?.message?.send?.text)) {
+  if (entry?.plugin?.outbound?.sendText ?? entry?.plugin?.message?.send?.text) {
     return true;
   }
   const actions = entry?.plugin?.actions;
