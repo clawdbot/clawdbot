@@ -9,7 +9,7 @@ import {
   NODE_SKILL_MAX_TOTAL_BYTES,
   NODE_SKILL_NAME_RE,
 } from "../shared/node-skill-constraints.js";
-import { loadSkillsFromDirSafe } from "../skills/loading/local-loader.js";
+import { loadSkillsFromDirSafe, type LoadedLocalSkill } from "../skills/loading/local-loader.js";
 import { resolveConfigDir } from "../utils.js";
 
 type ScanNodeHostedSkillsOptions = {
@@ -87,8 +87,7 @@ export function scanNodeHostedSkills(
     return [];
   }
 
-  const loadedSkills: ReturnType<typeof loadSkillsFromDirSafe>["skills"] = [];
-  const frontmatterByFilePath = new Map<string, Record<string, string>>();
+  const loadedSkills: LoadedLocalSkill[] = [];
   for (const candidate of candidates) {
     let invalidFrontmatter = false;
     const candidatePath = path.resolve(candidate);
@@ -103,13 +102,11 @@ export function scanNodeHostedSkills(
         warn(`node host skill skipped (${diagnostic.path}): ${diagnostic.message}`);
       },
     });
-    const skill = loaded.skills.find((entry) => path.resolve(entry.filePath) === candidatePath);
-    if (skill) {
-      loadedSkills.push(skill);
-      const frontmatter = loaded.frontmatterByFilePath.get(skill.filePath);
-      if (frontmatter) {
-        frontmatterByFilePath.set(skill.filePath, frontmatter);
-      }
+    const loadedSkill = loaded.find(
+      (entry) => path.resolve(entry.skill.filePath) === candidatePath,
+    );
+    if (loadedSkill) {
+      loadedSkills.push(loadedSkill);
       continue;
     }
     let size: number | undefined;
@@ -132,10 +129,9 @@ export function scanNodeHostedSkills(
   const descriptors: NodeSkillDescriptor[] = [];
   const seenNames = new Set<string>();
   let totalBytes = 0;
-  for (const skill of loadedSkills.toSorted((left, right) =>
-    left.name.localeCompare(right.name, "en"),
+  for (const { skill, frontmatter } of loadedSkills.toSorted((left, right) =>
+    left.skill.name.localeCompare(right.skill.name, "en"),
   )) {
-    const frontmatter = frontmatterByFilePath.get(skill.filePath);
     if (
       frontmatter?.name?.trim() !== skill.name ||
       frontmatter.description?.trim() !== skill.description ||
