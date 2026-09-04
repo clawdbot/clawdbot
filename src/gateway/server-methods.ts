@@ -62,6 +62,7 @@ import type {
   GatewayRequestOptions,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
+import type { GatewayRpcDiagnostics } from "./server/ws-connection/request-diagnostics.js";
 import { sessionMutationTargetFields } from "./session-method-policy.js";
 import { resolveDirectIncognitoTargets } from "./session-sharing-target-input.js";
 import {
@@ -682,6 +683,7 @@ export async function runWithGatewayRequestEnvelope<T>(
 /** Authorizes and dispatches one gateway JSON-RPC-style request. */
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
+  diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context, signal } = opts;
   // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
@@ -717,7 +719,7 @@ export async function handleGatewayRequest(
   );
   const invokeHandler = () => {
     opts.sessionMutationCommitGuard?.();
-    return handler({
+    const options = {
       req,
       params: (req.params ?? {}) as Record<string, unknown>,
       client,
@@ -727,7 +729,8 @@ export async function handleGatewayRequest(
       signal,
       sessionMutationCommitGuard: opts.sessionMutationCommitGuard,
       sessionMutationAuthorization,
-    });
+    };
+    return diagnostics ? diagnostics.runHandler(() => handler(options)) : handler(options);
   };
   await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
     context,
