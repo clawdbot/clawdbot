@@ -1,8 +1,16 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { patchSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
+import {
+  getConversationSession,
+  normalizeSessionDeliveryState,
+  patchSessionEntry,
+} from "../../plugin-sdk/session-store-runtime.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
@@ -81,6 +89,79 @@ async function setupStop() {
 }
 
 describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) => {
+  it("does not reclaim a conversation reassigned after abort preparation", async () => {
+    const state = await setupStop();
+    const nextKey = `${sessionKey}:thread:123.456`;
+    const address = {
+      agentId: "main",
+      storePath: state.storePath,
+      channel: "slack",
+      accountId: "default",
+      kind: "group" as const,
+      peerId: "g12345678",
+      threadId: "123.456",
+    };
+    const delivery = normalizeSessionDeliveryState({
+      context: {
+        channel: "slack",
+        accountId: "default",
+        to: "group:g12345678",
+        threadId: "123.456",
+      },
+    });
+    await replaceSessionEntry(
+      { storePath: state.storePath, sessionKey },
+      { ...state.entry, updatedAt: 100, chatType: "group", delivery },
+    );
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId: state.entry.sessionId,
+      resetTriggered: false,
+    });
+    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+    let reassigned = false;
+    state.isCommandTargetCurrent = () => {
+      const current = getConversationSession(address);
+      if (
+        !reassigned &&
+        operation.abortSignal.aborted &&
+        (pathKind === "fast" || state.params.sessionStore?.[sessionKey]?.abortedLastRun === true)
+      ) {
+        reassigned = true;
+        // A separate synchronous writer commits while abort's prepared patch yields.
+        queueMicrotask(() => {
+          replaceSessionEntrySync(
+            { storePath: state.storePath, sessionKey: nextKey },
+            { sessionId: "session-b", updatedAt: 200, chatType: "group", delivery },
+          );
+        });
+      }
+      return current?.sessionKey === sessionKey;
+    };
+    state.params.opts = { isCommandTargetCurrent: state.isCommandTargetCurrent };
+    const failure = await (
+      pathKind === "fast" ? tryFastAbortFromMessage(state) : handleStopCommand(state.params, true)
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(reassigned).toBe(true);
+    expect(getConversationSession(address)).toEqual({
+      sessionKey: nextKey,
+      sessionId: "session-b",
+    });
+    expect(loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun).not.toBe(
+      true,
+    );
+    if (failure) {
+      expect(failure).toMatchObject({
+        message: "The selected session changed before it could be stopped.",
+      });
+    }
+    operation.complete();
+  });
+
   it("skips stale abort bookkeeping after waiting for a replacement writer", async () => {
     const state = await setupStop();
     const entered = createDeferred();

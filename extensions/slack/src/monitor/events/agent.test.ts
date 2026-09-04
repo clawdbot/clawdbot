@@ -328,6 +328,7 @@ describe("registerSlackAgentEvents", () => {
       harness.ctx.isSlackAgentView = async () => managedView;
       await harness.recordSession({
         sessionKey,
+        updatedAt: 100,
         peerId: "U123",
         threadId: managedView ? "1712345678.000001" : undefined,
       });
@@ -346,22 +347,9 @@ describe("registerSlackAgentEvents", () => {
       });
 
       expect(patchSessionEntry).toHaveBeenCalledOnce();
-      const patch = patchSessionEntry.mock.calls[0]?.[0];
-      expect(patch).toEqual({
-        agentId: "main",
-        storePath: harness.storePath,
-        sessionKey,
-        preserveActivity: true,
-        update: expect.any(Function),
-      });
       expect(
-        await patch?.update(
-          { sessionId: "session", updatedAt: 1, displayName: "Old", label: "Operator label" },
-          {},
-        ),
-      ).toEqual({
-        displayName: "Renamed in Slack",
-      });
+        getSessionEntry({ agentId: "main", sessionKey, storePath: harness.storePath }),
+      ).toMatchObject({ displayName: "Renamed in Slack", updatedAt: 100 });
       expect(harness.recordSlackSessionTitle).toHaveBeenCalledWith({
         channelId: "D123",
         threadTs: "1712345678.000001",
@@ -486,35 +474,58 @@ describe("registerSlackAgentEvents", () => {
     },
   );
 
-  it.each([false, true])(
-    "does not acknowledge a missing managed session (Assistant: %s)",
-    async (assistant) => {
+  it.each(
+    [false, true].flatMap((assistant) =>
+      ["agent_session_stopped", "agent_session_title_changed"].map((type) => ({ assistant, type })),
+    ),
+  )(
+    "does not mutate a missing managed owner for $type (Assistant: $assistant)",
+    async ({ assistant, type }) => {
       const harness = createSessionEventHarness();
+      const threadTs = "1712345678.000001";
       await harness.recordSession({ sessionKey: "agent:main:main", peerId: "U123" });
       harness.ctx.isSlackAgentView = async () => !assistant;
       if (assistant) {
-        harness.readThread.mockResolvedValue({
+        // Slack excludes a message equal to oldest unless the request is inclusive.
+        harness.readThread.mockImplementation(async ({ oldest, inclusive }) => ({
           ok: true,
-          messages: [{ metadata: { event_type: "assistant_thread_context", event_payload: {} } }],
-        });
+          messages:
+            !oldest || Number(threadTs) > Number(oldest) || (oldest === threadTs && inclusive)
+              ? [
+                  {
+                    ts: threadTs,
+                    metadata: { event_type: "assistant_thread_context", event_payload: {} },
+                  },
+                ]
+              : [],
+        }));
       }
-      await harness.getHandler("agent_session_stopped")?.({
+      await harness.getHandler(type)?.({
         event: {
-          type: "agent_session_stopped",
+          type,
           channel: "D123",
-          thread_ts: "1712345678.000001",
+          thread_ts: threadTs,
           user: "U123",
           event_ts: "1712345679.000001",
+          title: "Assistant title must not rename the ordinary DM",
           streaming_message_ts: [],
         },
         body: {},
       });
       expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
+      expect(patchSessionEntry).not.toHaveBeenCalled();
+      expect(harness.recordSlackSessionTitle).not.toHaveBeenCalled();
       expect(markSlackStreamsStopped).not.toHaveBeenCalled();
       expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
-      expect(harness.postEphemeral).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "Sorry, something went wrong handling that command." }),
-      );
+      if (type === "agent_session_stopped") {
+        expect(harness.postEphemeral).toHaveBeenCalledWith(
+          expect.objectContaining({ text: "Sorry, something went wrong handling that command." }),
+        );
+      } else {
+        expect(harness.ctx.runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("No recorded session owns this Slack conversation"),
+        );
+      }
     },
   );
 

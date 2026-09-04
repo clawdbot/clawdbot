@@ -64,7 +64,6 @@ export async function readSlackAssistantThreadContext(params: {
   const response = await params.client.conversations.replies({
     channel: params.channelId,
     ts: params.threadTs,
-    oldest: params.threadTs,
     include_all_metadata: true,
     limit: 4,
   });

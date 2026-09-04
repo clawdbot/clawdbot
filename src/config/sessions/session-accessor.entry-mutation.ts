@@ -327,6 +327,13 @@ export async function markSessionAbortTarget(params: {
       {
         replaceEntry: true,
         skipMaintenance: true,
+        // The patch callback yields before BEGIN; the conversation can move without
+        // changing this session row, so its snapshot comparison cannot fence Stop.
+        assertCommitAllowed: () => {
+          if (resolution.target && params.isCurrent?.() === false) {
+            throw new Error("The selected session changed before it could be stopped.");
+          }
+        },
       },
     );
     return updated && resolution.target

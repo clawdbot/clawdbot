@@ -119,6 +119,12 @@ export async function persistAbortTargetEntry(params: {
         fallbackEntry: entry,
         replaceEntry: true,
         skipMaintenance: true,
+        // Reassignment can leave the selected row unchanged across the patch await.
+        assertCommitAllowed: () => {
+          if (applied && params.isCurrent?.() === false) {
+            throw new Error("The selected session changed before it could be stopped.");
+          }
+        },
       },
     );
     return applied;

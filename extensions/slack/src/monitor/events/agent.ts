@@ -165,12 +165,12 @@ export function registerSlackAgentEvents(params: {
         storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: routing.route.agentId }),
         sessionKey: routing.sessionKey,
         preserveActivity: true,
-        update: () => {
+        assertCommitAllowed: () => {
           if (!routing.isCurrentSession()) {
             throw new Error("Slack conversation owner changed before the title update");
           }
-          return { displayName: event.title };
         },
+        update: () => ({ displayName: event.title }),
       });
       if (!updated) {
         throw new Error("Slack conversation session disappeared before the title update");
