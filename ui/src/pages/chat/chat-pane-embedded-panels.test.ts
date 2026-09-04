@@ -77,6 +77,7 @@ describe("chat pane embedded panels", () => {
           availableSlots: ["detail", "workspace"],
           callbacks: {
             activatePanel: vi.fn(),
+            appendComposerText: vi.fn(),
             closeSlot: vi.fn(),
             openSlot: vi.fn(),
             reorderPanel: vi.fn(),
