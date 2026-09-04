@@ -2,16 +2,50 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
-import type { ModelAuthStatusResult } from "../api/types.ts";
+import type { CronJobsListResult, CronStatus, ModelAuthStatusResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
+import {
+  client as mockClient,
+  createGatewayHarness,
+  deferred,
+} from "../app/overlays-access.test-support.ts";
 import {
   createSidebarAttentionStore,
   type SidebarAttentionStore,
 } from "../app/sidebar-attention-store.ts";
 import { hiddenScopeUpgradeCapability } from "../test-helpers/application-context.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { loadDismissals } from "./sidebar-attention-dismissals.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
+
+function cronPage(id?: string): CronJobsListResult {
+  const jobs = id
+    ? [
+        {
+          id,
+          name: id,
+          enabled: true,
+          createdAtMs: 0,
+          updatedAtMs: 0,
+          schedule: { kind: "every" as const, everyMs: 60_000 },
+          sessionTarget: "isolated" as const,
+          wakeMode: "now" as const,
+          payload: { kind: "agentTurn" as const, message: "test" },
+          state: { lastRunStatus: "error" as const },
+        },
+      ]
+    : [];
+  return {
+    jobs,
+    snapshotRevision: id ?? "empty",
+    total: jobs.length,
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    nextOffset: null,
+  };
+}
 
 describe("sidebar attention source publication", () => {
   let store: SidebarAttentionStore | undefined;
@@ -20,6 +54,7 @@ describe("sidebar attention source publication", () => {
     store?.dispose();
     store = undefined;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   function createStore(gateway: ApplicationContext["gateway"]) {
@@ -42,6 +77,242 @@ describe("sidebar attention source publication", () => {
     });
   }
 
+  it.each(["list", "status"] as const)(
+    "coalesces cron bursts until the whole inventory pair settles (%s first)",
+    async (first) => {
+      const pendingList = deferred<CronJobsListResult>();
+      const pendingStatus = deferred<CronStatus>();
+      const pendingAuth = deferred<ModelAuthStatusResult>();
+      const cronStatus = { enabled: true, triggersEnabled: true, jobs: 1 };
+      let listCalls = 0;
+      let statusCalls = 0;
+      const request = vi.fn((method: string) => {
+        if (method === "cron.list") {
+          return ++listCalls === 1 ? pendingList.promise : Promise.resolve(cronPage("latest"));
+        }
+        if (method === "cron.status") {
+          return ++statusCalls === 1 ? pendingStatus.promise : Promise.resolve(cronStatus);
+        }
+        if (method === "models.authStatus") {
+          return pendingAuth.promise;
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const harness = createGatewayHarness(mockClient(request));
+      store = createStore(harness.gateway);
+      store.activate(SidebarAttentionStoreController);
+
+      try {
+        for (let index = 0; index < 20; index++) {
+          harness.emitEvent("cron", {});
+        }
+        expect(listCalls).toBe(1);
+        expect(statusCalls).toBe(1);
+        expect(
+          request.mock.calls.filter(([method]) => method === "models.authStatus"),
+        ).toHaveLength(1);
+
+        if (first === "list") {
+          pendingList.resolve(cronPage("stale"));
+          await pendingList.promise;
+        } else {
+          pendingStatus.resolve(cronStatus);
+          await pendingStatus.promise;
+        }
+        await Promise.resolve();
+        expect(listCalls).toBe(1);
+        expect(statusCalls).toBe(1);
+
+        pendingList.resolve(cronPage("stale"));
+        pendingStatus.resolve(cronStatus);
+        await waitForFast(() =>
+          expect(store?.entries).toMatchObject([
+            { type: "attention", kind: "cronFailed", label: "latest" },
+          ]),
+        );
+        expect(listCalls).toBe(2);
+        expect(statusCalls).toBe(2);
+      } finally {
+        store?.dispose();
+        store = undefined;
+        pendingList.resolve(cronPage());
+        pendingStatus.resolve(cronStatus);
+        pendingAuth.resolve({ ts: 1, providers: [] });
+      }
+    },
+  );
+
+  it("publishes progress but retires dismissals only after a fresh complete inventory", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const pages = Array.from({ length: 5 }, () => deferred<CronJobsListResult>());
+    let listCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return pages[listCalls++]!.promise;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, triggersEnabled: true, jobs: 1 };
+      }
+      return { ts: 1, providers: [] };
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    store = createStore(harness.gateway);
+    store.activate(SidebarAttentionStoreController);
+    pages[0]!.resolve(cronPage("dismissed"));
+    await waitForFast(() => expect(store?.entries).toHaveLength(1));
+    store.dismiss({ kind: "cronFailed", signature: "dismissed" });
+
+    try {
+      harness.emitEvent("cron", {});
+      for (const index of [1, 2]) {
+        await waitForFast(() => expect(listCalls).toBe(index + 1));
+        harness.emitEvent("cron", {});
+        pages[index]!.resolve(cronPage(`current-${index}`));
+        await waitForFast(() =>
+          expect(store?.entries).toMatchObject([{ label: `current-${index}` }]),
+        );
+        expect(loadDismissals(harness.gateway.connection.gatewayUrl)).toEqual({
+          cronFailed: ["dismissed"],
+        });
+      }
+      pages[3]!.resolve({ ...cronPage("partial"), hasMore: true, total: 2, nextOffset: 1 });
+      await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "partial" }]));
+      expect(loadDismissals(harness.gateway.connection.gatewayUrl)).toEqual({
+        cronFailed: ["dismissed"],
+      });
+      harness.emitEvent("cron", {});
+      pages[4]!.resolve(cronPage("fresh"));
+      await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "fresh" }]));
+      expect(loadDismissals(harness.gateway.connection.gatewayUrl)).toEqual({});
+    } finally {
+      store.dispose();
+      for (const page of pages) {
+        page.resolve(cronPage());
+      }
+    }
+  });
+
+  it("preserves loaded attention and dismissals when cron.list fails", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const page = cronPage("overdue");
+    page.jobs[0]!.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
+    let failing = false;
+    const request = vi.fn(async (method: string) => {
+      if (failing && method === "cron.list") {
+        throw new Error("temporarily unavailable");
+      }
+      if (method === "cron.list") {
+        return page;
+      }
+      if (method === "cron.status") {
+        return { enabled: true, triggersEnabled: true, jobs: 1 };
+      }
+      return { ts: 1, providers: [] };
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    store = createStore(harness.gateway);
+    store.activate(SidebarAttentionStoreController);
+    await waitForFast(() => expect(store?.entries).toHaveLength(1));
+
+    failing = true;
+    harness.emitEvent("cron", {});
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(store.entries).toMatchObject([{ label: "overdue" }]);
+    store.dismiss({ kind: "cronOverdue", signature: "overdue@1" });
+    harness.emitEvent("cron", {});
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(loadDismissals(harness.gateway.connection.gatewayUrl)).toEqual({
+      cronOverdue: ["overdue@1"],
+    });
+
+    failing = false;
+    harness.emitEvent("cron", {});
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(store.entries).toEqual([]);
+  });
+
+  it("preserves disabled scheduler attention when cron.status fails", async () => {
+    const page = cronPage("overdue");
+    page.jobs[0]!.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
+    let failing = false;
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.status") {
+        if (failing) {
+          throw new Error("temporarily unavailable");
+        }
+        return { enabled: false, triggersEnabled: true, jobs: 1 };
+      }
+      return method === "cron.list" ? page : { ts: 1, providers: [] };
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    store = createStore(harness.gateway);
+    store.activate(SidebarAttentionStoreController);
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(store.entries).toEqual([]);
+
+    failing = true;
+    harness.emitEvent("cron", {});
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(store.entries).toEqual([]);
+  });
+
+  it.each(["disconnect", "replace", "dispose"] as const)(
+    "retires queued cron refreshes on %s",
+    async (boundary) => {
+      const pendingList = deferred<CronJobsListResult>();
+      const pendingStatus = deferred<CronStatus>();
+      const cronStatus = { enabled: true, triggersEnabled: true, jobs: 1 };
+      const request = vi.fn((method: string) => {
+        if (method === "cron.list") {
+          return pendingList.promise;
+        }
+        if (method === "cron.status") {
+          return pendingStatus.promise;
+        }
+        if (method === "models.authStatus") {
+          return Promise.resolve({ ts: 1, providers: [] });
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const harness = createGatewayHarness(mockClient(request));
+      store = createStore(harness.gateway);
+      const publish = vi.fn();
+      store.subscribe(publish);
+      store.activate(SidebarAttentionStoreController);
+      harness.emitEvent("cron", {});
+
+      try {
+        if (boundary === "disconnect") {
+          harness.update({ phase: "reconnecting" });
+        } else if (boundary === "replace") {
+          harness.update({
+            client: mockClient(async (method) =>
+              method === "cron.list"
+                ? cronPage("replacement")
+                : method === "cron.status"
+                  ? cronStatus
+                  : { ts: 1, providers: [] },
+            ),
+          });
+          await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "replacement" }]));
+        } else {
+          store.dispose();
+        }
+        publish.mockClear();
+        pendingList.resolve(cronPage("retired"));
+        pendingStatus.resolve(cronStatus);
+        await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+
+        expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
+        expect(request.mock.calls.filter(([method]) => method === "cron.status")).toHaveLength(1);
+        expect(publish).not.toHaveBeenCalled();
+      } finally {
+        pendingList.resolve(cronPage());
+        pendingStatus.resolve(cronStatus);
+      }
+    },
+  );
+
   it("publishes cron attention while model auth is still pending", async () => {
     let resolveModelAuth!: (status: ModelAuthStatusResult) => void;
     const modelAuth = new Promise<ModelAuthStatusResult>((resolve) => {
@@ -49,28 +320,7 @@ describe("sidebar attention source publication", () => {
     });
     const request = vi.fn((method: string) => {
       if (method === "cron.list") {
-        return Promise.resolve({
-          jobs: [
-            {
-              id: "failed-cron",
-              name: "Failed cron",
-              enabled: true,
-              createdAtMs: 0,
-              updatedAtMs: 0,
-              schedule: { kind: "every", everyMs: 60_000 },
-              sessionTarget: "isolated",
-              wakeMode: "now",
-              payload: { kind: "agentTurn", message: "test" },
-              state: { lastRunStatus: "error" },
-            },
-          ],
-          snapshotRevision: "source-publication",
-          total: 1,
-          offset: 0,
-          limit: 50,
-          hasMore: false,
-          nextOffset: null,
-        });
+        return Promise.resolve(cronPage("failed-cron"));
       }
       if (method === "cron.status") {
         return Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 1 });

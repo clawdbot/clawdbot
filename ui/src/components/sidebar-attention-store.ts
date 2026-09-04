@@ -50,6 +50,8 @@ export class SidebarAttentionStoreController implements StoreController {
   private dismissedScope: string | null = null;
   private dismissed: SidebarAttentionDismissals = {};
   private loadGeneration = 0;
+  private cronRefresh: { generation: number; requested: boolean } | null = null;
+  private modelAuthLoadingGeneration: number | null = null;
   private readonly stopGateway: () => void;
   private readonly stopEvents: () => void;
   private readonly stopSelection: () => void;
@@ -185,14 +187,13 @@ export class SidebarAttentionStoreController implements StoreController {
     }
     const owner = this.owner();
     const agentScope = { ...this.sources.agentSelection.state };
-    const generation = ++this.loadGeneration;
+    const generation = this.loadGeneration;
     this.loadedOwner = owner;
     this.loadedClient = client;
     this.loadedAgentScope = agentScope;
-    const cron = createInitialCronState({ client, connected: true });
-    cron.cronAgentId = agentScope.scopeId;
     const current = () =>
       generation === this.loadGeneration &&
+      this.sources.gateway.snapshot.phase === "connected" &&
       this.sources.gateway.snapshot.client === client &&
       this.ownerEquals(owner, this.owner()) &&
       this.sources.agentSelection.state.selectedId === agentScope.selectedId &&
@@ -208,20 +209,53 @@ export class SidebarAttentionStoreController implements StoreController {
       this.reconcileDismissals(scope);
       this.onChange();
     };
-    void Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]).then(() => {
-      if (current()) {
-        this.cronJobs = cron.cronJobs;
-        this.cronSchedulerEnabled = cron.cronStatus?.enabled ?? null;
-        publishSource({
-          cronInventoryComplete: agentScope.scopeId === null,
-          modelAuthAgentId: null,
-        });
-      }
-    });
+    if (this.cronRefresh?.generation === generation) {
+      this.cronRefresh.requested = true;
+    } else {
+      const refresh = { generation, requested: true };
+      this.cronRefresh = refresh;
+      void (async () => {
+        try {
+          // One scope owns both reads. Events during either read request one
+          // trailing inventory; retired scopes never drain queued network work.
+          while (refresh.requested && current()) {
+            refresh.requested = false;
+            const cron = createInitialCronState({ client, connected: true });
+            cron.cronAgentId = agentScope.scopeId;
+            await Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]);
+            if (current()) {
+              if (!cron.cronJobsError) {
+                this.cronJobs = cron.cronJobs;
+              }
+              if (!cron.cronError) {
+                this.cronSchedulerEnabled = cron.cronStatus?.enabled ?? null;
+              }
+              publishSource({
+                // Keep progress visible under sustained events, but only a fresh,
+                // successful inventory can establish absence and retire dismissals.
+                cronInventoryComplete:
+                  agentScope.scopeId === null &&
+                  !cron.cronJobsHasMore &&
+                  !refresh.requested &&
+                  !cron.cronJobsError &&
+                  !cron.cronError,
+                modelAuthAgentId: null,
+              });
+            }
+          }
+        } finally {
+          if (this.cronRefresh === refresh) {
+            this.cronRefresh = null;
+          }
+        }
+      })();
+    }
     if (
       (refreshModelAuth || agentScope.selectedId !== this.modelAuthAgentId) &&
-      agentScope.selectedId
+      agentScope.selectedId &&
+      this.modelAuthLoadingGeneration !== generation
     ) {
+      this.modelAuthLoadingGeneration = generation;
       void loadModelAuthStatus(client, { agentId: agentScope.selectedId })
         .catch(() => null)
         .then((status) => {
@@ -232,6 +266,11 @@ export class SidebarAttentionStoreController implements StoreController {
               cronInventoryComplete: false,
               modelAuthAgentId: agentScope.selectedId,
             });
+          }
+        })
+        .finally(() => {
+          if (this.modelAuthLoadingGeneration === generation) {
+            this.modelAuthLoadingGeneration = null;
           }
         });
     } else if (!agentScope.selectedId) {
@@ -283,6 +322,7 @@ export class SidebarAttentionStoreController implements StoreController {
     if (scopeChanged) {
       this.onChange();
     }
+    this.loadGeneration += 1;
     this.load();
   }
 
