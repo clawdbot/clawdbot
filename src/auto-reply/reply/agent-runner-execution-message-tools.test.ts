@@ -181,6 +181,36 @@ describe("executeAgentTurn: message tool progress", () => {
     },
   );
 
+  it("clears run ownership when image preflight fails", async () => {
+    const onAgentRunTerminalOutcome = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
+    const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
+    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await expect(
+      executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          opts: { runId: "preflight-failure", onAgentRunTerminalOutcome },
+        }),
+      ),
+    ).rejects.toThrow("invalid image metadata");
+
+    expect(clearAgentRunContext).toHaveBeenCalledWith("preflight-failure", expect.any(String));
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        runId: "preflight-failure",
+        outcome: "mute",
+        runStatus: "errored",
+      }),
+    );
+    expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+  });
+
   it("preserves message-tool-only suppression across fallback candidates", async () => {
     const onItemEvent = vi.fn();
     const onCommandOutput = vi.fn();
