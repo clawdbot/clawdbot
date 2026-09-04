@@ -639,8 +639,12 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       const pickerTrigger = composer.locator('[data-chat-model-select="true"]');
+      const metadataRequestCount = (await gateway.getRequests("chat.metadata")).length;
       await pickerTrigger.click();
       await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+      // The startup snapshot is already visible. Wait for the refresh to commit
+      // its cooldown before moving Date; completion invalidates chat metadata.
+      await gateway.waitForRequest("chat.metadata", { after: metadataRequestCount });
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible())
         .toBe(true);

@@ -202,45 +202,93 @@ describe("chat pane catalog session lifecycle", () => {
 
   it.each([
     {
-      name: "uses a raw command for an empty tool call",
+      name: "labels a tool call with the text its catalog provided",
+      item: { type: "toolCall", text: "git status --short" },
+      expected: "Tool call\n\ngit status --short",
+    },
+    {
+      name: "labels a tool result with the text its catalog provided",
+      item: { type: "toolResult", text: "working tree clean" },
+      expected: "Tool result\n\nworking tree clean",
+    },
+    {
+      name: "keeps raw-only tool command labels readable",
       item: { type: "toolCall", raw: { command: "git status --short" } },
       expected: "Tool call\n\ngit status --short",
     },
     {
-      name: "uses aggregated output for an empty tool result",
-      item: { type: "toolResult", raw: { aggregatedOutput: "working tree clean" } },
-      expected: "Tool result\n\nworking tree clean",
+      name: "keeps a Unicode tool result at the preview boundary whole",
+      item: { type: "toolResult", text: "海".repeat(500) },
+      expected: `Tool result\n\n${"海".repeat(500)}`,
     },
     {
       name: "renders an empty reasoning item as its label alone",
       item: { type: "reasoning" },
       expected: "Thinking",
     },
-  ])("$name", ({ item, expected }) => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+  ] satisfies Array<{ name: string; item: SessionCatalogTranscriptItem; expected: string }>)(
+    "$name",
+    ({ item, expected }) => {
+      const { pane } = createCatalogContinuationPane(vi.fn());
 
-    const message = pane.catalogItemMessage(item as SessionCatalogTranscriptItem) as {
-      content: Array<{ text: string }>;
-    };
+      expect(pane.catalogItemMessage(item)).toMatchObject({
+        content: [{ type: "text", text: expected }],
+      });
+    },
+  );
 
-    expect(message.content[0]?.text).toBe(expected);
-    expect(message.content[0]?.text).not.toContain("Unsupported external session item");
-  });
+  it.each([
+    {
+      name: "text before a conflicting raw fallback",
+      item: {
+        type: "toolResult",
+        text: "x".repeat(750),
+        raw: { aggregatedOutput: "different raw output" },
+      },
+      preview: `${"x".repeat(499)}…`,
+    },
+    {
+      name: "raw aggregated output",
+      item: { type: "toolResult", raw: { aggregatedOutput: "x".repeat(750) } },
+      preview: `${"x".repeat(499)}…`,
+    },
+    {
+      name: "raw structured result",
+      item: { type: "toolResult", raw: { result: { output: "x".repeat(750) } } },
+      preview: `${JSON.stringify({ output: "x".repeat(750) }).slice(0, 499)}…`,
+    },
+    {
+      name: "text ending at a surrogate pair",
+      item: { type: "toolResult", text: `${"x".repeat(498)}🌱tail` },
+      preview: `${"x".repeat(498)}…`,
+    },
+  ] satisfies Array<{ name: string; item: SessionCatalogTranscriptItem; preview: string }>)(
+    "bounds the visible preview from $name without changing source data",
+    ({ item, preview }) => {
+      const { pane } = createCatalogContinuationPane(vi.fn());
+      const original = structuredClone(item);
 
-  it("clamps oversized aggregated tool output before rendering", () => {
+      expect(pane.catalogItemMessage(item)).toMatchObject({
+        content: [{ type: "text", text: `Tool result\n\n${preview}\n\n[Output truncated]` }],
+      });
+      expect(item).toEqual(original);
+    },
+  );
+
+  it("marks a preview that its catalog truncated", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
 
     const message = pane.catalogItemMessage({
       type: "toolResult",
-      raw: { aggregatedOutput: "x".repeat(5000) },
+      text: "first bytes of a huge command output",
+      truncated: true,
     } as SessionCatalogTranscriptItem) as { content: Array<{ text: string }> };
 
-    // The 500-char preview cap keeps a single huge tool result from injecting
-    // megabytes into one chat message; the "Tool result\n\n" prefix adds a bit.
-    expect(message.content[0]?.text.length).toBeLessThan(600);
-    expect(message.content[0]?.text.startsWith("Tool result")).toBe(true);
+    // Without the marker a previewed payload reads as output that simply ended.
+    expect(message.content[0]?.text).toBe(
+      "Tool result\n\nfirst bytes of a huge command output\n\n[Output truncated]",
+    );
   });
 
   it("skips an empty unknown catalog item", () => {

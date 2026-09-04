@@ -130,6 +130,7 @@ export type StartupCatchupExecution =
 export type ExecuteJobCoreOptions = {
   activeJobMarker?: CronActiveJobMarker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+  onPayloadExecutionStarted?: () => void;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;

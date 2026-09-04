@@ -226,16 +226,16 @@ async function probeMediaFile(
   }
 }
 
-/** Probes a bounded local-file batch under one shared wall-clock budget. */
+/** Probes a bounded batch under one elapsed-time budget, unaffected by wall-clock steps. */
 export async function probeMediaFilesWithinBudget(
   inputs: readonly MediaFileProbeInput[],
   options: MediaProbeBatchOptions,
 ): Promise<MediaProbeResult[]> {
   const results: MediaProbeResult[] = inputs.map(() => ({}));
-  const deadlineMs = Date.now() + options.budgetMs;
+  const deadlineMs = performance.now() + options.budgetMs;
   const probeCount = Math.min(inputs.length, options.maxProbes);
   for (let offset = 0; offset < probeCount; offset += options.concurrency) {
-    const timeoutMs = deadlineMs - Date.now();
+    const timeoutMs = deadlineMs - performance.now();
     if (timeoutMs <= 0) {
       break;
     }

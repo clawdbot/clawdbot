@@ -170,6 +170,8 @@ describe("browser plugin", () => {
         "browser.cdpUrl",
         "browser.noSandbox",
         "browser.extraArgs",
+        "browser.snapshotDefaults",
+        "browser.tabCleanup",
       ],
     });
     expect(browserPluginNodeHostCommands.map((entry) => entry.command)).toEqual([

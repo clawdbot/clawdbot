@@ -52,7 +52,7 @@ export function createDispatchTestHarness(
 ) {
   const sentResponses: GatewayTestResponseFrame[] = [];
   const responseWaiters: { id: string; deferred: Deferred<GatewayTestResponseFrame> }[] = [];
-  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
+  const send = vi.fn<GatewayWsMessageHandlerParams["send"]>(() => ({ kind: "sent" }));
   // Recording lives outside the spy so tests may replace send's implementation
   // (to observe call context) without silently breaking awaitResponseFrame.
   const sendForDispatcher = (frame: unknown) => {

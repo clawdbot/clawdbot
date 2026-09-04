@@ -634,6 +634,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["transcripts.list", "transcripts", "operator.read", "2026.8"],
   ["transcripts.get", "transcripts", "operator.read", "2026.8"],
   ["models.authOrderSet", "models-auth-order", "operator.admin", "2026.8", CONTROL_PLANE_WRITE],
+  ["canvas.document.view", "canvas", "operator.read", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

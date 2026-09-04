@@ -375,6 +375,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         : null;
     }
     let content = text;
+    let truncated = item.truncated;
     if (item.type === "reasoning") {
       content = text ? `Thinking\n\n${text}` : "Thinking";
     } else if (item.type === "toolCall") {
@@ -382,17 +383,18 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         text ?? catalogRawString(item.raw, ["command", "name", "tool", "title", "query"]);
       content = label ? `Tool call\n\n${label}` : "Tool call";
     } else if (item.type === "toolResult") {
-      // Raw aggregated output is only bounded by the transcript read's per-item
-      // byte cap (megabytes), so clamp it to the preview size before rendering.
-      const aggregated = catalogRawString(item.raw, ["aggregatedOutput"]);
       const output =
-        text ??
-        (aggregated ? clampText(aggregated, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null) ??
-        catalogRawResult(item.raw);
-      content = output ? `Tool result\n\n${output}` : "Tool result";
+        text ?? catalogRawString(item.raw, ["aggregatedOutput"]) ?? catalogRawResult(item.raw);
+      // Native text and raw fallbacks share the same display limit; source data stays intact.
+      const preview = output ? clampText(output, CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS) : null;
+      truncated ||= Boolean(output && preview !== output);
+      content = preview ? `Tool result\n\n${preview}` : "Tool result";
     }
     if (!content) {
       return null;
+    }
+    if (truncated) {
+      content = `${content}\n\n${t("chat.catalogOutputTruncated")}`;
     }
     return {
       role: "assistant",

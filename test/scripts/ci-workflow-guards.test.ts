@@ -379,6 +379,7 @@ function runCiManifestFixture(options: {
   nodeTestShards?: Record<string, unknown>[];
   changedPlannerSource?: string | null;
   changedPaths?: string[] | null;
+  changedCoreTestSupport?: boolean;
   repository?: string;
   eventName?: "pull_request" | "push" | "workflow_dispatch";
   historicalCompatibility?: boolean;
@@ -449,6 +450,24 @@ function runCiManifestFixture(options: {
         `,
       "utf8",
     );
+    if (options.changedCoreTestSupport) {
+      for (const file of [
+        "scripts/changed-lanes.mts",
+        "scripts/lib/changed-path-facts.mjs",
+        "scripts/lib/arg-utils.mts",
+        "scripts/lib/arg-utils.runtime.mjs",
+        "scripts/lib/direct-run.mjs",
+        "scripts/lib/merge-head-diff-base.mjs",
+        "scripts/lib/record-shared.mjs",
+        "packages/normalization-core/src/stable-stringify.ts",
+        "scripts/run-tsgo-core-test-shards.mts",
+        "scripts/run-additional-boundary-checks.mts",
+      ]) {
+        const target = path.join(root, file);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, readFileSync(file));
+      }
+    }
     const iosCapabilities = options.iosCapabilities ?? options.bundledPlanner;
     const iosBuildCapability = options.iosBuildCapability ?? iosCapabilities;
     const nativeI18nCapabilities = options.nativeI18nCapabilities ?? options.bundledPlanner;
@@ -1637,6 +1656,8 @@ function runCheckShardFixture(options: {
     stripeSupport?: boolean;
     hostedContract?: boolean;
     failStripe?: string;
+    changedPathsJson?: string;
+    boundary?: boolean;
   };
 }): {
   calls: string[];
@@ -1663,6 +1684,22 @@ function runCheckShardFixture(options: {
 const args = process.argv.slice(2);
 appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node " + args.join(" ")].join("\\t") + "\\n");
 if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process.exit(17);
+`,
+    );
+  }
+  if (options.types?.boundary) {
+    writeFileSync(
+      path.join(root, "scripts/run-additional-boundary-checks.mts"),
+      readFileSync("scripts/run-additional-boundary-checks.mts"),
+    );
+    for (const directory of ["scripts/lib", "packages", "node_modules"]) {
+      symlinkSync(path.resolve(directory), path.join(root, directory), "dir");
+    }
+    writeFileSync(
+      path.join(root, "scripts/check-native-state-schema-version.mjs"),
+      `
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node scripts/check-native-state-schema-version.mjs"].join("\\t") + "\\n");
 `,
     );
   }
@@ -1700,6 +1737,7 @@ if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process
     preflightOutputs: {
       compatibility_target: String(options.frozenTarget),
       run_format_check: "false",
+      changed_core_test_paths_json: options.types?.changedPathsJson ?? "",
     },
   };
   const rows: { name: string; step: WorkflowStep; matrix: Record<string, unknown> }[] = [];
@@ -1716,6 +1754,15 @@ if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process
     }
   }
   rows.push({ name: "central", step: checkShardStep, matrix: { task: options.task ?? "guards" } });
+  if (options.types?.boundary) {
+    rows.push({
+      name: "boundary",
+      step: workflow.jobs["check-additional-shard"].steps.find(
+        (step: WorkflowStep) => step.name === "Run additional check shard",
+      ),
+      matrix: { group: "boundaries" },
+    });
+  }
   // Rows are independent (matrix fail-fast:false); each real Bash body owns its halt.
   const runs = rows.map((row) => {
     const resolveValue = (value: unknown) =>
@@ -9658,6 +9705,103 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     },
   );
 
+  it("routes eligible core test leaves to one type owner before runner allocation", () => {
+    const changedPaths = [
+      "src/commands/doctor-config-preflight.plugin-persistence.test.ts",
+      "docs/ci.md",
+    ];
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedCoreTestSupport: true,
+      eventName: "pull_request",
+      changedPaths,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.outputs.changed_core_test_paths_json).toBe(
+      JSON.stringify(changedPaths.slice(0, 1)),
+    );
+    const result = runCheckShardFixture({
+      frozenTarget: false,
+      task: "test-types",
+      scripts: ["tsgo:scripts", "tsgo:test:root"],
+      types: {
+        compose: true,
+        changedPathsJson: manifest.outputs.changed_core_test_paths_json,
+        boundary: true,
+      },
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.rows).toEqual([
+      { name: "central", status: 0 },
+      { name: "boundary", status: 0 },
+    ]);
+    expect(result.typeCalls.filter((call) => call.row === "central")).toEqual([
+      {
+        row: "central",
+        localCheck: null,
+        command: `node --changed-paths-json ${JSON.stringify(changedPaths.slice(0, 1))} --concurrency 2`,
+      },
+      ...["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"].map((command) => ({
+        row: "central",
+        localCheck: "0",
+        command: `pnpm ${command}`,
+      })),
+    ]);
+    expect(
+      result.typeCalls
+        .filter((call) => call.row === "boundary")
+        .map((call) => call.command)
+        .toSorted(),
+    ).toEqual(
+      BOUNDARY_CHECKS.filter((check) => check.label !== "lint:tmp:tsgo-core-boundary")
+        .map((check) => [check.command, ...check.args].join(" "))
+        .toSorted(),
+    );
+    const workflow = readCiWorkflow();
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["check-test-types-hosted-core-shard"].if, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerProfile: "hybrid",
+        preflightOutputs: manifest.outputs,
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { changedPaths: null, invalid: true },
+    { changedPaths: [] },
+    { changedPaths: ["docs/ci.md"] },
+    { changedPaths: ["src/commands/doctor.test.ts", "package.json"] },
+    { changedPaths: ["src/commands/doctor.test.ts", "src/shared.test-support.ts"] },
+    { changedPaths: ["packages/mermaid-renderer/src/render.test.ts"] },
+    { changedPaths: ["src/gateway/gateway-acp-bind.live.test.ts"] },
+    { changedPaths: ["src/commands/doctor.test.ts"], changedCoreTestSupport: false },
+    { changedPaths: ["src/commands/doctor.test.ts"], eventName: "push" as const },
+    { changedPaths: ["src/commands/doctor.test.ts"], eventName: "workflow_dispatch" as const },
+    {
+      changedPaths: ["src/commands/doctor.test.ts"],
+      scopeEnv: { OPENCLAW_CI_CHANGED_PATHS_JSON: "invalid" },
+      invalid: true,
+    },
+  ])("retains full type owners for ineligible manifest inputs %j", (options) => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      changedCoreTestSupport: true,
+      eventName: "pull_request",
+      ...options,
+    });
+    if ("invalid" in options) {
+      expect(manifest.status).not.toBe(0);
+      expect(manifest.output).toContain("Current PR CI requires complete changed paths");
+      expect(manifest.outputs.changed_core_test_paths_json).toBeUndefined();
+    } else {
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.changed_core_test_paths_json).toBe("");
+    }
+  });
+
   it.each([
     ["hybrid", "pull_request", false, true, true, true],
     ["github", "workflow_dispatch", false, true, true, true],
@@ -11849,6 +11993,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(privateServerFiles).toEqual(uiE2ePrivateServerTestFiles);
     expect(helperPrivateServerFiles.toSorted()).toEqual([
+      "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
       "ui/src/e2e/child-session-load-errors.e2e.test.ts",
       "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
       "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
@@ -13636,6 +13781,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expected: { "pnpm-store-warmup": true, "check-lint-hosted-core-shard": true },
     },
     {
+      label: "targeted core test PR",
+      context: {
+        eventName: "pull_request",
+        runnerProfile: "hybrid",
+        preflightOutputs: { changed_core_test_paths_json: '["src/commands/doctor.test.ts"]' },
+      },
+      expected: {
+        "check-shard": true,
+        "check-additional-shard": true,
+        "check-lint-hosted-core-shard": true,
+        "check-test-types-hosted-core-shard": false,
+      },
+    },
+    {
       label: "Blacksmith has no hosted stripes",
       context: { frozenTarget: true },
       expected: {
@@ -13776,6 +13935,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const outcome = runCiGateFixture(renderCiGateEnvironment(context, results));
     expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(0);
+    if (context.preflightOutputs?.changed_core_test_paths_json) {
+      for (const terminal of ["failure", "skipped"]) {
+        const missingOwner = runCiGateFixture(
+          renderCiGateEnvironment(context, { ...results, "check-shard": terminal }),
+        );
+        expect(missingOwner.status).not.toBe(0);
+      }
+    }
   });
 
   it("runs Node 22 compatibility only from manual CI dispatches", () => {

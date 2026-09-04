@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
@@ -554,6 +555,71 @@ describe("prepareCodexAttemptConnection", () => {
     expect(resolveConnection).toHaveBeenCalledTimes(2);
     expect(resolveModelPolicy).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["during rotation", "after rejection"] as const)(
+    "releases a failed connection's abort listener when cancelled %s",
+    async (cancelAt) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const agentDir = path.join(tempDir, "agent");
+      const params = createParams(sessionFile, workspaceDir);
+      params.agentDir = agentDir;
+      params.config = {
+        agents: { defaults: { compaction: { maxActiveTranscriptBytes: "1mb" } } },
+      };
+      const controller = new AbortController();
+      params.abortSignal = controller.signal;
+      params.onAttemptAbort = vi.fn();
+      const upstreamListeners = getEventListeners(controller.signal, "abort").length;
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-existing",
+        cwd: workspaceDir,
+        model: params.modelId,
+        modelProvider: "openai",
+      });
+      const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+      await fs.mkdir(rolloutDir, { recursive: true });
+      await fs.writeFile(
+        path.join(rolloutDir, "rollout-thread-existing.jsonl"),
+        "x".repeat(1_048_577),
+      );
+      const rotationError = new Error("synthetic startup binding mutation failure");
+      const mutate = vi
+        .spyOn(testCodexAppServerBindingStore, "mutate")
+        .mockImplementationOnce(async () => {
+          if (cancelAt === "during rotation") {
+            controller.abort("cancelled during rotation");
+            expect(params.onAttemptAbort).toHaveBeenCalledTimes(1);
+          }
+          throw rotationError;
+        });
+
+      try {
+        await expect(
+          prepareCodexAttemptConnection({
+            params,
+            options: { bindingStore: testCodexAppServerBindingStore },
+          }),
+        ).rejects.toBe(rotationError);
+        expect(mutate).toHaveBeenCalledWith(expect.anything(), {
+          kind: "clear",
+          threadId: "thread-existing",
+        });
+        const remainingListeners = getEventListeners(controller.signal, "abort").length;
+        controller.abort("cancelled after rejection");
+        expect({
+          remainingListeners,
+          abortNotifications: vi.mocked(params.onAttemptAbort).mock.calls.length,
+        }).toEqual({
+          remainingListeners: upstreamListeners,
+          abortNotifications: cancelAt === "during rotation" ? 1 : 0,
+        });
+      } finally {
+        controller.abort("test cleanup");
+      }
+    },
+  );
 
   it("rejects the retired explicit untrusted approval policy with Doctor remediation", async () => {
     initializeGlobalHookRunner(

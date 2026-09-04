@@ -6,6 +6,7 @@ import {
   nodeHostMocks,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+  CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
   CODEX_CLI_SESSION_RESUME_COMMAND,
   CODEX_NODE_CONTINUE_COMMANDS,
   tempDirs,
@@ -13,6 +14,7 @@ import {
   registerCodexSessionCatalog,
   config,
   idleThread,
+  catalogThreadItem,
   compatibilityOwnerConfig,
   createControl,
   createEligibleControl,
@@ -841,16 +843,18 @@ describe("Codex supervision actions", () => {
   });
 
   it("reads local transcript turns one bounded App Server page at a time", async () => {
+    const question = catalogThreadItem("item-1", {
+      type: "userMessage",
+      content: [{ type: "text", text: "question" }],
+    });
+    const answer = catalogThreadItem("item-2", { text: "full answer" });
     const listTurnPage = vi.fn(async () => ({
       data: [
         {
           id: "turn-1",
-          items: [
-            { id: "item-1", type: "userMessage", text: "question" },
-            { id: "item-2", type: "agentMessage", text: "full answer" },
-          ],
+          items: [question, answer],
         },
-      ] as never,
+      ],
       nextCursor: "turns-page-2",
     }));
     const control = createEligibleControl({ listTurnPage });
@@ -868,85 +872,95 @@ describe("Codex supervision actions", () => {
       label: "Local Codex",
       threadId: "thread-1",
       items: [
-        { id: "item-2", type: "agentMessage", text: "full answer" },
-        { id: "item-1", type: "userMessage", text: "question" },
+        { id: "item-2", type: "agentMessage", text: "full answer", raw: answer },
+        { id: "item-1", type: "userMessage", text: "question", raw: question },
       ],
       nextCursor: "turns-page-2",
     });
     expect(listTurnPage).toHaveBeenCalledWith({
       threadId: "thread-1",
-      limit: 50,
+      limit: 1,
       sortDirection: "desc",
       itemsView: "full",
     });
     expect(control.readThread).not.toHaveBeenCalled();
   });
 
-  it("delegates paired-node transcript pagination to the eligible node command", async () => {
-    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => {
-      if (request.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND) {
-        return {
-          payloadJSON: JSON.stringify({
-            sessions: [
-              { threadId: "thread-remote", status: "idle", source: "cli", archived: false },
-            ],
-          }),
-        };
-      }
-      return {
-        payloadJSON: JSON.stringify({
-          data: [
-            {
-              id: "turn-remote",
-              items: [{ id: "item-remote", type: "userMessage", text: "remote prompt" }],
-            },
-          ],
-          nextCursor: "remote-turns-2",
-        }),
+  it.each([
+    { mode: "bounded", command: CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, nativeLimit: 25 },
+    { mode: "legacy", command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, nativeLimit: 1 },
+  ])(
+    "reads a paired-node transcript through its $mode command",
+    async ({ command, nativeLimit }) => {
+      const source = catalogThreadItem("item-remote", {
+        type: "userMessage",
+        content: [{ type: "text", text: "remote prompt" }],
+      });
+      const projected = {
+        id: "item-remote",
+        type: "userMessage",
+        text: "remote prompt",
+        raw: source,
       };
-    });
-    const { runtime } = createRuntime({
-      nodes: [
-        {
-          nodeId: "devbox",
-          displayName: "Devbox",
-          connected: true,
-          commands: [
-            CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-            CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-          ],
-        },
-      ],
-      invoke,
-    });
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => {
+        if (request.command !== command) {
+          throw new Error("unexpected node command");
+        }
+        return {
+          payloadJSON: JSON.stringify(
+            command === CODEX_CATALOG_TRANSCRIPT_READ_COMMAND
+              ? { items: [projected], nextCursor: "remote-position-2" }
+              : {
+                  data: [{ id: "turn-remote", items: [source] }],
+                  nextCursor: "remote-position-2",
+                },
+          ),
+        };
+      });
+      const { runtime } = createRuntime({
+        nodes: [
+          {
+            nodeId: "devbox",
+            displayName: "Devbox",
+            connected: true,
+            commands: [
+              CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+              CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+              command,
+            ],
+          },
+        ],
+        invoke,
+      });
 
-    await expect(
-      readCodexSessionTranscript({
-        runtime,
-        control: createControl(),
+      await expect(
+        readCodexSessionTranscript({
+          runtime,
+          control: createControl(),
+          hostId: "node:devbox",
+          threadId: "thread-remote",
+          cursor: "remote-position-1",
+          limit: 25,
+        }),
+      ).resolves.toEqual({
         hostId: "node:devbox",
+        label: "Devbox",
         threadId: "thread-remote",
-        cursor: "remote-turns-1",
-        limit: 25,
-      }),
-    ).resolves.toEqual({
-      hostId: "node:devbox",
-      label: "Devbox",
-      threadId: "thread-remote",
-      items: [{ id: "item-remote", type: "userMessage", text: "remote prompt" }],
-      nextCursor: "remote-turns-2",
-    });
-    expect(invoke).toHaveBeenLastCalledWith({
-      nodeId: "devbox",
-      command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-      params: {
-        agentId: "main",
-        threadId: "thread-remote",
-        cursor: "remote-turns-1",
-        limit: 25,
-      },
-      timeoutMs: 65_000,
-      scopes: ["operator.write"],
-    });
-  });
+        items: [projected],
+        nextCursor: "remote-position-2",
+      });
+      expect(invoke).toHaveBeenLastCalledWith({
+        nodeId: "devbox",
+        command,
+        params: {
+          agentId: "main",
+          threadId: "thread-remote",
+          cursor: "remote-position-1",
+          limit: nativeLimit,
+        },
+        timeoutMs: 65_000,
+        scopes: ["operator.write"],
+      });
+    },
+  );
 });

@@ -262,7 +262,7 @@ let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQ
 let admitQueuedMessageForSession: typeof import("./chat-queue.ts").admitQueuedMessageForSession;
 let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
 let removeDeliveredQueuedChatSendForRun: typeof import("./chat-queue.ts").removeDeliveredQueuedChatSendForRun;
-let removeVisibleOrScopedQueuedMessageWithoutReleasing: typeof import("./chat-queue.ts").removeVisibleOrScopedQueuedMessageWithoutReleasing;
+let removeQueuedMessageWithoutReleasing: typeof import("./chat-queue.ts").removeQueuedMessageWithoutReleasing;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
 let subscribeChatOutboxProjection: typeof import("./chat-queue.ts").subscribeChatOutboxProjection;
 let syncVisibleChatQueueProjection: typeof import("./chat-queue.ts").syncVisibleChatQueueProjection;
@@ -296,7 +296,7 @@ async function loadChatHelpers(): Promise<void> {
     removeDeliveredQueuedChatSendForRun,
     removeQueuedMessage,
     markQueuedChatSendsWaitingForReconnect,
-    removeVisibleOrScopedQueuedMessageWithoutReleasing,
+    removeQueuedMessageWithoutReleasing,
     readChatQueueForScope,
     subscribeChatOutboxProjection,
     syncVisibleChatQueueProjection,
@@ -6658,9 +6658,7 @@ describe("handleSendChat", () => {
     const admission = captureChatOutboxAdmission(host, queuedSessionKey);
     expect(admitQueuedMessageForSession(host, admission, item)).toBe(true);
 
-    expect(
-      removeVisibleOrScopedQueuedMessageWithoutReleasing(host, item.id, queuedSessionKey),
-    ).toMatchObject({ id: item.id });
+    expect(removeQueuedMessageWithoutReleasing(host, item.id)).toMatchObject({ id: item.id });
 
     expect(readChatQueueForScope(host, queuedSessionKey)).toStrictEqual([]);
     expect(listStoredChatOutboxes(host)).toStrictEqual([]);

@@ -66,7 +66,9 @@ The default `browser` tool is a bundled plugin. Disable it to replace it with an
 
 Defaults need both `plugins.entries.browser.enabled` **and** `browser.enabled=true`. Disabling only the plugin removes the `openclaw browser` CLI, `browser.request` gateway method, agent tool, and control service as one unit; your `browser.*` config stays intact for a replacement.
 
-Browser config changes require a Gateway restart so the plugin can re-register its service.
+Profiles, launch settings, snapshot defaults, and tab cleanup hot-reload. Browser
+enablement, evaluation, SSRF policy, and extension relay settings require a Gateway
+restart. See [Config hot reload](/gateway/configuration#config-hot-reload).
 
 ## Agent guidance
 
@@ -214,8 +216,8 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 
 `browser.snapshotDefaults.mode: "efficient"` changes the default `snapshot`
 extraction mode when a caller does not pass an explicit `snapshotFormat` or
-`mode`; see [Browser control API](/tools/browser-control) for per-call
-snapshot options.
+`mode`. Changes apply to the next snapshot; see
+[Browser control API](/tools/browser-control) for per-call snapshot options.
 
 On drivers with stable document identity, repeated AI or role snapshots of the
 same tab, document, and option family mark newly appeared ref-bearing elements
@@ -228,7 +230,12 @@ Session tab cleanup applies only to tabs created by the OpenClaw browser tool
 with `action: "open"`. OpenClaw does not adopt tabs that were already open,
 opened by the user, or otherwise have unknown ownership. The
 `browser.tabCleanup` block controls periodic idle and cap sweeps for primary
-sessions; disabling it does not disable explicit session lifecycle cleanup.
+sessions. Changes apply on the next sweep without restarting the browser;
+disabling it does not disable explicit session lifecycle cleanup.
+
+OpenClaw-managed Chrome also applies a separate, best-effort cap of eight page
+tabs when opening a tab. This cap is independent of `browser.tabCleanup`;
+remote and attach-only profiles do not use it.
 
 For host-local opens, ownership with a stable native CDP target and browser
 identity is stored in the shared SQLite state. Those records survive a Gateway

@@ -104,13 +104,18 @@ Principles:
 ## Widget model and hosting
 
 Widget HTML/JS is authored by the agent (typically via `show_widget`), wrapped
-in the standard document shell (CSP meta, size reporter, bridge bootstrap) and
-rendered in `<iframe sandbox="allow-scripts">` (never `allow-same-origin`).
+in the standard document shell (CSP meta, size reporter, bridge bootstrap), and
+rendered in an opaque-origin content iframe. In the Control UI's default
+`scripts` embed mode, both inline and board widgets use the dedicated-origin
+sandbox proxy described below.
 
 - **Inline (transcript) widgets** use managed Canvas document artifacts under
-  `<stateDir>/canvas/documents`, served by the Gateway and pruned per scope.
+  `<stateDir>/canvas/documents`, read through the authenticated
+  `canvas.document.view` RPC and pruned per scope.
   These artifacts are separate from SQLite board storage and need no capability
-  approval (they are capless by construction — prompt sends are user-confirmed).
+  approval (they are capless by construction — prompt sends require a user gesture).
+  Opening an inline preview creates no board state and never inherits the
+  pinned copy's grants.
 - **Board widgets** are session state: bytes live in the owning agent's SQLite
   DB (`board_widgets`), served by a core gateway route
   (`/__openclaw__/board/<agentId>/<sessionKey>/<name>/`) that reads the DB.
@@ -152,11 +157,20 @@ This keeps stored source out of board snapshots and avoids a database CHECK or
 schema-version change. Disabled plugins are absent from the registry, so new
 puts fail with an enable-and-retry error and existing cells render as disabled.
 
-The A2UI implementation composes a small document that references the renderer
-bundle on the capability-scoped Gateway asset route. Core then adds the same
-CSP, theme bridge, size reporter, and private-port host bridge used by HTML
-widgets. v0.8 and v0.9 use separate renderer bundles because their Lit custom
-elements share tag names but their processors and action contracts differ.
+The A2UI implementation composes a small document that references its renderer
+bundle. Ticketed board documents use the capability-scoped Gateway asset route;
+inline documents load the same public static renderer from the sandbox origin.
+Core adds the same CSP, theme bridge, size reporter, and private-port host bridge
+used by HTML widgets. v0.8 and v0.9 use separate renderer bundles because their
+Lit custom elements share tag names but their processors and action contracts
+differ.
+
+A registered kind can expose public static renderer bytes through
+`resources.readPublicResource(path)`. The isolated listener serves only exact
+registered `resources.paths`, only for `GET` or `HEAD`, and rechecks the active
+plugin registry after reading. It does not proxy Gateway routes, credentials,
+or data. Canvas opts in its two A2UI bundles; this grants no widget network or
+host-tool capability.
 
 Shared hosting infrastructure:
 
@@ -165,6 +179,11 @@ Shared hosting infrastructure:
   origin, per-widget CSP declared and fail-closed decoded) instead of a second
   bespoke iframe host. The proxy receives HTML by value, so local content is
   the natural case.
+- **Authenticated loading.** The trusted Control UI reads inline Canvas HTML
+  over its existing Gateway connection and board HTML over its ticketed HTTP
+  route, then passes the bytes to the proxy. The content iframe never navigates
+  to the authenticated document route. This avoids a separate iframe login
+  redirect to a page that refuses embedding.
 - **One authorization model.** A widget's reach is a granted allowlist,
   whatever its kind: for `html` widgets, host tools; for `mcp-app` widgets,
   the server's app-visible tools and same-server resources (via the existing
@@ -201,6 +220,26 @@ Shared hosting infrastructure:
   calls and trusted new-tab link clicks share one view-ticket-bound request
   channel. The host opens links with `noopener,noreferrer`; size reporting and
   theme tokens remain separate host notifications.
+
+The outer proxy runs on a different origin from both the Control UI and the
+Gateway. Its iframe allows `allow-same-origin` so the host can authenticate
+proxy messages against that dedicated origin. The proxy puts widget bytes in
+an inner `srcdoc` iframe with `allow-scripts allow-forms`, without
+`allow-same-origin`. Widget code therefore has neither application-origin
+access nor the proxy's origin. Inline views adopt only the wrapper's private
+prompt channel; dashboard views initialize their separate ticket-bound bridge.
+
+The shared loader fetches board HTML while the sandbox proxy starts, then
+delivers it only after that exact proxy reports ready. Mounted widgets retain
+their loaded document across presentation changes and ticket renewal. Inline
+views share concurrent reads of the same document only within one client and
+connection generation; each view still owns its own sandbox and prompt channel.
+Managed `[embed ref="..."]` previews use that authenticated path whenever their
+effective sandbox policy permits scripts, including the default with no explicit
+sandbox field. Explicit strict previews remain script-free.
+There is no completed-document cache: Canvas permits replacing named document
+IDs, so a remount reads the current source again. Reconnection retires pending
+results from the previous connection.
 
 ### Plugin capability declarations
 
@@ -273,12 +312,12 @@ residual. Widget content gains access to sensitive OpenClaw data only through
 policy-granted, byte-frozen data bindings, and the sandbox Permissions Policy
 blocks camera and microphone access.
 
-Board widgets already enable a DOM API guard before widget code runs. It removes
+Inline and board widgets enable a DOM API guard before widget code runs. It removes
 same-realm WebRTC constructors and blocks common ways to create descendant
 browsing contexts with fresh constructors. This reduces exposure but remains
 best-effort defense-in-depth, not an isolation or authorization boundary; it
 does not eliminate the accepted residual. The guard is implemented in
-`src/agents/sandbox-host.ts` and enabled by `src/gateway/board-sandbox.ts`.
+`src/agents/sandbox-host.ts` and enabled by the Canvas and board view owners.
 
 ### Transcript display: one widget card
 
@@ -346,6 +385,9 @@ board rows. `/new`/`/reset` does not touch them.
 
 RPCs (core method table, typebox schemas in `gateway-protocol`):
 
+- `canvas.document.view { docId }` → HTML and sandbox connection metadata —
+  `operator.read`; accepts managed script-enabled Canvas documents up to 2 MiB,
+  creates no board state, and returns no capability ticket.
 - `board.get { sessionKey }` → tabs + widget metadata (no bytes) — `operator.read`
 - `board.update { sessionKey, ops[] }` — tab CRUD/reorder, widget move/resize/
   remove/unpin, dock state, focus-tab — `operator.write`
@@ -370,7 +412,9 @@ Events (in `EVENT_SCOPE_GUARDS`, read scope):
 - `board.command { sessionKey, command }` — transient UI drive (agent switches
   the visible tab or dashboard panel presentation) — the `ui.command` pattern.
 
-Widget bytes are served over the authenticated HTTP surface, not the socket.
+Board widget bytes use the authenticated HTTP surface. Inline Canvas widget
+bytes use `canvas.document.view`; native clients and direct document opens keep
+the existing Canvas HTTP routes.
 
 ## Agent tools
 

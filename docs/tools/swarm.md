@@ -294,9 +294,9 @@ report that denial in its result so the script can decide what to do next.
 
 For structured output, OpenClaw adds a synthetic `structured_output` tool to
 the child and validates its payload against the supplied JSON Schema. An
-invalid or missing payload gets one corrective nudge. If the retry still does
-not validate, the collector completion keeps the child's raw text, leaves
-`structured` unset, and includes `schemaError`. The low-level `agents_wait`
+invalid payload gets one corrective nudge. If no payload is submitted, or the
+retry still does not validate, the collector completion keeps the child's raw
+text, leaves `structured` unset, and includes `schemaError`. The low-level `agents_wait`
 result exposes those fields for explicit recovery logic.
 
 ### Children are leaves

@@ -15,26 +15,6 @@ import type {
 import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
-let currentReloadGeneration = 0;
-let abortGeneration: number | undefined;
-
-export function nextGatewayReloadGeneration(): number {
-  return ++currentReloadGeneration;
-}
-
-export function isCurrentGatewayReloadGeneration(generation: number): boolean {
-  return generation === currentReloadGeneration;
-}
-
-export function isGatewayReloadGenerationAborted(generation: number): boolean {
-  return abortGeneration !== undefined && generation <= abortGeneration;
-}
-
-/** Signal any in-progress deferred channel reload to abort immediately. */
-export function abortPendingChannelReloads(): void {
-  abortGeneration = currentReloadGeneration;
-}
-
 export type RuntimeSecretsPreflightParams = Omit<
   Parameters<ActivateRuntimeSecrets>[1],
   "activate" | "canPublishFailureAsDegraded"
@@ -94,7 +74,7 @@ export type AcceptedRestartTargetOwnership = {
   reject: () => void;
 };
 
-export class GatewayHotReloadCancelledError extends Error {
+class GatewayHotReloadCancelledError extends Error {
   constructor() {
     super("config hot reload cancelled by config supersession or in-process restart");
     this.name = "GatewayHotReloadCancelledError";
@@ -145,7 +125,6 @@ export function assertReloadPublicationCurrent(
 }
 
 export type GatewayPluginReloadResult = {
-  restartChannels: ReadonlySet<ChannelKind>;
   activeChannels: ReadonlySet<ChannelKind>;
   /** Set when the reload was cancelled mid-flight (e.g. by an in-process restart). */
   cancelled?: boolean;
@@ -169,11 +148,7 @@ export type GatewayReloadHandlerParams = {
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;
-    changedPaths: readonly string[];
-    beforeReplace: (
-      channels: ReadonlySet<ChannelKind>,
-      accounts?: ReadonlyMap<ChannelKind, ReadonlySet<string>>,
-    ) => Promise<void>;
+    beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
     commitRuntime: (onCommit?: () => void) => Promise<void>;
     onReplacementTeardownFailure: (error: unknown) => void;
     env: NodeJS.ProcessEnv;

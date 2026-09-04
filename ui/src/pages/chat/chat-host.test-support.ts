@@ -185,6 +185,7 @@ export function makeChatHost(
     connectionEpoch: 0,
     chatLoading: false,
     chatMessage: "",
+    canRestoreComposer: () => true,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatLocalInputHistoryBySession: {},

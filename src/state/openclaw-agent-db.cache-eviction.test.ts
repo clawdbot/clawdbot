@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
+  borrowOpenClawAgentDatabase,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
@@ -14,7 +15,10 @@ import {
   OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
 
 const BASE_AGENT_IDS = Array.from(
   { length: OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP },
@@ -124,6 +128,32 @@ describe("openclaw agent database handle cache", () => {
       expect(isOpenClawAgentDatabaseOpen(leastRecentlyUsed.path)).toBe(false);
     } finally {
       transactionOwner.db.exec("ROLLBACK");
+    }
+  });
+
+  it("retries lease cleanup for a closed retained handle before evicting unrelated agents", () => {
+    const env = requireFixtureEnv();
+    const first = baseDatabases[0]!;
+    const borrowed = borrowOpenClawAgentDatabase({ agentId: first.agentId, env });
+    const { db: state } = openOpenClawStateDatabase({ env });
+    state.exec(`CREATE TEMP TRIGGER fail_agent_lease_release BEFORE DELETE ON agent_database_leases
+      BEGIN SELECT RAISE(ABORT, 'blocked lease release'); END`);
+    try {
+      expect(() => closeOpenClawAgentDatabaseByPath(first.path)).toThrow("blocked lease release");
+      expect(borrowed.db.isOpen).toBe(false);
+      state.exec("DROP TRIGGER fail_agent_lease_release");
+
+      evictAfterRefreshingBaseHandles("lease-recovery", env);
+      expect(listOpenClawAgentDatabasesForTest()).toHaveLength(OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP);
+      expect(
+        state
+          .prepare("SELECT lease_id FROM agent_database_leases WHERE agent_id = ?")
+          .all(first.agentId),
+      ).toEqual([]);
+    } finally {
+      state.exec("DROP TRIGGER IF EXISTS fail_agent_lease_release");
+      borrowed.release();
+      closeOpenClawAgentDatabaseByPath(first.path);
     }
   });
 

@@ -19,7 +19,6 @@ import {
   resolveRegistryPluginModuleLocationFromRecords,
 } from "./facade-resolution-shared.js";
 export {
-  createLazyFacadeArrayValue,
   createLazyFacadeObjectValue,
   listImportedBundledPluginFacadeIds,
 } from "./facade-loader.js";
@@ -219,17 +218,6 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   });
 }
 
-/** Check whether an activated bundled plugin public surface may be loaded. */
-export function canLoadActivatedBundledPluginPublicSurface(params: {
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  return loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
-    buildFacadeActivationCheckParams(params),
-  ).allowed;
-}
-
 /** Load an activated plugin public surface or throw when activation policy blocks access. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
@@ -299,43 +287,4 @@ export const testing = {
   loadFacadeModuleAtLocationSync,
   resolveRegistryPluginModuleLocationFromRegistry: resolveRegistryPluginModuleLocationFromRecords,
   resolveFacadeModuleLocation,
-  evaluateBundledPluginPublicSurfaceAccess: ((
-    ...args: Parameters<
-      FacadeActivationCheckRuntimeModule["evaluateBundledPluginPublicSurfaceAccess"]
-    >
-  ) =>
-    loadFacadeActivationCheckRuntime().evaluateBundledPluginPublicSurfaceAccess(
-      ...args,
-    )) as FacadeActivationCheckRuntimeModule["evaluateBundledPluginPublicSurfaceAccess"],
-  throwForBundledPluginPublicSurfaceAccess: ((
-    ...args: Parameters<
-      FacadeActivationCheckRuntimeModule["throwForBundledPluginPublicSurfaceAccess"]
-    >
-  ) =>
-    loadFacadeActivationCheckRuntime().throwForBundledPluginPublicSurfaceAccess(
-      ...args,
-    )) as FacadeActivationCheckRuntimeModule["throwForBundledPluginPublicSurfaceAccess"],
-  resolveActivatedBundledPluginPublicSurfaceAccessOrThrow: ((
-    params: BundledPluginPublicSurfaceParams,
-  ) =>
-    loadFacadeActivationCheckRuntime().resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
-      buildFacadeActivationCheckParams(params),
-    )) as (params: BundledPluginPublicSurfaceParams) => {
-    allowed: boolean;
-    pluginId?: string;
-    reason?: string;
-  },
-  resolveBundledPluginPublicSurfaceAccess: ((params: BundledPluginPublicSurfaceParams) =>
-    loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
-      buildFacadeActivationCheckParams(params),
-    )) as (params: BundledPluginPublicSurfaceParams) => {
-    allowed: boolean;
-    pluginId?: string;
-    reason?: string;
-  },
-  resolveTrackedFacadePluginId: ((params: BundledPluginPublicSurfaceParams) =>
-    loadFacadeActivationCheckRuntime().resolveTrackedFacadePluginId(
-      buildFacadeActivationCheckParams(params),
-    )) as (params: BundledPluginPublicSurfaceParams) => string,
 };
-export { testing as __testing };

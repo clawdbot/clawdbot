@@ -12,8 +12,8 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
-import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
+import type { GatewayPluginReloadResult } from "./server-reload-contracts.js";
+import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
 
 const hoisted = vi.hoisted(() => ({
   hotReloadStatus: { current: "active" as "active" | "disabled" },
@@ -107,7 +107,6 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       startChannel: vi.fn(async () => new Map()),
       stopChannel: vi.fn(async () => {}),
       reloadPlugins: vi.fn(async (): Promise<GatewayPluginReloadResult> => ({
-        restartChannels: new Set(),
         activeChannels: new Set(),
       })),
       logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },

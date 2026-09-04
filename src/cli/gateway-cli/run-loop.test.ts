@@ -295,7 +295,7 @@ vi.mock("../../agents/provider-local-service.js", () => ({
   stopManagedProviderLocalServices: () => stopManagedProviderLocalServices(),
 }));
 
-vi.mock("../../gateway/server-reload-contracts.js", () => ({
+vi.mock("../../gateway/server-reload-generation.js", () => ({
   abortPendingChannelReloads: () => abortPendingChannelReloads(),
 }));
 
