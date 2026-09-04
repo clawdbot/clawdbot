@@ -1656,7 +1656,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         }
         expect(displays.map((display) => display.content).join("")).toBe(text);
         await fs.writeFile(
-          path.join(evidenceDir, "discord-portable-prefix.json"),
+          path.join(evidenceDir, `discord-portable-prefix-tool-progress-${tools}.json`),
           JSON.stringify(
             {
               kind: "mock-gateway",
