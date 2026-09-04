@@ -6,13 +6,12 @@ import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerUserHomeDir,
 } from "./auth-start-options.js";
-import type { CodexAppServerClient } from "./client.js";
 import type {
   CodexAppServerHomeScope,
   CodexModelBackedReviewerContext,
   ProviderAuthAliasConfig,
 } from "./config-contracts.js";
-import { readCodexEffectiveConfig } from "./config-layer-policy.js";
+import { readCodexEffectiveConfig, type CodexConfigReadClient } from "./config-layer-policy.js";
 import {
   firstTomlTableOffset,
   parseInlineOpenAIModelProviderBaseUrl,
@@ -28,7 +27,7 @@ const CODEX_CONFIG_TOML_FILENAME = "config.toml";
 
 /** Cloud/system config can redirect reviews after local home/profile checks have passed. */
 export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
-  client: Pick<CodexAppServerClient, "request">;
+  client: CodexConfigReadClient;
   approvalsReviewer: string;
   cwd: string;
   signal?: AbortSignal;
@@ -37,7 +36,7 @@ export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
     params.approvalsReviewer !== "auto_review" &&
     params.approvalsReviewer !== "guardian_subagent"
   ) {
-    return;
+    return undefined;
   }
   const response = await readCodexEffectiveConfig(params.client, params.cwd, params.signal);
   const effectiveConfig = response.config;

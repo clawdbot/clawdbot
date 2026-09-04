@@ -1,6 +1,6 @@
 import path from "node:path";
-import type { CodexAppServerClient } from "./client.js";
-import { isJsonObject, type CodexConfigReadResponse } from "./protocol.js";
+import type { CodexConfigReadParams, CodexConfigReadResponse } from "./protocol-control-plane.js";
+import { isJsonObject } from "./protocol.js";
 
 // Native session flags override these layers. Legacy managed layers sit above
 // them, so app admission and restricted turns cannot replace their tool policy.
@@ -14,9 +14,17 @@ export const CODEX_SESSION_OVERRIDABLE_LAYER_TYPES = new Set([
   "sessionFlags",
 ]);
 
+export type CodexConfigReadClient = {
+  request(
+    method: "config/read",
+    params: CodexConfigReadParams,
+    options: { signal?: AbortSignal },
+  ): Promise<CodexConfigReadResponse>;
+};
+
 /** Read one effective snapshot for the current boundary's reviewer and tool-policy checks. */
 export async function readCodexEffectiveConfig(
-  client: Pick<CodexAppServerClient, "request">,
+  client: CodexConfigReadClient,
   cwd: string,
   signal?: AbortSignal,
 ): Promise<CodexConfigReadResponse> {
