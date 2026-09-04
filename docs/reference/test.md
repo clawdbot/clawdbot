@@ -497,6 +497,41 @@ Separate output owners remain: other real-Gateway suites, `chat-outbox-*`, and
 `chat-attachment-read-lifecycle`. Do not assume those owners have the ordinary
 mocked proof retention guarantee.
 
+### Screenshots during Chromium recordings
+
+During `recordVideo`, capture viewport PNGs with `page.screenshot({ path })`,
+without `clip` or `fullPage: true`. Keep the scenario's existing viewport,
+recording size, readiness waits, and animation options. If an element-only PNG
+is needed, crop the captured PNG outside the browser. A crop cannot recover
+missing content from an already-corrupted recording.
+
+In a macOS arm64 reproduction with Playwright 1.62.1 and its bundled full Chrome
+for Testing 151.0.7922.34, `locator.screenshot()` and
+`page.screenshot({ clip })` caused small screencast frames. The element appears at
+the video origin with gray elsewhere, even though the PNG, DOM geometry, and
+functional assertions are correct. `fullPage: true` is not a general workaround:
+a document larger than the viewport can instead produce a shrunken page with
+gray padding. Unclipped viewport captures preserved the recording in the same
+synthetic reproduction; other browser versions and platforms require their own
+verification.
+
+This is an upstream capture limitation, not a Gateway or context-cleanup failure.
+[Chromium's screenshot handler](https://chromium.googlesource.com/chromium/src/+/151.0.7922.34/content/browser/devtools/protocol/page_handler.cc#1492)
+temporarily changes the shared view size and restores it after capture; its
+screencast producer can observe the intermediate surface.
+[Playwright's recorder](https://github.com/microsoft/playwright/blob/v1.62.1/packages/playwright-core/src/server/videoRecorder.ts#L166)
+pads undersized frames with gray. Closing the context finalizes the video but
+does not repair those frames. Do not filter out bad frames or change UI behavior
+to conceal this limitation.
+
+Verify finalized video content around every capture, not just its dimensions or
+the success of locator assertions. For a dependency upgrade, reproduce with a
+synthetic page containing an offset small element, compare element, clipped,
+viewport, and oversized full-page screenshots, and inspect every decoded frame.
+Keep real host/profile footage local; inspect public proof for synthetic-only
+content before sharing. Correct PNGs remain useful still-image proof, but a
+corrupted video is not continuous-flow proof.
+
 ## Gateway and E2E
 
 - Gateway tests are included in the untargeted `pnpm test` full suite; run them alone with `pnpm test:gateway`.
