@@ -90,8 +90,8 @@ describe("experience review auto apply", () => {
       const release = createDeferred();
       const registration = vi.spyOn(agentRunRegistry, "registerAgentRunContext");
       const restartSignal = getGatewayRestartDrainSignal();
+      const acquire = vi.spyOn(SessionManager, "openModelContextAsync");
       if (boundary === "context acquisition") {
-        const acquire = vi.mocked(SessionManager.openModelContextAsync);
         const implementation = acquire.getMockImplementation()!;
         acquire.mockImplementationOnce(async (...args) => {
           acquired.resolve();
@@ -132,9 +132,7 @@ describe("experience review auto apply", () => {
         expect(restartSignal.aborted).toBe(true);
         expect(getGatewayRestartDrainSignal().aborted).toBe(false);
         if (boundary === "context acquisition") {
-          expect(vi.mocked(SessionManager.openModelContextAsync).mock.lastCall?.[1]?.signal).toBe(
-            restartSignal,
-          );
+          expect(acquire.mock.lastCall?.[1]?.signal).toBe(restartSignal);
         }
         release.resolve();
         expect(await settled).toMatchObject({ message: "gateway runtime reset" });
@@ -147,6 +145,7 @@ describe("experience review auto apply", () => {
       } finally {
         release.resolve();
         await settled;
+        acquire.mockRestore();
         registration.mockRestore();
       }
     },
