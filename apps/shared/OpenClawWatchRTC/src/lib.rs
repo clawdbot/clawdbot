@@ -9,7 +9,7 @@ use str0m::change::{SdpAnswer, SdpPendingOffer};
 use str0m::format::Codec;
 use str0m::media::{Direction, Frequency, MediaKind, MediaTime, Mid};
 use str0m::net::{Protocol, Receive};
-use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
+use str0m::{Candidate, Event, IceConnectionState, IceCreds, Input, Output, Rtc};
 
 const CANDIDATE_BUDGET: usize = 100;
 
@@ -116,7 +116,18 @@ unsafe fn input<'a>(bytes: *const u8, length: usize, maximum: usize) -> Result<&
 #[unsafe(no_mangle)]
 pub extern "C" fn openclaw_rtc_create() -> *mut OpenClawRTC {
     catch_unwind(|| {
+        // The pinned ICE default uses a non-cryptographic RNG. Supply independent
+        // OS entropy: 64 bits for the ufrag and 192 bits for the password.
+        let mut entropy = [0_u8; 32];
+        if getrandom::fill(&mut entropy).is_err() {
+            return ptr::null_mut();
+        }
+        let credentials = IceCreds {
+            ufrag: entropy[..8].iter().map(|byte| format!("{byte:02x}")).collect(),
+            pass: entropy[8..].iter().map(|byte| format!("{byte:02x}")).collect(),
+        };
         let rtc = Rtc::builder()
+            .set_local_ice_credentials(credentials)
             .clear_codecs()
             .enable_opus(true)
             // Release each Opus frame despite loss; a nonzero window still drops

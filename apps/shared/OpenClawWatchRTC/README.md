@@ -73,6 +73,10 @@ system resolver, Watch radio, microphone or speaker path.
 
 ## Ownership and limits
 
+Each engine supplies fresh ICE credentials from the operating system's
+cryptographic RNG instead of the pinned library's non-cryptographic default.
+On watchOS this uses CommonCrypto; entropy failure prevents engine creation.
+
 Every native RTC mutation must be followed by polling until the next timeout.
 `WatchRealtimeTransport` enforces this on one serial queue. C byte pointers are
 borrowed until the next bridge call and are copied before crossing the queue.
