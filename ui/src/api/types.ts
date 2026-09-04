@@ -394,6 +394,7 @@ export type GatewaySessionRow = SessionRow & {
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
+  hasActiveSubagentDescendantRun?: boolean;
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;

@@ -166,6 +166,25 @@ it("preserves active run id ownership across omitted, liveness, and exact states
   });
 });
 
+it("carries descendant-only subagent liveness in session snapshots", () => {
+  const sessionRow = {
+    key: "agent:main:parent",
+    kind: "direct" as const,
+    updatedAt: 7,
+    hasActiveSubagentRun: true,
+    hasActiveSubagentDescendantRun: true,
+  };
+
+  expect(buildGatewaySessionSnapshot({ sessionRow, includeSession: true })).toMatchObject({
+    hasActiveSubagentRun: true,
+    hasActiveSubagentDescendantRun: true,
+    session: {
+      hasActiveSubagentRun: true,
+      hasActiveSubagentDescendantRun: true,
+    },
+  });
+});
+
 it.each(["user", "auto", null] as const)(
   "carries model override source %s into session change events",
   (source) => {

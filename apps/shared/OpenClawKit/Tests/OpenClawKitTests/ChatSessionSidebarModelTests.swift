@@ -28,7 +28,8 @@ struct ChatSessionSidebarModelTests {
         agentStatus: OpenClawChatSessionAgentStatus? = nil,
         observerDigest: OpenClawChatSessionObserverDigest? = nil,
         endedAt: Double? = nil,
-        hasActiveSubagentRun: Bool? = nil) -> OpenClawChatSessionEntry
+        hasActiveSubagentRun: Bool? = nil,
+        hasActiveSubagentDescendantRun: Bool? = nil) -> OpenClawChatSessionEntry
     {
         OpenClawChatSessionEntry(
             key: key,
@@ -67,6 +68,7 @@ struct ChatSessionSidebarModelTests {
             hasActiveRun: hasActiveRun,
             activeRunIds: activeRunIds,
             hasActiveSubagentRun: hasActiveSubagentRun,
+            hasActiveSubagentDescendantRun: hasActiveSubagentDescendantRun,
             endedAt: endedAt)
     }
 
@@ -578,11 +580,18 @@ struct ChatSessionSidebarModelTests {
         #expect(ChatSessionSidebarModel.canArchiveSession(
             self.entry(key: "agent:main:active", sessionId: "session-active", hasActiveRun: true),
             mainSessionKey: "agent:main:main"))
+        #expect(ChatSessionSidebarModel.canArchiveSession(
+            self.entry(
+                key: "agent:main:active-subagent",
+                sessionId: "session-active-subagent",
+                hasActiveSubagentRun: true),
+            mainSessionKey: "agent:main:main"))
         #expect(!ChatSessionSidebarModel.canArchiveSession(
             self.entry(
-                key: "agent:main:active-child",
-                sessionId: "session-active-child",
-                hasActiveSubagentRun: true),
+                key: "agent:main:active-descendant",
+                sessionId: "session-active-descendant",
+                hasActiveSubagentRun: true,
+                hasActiveSubagentDescendantRun: true),
             mainSessionKey: "agent:main:main"))
     }
 
@@ -864,6 +873,35 @@ struct ChatSessionSidebarModelTests {
             sessionChange: tombstoned,
             to: retained))
         #expect(cleared[0].activeRunIds == nil)
+    }
+
+    @Test func `descendant activity events set and clear archive eligibility`() throws {
+        let existing = self.entry(
+            key: "agent:main:work",
+            sessionId: "session-work")
+        let decoder = JSONDecoder()
+
+        let active = try decoder.decode(
+            OpenClawChatSessionsChangedEvent.self,
+            from: Data(
+                #"{"reason":"run-progress","session":{"key":"agent:main:work","hasActiveSubagentDescendantRun":true}}"#.utf8))
+        let blocked = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: active,
+            to: [existing]))
+        #expect(!ChatSessionSidebarModel.canArchiveSession(
+            blocked[0],
+            mainSessionKey: "agent:main:main"))
+
+        let inactive = try decoder.decode(
+            OpenClawChatSessionsChangedEvent.self,
+            from: Data(
+                #"{"reason":"run-progress","session":{"key":"agent:main:work","hasActiveSubagentDescendantRun":false}}"#.utf8))
+        let eligible = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: inactive,
+            to: blocked))
+        #expect(ChatSessionSidebarModel.canArchiveSession(
+            eligible[0],
+            mainSessionKey: "agent:main:main"))
     }
 
     @Test func `subtitle precedence keeps attention and status above observer digest`() {

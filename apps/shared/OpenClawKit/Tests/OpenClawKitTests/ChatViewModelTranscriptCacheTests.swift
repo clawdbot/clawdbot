@@ -436,6 +436,7 @@ struct ChatViewModelTranscriptCacheTests {
         active.hasActiveRun = true
         active.activeRunIds = ["run-active"]
         active.hasActiveSubagentRun = true
+        active.hasActiveSubagentDescendantRun = true
         active.startedAt = 1000
         active.endedAt = 2000
         active.runtimeMs = 1000
@@ -446,6 +447,7 @@ struct ChatViewModelTranscriptCacheTests {
         #expect(projected.hasActiveRun == nil)
         #expect(projected.activeRunIds == nil)
         #expect(projected.hasActiveSubagentRun == nil)
+        #expect(projected.hasActiveSubagentDescendantRun == nil)
         #expect(projected.startedAt == nil)
         #expect(projected.endedAt == 2000)
         #expect(projected.runtimeMs == 1000)

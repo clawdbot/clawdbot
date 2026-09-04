@@ -390,6 +390,9 @@ public enum ChatSessionSidebarModel {
         if change.activeRunIdsPresent {
             session.activeRunIds = change.activeRunIds
         }
+        if change.hasActiveSubagentDescendantRunPresent {
+            session.hasActiveSubagentDescendantRun = change.hasActiveSubagentDescendantRun
+        }
         if let startedAt = change.startedAt {
             session.startedAt = startedAt
         }
@@ -499,7 +502,7 @@ public enum ChatSessionSidebarModel {
     {
         self.normalized(session.sessionId) != nil &&
             self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
-            session.hasActiveSubagentRun != true
+            session.hasActiveSubagentDescendantRun != true
     }
 
     public static func isSessionInActiveAgentScope(
