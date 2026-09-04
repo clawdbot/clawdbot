@@ -84,4 +84,15 @@ describe("cron channel output policy", () => {
       }),
     ).resolves.toBe("room");
   });
+
+  it("keeps an unthreaded target without consulting the channel plugin", async () => {
+    channelPluginMocks.getChannelPlugin.mockClear();
+    await expect(
+      resolveCurrentChannelTarget({ channel: "topicchat", to: "room", threadId: null }),
+    ).resolves.toBe("room");
+    await expect(resolveCurrentChannelTarget({ channel: "topicchat", to: "room" })).resolves.toBe(
+      "room",
+    );
+    expect(channelPluginMocks.getChannelPlugin).not.toHaveBeenCalled();
+  });
 });
