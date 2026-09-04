@@ -8,6 +8,7 @@ import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import "../../plugins/control-ui-contributions.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -106,18 +107,25 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           : undefined,
       );
     }
+    // Accessories belong to the shared header and remain presented in visible,
+    // unfocused panes; docked chat must not mount another copy.
     const header = this.compact
       ? nothing
-      : this.renderPaneHeader(
-          sessionWorkspace,
-          backgroundTasks,
-          selectedSession,
-          catalog,
-          agentWorkspace,
-          workspaceGit,
-          chatProps.placementStartup,
-          sidebarLayout,
-        );
+      : html`${this.renderPaneHeader(
+            sessionWorkspace,
+            backgroundTasks,
+            selectedSession,
+            catalog,
+            agentWorkspace,
+            workspaceGit,
+            chatProps.placementStartup,
+            sidebarLayout,
+          )}<openclaw-plugin-contributions
+            .kind=${"session-header"}
+            .sessionKey=${state.sessionKey}
+            .agentId=${currentAgentId}
+            .presented=${this.visuallyPresented}
+          ></openclaw-plugin-contributions>`;
     const recovery = html`<openclaw-chat-outbox-recovery
       .host=${state}
       .identity=${JSON.stringify([
@@ -132,6 +140,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     ></openclaw-chat-outbox-recovery>`;
     const chat = renderChat({
       ...chatProps,
+      presented: this.active && this.presented,
       browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
       header: nothing,
@@ -220,6 +229,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
+      pluginPanels: this.context.plugins.registrations("panels"),
+      isPluginPanelPresented: (slot) =>
+        this.active && this.presented && isSidebarSlotVisible(sidebarLayout, slot),
     });
     const availableSlots = availableSidebarSlots(panelDefinitions);
     const panelTemplates = sidebarPanelTemplates(panelDefinitions);

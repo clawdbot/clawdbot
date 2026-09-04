@@ -81,6 +81,7 @@ import {
 import {
   isUnavailableNpmTarget,
   PLUGIN_INSTALL_ERROR_CODE,
+  type PluginInstallArtifactConsentRequest,
   type PluginInstallLogger,
 } from "./install-types.js";
 import {
@@ -205,6 +206,8 @@ export type ManagedPluginSourceInstallRequest =
   | {
       source: "local";
       path: string;
+      /** Stable source provenance when installing an owner-verified temporary copy. */
+      recordPath?: string;
       recordSource: "archive" | "path";
       mode: "install" | "update";
       link?: boolean;
@@ -1343,6 +1346,7 @@ async function persistManagedSourceInstall(params: {
   runtime?: RuntimeEnv;
   successMessage?: string;
   beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{ config: OpenClawConfig; warnings: string[] }> {
   const warnings: string[] = [];
   let committed = false;
@@ -1355,6 +1359,7 @@ async function persistManagedSourceInstall(params: {
       runtime: params.runtime,
       persistenceLogger: { warn: (message) => warnings.push(message) },
       beforePersistentApply: params.beforePersistentApply,
+      beforePersistentEffect: params.beforePersistentEffect,
       // Only the persistence owner can distinguish rejection from a late refresh failure.
       onCommitted: () => {
         committed = true;
@@ -1461,6 +1466,8 @@ type ManagedPluginSourceInstallParams = {
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentApply?: () => void;
+  /** Revalidate the initiating owner after artifact review and before durable activation. */
+  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 /**
@@ -1473,6 +1480,23 @@ type ManagedPluginSourceInstallParams = {
  */
 export async function installManagedPluginSource(
   params: ManagedPluginSourceInstallParams,
+): Promise<ManagedPluginSourceInstallResult> {
+  return await withPluginLifecycleLease({ env: params.env }, async (lease) => {
+    const assertOwned = lease.assertOwned.bind(lease);
+    const ownedParams = {
+      ...params,
+      beforePersistentApply: () => {
+        params.beforePersistentApply?.();
+        assertOwned();
+      },
+    };
+    return await installManagedPluginSourceUnderLease(ownedParams, assertOwned);
+  });
+}
+
+async function installManagedPluginSourceUnderLease(
+  params: ManagedPluginSourceInstallParams,
+  assertOwned: () => void,
 ): Promise<ManagedPluginSourceInstallResult> {
   const { request } = params;
   if (request.source === "official" && request.installSources) {
@@ -1501,19 +1525,22 @@ export async function installManagedPluginSource(
       : { ...installAttempt, installSource: installedSource };
   }
   if (request.source !== "official" && request.source !== "npm" && request.source !== "clawhub") {
-    return await installResolvedManagedPluginSource(params);
+    return await installResolvedManagedPluginSource(params, assertOwned);
   }
   const installSpec = resolveOfficialManagedInstallSpec({
     request,
     config: params.snapshot.config,
   });
   if (!installSpec) {
-    return await installResolvedManagedPluginSource(params);
+    return await installResolvedManagedPluginSource(params, assertOwned);
   }
-  const result = await installResolvedManagedPluginSource({
-    ...params,
-    request: { ...request, spec: installSpec, recordSpec: request.recordSpec ?? request.spec },
-  });
+  const result = await installResolvedManagedPluginSource(
+    {
+      ...params,
+      request: { ...request, spec: installSpec, recordSpec: request.recordSpec ?? request.spec },
+    },
+    assertOwned,
+  );
   if (result.ok) {
     return result;
   }
@@ -1534,6 +1561,7 @@ export async function installManagedPluginSource(
 /** Execute one resolved plugin source through the shared install-and-persist pipeline. */
 async function installResolvedManagedPluginSource(
   params: ManagedPluginSourceInstallParams,
+  assertOwned: () => void,
 ): Promise<ManagedPluginSourceInstallResult> {
   const { request } = params;
   const env = params.env ?? process.env;
@@ -1577,16 +1605,25 @@ async function installResolvedManagedPluginSource(
         onCapabilityConsent: params.onCapabilityConsent,
       });
 
-  const common = requestDeferredPluginInstall({
-    ...params.safetyOverrides,
-    config: params.snapshot.config,
-    extensionsDir,
-    logger: params.logger,
-    beforePersistentApply: params.beforePersistentApply,
-    ...(capabilityConsent
-      ? { onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit }
-      : {}),
-  });
+  const common = requestDeferredPluginInstall(
+    {
+      ...params.safetyOverrides,
+      config: params.snapshot.config,
+      extensionsDir,
+      logger: params.logger,
+      beforePersistentApply: params.beforePersistentApply,
+      ...(capabilityConsent || params.beforePersistentEffect
+        ? {
+            onBeforePluginArtifactCommit: async (artifact: PluginInstallArtifactConsentRequest) => {
+              await capabilityConsent?.onBeforePluginArtifactCommit(artifact);
+              await params.beforePersistentEffect?.();
+            },
+          }
+        : {}),
+    },
+    undefined,
+    assertOwned,
+  );
   const complete = async <T extends SourceInstallerResult>(
     installResult: Promise<T>,
     completed: {
@@ -1670,7 +1707,7 @@ async function installResolvedManagedPluginSource(
         successMessage: request.successMessage,
         install: (result) => ({
           source: request.recordSource,
-          sourcePath: request.path,
+          sourcePath: request.recordPath ?? request.path,
           installPath: installPath ?? result.targetDir,
           version: result.version,
         }),

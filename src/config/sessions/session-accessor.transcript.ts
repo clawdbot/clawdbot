@@ -4,6 +4,7 @@ import { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId 
 import { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 import {
   findTranscriptEvent,
+  hasSessionTranscriptMessage,
   inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,
   loadTranscriptEventRowsAfterSeqSync,
@@ -46,6 +47,7 @@ export {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
+  hasSessionTranscriptMessage,
   inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,

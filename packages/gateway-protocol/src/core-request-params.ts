@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import type * as AgentSchema from "./schema/agent.js";
 import type * as BoardSchema from "./schema/board.js";
+import type { CanvasDocumentViewParams } from "./schema/canvas.js";
 import type { CommandsListParams } from "./schema/commands.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
@@ -11,6 +12,7 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "canvas.document.view": CanvasDocumentViewParams;
   "board.action": BoardSchema.BoardActionParams;
   "board.data.read": BoardSchema.BoardDataReadParams;
   "board.event": BoardSchema.BoardEventParams;

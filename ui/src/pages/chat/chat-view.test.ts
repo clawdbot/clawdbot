@@ -21,8 +21,9 @@ import {
   replaceSlashCommands,
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
-import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -451,7 +452,7 @@ function createChatHeaderState(
     throw new Error(`Unexpected request: ${method}`);
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const sessions = createSessionCapability({
+  const sessions = createTestSessionCapability({
     snapshot: { client, phase: "connected", hello: null },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
@@ -896,12 +897,13 @@ describe("chat Swarm progress", () => {
       ],
     });
 
-    const widget = container.querySelector("[data-test-id=chat-swarm]");
-    expect(widget).not.toBeNull();
-    const scrollAnchor = widget?.previousElementSibling;
+    const widget = requireElement(container, "[data-test-id=chat-swarm]", "Swarm progress");
+    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
+    const scrollAnchor = widget.previousElementSibling;
     expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
     expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(widget?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    expect(widget.parentElement).toBe(shell.parentElement);
+    expect(widget.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
   });
 });
@@ -930,12 +932,12 @@ describe("inline approval card", () => {
     });
 
     const card = container.querySelector(".chat-inline-approval .exec-approval-card");
-    const inlineSurface = container.querySelector(".chat-inline-approval");
+    const inlineSurface = requireElement(container, ".chat-inline-approval", "inline approval");
+    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
     expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
-    expect(inlineSurface?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(
-      inlineSurface?.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
-    ).toBe(true);
+    expect(inlineSurface.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
+    expect(inlineSurface.parentElement).toBe(shell.parentElement);
+    expect(inlineSurface.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     const countdown = expectDefined(
       container.querySelector<LitElement>(".exec-approval-countdown"),
       "inline approval countdown",
@@ -1806,6 +1808,8 @@ describe("chat code-block copy", () => {
 
 describe("chat transcript rendering", () => {
   it("refreshes cached inline reply handlers when the callback identity changes", () => {
+    // Freeze the separate minute-based timestamp dependency while checking callback rebinding.
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
     const transcript = createTestTranscript();
     const firstReply = vi.fn();
     const currentReply = vi.fn();
@@ -1822,8 +1826,6 @@ describe("chat transcript rendering", () => {
         isStreaming: false,
       },
     ] as ReturnType<typeof chatThread.buildCachedChatItems>;
-    const defaultBuildChatItems = buildChatItemsMock.getMockImplementation();
-    const defaultRenderMessageGroup = renderMessageGroupMock.getMockImplementation();
     buildChatItemsMock.mockReturnValue(stableChatItems);
     renderMessageGroupMock.mockImplementation(
       (
@@ -1865,13 +1867,6 @@ describe("chat transcript rendering", () => {
       '[aria-label="Reply to message"]',
       "inline reply button",
     ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    if (defaultRenderMessageGroup) {
-      renderMessageGroupMock.mockImplementation(defaultRenderMessageGroup);
-    }
-    if (defaultBuildChatItems) {
-      buildChatItemsMock.mockImplementation(defaultBuildChatItems);
-    }
-
     expect(firstReply).not.toHaveBeenCalled();
     expect(currentReply).toHaveBeenCalledOnce();
   });
@@ -2469,7 +2464,8 @@ describe("chat scroll-to-bottom affordance", () => {
     const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
     const queue = requireElement(container, ".chat-queue", "composer queue");
     const composer = requireElement(shell, ".agent-chat__input", "composer");
-    expect(wrapper.nextElementSibling).toBe(shell);
+    expect(wrapper.parentElement).toBe(shell.parentElement);
+    expect(wrapper.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
     expect(queue.compareDocumentPosition(composer)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
@@ -2616,8 +2612,9 @@ afterEach(() => {
   releaseChatAttachmentPayloads([...registeredAttachmentPayloads.values()]);
   registeredAttachmentPayloads.clear();
   vi.useRealTimers();
-  buildChatItemsMock.mockClear();
-  renderMessageGroupMock.mockClear();
+  // Restore defaults even when a case fails with an override installed.
+  buildChatItemsMock.mockReset();
+  renderMessageGroupMock.mockReset();
   chatMediaRenderVersionMock.value = 0;
   resetChatViewState();
   replaceSlashCommands(buildFallbackSlashCommands());

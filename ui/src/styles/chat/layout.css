@@ -1387,7 +1387,10 @@ openclaw-chat-video-player {
 /* Bare composers need this fade to cover transcript underlap. A progress card owns
    that boundary itself; painting behind it exposes a veil above the card. */
 .chat-main__conversation
-  > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
+  > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before,
+.chat-main__conversation
+  > openclaw-plugin-view[data-plugin-composer]
+  .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
   position: absolute;
   inset: calc(0px - var(--chat-transcript-fade-height, 20px)) 0 auto;
   height: calc(
@@ -2719,7 +2722,10 @@ button.chat-pr__diff {
   }
 
   .chat-main__conversation
-    > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
+    > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before,
+  .chat-main__conversation
+    > openclaw-plugin-view[data-plugin-composer]
+    .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
     inset-inline: calc(var(--chat-thread-gutter) - var(--chat-mobile-edge-inset, 4px));
   }
 

@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -23,6 +24,9 @@ import {
 import { formatUiError } from "../../lib/format-error.ts";
 import { showToast } from "../../lib/toast.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderCustomPluginUiDisabled } from "../../plugins/control-ui-disabled.ts";
+import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
 import { renderBoardGrantedCapabilities } from "./board-widget-capabilities.ts";
@@ -69,6 +73,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) contentHeightPx?: number;
   @property({ type: Boolean }) fitAutoContent = false;
   @property({ attribute: false }) tabs: readonly BoardTab[] = [];
+  @property({ attribute: false }) session: BoardGetParams = { sessionKey: "" };
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
@@ -88,6 +93,10 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @state() private pluginRendererLabel = "";
   private pluginRendererKind = "";
   private pluginRendererLoadToken: object | null = null;
+  private readonly pluginSubscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.plugins,
+    (plugins, notify) => plugins.subscribe(notify),
+  );
   private readonly appView = new BoardMcpAppLifecycle({
     active: () => this.active,
     connected: () => this.isConnected,
@@ -154,6 +163,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback(): void {
+    this.pluginSubscriptions.clear();
     this.resetPluginRenderer();
     this.frame.disconnect();
     this.appView.disconnect();
@@ -281,6 +291,31 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       return this.frame.render(widget);
     }
     if (widget.contentKind === "plugin") {
+      const pluginId = pluginIdForWidgetKind(widget.pluginKind);
+      const activeKinds = this.context?.gateway.snapshot.hello?.controlUiWidgetKinds ?? [];
+      const runtime = this.context?.plugins;
+      const key = `${pluginId}/${widget.pluginKind?.slice(pluginId.length + 1)}`;
+      const advertised = activeKinds.some(
+        (entry) => entry.kind === widget.pluginKind && entry.pluginId === pluginId,
+      );
+      const native = advertised
+        ? runtime?.registrations("widgets").find((entry) => entry.key === key)
+        : undefined;
+      // Keep healthy renderers visible while their replacement loads or fails.
+      if (native) {
+        return renderPluginContribution(
+          "widgets",
+          key,
+          {
+            ...this.session,
+            widget: { name: widget.name, props: widget.props },
+            canMutate: this.canMutate,
+            canGrant: this.canGrant,
+          },
+          nothing,
+          this.active,
+        );
+      }
       if (this.pluginRendererError) {
         return renderBoardWidgetError(this.pluginRendererError, () => this.retryPluginRenderer());
       }
@@ -293,16 +328,29 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
           requestUpdate: () => this.requestUpdate(),
         });
       }
-      const pluginId = pluginIdForWidgetKind(widget.pluginKind);
-      const activeKinds = this.context?.gateway.snapshot.hello?.controlUiWidgetKinds ?? [];
       const contribution = getPluginWidgetKindContribution(widget.pluginKind, activeKinds);
-      return contribution
-        ? html`<p class="board-widget__plugin-loading">${t("board.widget.pluginLoading")}</p>`
-        : renderBoardDisabledPlugin({
-            pluginId,
-            disabled: this.busy || this.actionPending || !this.canMutate,
-            onRemove: () => void this.runAction(() => callbacks.remove(widget)),
-          });
+      if (
+        contribution ||
+        (this.context && this.context.gateway.snapshot.phase !== "connected") ||
+        runtime?.isLoading(pluginId)
+      ) {
+        return html`<p class="board-widget__plugin-loading">${t("board.widget.pluginLoading")}</p>`;
+      }
+      const disabled = renderCustomPluginUiDisabled(this.context, pluginId);
+      if (!disabled && advertised && runtime) {
+        const error = runtime.errors.find(
+          (entry) => entry.pluginId === pluginId || entry.pluginId === "host",
+        );
+        if (error) {
+          return renderBoardWidgetError(error.message, () => void runtime.refresh());
+        }
+      }
+      return renderBoardDisabledPlugin({
+        pluginId,
+        content: disabled,
+        disabled: this.busy || this.actionPending || !this.canMutate,
+        onRemove: () => void this.runAction(() => callbacks.remove(widget)),
+      });
     }
     return this.frame.render(widget);
   }

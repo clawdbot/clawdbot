@@ -60,6 +60,7 @@ import type {
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
 import type { GatewayRequestEntry } from "./server-request-entry.js";
+import type { GatewayRpcDiagnostics } from "./server/ws-connection/request-diagnostics.js";
 import { sessionMutationTargetFields } from "./session-method-policy.js";
 import { resolveDirectIncognitoTargets } from "./session-sharing-target-input.js";
 import {
@@ -228,16 +229,14 @@ export function createRequestGatewayMethodRegistry(
       coreDescriptorHandlers[method] = extraHandler;
     }
   }
-  const coreDescriptors = createCoreGatewayMethodDescriptors(coreDescriptorHandlers);
-  const coreMethodNames = new Set(coreDescriptors.map((descriptor) => descriptor.name));
   const auxHandlers = Object.fromEntries(
     extraHandlerEntries.filter(
-      ([method]) => !pluginMethodNames.has(method) && !coreMethodNames.has(method),
+      ([method]) => !pluginMethodNames.has(method) && !isCoreGatewayMethodClassified(method),
     ),
   );
   return createGatewayMethodRegistry(
     [
-      ...coreDescriptors,
+      ...createCoreGatewayMethodDescriptors(coreDescriptorHandlers),
       ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
       ...createGatewayMethodDescriptorsFromHandlers({
         handlers: auxHandlers,
@@ -474,6 +473,7 @@ export async function handleGatewayRequest(
     extraHandlers?: GatewayRequestHandlers;
     requestEntry?: GatewayRequestEntry;
   },
+  diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context, signal } = opts;
   const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
@@ -532,7 +532,9 @@ export async function handleGatewayRequest(
       // No await between the final fence, ownership handoff, and actual invocation.
       // Long polls and shutdown initiators must never remain preparation leases.
       entry?.release();
-      return preparedHandler(handlerOptions);
+      return diagnostics
+        ? diagnostics.runHandler(() => preparedHandler(handlerOptions))
+        : preparedHandler(handlerOptions);
     };
     await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
       context,

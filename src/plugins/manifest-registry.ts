@@ -510,6 +510,7 @@ function buildRecord(params: {
     trustedOfficialInstall: params.trustedOfficialInstall === true ? true : undefined,
     qaRunners: params.manifest.qaRunners,
     dashboard: params.manifest.dashboard,
+    controlUi: params.manifest.controlUi,
     mcpServers: params.manifest.mcpServers,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],

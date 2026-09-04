@@ -161,7 +161,11 @@ export async function runSkillCollectionReviewForAgent(params: {
                 candidate.authIdentity !== reviewModel.authIdentity,
             )
           ) {
-            throw new Error("Shared workspace agents use different collection-review identities.");
+            // Unresolved identities stay distinct; report their known cause before a mismatch.
+            throw new Error(
+              reviewModels.find((candidate) => candidate.authError)?.authError ??
+                "Shared workspace agents use different collection-review identities.",
+            );
           }
           await runSkillCollectionReview({
             config: params.config,
@@ -235,6 +239,9 @@ function resolveCollectionReviewIdentity(
   const credential = profileId ? store.profiles[profileId] : undefined;
   return {
     ...model,
+    authError: credential
+      ? undefined
+      : `Skill collection review cannot start: no resolved auth credential for provider "${model.provider}" (agent "${agentId}"). Configure a credential for this provider before shared-workspace review can run.`,
     authIdentity: credential
       ? sha256Hex(stableStringify(credential))
       : `unresolved:${agentId}:${profileId ?? model.provider}`,

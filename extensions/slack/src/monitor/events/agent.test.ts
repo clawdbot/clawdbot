@@ -20,6 +20,7 @@ import {
 import * as sessionStoreRuntime from "openclaw/plugin-sdk/session-store-runtime";
 // Slack tests cover Agent View lifecycle handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getSlackListenerWriteClient } from "../../client.js";
 import { appendSlackStream, markSlackStreamsStopped, startSlackStream } from "../../streaming.js";
 import { deliverSlackSlashReplies } from "../replies.js";
 import { getSlackSessionRuns, registerSlackSessionRun } from "../session-run-targets.js";
@@ -277,9 +278,16 @@ describe("registerSlackAgentEvents", () => {
       harness.ctx.allowFrom = ["U_OWNER"];
       harness.ctx.useAccessGroups = true;
       const client = harness.ctx.app.client;
-      vi.spyOn(client.chat, "startStream").mockResolvedValue({ ok: true, ts: "1712345678.000002" });
+      const writeClient = expectDefined(
+        getSlackListenerWriteClient({ listenerClient: client }),
+        "derived Slack listener write client",
+      );
+      vi.spyOn(writeClient.chat, "startStream").mockResolvedValue({
+        ok: true,
+        ts: "1712345678.000002",
+      });
       const appendError = new Error("Slack rejected the append");
-      vi.spyOn(client.chat, "appendStream").mockRejectedValue(appendError);
+      vi.spyOn(writeClient.chat, "appendStream").mockRejectedValue(appendError);
       const session = await startSlackStream({
         client,
         channel,
