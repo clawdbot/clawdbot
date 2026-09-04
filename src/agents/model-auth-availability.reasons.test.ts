@@ -31,7 +31,12 @@ describe("model auth unavailability reasons", () => {
     { name: "empty snapshot material", key: "", available: undefined },
     { name: "foreign source", key: "ollama-local", snapshot: "foreign", available: undefined },
     { name: "replaced source", key: "ollama-local", snapshot: "replaced", available: undefined },
-    { name: "explicit order", key: "ollama-local", order: true, available: false },
+    {
+      name: "declared SecretRef over empty profile order",
+      key: "ollama-local",
+      order: true,
+      available: true,
+    },
     { name: "explicit lock", key: "ollama-local", locked: true, available: false },
   ])(
     "preserves source ownership for $name",
