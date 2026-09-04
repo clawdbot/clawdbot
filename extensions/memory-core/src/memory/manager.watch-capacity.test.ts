@@ -336,6 +336,65 @@ describe("memory watcher kernel capacity degrade", () => {
     expect(readDegradedDirs(active).length).toBeGreaterThan(0);
   });
 
+  it("replacement reattach keeps degradation when the new parent attach hits capacity", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    await setupCapacityWorkspace();
+    const memoryDir = path.join(workspaceDir, "memory");
+
+    const active = await createManager(createWatchConfig());
+    await vi.waitFor(() => {
+      expect(createdNativeWatchers.some((watcher) => watcher.dir === memoryDir)).toBe(true);
+      expect(createdNativeWatchers.some((watcher) => watcher.dir === workspaceDir)).toBe(true);
+    });
+    const parentWatcher = createdNativeWatchers.find((watcher) => watcher.dir === workspaceDir);
+    const chokidarBaseline = createdChokidarWatchers.length;
+
+    // Replace the watched root, then let the replacement main attach succeed
+    // while every later watch (its parent) throws EMFILE — the exact finding
+    // scenario: the reattach must not erase the armed degradation state.
+    await fs.rm(memoryDir, { recursive: true });
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "note.md"), "hello");
+    let allowedLeft = 1;
+    nativeWatchFactoryMock.mockImplementation(
+      (
+        dir: string,
+        options: unknown,
+        listener?: (eventType: string, filename: string | null) => void,
+      ) => {
+        if (allowedLeft > 0 && dir === memoryDir) {
+          allowedLeft -= 1;
+          const watcher = makeNativeWatcherFor(dir);
+          if (listener) {
+            watcher.rememberListener(listener);
+          }
+          createdNativeWatchers.push(watcher);
+          return watcher;
+        }
+        throw Object.assign(new Error(`simulated watch failure on ${dir}`), { code: "EMFILE" });
+      },
+    );
+    parentWatcher?.emit("rename", "memory");
+
+    await vi.waitFor(() => {
+      const degraded = memoryLoggerWarn.mock.calls.some((call) =>
+        String(call[0]).includes("kernel watch capacity exhausted"),
+      );
+      expect(degraded).toBe(true);
+    });
+    // The degradation state survives the replacement: the reattach reported
+    // capacity instead of a nominal "attached", so forced rescans stay armed.
+    function readDegradedDirs(m: MemoryIndexManager): string[] {
+      // SAFETY: test-only read of the per-root degraded set.
+      return Array.from(
+        (m as unknown as { capacityDegradedDirs: Set<string> }).capacityDegradedDirs,
+      );
+    }
+    expect(readDegradedDirs(active)).toContain(memoryDir);
+    expect(createdChokidarWatchers.length).toBe(chokidarBaseline);
+    expect(readIntervalTimer(active)).toBeTruthy();
+  });
+
   // The full index pipeline needs the plugin state store; its sqlite temp-dir
   // handling does not work on local Windows (same class as the doctor suites),
   // so CI Linux is authoritative for the real-index proof.
@@ -403,6 +462,68 @@ describe("memory watcher kernel capacity degrade", () => {
       );
     }
   });
+
+  // Timer-driven recovery proof for an actually exhausted host: unlike the
+  // case above, nothing may nudge the manager — no forced dirty flag, no
+  // direct sync call. The production 5-minute fallback interval itself must
+  // observe and index a post-startup edit. Only runs when
+  // OPENCLAW_REAL_CAPACITY_HOST=1 (real kernel EMFILE; ~6 minutes runtime).
+  const itRealExhaustedHost = process.env.OPENCLAW_REAL_CAPACITY_HOST === "1" ? it : it.skip;
+  itRealExhaustedHost(
+    "real interval timer recovers a post-startup edit without manual nudging",
+    async () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      await setupCapacityWorkspace();
+      const trace: string[] = [
+        "t0 real exhausted host: startup root fs.watch fails with real kernel EMFILE",
+      ];
+
+      const active = await createManager(createWatchConfig());
+      await vi.waitFor(() => expect(readIntervalTimer(active)).toBeTruthy());
+      trace.push("t1 degrade armed: interval timer running, no manual transitions performed");
+
+      function readIndexedPaths(m: MemoryIndexManager): string[] {
+        // SAFETY: test-only read of the protected sqlite handle to inspect indexed sources.
+        const db = (
+          m as unknown as {
+            db: { prepare: (q: string) => { all: () => Array<{ path?: unknown }> } };
+          }
+        ).db;
+        return db
+          .prepare("SELECT path FROM memory_index_sources")
+          .all()
+          .flatMap((row) => (typeof row.path === "string" ? [row.path] : []));
+      }
+
+      // Post-startup edit, then nothing but wall-clock waiting: the real
+      // interval tick must pick it up on its own.
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "timer-note.md"),
+        "timer recovered this note",
+      );
+      trace.push("t2 post-startup edit written; waiting on the production interval timer");
+
+      await vi.waitFor(
+        () =>
+          expect(readIndexedPaths(active).some((indexed) => indexed.includes("timer-note"))).toBe(
+            true,
+          ),
+        { timeout: 9 * 60_000, interval: 15_000 },
+      );
+      trace.push(`t3 timer-driven recovery: indexed=${JSON.stringify(readIndexedPaths(active))}`);
+      trace.push("t4 proof: the production interval recovered the edit with no manual nudging");
+
+      const evidenceDir = process.env.OPENCLAW_EVIDENCE_OUT;
+      if (evidenceDir) {
+        await fs.mkdir(evidenceDir, { recursive: true });
+        const traceText = trace.join(EVIDENCE_NEWLINE);
+        await fs.writeFile(
+          path.join(evidenceDir, "137200-timer-driven-trace.md"),
+          `${traceText}${EVIDENCE_NEWLINE}`,
+        );
+      }
+    },
+  );
 
   it("runtime new-child capacity failure degrades through the event path", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });

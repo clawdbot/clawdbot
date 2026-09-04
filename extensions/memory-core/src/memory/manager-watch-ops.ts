@@ -308,9 +308,22 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       this.attachMemoryChokidarFallback(dir, markDirty);
     });
     this.nativeMemoryWatchPairs.push(pair);
-    this.attachNativeMemoryParentWatch(pair, recordedInode, markDirty, "native", () =>
-      this.attachNativeMemoryWatchForDir(dir, markDirty),
+    const parentResult = this.attachNativeMemoryParentWatch(
+      pair,
+      recordedInode,
+      markDirty,
+      "native",
+      () => this.attachNativeMemoryWatchForDir(dir, markDirty),
     );
+    if (parentResult === "capacity") {
+      // Parent creation hit capacity exhaustion: root replacement would stay
+      // uncovered, so this tree degrades instead of reporting "attached".
+      this.closeNativeMemoryWatchPair(pair);
+      if (!this.closed) {
+        this.degradeMemoryWatchToPollingSync(dir, markDirty);
+      }
+      return "capacity";
+    }
     return "attached";
   }
 
@@ -320,7 +333,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
     label: "native" | "Linux",
     reattach: () => NativeMemoryWatchResult,
-  ): void {
+  ): NativeMemoryWatchResult {
     const { dir } = pair;
     let watchedInode: number | null = recordedInode;
     // Non-recursive parent watcher: catches root-directory replacement so
@@ -439,14 +452,11 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       pair.parent = attachedParent;
     } catch (err) {
       if (isKernelWatchCapacityError(err)) {
-        // The kernel cannot grant the parent watch even at creation time:
-        // root replacement would stay uncovered and a retry cannot succeed
-        // under the same limit. Degrade the tree to forced polling.
-        this.closeNativeMemoryWatchPair(pair);
-        if (!this.closed) {
-          this.degradeMemoryWatchToPollingSync(pair.dir, markDirty);
-        }
-        return;
+        // The kernel cannot grant the parent watch even at creation time.
+        // Signal the caller instead of degrading here: during a reattach the
+        // caller must keep the (still-armed) polling state, and closing the
+        // freshly attached pair is the caller's bookkeeping.
+        return "capacity";
       }
       // Parent watcher couldn't start (e.g. parentDir not accessible).
       // The main watcher still works for non-replacement events; just
@@ -454,6 +464,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       log.warn(
         `memory ${label} parent watcher could not start on ${path.dirname(dir)}: ${String(err)}`,
       );
+      return "attached";
     }
   }
 
@@ -489,9 +500,8 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       chokidarFallback: (fallbackDir, markDirty) => {
         this.attachMemoryChokidarFallback(fallbackDir, markDirty);
       },
-      attachParentWatch: (pair, recordedInode, markDirty, reattach) => {
-        this.attachNativeMemoryParentWatch(pair, recordedInode, markDirty, "Linux", reattach);
-      },
+      attachParentWatch: (pair, recordedInode, markDirty, reattach) =>
+        this.attachNativeMemoryParentWatch(pair, recordedInode, markDirty, "Linux", reattach),
     };
   }
 

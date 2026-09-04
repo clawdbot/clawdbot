@@ -46,7 +46,7 @@ export type MemoryWatchAttachContext = {
     recordedInode: number,
     markDirty: MemoryWatchMarkDirty,
     reattach: () => NativeMemoryWatchResult,
-  ): void;
+  ): NativeMemoryWatchResult;
 };
 
 export function attachLinuxMemoryDirectoryTreeWatchForDir(
@@ -232,9 +232,16 @@ export function attachLinuxMemoryDirectoryTreeWatchForDir(
     return "attached";
   }
 
-  ctx.attachParentWatch(pair, recordedInode, markDirty, () =>
+  const parentResult = ctx.attachParentWatch(pair, recordedInode, markDirty, () =>
     attachLinuxMemoryDirectoryTreeWatchForDir(ctx, dir, markDirty),
   );
+  if (parentResult === "capacity") {
+    // The parent creation hit capacity exhaustion: coverage of root
+    // replacement cannot be restored, so this tree degrades like any other
+    // capacity failure instead of reporting a nominal "attached" pair.
+    ctx.closePair(pair);
+    return "capacity";
+  }
   return "attached";
 }
 
