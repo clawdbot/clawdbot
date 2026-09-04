@@ -84,15 +84,10 @@ const OMITTED_DIST_SUBTREE_PATTERNS = [
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}(?:/|$)`, "u"),
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
 ] as const;
-type ExternalizedBundledExtensionIds = ReadonlySet<string>;
 type PackageDistExclusionRules = {
   files: ReadonlySet<string>;
   prefixes: readonly string[];
   patterns: readonly RegExp[];
-};
-type PackageDistInventoryRules = {
-  externalizedExtensionIds: ExternalizedBundledExtensionIds;
-  exclusions: PackageDistExclusionRules;
 };
 
 function normalizeRelativePath(value: string): string {
@@ -141,23 +136,16 @@ function compilePackageFilesExclusionPattern(pattern: string): RegExp {
   return new RegExp(source, "u");
 }
 
-function collectPackageDistInventoryRules(rootPackageJson: unknown): PackageDistInventoryRules {
+function collectPackageDistExclusionRules(rootPackageJson: unknown): PackageDistExclusionRules {
   if (!rootPackageJson || typeof rootPackageJson !== "object") {
-    return {
-      externalizedExtensionIds: new Set(),
-      exclusions: { files: new Set(), prefixes: [], patterns: [] },
-    };
+    return { files: new Set(), prefixes: [], patterns: [] };
   }
   const files = (rootPackageJson as { files?: unknown }).files;
   if (!Array.isArray(files)) {
-    return {
-      externalizedExtensionIds: new Set(),
-      exclusions: { files: new Set(), prefixes: [], patterns: [] },
-    };
+    return { files: new Set(), prefixes: [], patterns: [] };
   }
-  const externalizedExtensionIds = new Set<string>();
   const excludedFiles = new Set<string>();
-  const excludedPrefixes: string[] = [];
+  const excludedPrefixes = new Set<string>();
   const excludedPatterns: RegExp[] = [];
   for (const entry of files) {
     if (typeof entry !== "string") {
@@ -166,14 +154,16 @@ function collectPackageDistInventoryRules(rootPackageJson: unknown): PackageDist
     const normalized = normalizeRelativePath(entry);
     const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(normalized);
     if (match?.[1]) {
-      externalizedExtensionIds.add(match[1]);
+      // Preserve literal root and descendant exclusion alongside package-file glob rules.
+      excludedFiles.add(`dist/extensions/${match[1]}`);
+      excludedPrefixes.add(`dist/extensions/${match[1]}/`);
     }
     if (!normalized.startsWith("!dist/")) {
       continue;
     }
     const excludedPath = normalized.slice(1);
     if (excludedPath.endsWith("/**") && !excludedPath.slice(0, -3).includes("*")) {
-      excludedPrefixes.push(excludedPath.slice(0, -2));
+      excludedPrefixes.add(excludedPath.slice(0, -2));
     } else if (excludedPath.includes("*")) {
       excludedPatterns.push(compilePackageFilesExclusionPattern(excludedPath));
     } else {
@@ -181,30 +171,10 @@ function collectPackageDistInventoryRules(rootPackageJson: unknown): PackageDist
     }
   }
   return {
-    externalizedExtensionIds,
-    exclusions: {
-      files: excludedFiles,
-      prefixes: excludedPrefixes.toSorted((left, right) => left.localeCompare(right)),
-      patterns: excludedPatterns,
-    },
+    files: excludedFiles,
+    prefixes: [...excludedPrefixes].toSorted((left, right) => left.localeCompare(right)),
+    patterns: excludedPatterns,
   };
-}
-
-function isExternalizedBundledExtensionDistPath(
-  relativePath: string,
-  externalizedExtensionIds: ExternalizedBundledExtensionIds,
-): boolean {
-  if (externalizedExtensionIds.size === 0) {
-    return false;
-  }
-  const parts = normalizeRelativePath(relativePath).split("/");
-  return (
-    parts.length >= 3 &&
-    parts[0] === "dist" &&
-    parts[1] === "extensions" &&
-    Boolean(parts[2]) &&
-    externalizedExtensionIds.has(parts[2] ?? "")
-  );
 }
 
 function isOmittedPluginSdkTestPath(relativePath: string): boolean {
@@ -216,11 +186,11 @@ function isOmittedPluginSdkTestPath(relativePath: string): boolean {
   );
 }
 
-async function collectPackageDistInventoryRulesForRoot(
+async function collectPackageDistExclusionRulesForRoot(
   packageRoot: string,
-): Promise<PackageDistInventoryRules> {
+): Promise<PackageDistExclusionRules> {
   const packageJsonPath = path.join(packageRoot, "package.json");
-  return collectPackageDistInventoryRules(await readJsonIfExists<unknown>(packageJsonPath));
+  return collectPackageDistExclusionRules(await readJsonIfExists<unknown>(packageJsonPath));
 }
 
 function isPackageFilesExcludedDistPath(
@@ -234,14 +204,11 @@ function isPackageFilesExcludedDistPath(
   );
 }
 
-function isPackagedDistPath(relativePath: string, rules: PackageDistInventoryRules): boolean {
+function isPackagedDistPath(relativePath: string, rules: PackageDistExclusionRules): boolean {
   if (!relativePath.startsWith("dist/")) {
     return false;
   }
-  if (isExternalizedBundledExtensionDistPath(relativePath, rules.externalizedExtensionIds)) {
-    return false;
-  }
-  if (isPackageFilesExcludedDistPath(relativePath, rules.exclusions)) {
+  if (isPackageFilesExcludedDistPath(relativePath, rules)) {
     return false;
   }
   if (isLegacyPluginDependencyDirPath(relativePath)) {
@@ -278,12 +245,11 @@ function isPackagedDistPath(relativePath: string, rules: PackageDistInventoryRul
   return true;
 }
 
-function isOmittedDistSubtree(relativePath: string, rules: PackageDistInventoryRules): boolean {
+function isOmittedDistSubtree(relativePath: string, rules: PackageDistExclusionRules): boolean {
   return (
-    isExternalizedBundledExtensionDistPath(relativePath, rules.externalizedExtensionIds) ||
     // npm directory exclusions can select the root itself or its trailing-slash subtree.
-    isPackageFilesExcludedDistPath(relativePath, rules.exclusions) ||
-    isPackageFilesExcludedDistPath(`${relativePath}/`, rules.exclusions) ||
+    isPackageFilesExcludedDistPath(relativePath, rules) ||
+    isPackageFilesExcludedDistPath(`${relativePath}/`, rules) ||
     isLegacyPluginDependencyDirPath(relativePath) ||
     isOmittedPluginSdkTestPath(relativePath) ||
     OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
@@ -293,7 +259,7 @@ function isOmittedDistSubtree(relativePath: string, rules: PackageDistInventoryR
 async function collectRelativeFiles(
   rootDir: string,
   baseDir: string,
-  rules: PackageDistInventoryRules,
+  rules: PackageDistExclusionRules,
   fsLimit: LimitFunction,
   onDirectory?: (directoryPath: string) => Promise<void>,
 ): Promise<string[]> {
@@ -345,8 +311,8 @@ export async function collectPackageDistInventory(
 ): Promise<string[]> {
   const rules =
     options.packageManifest === undefined
-      ? await collectPackageDistInventoryRulesForRoot(packageRoot)
-      : collectPackageDistInventoryRules(options.packageManifest);
+      ? await collectPackageDistExclusionRulesForRoot(packageRoot)
+      : collectPackageDistExclusionRules(options.packageManifest);
   const fsLimit = pLimit(PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY);
   return await collectRelativeFiles(
     path.join(packageRoot, "dist"),
@@ -357,7 +323,10 @@ export async function collectPackageDistInventory(
   );
 }
 
-async function readPackageDistInventoryOptional(packageRoot: string): Promise<string[] | null> {
+/** Reads an existing package dist inventory, returning null when the inventory is absent. */
+export async function readPackageDistInventoryIfPresent(
+  packageRoot: string,
+): Promise<string[] | null> {
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   const parsed = await readJsonIfExists<unknown>(inventoryPath);
   if (parsed === null) {
@@ -367,11 +336,4 @@ async function readPackageDistInventoryOptional(packageRoot: string): Promise<st
     throw new Error(`Invalid package dist inventory at ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
   }
   return sortUniqueStrings(parsed.map(normalizeRelativePath));
-}
-
-/** Reads an existing package dist inventory, returning null when the inventory is absent. */
-export async function readPackageDistInventoryIfPresent(
-  packageRoot: string,
-): Promise<string[] | null> {
-  return await readPackageDistInventoryOptional(packageRoot);
 }

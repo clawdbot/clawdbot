@@ -10,7 +10,7 @@ private enum RootSidebarDrawerMetric {
 }
 
 struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
-    private enum DragDisposition: Equatable {
+    enum DragDisposition: Equatable {
         case opening
         case closing
         case rejected
@@ -124,23 +124,20 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
         let dragSession = self.dragSession
         return DragGesture(minimumDistance: 8)
             .updating(self.$dragState) { value, state, _ in
-                let disposition: DragDisposition
-                if let latchedDisposition = state.disposition {
-                    disposition = latchedDisposition
-                } else {
-                    disposition = Self.dragDisposition(
-                        for: value,
-                        isPresented: isPresented,
-                        canOpenFromEdge: canOpenFromEdge)
-                    state.disposition = disposition
-                    dragSession.disposition = disposition
-                }
+                let disposition = Self.dragDisposition(
+                    startLocation: value.startLocation,
+                    translation: value.translation,
+                    isPresented: isPresented,
+                    canOpenFromEdge: canOpenFromEdge,
+                    latchedDisposition: state.disposition)
+                state.disposition = disposition
+                dragSession.disposition = disposition
                 switch disposition {
                 case .opening:
                     state.translationWidth = max(0, min(sidebarWidth, value.translation.width))
                 case .closing:
                     state.translationWidth = max(-sidebarWidth, min(0, value.translation.width))
-                case .rejected:
+                case .rejected, nil:
                     break
                 }
             }
@@ -168,16 +165,28 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
             }
     }
 
-    private static func dragDisposition(
-        for value: DragGesture.Value,
+    static func dragDisposition(
+        startLocation: CGPoint,
+        translation: CGSize,
         isPresented: Bool,
-        canOpenFromEdge: Bool) -> DragDisposition
+        canOpenFromEdge: Bool,
+        latchedDisposition: DragDisposition?) -> DragDisposition?
     {
-        if isPresented {
-            return self.isClosingDrag(value) ? .closing : .rejected
+        if let latchedDisposition { return latchedDisposition }
+        if !isPresented {
+            // Opening is an edge gesture; closing may start anywhere on the content card.
+            guard canOpenFromEdge,
+                  startLocation.x <= RootSidebarDrawerMetric.edgeGestureWidth,
+                  startLocation.y > RootSidebarDrawerMetric.topGestureExclusion
+            else { return .rejected }
         }
-        guard canOpenFromEdge else { return .rejected }
-        return self.isOpeningDrag(value) ? .opening : .rejected
+        let horizontal = isPresented ? -translation.width : translation.width
+        let vertical = abs(translation.height)
+        // Leave marginal diagonals undecided without moving the card; once vertical
+        // scrolling wins, latch rejection so a later thumb arc cannot open the drawer.
+        guard horizontal >= vertical else { return .rejected }
+        guard horizontal >= 16, horizontal > 2 * vertical else { return nil }
+        return isPresented ? .closing : .opening
     }
 
     private static func shouldSettle(
@@ -186,18 +195,6 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
     {
         translation > RootSidebarDrawerMetric.settleTranslation ||
             predictedTranslation > RootSidebarDrawerMetric.settlePredictedTranslation
-    }
-
-    private static func isOpeningDrag(_ value: DragGesture.Value) -> Bool {
-        value.startLocation.x <= RootSidebarDrawerMetric.edgeGestureWidth &&
-            value.startLocation.y > RootSidebarDrawerMetric.topGestureExclusion &&
-            value.translation.width > 0 &&
-            value.translation.width > abs(value.translation.height)
-    }
-
-    private static func isClosingDrag(_ value: DragGesture.Value) -> Bool {
-        value.translation.width < 0 &&
-            -value.translation.width > abs(value.translation.height)
     }
 
     private static func contentShape(progress: CGFloat) -> UnevenRoundedRectangle {

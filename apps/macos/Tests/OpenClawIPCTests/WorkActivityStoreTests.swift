@@ -2,9 +2,77 @@ import Foundation
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 @MainActor
 struct WorkActivityStoreTests {
+    @Test func `replacement primary clears old work without retiring the new same-key tool`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let connection = makeActivityGatewayConnection(mainSessionKey: "main")
+            let control = ControlChannel(gateway: connection, endpointRevision: { 1 })
+            let store = WorkActivityStore.shared
+            let previousMainKey = store.mainSessionKey
+            defer {
+                store.handleJob(sessionKey: "main", state: "done")
+                store.setMainSessionKey(previousMainKey)
+            }
+            store.setMainSessionKey("before-primary")
+            _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+            #expect(await self.eventually { store.mainSessionKey == "main" })
+
+            store.handleJob(sessionKey: "main", state: "started")
+            store.handleTool(sessionKey: "main", phase: "start", name: "read", meta: "old-tool", args: nil)
+            store.handleTool(sessionKey: "main", phase: "result", name: "read", meta: "old-tool", args: nil)
+
+            // The heartbeat acknowledges that the primary consumer processed the preceding hello.
+            let acknowledgement = WorkActivityAcknowledgement()
+            let observer = NotificationCenter.default.addObserver(
+                forName: .controlHeartbeat,
+                object: nil,
+                queue: .main)
+            { notification in
+                guard let data = notification.object as? Data,
+                      let heartbeat = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data),
+                      heartbeat.status == "work-lifetime-proof"
+                else { return }
+                Task { @MainActor in acknowledgement.received = true }
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
+            await connection.shutdown()
+            _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+            let snapshot = try #require(await connection.lastSnapshot)
+            await connection._test_handlePush(.snapshot(snapshot), socketGeneration: 1)
+            await connection._test_handlePush(
+                .event(EventFrame(
+                    type: "event",
+                    event: "heartbeat",
+                    payload: AnyCodable(["ts": 1, "status": "work-lifetime-proof"]))),
+                socketGeneration: 1)
+            #expect(await self.eventually { acknowledgement.received })
+            #expect(store.current == nil)
+            #expect(store.iconState == .idle)
+            #expect(store.lastToolUpdatedAt == nil)
+
+            store.handleTool(sessionKey: "main", phase: "start", name: "read", meta: "new-tool", args: nil)
+            let newTool = store.current
+            let newToolUpdatedAt = store.lastToolUpdatedAt
+            try? await Task.sleep(for: .seconds(3))
+            #expect(store.current == newTool)
+            #expect(store.iconState == .workingMain(.tool(.read)))
+            #expect(store.lastToolUpdatedAt == newToolUpdatedAt)
+            await control.disconnect()
+        }
+    }
+
+    private func eventually(_ predicate: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            if predicate() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return predicate()
+    }
+
     @Test func `main session job preempts other`() {
         let store = WorkActivityStore()
 
@@ -95,4 +163,29 @@ struct WorkActivityStoreTests {
         store.resolveIconState(override: .otherEdit)
         #expect(store.iconState == .overridden(.tool(.edit)))
     }
+}
+
+@MainActor
+private final class WorkActivityAcknowledgement {
+    var received = false
+}
+
+func makeActivityGatewayConnection(mainSessionKey: String) -> GatewayConnection {
+    let session = GatewayTestWebSocketSession(taskFactory: {
+        GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+            guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        }, receiveHook: { socket, receiveIndex in
+            if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: socket.snapshotConnectRequestID() ?? "connect", mainSessionKey: mainSessionKey))
+        })
+    })
+    return GatewayConnection(
+        testEndpointProvider: {
+            GatewayConnection.EndpointSnapshot(
+                config: (URL(string: "ws://127.0.0.1:49229")!, nil, nil), routeAuthority: nil, revision: 1)
+        },
+        currentEndpointRevision: { 1 },
+        sessionBox: WebSocketSessionBox(session: session))
 }

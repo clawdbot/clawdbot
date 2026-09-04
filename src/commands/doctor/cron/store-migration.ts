@@ -638,20 +638,18 @@ export function normalizeStoredCronJobs(
     mutated ||= scheduledPolicyMutated;
 
     const invalidPersistedReason = getInvalidPersistedCronJobReason(raw);
-    if (
-      invalidPersistedReason === "missing-schedule" ||
-      invalidPersistedReason === "invalid-schedule"
-    ) {
-      trackIssue("invalidSchedule");
-      removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
-      mutated = true;
-      continue;
-    }
-    if (
-      invalidPersistedReason === "missing-payload" ||
-      invalidPersistedReason === "invalid-payload"
-    ) {
-      trackIssue("invalidPayload");
+    if (invalidPersistedReason) {
+      if (
+        invalidPersistedReason === "missing-schedule" ||
+        invalidPersistedReason === "invalid-schedule"
+      ) {
+        trackIssue("invalidSchedule");
+      } else if (
+        invalidPersistedReason === "missing-payload" ||
+        invalidPersistedReason === "invalid-payload"
+      ) {
+        trackIssue("invalidPayload");
+      }
       removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
       mutated = true;
       continue;

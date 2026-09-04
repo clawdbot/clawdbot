@@ -121,15 +121,13 @@ const workerTurnClaimSchema = z
       ownerEpoch: safeNonNegativeIntegerSchema,
     }),
   })
-  .transform(
-    (claim): WorkerSessionTurnClaim => ({
-      sessionId: claim.sessionId,
-      claimId: claim.claimId,
-      runId: claim.runId,
-      placementGeneration: claim.placementGeneration,
-      owner: claim.owner,
-    }),
-  );
+  .transform((claim): WorkerSessionTurnClaim => ({
+    sessionId: claim.sessionId,
+    claimId: claim.claimId,
+    runId: claim.runId,
+    placementGeneration: claim.placementGeneration,
+    owner: claim.owner,
+  }));
 const delegatedAuthoritySchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("local"),
@@ -157,14 +155,12 @@ const sessionSpawnContextSchema = z
       deny: stringListSchema,
     }),
   })
-  .transform(
-    (context): AgentRuntimeSessionSpawnContext => ({
-      ...(context.completionOwnerSessionKey
-        ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
-        : {}),
-      inheritedToolPolicy: context.inheritedToolPolicy,
-    }),
-  );
+  .transform((context): AgentRuntimeSessionSpawnContext => ({
+    ...(context.completionOwnerSessionKey
+      ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
+      : {}),
+    inheritedToolPolicy: context.inheritedToolPolicy,
+  }));
 const cronCreatorAuthorityGrantSchema = z
   .object({
     runId: normalizedRequiredStringSchema,
@@ -189,12 +185,10 @@ const messageActionToolContextSchema = z
     sameChannelThreadRequired: z.boolean().optional().catch(undefined),
     skipCrossContextDecoration: z.boolean().optional().catch(undefined),
   })
-  .transform(
-    (context): InternalChannelThreadingToolContext => ({
-      ...context,
-      currentChannelProvider: context.currentChannelProvider as ChannelId | undefined,
-    }),
-  );
+  .transform((context): InternalChannelThreadingToolContext => ({
+    ...context,
+    currentChannelProvider: context.currentChannelProvider as ChannelId | undefined,
+  }));
 const messageActionContextSchema = z.object({
   expiresAtMs: z.number().finite(),
   turnCapability: normalizedRequiredStringSchema.optional(),

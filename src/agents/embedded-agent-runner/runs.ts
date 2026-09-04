@@ -46,7 +46,7 @@ import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runt
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-admission.js";
+import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
@@ -83,6 +83,11 @@ type EmbeddedAgentQueueFailureReason =
   | "task_suggestion_delivery_mode_mismatch"
   | "transcript_commit_wait_unsupported"
   | "runtime_rejected";
+
+export type EmbeddedRunTimeoutRecoveryMarker = {
+  sessionId: string;
+  recoveryToken: symbol;
+};
 
 export type EmbeddedAgentQueueMessageOutcome =
   | {
@@ -252,6 +257,7 @@ function clearEmbeddedRunAbandonment(params: {
 
 function markEmbeddedRunAbandoned(params: {
   sessionId: string;
+  runId?: string;
   sessionKey?: string;
   sessionFile?: string;
   reason: AbandonedEmbeddedRun["reason"];
@@ -268,6 +274,7 @@ function markEmbeddedRunAbandoned(params: {
   const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
   const abandonedRun: AbandonedEmbeddedRun = {
     sessionId,
+    ...(params.runId?.trim() ? { runId: params.runId.trim() } : {}),
     abandonedAtMs: Date.now(),
     reason: params.reason,
     ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
@@ -293,27 +300,76 @@ export function markActiveEmbeddedRunAbandoned(params: {
   if (!sessionId || ACTIVE_EMBEDDED_RUNS.get(sessionId) !== params.handle) {
     return false;
   }
-  markEmbeddedRunAbandoned(params);
+  markEmbeddedRunAbandoned({ ...params, runId: params.handle.runId });
   return true;
 }
 
-export function isEmbeddedRunAbandoned(params: {
+export function resolveEmbeddedRunAbandonment(params: {
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
-}): boolean {
+}): AbandonedEmbeddedRun["reason"] | undefined {
   const normalizedSessionId = params.sessionId?.trim();
-  if (normalizedSessionId && ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.has(normalizedSessionId)) {
-    return true;
-  }
   const normalizedSessionKey = params.sessionKey?.trim();
-  if (normalizedSessionKey && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(normalizedSessionKey)) {
-    return true;
-  }
   const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
-  return Boolean(
-    normalizedSessionFile && ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(normalizedSessionFile),
+  const sessionIds = [
+    normalizedSessionId,
+    normalizedSessionKey
+      ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
+      : undefined,
+    normalizedSessionFile
+      ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile)
+      : undefined,
+  ];
+  const reasons = new Set(
+    sessionIds.map((sessionId) =>
+      sessionId ? ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(sessionId)?.reason : undefined,
+    ),
   );
+  return reasons.has("timeout")
+    ? "timeout"
+    : reasons.has("recovering_timeout")
+      ? "recovering_timeout"
+      : undefined;
+}
+
+/**
+ * Temporarily releases terminal-timeout delivery suppression while a timed-out
+ * attempt is performing an eligible compaction-and-retry recovery.
+ */
+export function markEmbeddedRunRecoveringTimeout(params: {
+  sessionId: string;
+  runId?: string;
+}): EmbeddedRunTimeoutRecoveryMarker | undefined {
+  const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(params.sessionId.trim());
+  if (
+    !abandoned ||
+    abandoned.reason !== "timeout" ||
+    (abandoned.runId && abandoned.runId !== params.runId?.trim())
+  ) {
+    return undefined;
+  }
+  const recoveryToken = Symbol("openclaw.embeddedRunTimeoutRecovery");
+  abandoned.reason = "recovering_timeout";
+  abandoned.recoveryToken = recoveryToken;
+  return { sessionId: abandoned.sessionId, recoveryToken };
+}
+
+/** Restores terminal-timeout suppression when recovery cannot continue. */
+export function restoreEmbeddedRunTimeoutAbandonment(
+  marker: EmbeddedRunTimeoutRecoveryMarker,
+): boolean {
+  const abandoned = ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.get(marker.sessionId.trim());
+  if (
+    !abandoned ||
+    abandoned.reason !== "recovering_timeout" ||
+    abandoned.recoveryToken !== marker.recoveryToken
+  ) {
+    return false;
+  }
+  abandoned.reason = "timeout";
+  delete abandoned.recoveryToken;
+  return true;
 }
 
 function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): void {
@@ -620,7 +676,7 @@ function prepareEmbeddedAgentQueueMessage(
   if (
     typeof activity.lastProgressAgeMs === "number" &&
     activity.lastProgressAgeMs > resolveRunStaleThresholdMs(activity) &&
-    recoveryBlocker !== "human_input_wait"
+    !recoveryBlocker
   ) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
@@ -1056,6 +1112,10 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   const settleMs = params.settleMs ?? 15_000;
   const settleDeadline = Date.now() + settleMs;
   const embeddedRunHandle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
+  // Capture the exact handle's session owner before cancellation can replace the run.
+  const agentId = embeddedRunHandle
+    ? ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(embeddedRunHandle)?.agentId
+    : undefined;
   const replyOperation = resolveActiveReplyOperationForSessionId(params.sessionId);
   let releaseStaleExpiryBarrier: (() => void) | undefined;
   const staleExpiryBarrier =
@@ -1112,7 +1172,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     }
     const persistenceSnapshot =
       params.forceClear === true && params.sessionKey
-        ? tryLoadForceClearSessionSnapshot(params.sessionKey)
+        ? tryLoadForceClearSessionSnapshot(params.sessionKey, agentId)
         : undefined;
     const forceCleared =
       params.forceClear === true &&
@@ -1149,10 +1209,11 @@ type ForceClearSessionSnapshot = {
 
 function tryLoadForceClearSessionSnapshot(
   sessionKey: string,
+  preparedAgentId?: string,
 ): ForceClearSessionSnapshot | undefined {
   try {
     const cfg = getRuntimeConfig();
-    const agentId = resolveSessionAgentId({ config: cfg, sessionKey });
+    const agentId = resolveSessionAgentId({ config: cfg, sessionKey, agentId: preparedAgentId });
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const entry = loadSessionEntry({ agentId, sessionKey, storePath });
     if (!entry || entry.status !== "running") {
@@ -1253,6 +1314,7 @@ export function setActiveEmbeddedRun(
   handle: EmbeddedAgentQueueHandle,
   sessionKey?: string,
   sessionFile?: string,
+  agentId?: string,
 ) {
   const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
   const incomingLifecycleGeneration = setActiveEmbeddedRunLifecycleGeneration(
@@ -1288,6 +1350,7 @@ export function setActiveEmbeddedRun(
   const operationalRunInstance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS.set(handle, {
     sessionId,
+    agentId,
     ...(sessionKey ? { sessionKey } : {}),
     delegatedAuthority:
       operationalRunInstance?.runId === handle.runId && operationalRunInstance

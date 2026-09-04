@@ -17,7 +17,7 @@ import {
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
-import { readSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
+import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
 import {
   listDurableSqliteTargetOwnersForSessionStorePath,
   listDurableSqliteTargetPathsForSessionStorePath,
@@ -113,7 +113,7 @@ export function listKnownSessionStoreAgentIds(
       try {
         const logicalOwners = withOpenClawAgentDatabaseReadOnly(
           (database) =>
-            readSessionEntryKeys(database).flatMap((sessionKey) => {
+            Array.from(iterateSessionEntryKeys(database)).flatMap((sessionKey) => {
               const parsed = parseAgentSessionKey(sessionKey);
               return parsed ? [normalizeAgentId(parsed.agentId)] : [];
             }),
@@ -214,6 +214,27 @@ function isValidatedRecoveryCandidateSessionsDir(params: {
     }
     throw err;
   }
+}
+
+function createRealAgentsRootResolver(): (agentsRoot: string) => string | undefined {
+  // Freeze successes and skippable failures for one discovery pass; each caller gets a fresh cache.
+  const realAgentsRoots = new Map<string, string | undefined>();
+  return (agentsRoot) => {
+    if (realAgentsRoots.has(agentsRoot)) {
+      return realAgentsRoots.get(agentsRoot);
+    }
+    try {
+      const realAgentsRoot = fsSync.realpathSync.native(agentsRoot);
+      realAgentsRoots.set(agentsRoot, realAgentsRoot);
+      return realAgentsRoot;
+    } catch (err) {
+      if (shouldSkipDiscoveryError(err)) {
+        realAgentsRoots.set(agentsRoot, undefined);
+        return undefined;
+      }
+      throw err;
+    }
+  };
 }
 
 function resolveSessionStoreDiscoveryState(
@@ -387,15 +408,18 @@ export function resolveExistingAgentSessionStoreTargetsSync(
           ? normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId)
           : requested;
         const result = withOpenClawAgentDatabaseReadOnly(
-          (database) =>
-            readSessionEntryKeys(database).some((sessionKey) => {
+          (database) => {
+            for (const sessionKey of iterateSessionEntryKeys(database)) {
               const parsed = parseAgentSessionKey(sessionKey);
               // Unscoped keys belong to the validated database owner. Explicit agent keys must
               // match so a fixed store containing only another agent's rows proves nothing.
-              return parsed
-                ? normalizeAgentId(parsed.agentId) === requested
-                : databaseAgentId === requested;
-            }),
+              const ownerAgentId = parsed ? normalizeAgentId(parsed.agentId) : databaseAgentId;
+              if (ownerAgentId === requested) {
+                return true;
+              }
+            }
+            return false;
+          },
           { agentId: databaseAgentId, env, path: sqlitePath },
         );
         return result.found && result.value ? [fixedTarget] : [];
@@ -428,23 +452,7 @@ export function resolveAllAgentSessionStoreCandidateTargetsSync(
 ): SessionStoreTarget[] {
   const env = params.env ?? process.env;
   const { configuredTargets, agentsRoots } = resolveSessionStoreDiscoveryState(cfg, env);
-  const realAgentsRoots = new Map<string, string | undefined>();
-  const getRealAgentsRoot = (agentsRoot: string): string | undefined => {
-    if (realAgentsRoots.has(agentsRoot)) {
-      return realAgentsRoots.get(agentsRoot);
-    }
-    try {
-      const realAgentsRoot = fsSync.realpathSync.native(agentsRoot);
-      realAgentsRoots.set(agentsRoot, realAgentsRoot);
-      return realAgentsRoot;
-    } catch (err) {
-      if (shouldSkipDiscoveryError(err)) {
-        realAgentsRoots.set(agentsRoot, undefined);
-        return undefined;
-      }
-      throw err;
-    }
-  };
+  const getRealAgentsRoot = createRealAgentsRootResolver();
   const validatedConfiguredTargets = configuredTargets.flatMap((target) => {
     const agentsRoot = resolveAgentsDirFromSessionStorePath(target.storePath);
     if (!agentsRoot) {
@@ -518,23 +526,7 @@ function resolveAgentSessionStoreTargets(
     resolveSessionStorePathCore(undefined, { agentId: requested, env }),
   ]);
   const targets: SessionStoreTarget[] = [];
-  const realAgentsRoots = new Map<string, string | undefined>();
-  const getRealAgentsRoot = (agentsRoot: string): string | undefined => {
-    if (realAgentsRoots.has(agentsRoot)) {
-      return realAgentsRoots.get(agentsRoot);
-    }
-    try {
-      const realAgentsRoot = fsSync.realpathSync.native(agentsRoot);
-      realAgentsRoots.set(agentsRoot, realAgentsRoot);
-      return realAgentsRoot;
-    } catch (err) {
-      if (shouldSkipDiscoveryError(err)) {
-        realAgentsRoots.set(agentsRoot, undefined);
-        return undefined;
-      }
-      throw err;
-    }
-  };
+  const getRealAgentsRoot = createRealAgentsRootResolver();
 
   for (const storePath of storePaths) {
     const agentsRoot = resolveAgentsDirFromSessionStorePath(storePath);
@@ -662,6 +654,9 @@ export function resolveSessionStoreTargets(
   const requestedAgent = opts.agent?.trim();
   if (opts.agent !== undefined && !requestedAgent) {
     throw new Error("--agent must not be blank");
+  }
+  if (opts.store !== undefined && !opts.store.trim()) {
+    throw new Error("--store must not be blank");
   }
   const hasAgent = requestedAgent !== undefined;
   const allAgents = opts.allAgents === true;

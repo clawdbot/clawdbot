@@ -1,7 +1,8 @@
 ---
-summary: "Publish redacted local coding sessions into a shared read-only OpenClaw catalog"
+summary: "Publish redacted coding sessions for shared viewing and independent Team continuation"
 read_when:
   - Sharing a Claude Code or Codex session with trusted Gateway operators
+  - Continuing a beamed conversation with a Team agent
   - Configuring an authenticated session-ingest endpoint without connecting a node
   - Auditing what Beam stores and exposes
 title: "Beam plugin"
@@ -12,7 +13,7 @@ The bundled `beam` plugin receives a sanitized coding-session snapshot over auth
 Beam ships with OpenClaw but is disabled by default. When enabled, it registers:
 
 - `POST /api/v1/beam/sessions`
-- the read-only **Beam** session catalog in the Control UI sidebar
+- the **Beam** session catalog in the Control UI sidebar
 
 ## Enable
 
@@ -71,6 +72,7 @@ Content-Type: application/json
   "version": 1,
   "beamId": "0123456789abcdef0123456789abcdef",
   "source": "claude",
+  "sourceModel": { "provider": "anthropic", "model": "claude-opus-4-1" },
   "title": "Fix the upload flow",
   "updatedAt": "2026-07-20T12:00:00.000Z",
   "completed": false,
@@ -107,6 +109,16 @@ so its response validator accepts named links.
 
 Uploading the same `beamId` updates the existing catalog row. A completed upload sets the row status to `completed`; earlier updates display as `live`.
 
+`sourceModel` is optional. Current automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
+
+## Continue on the Team Gateway
+
+Select a Beam in the Control UI and write a message in its composer. On the first send, OpenClaw creates a normal session for the selected Team agent, copies the bounded sanitized Beam history into it, and sends your message there. The original Beam stays unchanged, and later source uploads do not alter the copied session.
+
+OpenClaw uses `sourceModel` when that exact model is available to the Team agent. Otherwise it uses the agent's configured model. Each copied transcript item is marked as untrusted external content. The copied session also includes a notice that the old content is reference material rather than operator instructions, names the model choice, and explains that the session cannot access the source machine or its tools.
+
+Continuation is a copy, not remote resume or two-way synchronization. Each operator may create an independent continuation from the same Beam.
+
 ## Storage and visibility
 
 Beam stores sanitized payloads in OpenClaw's shared SQLite-backed plugin state:
@@ -116,18 +128,20 @@ Beam stores sanitized payloads in OpenClaw's shared SQLite-backed plugin state:
 - oldest-entry eviction when the catalog reaches its bound
 - server receipt time controls catalog ordering; clients cannot move themselves ahead with a forged timestamp
 
-The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session, while uploads require `operator.write` or `operator.admin`. Any write-authorized operator that knows a Beam id can update that row. Uploader attribution does not grant ownership or change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
+The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session. Uploading or continuing requires `operator.write` or `operator.admin`; agent access policy must also allow the chosen agent. Any write-authorized operator that knows a Beam id can update that row. Uploader attribution does not grant ownership or change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
+
+A continuation belongs to the authenticated operator who creates it. From then on it follows ordinary session sharing, sandbox, tool, and model policy for that Team agent. Access to the original Beam does not grant access to another operator's continuation.
 
 User turns are attributed to the verified publisher of the current snapshot, using their current profile name and avatar, including merged profiles. Beam's upload format does not identify individual authors within a multi-user transcript. The uploader reference shares the snapshot's seven-day retention and is replaced on each upload. Shared-token uploads, failed profile resolution, and older snapshots without a recorded uploader display **User**; they never inherit the viewer's identity or a previous uploader's identity. Reupload an older snapshot through personal authentication to attribute it.
 
 ## Security boundary
 
-Beam is passive session publication, not remote control.
+Beam publication is not remote control.
 
-- It has no `continueSession`, archive, terminal, tool, or node capability.
+- Continuing makes an independent Gateway-owned session. Beam itself has no archive, terminal, tool, or node capability.
 - It accepts text-only normalized transcript items, not HTML, scripts, archives, attachments, or server-fetched URLs.
 - The official skill removes raw tool results, reasoning, prompts, local paths, credentials, cookies, and auth material before upload.
-- The receiver still treats every transcript as untrusted text. Copying a beamed transcript into a new agent session is a separate operator action.
+- The receiver treats every transcript as untrusted text. The first message in the Beam composer is the explicit operator action that copies it into a new session.
 - Requests are rate-limited and concurrency-limited before the body is read.
 
 ## Mirroring
@@ -169,7 +183,7 @@ When browsing Claude sessions on paired nodes, update those nodes alongside the 
 
 `404 Not Found`
 
-: The Beam plugin is disabled, the Gateway has not restarted since enablement, or the request is reaching another Gateway.
+: The Beam plugin is disabled, the Gateway has not reloaded it since enablement, or the request is reaching another Gateway.
 
 `401 Unauthorized`
 

@@ -27,6 +27,7 @@ import {
   waitersFor,
 } from "./placement-turn-claim-events.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
+import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.js";
 import {
   clearWorkerWorkspacePendingResult,
   hasCurrentWorkspaceResultClaim,
@@ -67,6 +68,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     options: { allowDraining?: boolean } = {},
   ): WorkerSessionTurnClaim => {
     const identity = normalizeIdentity(input);
+    assertSessionWorkspaceUnreserved(db, identity.sessionId);
     const claimId = required(input.claimId, "turn claim id");
     const runId = required(input.runId, "turn claim run id");
     const owner: WorkerSessionTurnOwner =

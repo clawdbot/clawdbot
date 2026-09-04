@@ -5,6 +5,7 @@ import { testing } from "../../openai-transport-stream.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
   prepareEmbeddedAttemptPromptPreflight,
@@ -200,6 +201,7 @@ describe("attempt prompt preflight", () => {
 
   it("routes a mid-turn compaction request with its measured budget", () => {
     const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request,
       sessionAgentId: "test",
@@ -226,6 +228,7 @@ describe("attempt prompt preflight", () => {
     const messagesBefore = sessionManager.buildSessionContext().messages;
     const replaceSessionMessages = vi.fn();
     const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },
       sessionAgentId: "test",
@@ -249,6 +252,7 @@ describe("attempt prompt preflight", () => {
 
   it("keeps the compaction fallback when persisted truncation cannot inspect history", () => {
     const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt,
       request: { ...request, route: "truncate_tool_results_only" },
       sessionAgentId: "test",
@@ -267,6 +271,7 @@ describe("attempt prompt preflight", () => {
     );
     const replaceSessionMessages = vi.fn();
     const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       attempt: { ...attempt, contextTokenBudget: 100 },
       request: { ...request, route: "truncate_tool_results_only" },
       sessionAgentId: "test",

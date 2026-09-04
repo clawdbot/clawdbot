@@ -4,7 +4,6 @@ import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
   retireUnsafeCodexTurnClientBestEffort,
-  retireCodexAppServerClientAfterTimedOutTurn,
   unsubscribeCodexThreadBestEffort,
   terminateCodexBackgroundTerminals,
 } from "./attempt-client-cleanup.js";
@@ -208,57 +207,5 @@ describe("Codex app-server attempt client cleanup", () => {
       { threadId: "thread-1" },
       { timeoutMs: 123 },
     );
-  });
-
-  it("closes only the isolated client after timed-out turn cleanup", async () => {
-    const notificationHandlers = new Set<(notification: unknown) => void>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "turn/interrupt") {
-        queueMicrotask(() => {
-          for (const handler of notificationHandlers) {
-            handler({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turn: { id: "turn-1", status: "interrupted" },
-              },
-            });
-          }
-        });
-      }
-      return {};
-    });
-    const close = vi.fn();
-
-    await retireCodexAppServerClientAfterTimedOutTurn(
-      {
-        request,
-        close,
-        addNotificationHandler: (handler: (notification: unknown) => void) => {
-          notificationHandlers.add(handler);
-          return () => notificationHandlers.delete(handler);
-        },
-        addRequestHandler: () => () => undefined,
-        addCloseHandler: () => () => undefined,
-      } as never,
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        reason: "turn_terminal_idle_timeout",
-        suspectPhysicalClient: true,
-      },
-    );
-
-    expect(request).toHaveBeenCalledWith(
-      "turn/interrupt",
-      { threadId: "thread-1", turnId: "turn-1" },
-      { timeoutMs: 5_000 },
-    );
-    expect(request).toHaveBeenCalledWith(
-      "thread/unsubscribe",
-      { threadId: "thread-1" },
-      { timeoutMs: 5_000 },
-    );
-    expect(close).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,4 @@
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
@@ -16,6 +16,7 @@ import {
 
 type NewSessionDraftState = {
   message: string;
+  mentions?: readonly HumanMention[];
   attachments: ChatAttachment[];
   incognito: boolean;
 };
@@ -49,6 +50,7 @@ export class NewSessionDraftPersistence {
       message: string,
       attachments: ChatAttachment[],
       resetVisibility?: boolean,
+      mentions?: readonly HumanMention[],
     ) => void,
     private readonly onStorageError: () => void,
   ) {}
@@ -124,7 +126,12 @@ export class NewSessionDraftPersistence {
     const generation = ++this.restoreGeneration;
     const mutationGeneration = this.mutationGeneration;
     const baseline = this.read();
-    const signature = chatAttachmentDraftSignature(baseline.message, baseline.attachments);
+    const signature = chatAttachmentDraftSignature(
+      baseline.message,
+      baseline.attachments,
+      undefined,
+      baseline.mentions,
+    );
     void this.restoreScope(scope, generation, mutationGeneration, signature);
   }
 
@@ -199,6 +206,7 @@ export class NewSessionDraftPersistence {
             current.draft,
             submitted.message,
             submittedAttachments,
+            submitted.mentions,
           ))
         ) {
           return;
@@ -308,6 +316,9 @@ export class NewSessionDraftPersistence {
       expectedWriteIds,
       revision: this.revision,
       text: state.message,
+      ...(state.mentions?.length
+        ? { mentions: state.mentions.map((mention) => ({ ...mention })) }
+        : {}),
       storedAttachments: captureDurableChatAttachments(state.attachments),
       writeId,
     };
@@ -338,7 +349,13 @@ export class NewSessionDraftPersistence {
       mutationGeneration !== this.mutationGeneration ||
       !currentScope ||
       durableComposerScopeIdentity(scope) !== durableComposerScopeIdentity(currentScope) ||
-      signature !== chatAttachmentDraftSignature(current.message, current.attachments)
+      signature !==
+        chatAttachmentDraftSignature(
+          current.message,
+          current.attachments,
+          undefined,
+          current.mentions,
+        )
     ) {
       return;
     }
@@ -379,13 +396,22 @@ export class NewSessionDraftPersistence {
       !hydratedScope ||
       durableComposerScopeIdentity(scope) !== durableComposerScopeIdentity(hydratedScope) ||
       signature !==
-        chatAttachmentDraftSignature(hydratedCurrent.message, hydratedCurrent.attachments)
+        chatAttachmentDraftSignature(
+          hydratedCurrent.message,
+          hydratedCurrent.attachments,
+          undefined,
+          hydratedCurrent.mentions,
+        )
     ) {
       releaseChatAttachmentPayloads(attachments);
       return;
     }
     this.revision = storedRevision;
-    this.apply(result.status === "found" ? result.draft.text : "", attachments);
+    if (result.status === "found" && result.draft.mentions) {
+      this.apply(result.draft.text, attachments, undefined, result.draft.mentions);
+    } else {
+      this.apply(result.status === "found" ? result.draft.text : "", attachments);
+    }
   }
 
   private clearTimer() {

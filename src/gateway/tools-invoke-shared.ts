@@ -250,15 +250,10 @@ async function invokeGatewayToolWithSignal(
   const authenticatedUserProfile = params.cfg.gateway?.roles
     ? params.authenticatedUserProfile
     : undefined;
-  // The calling connection already resolved its authority at connect (shared-secret
-  // owners mint system authority there). Carry that exact fact forward instead of
-  // re-deriving it from scopes, or role boundaries deny the caller's own dispatch.
-  const operatorRoleActor =
-    params.operatorRoleActor ??
-    (params.senderIsOwner && !authenticatedUserProfile ? { kind: "system" as const } : undefined);
+  // HTTP and RPC auth boundaries supply authority independently of profile attribution.
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-    ...(operatorRoleActor ? { operatorRoleActor } : {}),
+    operatorRoleActor: params.operatorRoleActor,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
   });
   const primarySessionAuthorizationError = authorizeResolvedSessionMutation({
@@ -313,7 +308,7 @@ async function invokeGatewayToolWithSignal(
       (!existingTarget
         ? authorizeGatewaySessionCreation({
             cfg: params.cfg,
-            profileId: authenticatedUserProfile.profileId,
+            client,
             agentId: targetAgentId,
           })
         : null);
@@ -431,7 +426,11 @@ async function invokeGatewayToolWithSignal(
       await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal);
     const result = authenticatedUserProfile
       ? await withOperatorToolGatewayAuthority(
-          { authenticatedUserProfile, scopes: params.operatorScopes ?? [] },
+          {
+            authenticatedUserProfile,
+            operatorRoleActor: params.operatorRoleActor,
+            scopes: params.operatorScopes ?? [],
+          },
           executeTool,
         )
       : await executeTool();

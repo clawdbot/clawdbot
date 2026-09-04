@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-computer.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -20,9 +21,67 @@ import {
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 
-describe("worker desktop and image launch", () => {
+const prepareGitHubBinding = vi.hoisted(() => vi.fn());
+vi.mock("./worker-github-binding.js", () => ({
+  prepareWorkerGitHubBinding: prepareGitHubBinding,
+}));
+
+describe("worker launch capabilities", () => {
   beforeEach(setupWorkerTurnLauncherTest);
+  beforeEach(() => {
+    prepareGitHubBinding.mockReset().mockResolvedValue(undefined);
+  });
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it.each([true, false])(
+    "carries only an available GitHub identity in the launch envelope (%s)",
+    async (available) => {
+      seedActivePlacement();
+      const github: WorkerGitHubLaunchBinding = {
+        token: "synthetic-turn-bound-github-token",
+        login: "shared-bot",
+        branch: "openclaw/session-branch",
+        remoteUrl: "https://github.com/owner/repo.git",
+        gitAuthor: { name: "Shared Bot", email: "shared@example.test" },
+      };
+      prepareGitHubBinding.mockResolvedValue(available ? github : undefined);
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async ({ plan }) => {
+        if (available) {
+          expect(plan.assignment.github).toEqual(github);
+        } else {
+          expect(plan.assignment).not.toHaveProperty("github");
+        }
+        throw new WorkerRunnerCapacityError();
+      });
+      const tunnel: WorkerTunnelHandle = {
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        launchTurn,
+        measureLaunchTurn,
+        stageAttachments: vi.fn(),
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(async () => {}),
+      };
+      const environments = {
+        ...unusedEnvironments(),
+        get: vi.fn(() => attachedEnvironment()),
+        acquireTurnCredential: vi.fn(async () => credential()),
+        startTunnel: vi.fn(async () => tunnel),
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+      await expect(
+        provider.executeTurn(
+          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-github" },
+          turn("run-github"),
+          vi.fn(),
+        ),
+      ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+      expect(launchTurn).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     { missingFeature: undefined, modelHasVision: undefined, allowed: true },

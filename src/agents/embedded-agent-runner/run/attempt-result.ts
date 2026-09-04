@@ -441,7 +441,7 @@ export function completeEmbeddedAttemptResult(
       messagingToolSentTargets: getMessagingToolSentTargets(),
       acceptedSessionSpawns,
       lastToolError,
-      lastAssistant: state.lastAssistant,
+      currentAttemptCompletedAssistant: state.currentAttemptCompletedAssistant,
       itemLifecycle: getItemLifecycle(),
       messagesSnapshot: state.messagesSnapshot,
       toolMetas: toolMetasNormalized,

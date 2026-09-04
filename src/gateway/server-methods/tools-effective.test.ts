@@ -14,23 +14,21 @@ type RuntimeModelContext = Awaited<
 >;
 
 const resolveEffectiveToolInventoryRuntimeModelContextMock = vi.hoisted(() =>
-  vi.fn(
-    (_params?: unknown): RuntimeModelContext => ({
-      modelApi: "openai-responses",
-      runtimeModel: {
-        id: "gpt-4.1",
-        name: "GPT 4.1",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 8_192,
-      },
-    }),
-  ),
+  vi.fn((_params?: unknown): RuntimeModelContext => ({
+    modelApi: "openai-responses",
+    runtimeModel: {
+      id: "gpt-4.1",
+      name: "GPT 4.1",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8_192,
+    },
+  })),
 );
 
 const runtimeMocks = vi.hoisted(() => ({

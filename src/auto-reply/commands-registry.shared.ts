@@ -462,6 +462,7 @@ export function buildBuiltinChatCommands(
       activeRunSafe: true,
     }),
     defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power"),
+    defineBuiltinCommand("update", "Update OpenClaw and restart.", "tools", "power"),
     defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
       args: [
         defineCommandArgument("mode", "mention or always", { choices: ["mention", "always"] }),

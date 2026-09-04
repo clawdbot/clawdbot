@@ -19,19 +19,20 @@ defineDiscordVoiceTests(
     getLastAudioPlayer,
     loggerErrorMock,
     lastRealtimeBridgeParams,
+    lastRealtimeBridge,
     beginSpeakerTurn,
     expectOffEventWithFunction,
     createJoinedAgentProxyFixture,
     handleSpeakingStart,
   }) => {
     it.each([
-      ["agent-proxy", "completed"],
-      ["agent-proxy", "error"],
-      ["bidi", "completed"],
-      ["bidi", "error"],
+      ["agent-proxy", "leave"],
+      ["agent-proxy", "destroyed"],
+      ["bidi", "leave"],
+      ["bidi", "destroyed"],
     ] as const)(
-      "retires %s voice on provider %s without affecting its replacement",
-      async (mode, reason) => {
+      "retires %s room capture on %s without affecting its replacement",
+      async (mode, boundary) => {
         const oldConnection = createConnectionMock();
         const newConnection = createConnectionMock();
         joinVoiceChannelMock.mockReturnValueOnce(oldConnection).mockReturnValueOnce(newConnection);
@@ -62,27 +63,29 @@ defineDiscordVoiceTests(
             "voice capture stream",
           );
           getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u-owner", "speaker end");
-          expect(entry.capture.captureFinalizeTimers.size).toBe(1);
+          expect(entry.capture.get("u-owner")?.finalizeTimer).toBeDefined();
           const turn = beginSpeakerTurn(entry);
-          const provider = lastRealtimeBridgeParams();
+          const { bridgeParams: provider, session: oldProvider } = lastRealtimeBridge();
           const player = getLastAudioPlayer();
           provider.audioSink.sendAudio(Buffer.alloc(24_000));
           expect(player.play).toHaveBeenCalledOnce();
 
-          provider.onClose?.(reason);
+          if (boundary === "leave") {
+            await manager.leave({ guildId: "g1" });
+          } else {
+            oldConnection.state.status = "destroyed";
+            expectDefined(oldConnection.handlers.get("destroyed"), "destroyed listener")();
+          }
 
           expect(manager.status()).toEqual([]);
           expect(entry.realtimeLifecycle.status).toBe("stopped");
           expect(entry.transcripts).toBeUndefined();
           expect(onStop).toHaveBeenCalledExactlyOnceWith(undefined);
           expect(captureStream.destroy).toHaveBeenCalledOnce();
-          expect(entry.capture.activeCaptureStreams.size).toBe(0);
-          expect(entry.capture.captureFinalizeTimers.size).toBe(0);
-          expect(oldConnection.destroy).toHaveBeenCalledOnce();
-          expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
-          expect(loggerErrorMock).toHaveBeenCalledExactlyOnceWith(
-            expect.stringContaining(`Realtime provider closed unexpectedly: ${reason}`),
-          );
+          expect(entry.capture.size).toBe(0);
+          expect(oldConnection.destroy).toHaveBeenCalledTimes(boundary === "leave" ? 1 : 0);
+          expect(oldProvider.close).toHaveBeenCalledOnce();
+          expect(loggerErrorMock).not.toHaveBeenCalled();
           expect(player.stop).toHaveBeenCalledWith(true);
           expectOffEventWithFunction(oldConnection.receiver.speaking.off, "start");
           expectOffEventWithFunction(oldConnection.receiver.speaking.off, "end");
@@ -94,6 +97,7 @@ defineDiscordVoiceTests(
 
           await manager.join({ guildId: "g1", channelId: "1001" });
           const replacement = getSessionEntry(manager);
+          const replacementProvider = lastRealtimeBridge();
           const replacementTranscripts = {
             sessionId: "notes-2",
             onUtterance: vi.fn(),
@@ -103,10 +107,10 @@ defineDiscordVoiceTests(
             { guildId: "g1", channelId: "1001" },
             { transcripts: replacementTranscripts },
           );
-          const inputCalls = realtimeSessionMock.sendAudio.mock.calls.length;
+          const inputCalls = oldProvider.sendAudio.mock.calls.length;
           turn.sendInputAudio(Buffer.alloc(3840));
           turn.close();
-          provider.onClose?.(reason);
+          provider.onClose?.("error");
           provider.onReady?.();
           provider.onEvent?.({ direction: "client", type: "session.reconnect.ready" });
           provider.audioSink.sendAudio(Buffer.alloc(24_000));
@@ -117,19 +121,48 @@ defineDiscordVoiceTests(
           expectConnectedStatus(manager, "1001");
           expect(getSessionEntry(manager)).toBe(replacement);
           expect(newConnection.destroy).not.toHaveBeenCalled();
-          expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
-          expect(loggerErrorMock).toHaveBeenCalledOnce();
-          expect(realtimeSessionMock.sendAudio).toHaveBeenCalledTimes(inputCalls);
+          expect(oldProvider.close).toHaveBeenCalledOnce();
+          expect(loggerErrorMock).not.toHaveBeenCalled();
+          expect(oldProvider.sendAudio).toHaveBeenCalledTimes(inputCalls);
           expect(player.play).toHaveBeenCalledOnce();
           expect(onStop).toHaveBeenCalledOnce();
           expect(replacementTranscripts.onStop).not.toHaveBeenCalled();
           expect(transcripts.onUtterance).not.toHaveBeenCalled();
           expect(replacementTranscripts.onUtterance).not.toHaveBeenCalled();
           beginSpeakerTurn(replacement);
-          expect(realtimeSessionMock.sendAudio).toHaveBeenCalledTimes(inputCalls + 1);
+          expect(replacementProvider.session.sendAudio).toHaveBeenCalledOnce();
+          expect(oldProvider.sendAudio).toHaveBeenCalledTimes(inputCalls);
         } finally {
           decoding.resolve();
           await receive;
+          await manager.destroy();
+        }
+      },
+    );
+
+    it.each([
+      ["agent-proxy", "completed"],
+      ["agent-proxy", "error"],
+      ["bidi", "completed"],
+      ["bidi", "error"],
+    ] as const)(
+      "retires an unbound %s room when its warm provider closes with %s",
+      async (mode, reason) => {
+        const manager = createAgentProxyManager(undefined, { voice: { mode } });
+        try {
+          await manager.join({ guildId: "g1", channelId: "1001" });
+          const entry = getSessionEntry(manager);
+          const provider = lastRealtimeBridgeParams();
+          const destroyConnection = vi.spyOn(entry.connection, "destroy");
+          provider.onClose?.(reason);
+          expect(manager.status()).toEqual([]);
+          expect(entry.realtimeLifecycle.status).toBe("stopped");
+          expect(destroyConnection).toHaveBeenCalledOnce();
+          expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
+          expect(loggerErrorMock).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining(`Realtime provider closed unexpectedly: ${reason}`),
+          );
+        } finally {
           await manager.destroy();
         }
       },

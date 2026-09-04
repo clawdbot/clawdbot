@@ -21,13 +21,14 @@ import {
 } from "../infra/exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequest } from "../infra/system-agent-approvals.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { ChannelApprovalCapability, ChannelOutboundPayloadHint } from "./channel-contract.js";
 import { channelRouteTargetsMatchExact } from "./channel-route.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 import type { ReplyPayload } from "./reply-payload.js";
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type DeliverySuppressionInput = Parameters<
   NonNullable<
     NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
@@ -765,6 +766,10 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     canApprovalPotentiallyRouteToChannel({
       ...input,
       approvalKind: "plugin",
+    }) ||
+    canApprovalPotentiallyRouteToChannel({
+      ...input,
+      approvalKind: "system-agent",
     });
 
   const isSessionApprovalEligible = (input: {

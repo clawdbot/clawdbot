@@ -1,10 +1,11 @@
 // Bench Gateway Startup script supports OpenClaw repository automation.
-import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import { getFreePort, readProcessRssMb, readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
 import {
@@ -41,17 +42,19 @@ import {
 import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
 
 type GatewayBenchCase = {
-  agentTopology?: "single" | "shared-eleven-plus-distinct-one";
+  agentTopology?: "incident-scale" | "single" | "shared-eleven-plus-distinct-one";
   completionTracePhase?: string;
   config: Record<string, unknown>;
   env?: Record<string, string>;
   id: string;
+  incidentFixture?: "combined" | "database" | "null-metadata" | "packaged-plugins" | "workspace";
   name: string;
   pluginActivationOnStartup?: boolean;
   pluginCount?: number;
   providerCatalogStallMs?: number;
   providerStaticCatalogModelCount?: number;
   providerStaticCatalogStallMs?: number;
+  runByDefault?: boolean;
 };
 
 type ProbeResult = InitialProbeResult;
@@ -115,6 +118,8 @@ const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
+const INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS = 30_000;
+const INCIDENT_COMBINED_READYZ_P95_MAX_MS = 60_000;
 const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
 const VALUE_FLAGS = new Set([
   "--case",
@@ -128,6 +133,31 @@ const VALUE_FLAGS = new Set([
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
+const LARGE_PLUGIN_MODEL_AGENT_COUNT = 256;
+const LARGE_PLUGIN_MODEL_COUNT = 58;
+const LARGE_PLUGIN_MODEL_PROVIDER_IDS = ["openai", "google", "minimax"] as const;
+
+function buildLargePluginModelAgentEntries() {
+  const model = {
+    primary: `${LARGE_PLUGIN_MODEL_PROVIDER_IDS[0]}/model-01`,
+    fallbacks: Array.from({ length: LARGE_PLUGIN_MODEL_COUNT - 1 }, (_, offset) => {
+      const index = offset + 1;
+      const provider =
+        index % 3 === 0
+          ? LARGE_PLUGIN_MODEL_PROVIDER_IDS[0]
+          : index % 3 === 1
+            ? LARGE_PLUGIN_MODEL_PROVIDER_IDS[1]
+            : LARGE_PLUGIN_MODEL_PROVIDER_IDS[2];
+      return `${provider}/model-${String(index + 1).padStart(2, "0")}`;
+    }),
+  };
+  return Object.fromEntries(
+    Array.from({ length: LARGE_PLUGIN_MODEL_AGENT_COUNT }, (_, index) => [
+      `agent-${String(index + 1).padStart(4, "0")}`,
+      { model },
+    ]),
+  );
+}
 
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
@@ -248,6 +278,63 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     pluginCount: 50,
     config: BASE_CONFIG,
   },
+  {
+    id: "largePluginModelConfig",
+    name: `gateway, ${LARGE_PLUGIN_MODEL_AGENT_COUNT} agents with ${LARGE_PLUGIN_MODEL_COUNT} plugin-owned model refs each`,
+    completionTracePhase: "config.snapshot.auto-enable",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    runByDefault: false,
+    config: {
+      ...BASE_CONFIG,
+      agents: {
+        ownership: "explicit",
+        entries: buildLargePluginModelAgentEntries(),
+      },
+      plugins: {
+        enabled: true,
+        allow: [...LARGE_PLUGIN_MODEL_PROVIDER_IDS],
+      },
+    },
+  },
+  {
+    id: "incidentDatabase",
+    name: "gateway, incident-scale database",
+    incidentFixture: "database",
+    runByDefault: false,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "incidentNullMetadata",
+    name: "gateway, incident-scale NULL metadata repair",
+    incidentFixture: "null-metadata",
+    runByDefault: false,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "incidentWorkspace",
+    name: "gateway, incident-scale workspace",
+    agentTopology: "incident-scale",
+    incidentFixture: "workspace",
+    runByDefault: false,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "incidentPackagedPlugins",
+    name: "gateway, packaged plugin inventory",
+    env: { OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1" },
+    incidentFixture: "packaged-plugins",
+    runByDefault: false,
+    config: BASE_CONFIG,
+  },
+  {
+    id: "incidentCombined",
+    name: "gateway, incident-scale combined load",
+    agentTopology: "incident-scale",
+    env: { OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1" },
+    incidentFixture: "combined",
+    runByDefault: false,
+    config: BASE_CONFIG,
+  },
 ] as const;
 
 function validateCliArgs(argv: string[]): void {
@@ -263,7 +350,8 @@ function resolveEntry(raw: string | undefined): string {
 }
 
 function resolveCases(caseIds: string[]): GatewayBenchCase[] {
-  return resolveGatewayBenchCases(caseIds, GATEWAY_CASES, {
+  const defaultCases = GATEWAY_CASES.filter((benchCase) => benchCase.runByDefault !== false);
+  return resolveGatewayBenchCases(caseIds, caseIds.length === 0 ? defaultCases : GATEWAY_CASES, {
     allByDefault: true,
     validateDuplicatesFirst: true,
   });
@@ -389,7 +477,7 @@ function collectResultFailures(
   results: CaseResult[],
   options: { processMetricsRequired?: boolean } = {},
 ): BenchmarkFailure[] {
-  const processMetricsRequired = options.processMetricsRequired ?? process.platform !== "win32";
+  const processMetricsRequired = options.processMetricsRequired ?? true;
   const failures: BenchmarkFailure[] = [];
   for (const result of results) {
     result.samples.forEach((sample, index) => {
@@ -430,6 +518,29 @@ function collectResultFailures(
         });
       }
     });
+    if (result.id !== "incidentCombined") {
+      continue;
+    }
+    const healthzP95 = result.summary.healthzMs?.p95;
+    if (healthzP95 == null || healthzP95 >= INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS) {
+      failures.push({
+        id: result.id,
+        reason:
+          `/healthz p95 ${healthzP95 == null ? "missing" : formatMs(healthzP95)} ` +
+          `must be under ${formatMs(INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS)}`,
+        sampleIndex: 0,
+      });
+    }
+    const readyzP95 = result.summary.readyzMs?.p95;
+    if (readyzP95 == null || readyzP95 >= INCIDENT_COMBINED_READYZ_P95_MAX_MS) {
+      failures.push({
+        id: result.id,
+        reason:
+          `/readyz p95 ${readyzP95 == null ? "missing" : formatMs(readyzP95)} ` +
+          `must be under ${formatMs(INCIDENT_COMBINED_READYZ_P95_MAX_MS)}`,
+        sampleIndex: 0,
+      });
+    }
   }
   return failures;
 }
@@ -443,7 +554,7 @@ function printBenchmarkFailures(failures: BenchmarkFailure[]): void {
   );
   for (const failure of failures.slice(0, 8)) {
     console.error(
-      `[gateway-startup-bench] ${failure.id} run ${failure.sampleIndex}: ${failure.reason}`,
+      `[gateway-startup-bench] ${failure.id} ${failure.sampleIndex ? `run ${failure.sampleIndex}` : "summary"}: ${failure.reason}`,
     );
   }
   if (failures.length > 8) {
@@ -504,12 +615,188 @@ function buildBenchAgentList(
   if (topology === "single") {
     return [{ id: "main", default: true, workspace: sharedWorkspace }];
   }
+  if (topology === "incident-scale") {
+    return Array.from({ length: 8 }, (_, index) => ({
+      id: `incident-agent-${String(index + 1).padStart(2, "0")}`,
+      default: index === 0,
+      workspace: path.join(root, "workspaces", `agent-${String(index + 1).padStart(2, "0")}`),
+    }));
+  }
   mkdirSync(distinctWorkspace, { recursive: true });
   return Array.from({ length: 12 }, (_, index) => ({
     id: `agent-${String(index + 1).padStart(2, "0")}`,
     ...(index === 0 ? { default: true } : {}),
     workspace: index === 11 ? distinctWorkspace : sharedWorkspace,
   }));
+}
+
+const INCIDENT_AUDIT_ROW_COUNT = 200_000;
+const INCIDENT_WORKSPACE_FILE_BYTES = 10 * 1024;
+const INCIDENT_WORKSPACE_FILE_COUNT = 80_000;
+const INCIDENT_WORKSPACE_COUNT = 8;
+const INCIDENT_WORKSPACE_FILES_PER_DIRECTORY = 1_000;
+
+type IncidentFixtureOptions = {
+  auditRowCount?: number;
+  kind: NonNullable<GatewayBenchCase["incidentFixture"]>;
+  workspaceFileBytes?: number;
+  workspaceFileCount?: number;
+};
+
+function fixtureIncludesDatabase(kind: IncidentFixtureOptions["kind"]): boolean {
+  return kind === "combined" || kind === "database" || kind === "null-metadata";
+}
+
+function fixtureIncludesWorkspace(kind: IncidentFixtureOptions["kind"]): boolean {
+  return kind === "combined" || kind === "workspace";
+}
+
+function fixtureIncludesNullMetadata(kind: IncidentFixtureOptions["kind"]): boolean {
+  return kind === "combined" || kind === "null-metadata";
+}
+
+function fixtureIncludesPackagedPlugins(kind: IncidentFixtureOptions["kind"]): boolean {
+  return kind === "combined" || kind === "packaged-plugins";
+}
+
+function listIncidentPackagedPluginArtifacts(env = process.env): string[] {
+  return listBundledPluginPackArtifacts({
+    env: { ...env, OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined },
+  });
+}
+
+function assertIncidentPackagedPluginInventory(): void {
+  const missing = listIncidentPackagedPluginArtifacts().filter(
+    (artifact) => !existsSync(path.resolve(process.cwd(), artifact)),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `Incident packaged-plugin benchmark requires a built plugin inventory; ${missing.length} required artifact(s) are missing. Run pnpm build first.`,
+    );
+  }
+}
+
+function createIncidentWorkspaces(root: string, options: IncidentFixtureOptions): void {
+  if (!fixtureIncludesWorkspace(options.kind)) {
+    return;
+  }
+  const fileCount = options.workspaceFileCount ?? INCIDENT_WORKSPACE_FILE_COUNT;
+  const fileBytes = options.workspaceFileBytes ?? INCIDENT_WORKSPACE_FILE_BYTES;
+  const contents = Buffer.alloc(fileBytes, "x");
+  for (let index = 0; index < fileCount; index += 1) {
+    const workspaceIndex = index % INCIDENT_WORKSPACE_COUNT;
+    const directoryIndex = Math.floor(index / INCIDENT_WORKSPACE_FILES_PER_DIRECTORY);
+    const directory = path.join(
+      root,
+      "workspaces",
+      `agent-${String(workspaceIndex + 1).padStart(2, "0")}`,
+      "incident-artifacts",
+      `batch-${String(directoryIndex).padStart(3, "0")}`,
+    );
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(path.join(directory, `artifact-${String(index).padStart(6, "0")}.bin`), contents);
+  }
+}
+
+function seedIncidentAuditRows(database: import("node:sqlite").DatabaseSync, count: number): void {
+  const payload = `fixture:${"x".repeat(1024)}`;
+  const insert = database.prepare(
+    `INSERT INTO audit_events (
+       event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type,
+       actor_id, agent_id, session_key, run_id, channel, target_ref
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  database.exec("BEGIN IMMEDIATE;");
+  try {
+    for (let index = 0; index < count; index += 1) {
+      const id = `incident-audit-${String(index).padStart(8, "0")}`;
+      insert.run(
+        id,
+        `source-${id}`,
+        index + 1,
+        1_750_000_000_000 + index,
+        "gateway.admission",
+        "accepted",
+        "ok",
+        "system",
+        "incident-fixture",
+        "incident-agent-01",
+        "agent:incident-agent-01:main",
+        `run-${id}`,
+        "fixture",
+        payload,
+      );
+    }
+    database.exec("COMMIT;");
+  } catch (error) {
+    database.exec("ROLLBACK;");
+    throw error;
+  }
+  // Retain half the rows after a large write so the fixture keeps the incident's
+  // high freelist pressure without storing any customer content.
+  database.prepare("DELETE FROM audit_events WHERE source_sequence % 2 = 0").run();
+}
+
+async function writeIncidentFixture(root: string, options: IncidentFixtureOptions): Promise<void> {
+  createIncidentWorkspaces(root, options);
+  if (!fixtureIncludesDatabase(options.kind)) {
+    return;
+  }
+  const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+  const [{ DatabaseSync }, agentDatabase, stateDatabase] = await Promise.all([
+    import("node:sqlite"),
+    import("../src/state/openclaw-agent-db.js"),
+    import("../src/state/openclaw-state-db.js"),
+  ]);
+  const state = stateDatabase.openOpenClawStateDatabase({ env });
+  const agents = Array.from({ length: INCIDENT_WORKSPACE_COUNT }, (_, index) =>
+    agentDatabase.openOpenClawAgentDatabase({
+      agentId: `incident-agent-${String(index + 1).padStart(2, "0")}`,
+      env,
+    }),
+  );
+  const statePath = state.path;
+  const agentPaths = agents.map((agent) => agent.path);
+  try {
+    state.db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    agents.forEach((agent) => agent.db.exec("PRAGMA wal_checkpoint(TRUNCATE);"));
+  } finally {
+    agentDatabase.closeOpenClawAgentDatabasesForTest();
+    stateDatabase.closeOpenClawStateDatabaseForTest();
+  }
+  const stateHandle = new DatabaseSync(statePath);
+  try {
+    seedIncidentAuditRows(stateHandle, options.auditRowCount ?? INCIDENT_AUDIT_ROW_COUNT);
+    if (fixtureIncludesNullMetadata(options.kind)) {
+      stateHandle
+        .prepare("UPDATE schema_meta SET app_version = NULL WHERE meta_key = 'primary'")
+        .run();
+    }
+    stateHandle.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  } finally {
+    stateHandle.close();
+  }
+  if (!fixtureIncludesNullMetadata(options.kind)) {
+    return;
+  }
+  for (const agentPath of agentPaths) {
+    const agent = new DatabaseSync(agentPath);
+    try {
+      agent.prepare("UPDATE schema_meta SET app_version = NULL WHERE meta_key = 'primary'").run();
+      agent.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    } finally {
+      agent.close();
+    }
+  }
+}
+
+async function withGatewayBenchRoot<T>(run: (root: string) => Promise<T>): Promise<T> {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-bench-"));
+  try {
+    return await run(root);
+  } finally {
+    rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+  }
 }
 
 function writeConfig(root: string, benchCase: GatewayBenchCase): string {
@@ -550,147 +837,167 @@ async function runGatewaySample(options: {
   sampleIndex: number;
   timeoutMs: number;
 }): Promise<GatewaySample> {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-bench-"));
-  const port = await getFreePort();
-  const configPath = writeConfig(root, options.benchCase);
-  const env = sanitizedEnv(root, configPath, options.benchCase);
-  const startAt = performance.now();
-  const deadlineAt = startAt + options.timeoutMs;
-  const startupTrace: Record<string, number> = {};
-  const output: string[] = [];
-  const outputBuffers: Record<"stderr" | "stdout", string> = { stderr: "", stdout: "" };
-  let firstOutputMs: number | null = null;
-  let gatewayReadyLogLine: string | null = null;
-  let gatewayReadyLogMs: number | null = null;
-  let httpListenLogLine: string | null = null;
-  let httpListenLogMs: number | null = null;
-  let maxRssMb: number | null = null;
-  let childExited = false;
-
-  const nodeOptions = [
-    ...(options.cpuProfDir
-      ? [
-          "--cpu-prof",
-          "--cpu-prof-dir",
-          options.cpuProfDir,
-          "--cpu-prof-name",
-          `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
-        ]
-      : []),
-    ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
-  ];
-  const childArgs = buildGatewayBenchChildArgs(options.entry, port, nodeOptions);
-  const child = spawn(process.execPath, childArgs, {
-    cwd: process.cwd(),
-    detached: process.platform !== "win32",
-    env,
-  });
-  const cpuStartMs = readProcessTreeCpuMs(child.pid);
-  const sampleRss = () => {
-    const rssMb = readProcessRssMb(child.pid);
-    if (rssMb != null) {
-      maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
+  return await withGatewayBenchRoot(async (root) => {
+    const port = await getFreePort();
+    const configPath = writeConfig(root, options.benchCase);
+    const env = sanitizedEnv(root, configPath, options.benchCase);
+    if (options.benchCase.incidentFixture) {
+      await writeIncidentFixture(root, { kind: options.benchCase.incidentFixture });
+      if (fixtureIncludesPackagedPlugins(options.benchCase.incidentFixture)) {
+        assertIncidentPackagedPluginInventory();
+      }
     }
-  };
-  sampleRss();
-  const rssTimer = setInterval(sampleRss, 100);
-  rssTimer.unref?.();
-  const childExitPromise = new Promise<{ exitCode: number | null; signal: string | null }>(
-    (resolve) => {
-      child.once("exit", (exitCode, signal) => {
-        childExited = true;
-        resolve({ exitCode, signal });
+    const startAt = performance.now();
+    const deadlineAt = startAt + options.timeoutMs;
+    const startupTrace: Record<string, number> = {};
+    const output: string[] = [];
+    const outputBuffers: Record<"stderr" | "stdout", string> = { stderr: "", stdout: "" };
+    let firstOutputMs: number | null = null;
+    let gatewayReadyLogLine: string | null = null;
+    let gatewayReadyLogMs: number | null = null;
+    let httpListenLogLine: string | null = null;
+    let httpListenLogMs: number | null = null;
+    let maxRssMb: number | null = null;
+    let childExited = false;
+    let child: ChildProcessWithoutNullStreams | undefined;
+    let rssTimer: ReturnType<typeof setInterval> | undefined;
+
+    try {
+      const nodeOptions = [
+        ...(options.cpuProfDir
+          ? [
+              "--cpu-prof",
+              "--cpu-prof-dir",
+              options.cpuProfDir,
+              "--cpu-prof-name",
+              `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
+            ]
+          : []),
+        ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
+      ];
+      const childArgs = buildGatewayBenchChildArgs(options.entry, port, nodeOptions);
+      child = spawn(process.execPath, childArgs, {
+        cwd: process.cwd(),
+        detached: process.platform !== "win32",
+        env,
+        stdio: ["pipe", "pipe", "pipe"],
       });
-    },
-  );
+      const startedChild = child;
+      const cpuStartMs = readProcessTreeCpuMs(startedChild.pid);
+      const sampleRss = () => {
+        const rssMb = readProcessRssMb(startedChild.pid);
+        if (rssMb != null) {
+          maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
+        }
+      };
+      sampleRss();
+      rssTimer = setInterval(sampleRss, 100);
+      rssTimer.unref?.();
+      const childExitPromise = new Promise<{ exitCode: number | null; signal: string | null }>(
+        (resolve) => {
+          startedChild.once("exit", (exitCode, signal) => {
+            childExited = true;
+            resolve({ exitCode, signal });
+          });
+        },
+      );
 
-  const onLine = (line: string, nowMs: number) => {
-    const readyLogKind = classifyGatewayReadyLog(line);
-    if (readyLogKind === "http-listen" && httpListenLogMs == null) {
-      httpListenLogMs = nowMs;
-      httpListenLogLine = line;
-    }
-    if (readyLogKind === "gateway-ready" && gatewayReadyLogMs == null) {
-      gatewayReadyLogMs = nowMs;
-      gatewayReadyLogLine = line;
-    }
-    collectStartupTrace(line, startupTrace);
-  };
-  const onChunk = (stream: "stderr" | "stdout", chunk: Buffer) => {
-    if (firstOutputMs == null) {
-      firstOutputMs = performance.now() - startAt;
-    }
-    const text = chunk.toString("utf8");
-    output.push(text);
-    if (output.length > 20) {
-      output.splice(0, output.length - 20);
-    }
-    const parsed = collectOutputLines(outputBuffers[stream], text);
-    outputBuffers[stream] = parsed.carry;
-    const nowMs = performance.now() - startAt;
-    for (const line of parsed.lines) {
-      onLine(line, nowMs);
-    }
-  };
-  child.stdout.on("data", (chunk: Buffer) => onChunk("stdout", chunk));
-  child.stderr.on("data", (chunk: Buffer) => onChunk("stderr", chunk));
+      const onLine = (line: string, nowMs: number) => {
+        const readyLogKind = classifyGatewayReadyLog(line);
+        if (readyLogKind === "http-listen" && httpListenLogMs == null) {
+          httpListenLogMs = nowMs;
+          httpListenLogLine = line;
+        }
+        if (readyLogKind === "gateway-ready" && gatewayReadyLogMs == null) {
+          gatewayReadyLogMs = nowMs;
+          gatewayReadyLogLine = line;
+        }
+        collectStartupTrace(line, startupTrace);
+      };
+      const onChunk = (stream: "stderr" | "stdout", chunk: Buffer) => {
+        if (firstOutputMs == null) {
+          firstOutputMs = performance.now() - startAt;
+        }
+        const text = chunk.toString("utf8");
+        output.push(text);
+        if (output.length > 20) {
+          output.splice(0, output.length - 20);
+        }
+        const parsed = collectOutputLines(outputBuffers[stream], text);
+        outputBuffers[stream] = parsed.carry;
+        const nowMs = performance.now() - startAt;
+        for (const line of parsed.lines) {
+          onLine(line, nowMs);
+        }
+      };
+      startedChild.stdout.on("data", (chunk: Buffer) => onChunk("stdout", chunk));
+      startedChild.stderr.on("data", (chunk: Buffer) => onChunk("stderr", chunk));
 
-  const [healthz, readyz] = await Promise.all([
-    waitForProbe({
-      deadlineAt,
-      isDone: () => childExited,
-      path: "/healthz",
-      port,
-      startAt,
-    }),
-    waitForProbe({
-      deadlineAt,
-      isDone: () => childExited,
-      path: "/readyz",
-      port,
-      startAt,
-    }),
-  ]);
-  const completionMs = options.benchCase.completionTracePhase
-    ? await waitForStartupTracePhase({
-        deadlineAt,
-        isDone: () => childExited,
-        phase: options.benchCase.completionTracePhase,
+      const [healthz, readyz] = await Promise.all([
+        waitForProbe({
+          deadlineAt,
+          isDone: () => childExited,
+          path: "/healthz",
+          port,
+          startAt,
+        }),
+        waitForProbe({
+          deadlineAt,
+          isDone: () => childExited,
+          path: "/readyz",
+          port,
+          startAt,
+        }),
+      ]);
+      const completionMs = options.benchCase.completionTracePhase
+        ? await waitForStartupTracePhase({
+            deadlineAt,
+            isDone: () => childExited,
+            phase: options.benchCase.completionTracePhase,
+            startupTrace,
+          })
+        : performance.now() - startAt;
+      const completedAt = performance.now();
+      const cpuEndMs = readProcessTreeCpuMs(startedChild.pid);
+      const cpuMs =
+        cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
+      const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
+      const exit = await stopChild(startedChild);
+      sampleRss();
+      child = undefined;
+      // stopChild is the bounded teardown wait; the raw exit promise may never settle.
+      void childExitPromise.catch(() => null);
+      flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt, {
+        flushPartial: true,
+      });
+
+      return {
+        completionMs,
+        cpuCoreRatio,
+        cpuMs,
+        exitedBeforeTeardown: exit.exitedBeforeTeardown,
+        exitCode: exit.exitCode,
+        firstOutputMs,
+        gatewayReadyLogLine,
+        gatewayReadyLogMs,
+        healthz,
+        httpListenLogLine,
+        httpListenLogMs,
+        maxRssMb,
+        outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
+        readyz,
+        signal: exit.signal,
         startupTrace,
-      })
-    : performance.now() - startAt;
-  const completedAt = performance.now();
-  const cpuEndMs = readProcessTreeCpuMs(child.pid);
-  const cpuMs = cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
-  const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
-  const exit = await stopChild(child);
-  clearInterval(rssTimer);
-  sampleRss();
-  // stopChild is the bounded teardown wait; the raw exit promise may never settle.
-  void childExitPromise.catch(() => null);
-  flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt, {
-    flushPartial: true,
+      };
+    } finally {
+      if (rssTimer) {
+        clearInterval(rssTimer);
+      }
+      if (child) {
+        await stopChild(child).catch(() => undefined);
+      }
+    }
   });
-  rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
-
-  return {
-    completionMs,
-    cpuCoreRatio,
-    cpuMs,
-    exitedBeforeTeardown: exit.exitedBeforeTeardown,
-    exitCode: exit.exitCode,
-    firstOutputMs,
-    gatewayReadyLogLine,
-    gatewayReadyLogMs,
-    healthz,
-    httpListenLogLine,
-    httpListenLogMs,
-    maxRssMb,
-    outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
-    readyz,
-    signal: exit.signal,
-    startupTrace,
-  };
 }
 
 async function runCase(options: {
@@ -826,12 +1133,15 @@ export const testing = {
   collectOutputLines,
   collectResultFailures,
   collectStartupTrace,
+  listIncidentPackagedPluginArtifacts,
   parseOptions,
   sanitizedEnv,
   stopChild,
   summarizeCase,
   waitForProbe,
   waitForStartupTracePhase,
+  withGatewayBenchRoot,
+  writeIncidentFixture,
   writeConfig,
 };
 

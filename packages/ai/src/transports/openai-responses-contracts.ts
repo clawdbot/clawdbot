@@ -194,6 +194,7 @@ export type OpenAIResponsesRequestParams = {
   instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
+  prompt_cache_options?: { ttl: "30m" };
   metadata?: Record<string, string>;
   previous_response_id?: string;
   store?: boolean;

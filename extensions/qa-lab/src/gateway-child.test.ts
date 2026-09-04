@@ -103,6 +103,7 @@ function createParams(baseEnv?: NodeJS.ProcessEnv) {
     bundledPluginsDir: "/tmp/openclaw-qa/bundled-plugins",
     stagedBundledPluginsRoot: "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
     compatibilityHostVersion: "2026.4.8",
+    developmentSourceRoot: "/repo/openclaw",
     baseEnv,
   };
 }
@@ -306,6 +307,42 @@ describe("runQaGatewayCliCommand", () => {
       }),
     ).rejects.toThrow("OpenClaw CLI exited 7: fixture failure");
   });
+
+  it("retains bounded redacted stdout failures alongside stderr panels", async () => {
+    const lifetime = new QaGatewayChildLifecycle();
+    try {
+      const error = await runQaGatewayCliCommand({
+        lifetime,
+        executablePath: process.execPath,
+        argsPrefix: [
+          "--input-type=module",
+          "--eval",
+          `await new Promise((resolve) => process.stderr.write(
+            "Doctor panel: Authorization: Bearer fixture-panel-secret\\n" + "diagnostic ".repeat(400), resolve));
+          await new Promise((resolve) => process.stdout.write(JSON.stringify({
+            status: "error", reason: "readiness execution failed", apiKey: "fixture-result-secret",
+          }), resolve));
+          process.exit(7);`,
+        ],
+        args: [],
+        cwd: process.cwd(),
+        env: process.env,
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) {
+        throw new Error("expected CLI failure");
+      }
+      expect(error.message).toContain("OpenClaw CLI exited 7: Doctor panel:");
+      expect(error.message).toContain('"reason":"readiness execution failed"');
+      expect(error.message.length).toBeLessThanOrEqual(2_048);
+      expect(error.message).toContain("Bearer <redacted>");
+      expect(error.message).toContain('"apiKey":"<redacted>"');
+      expect(inspect(error, { depth: null })).not.toMatch(/fixture-(panel|result)-secret/u);
+    } finally {
+      await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
+    }
+  });
 });
 
 describe("monitorQaGatewayChildFailure", () => {
@@ -451,6 +488,7 @@ describe("Gateway child fixture helpers", () => {
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.6-luna",
       alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      autoCompactTokenLimit: 1,
     });
 
     expect(modelCatalogPath).toBe(path.join(tempRoot, "codex-model-catalog.json"));
@@ -460,12 +498,14 @@ describe("Gateway child fixture helpers", () => {
     expect(catalog.models).toEqual([
       expect.objectContaining({
         slug: "gpt-5.6-luna",
+        auto_compact_token_limit: 1,
         apply_patch_tool_type: "freeform",
         supports_reasoning_summary_parameter: true,
         tool_mode: "direct",
       }),
       expect.objectContaining({
         slug: "gpt-5.6-luna-alt",
+        auto_compact_token_limit: 1,
         apply_patch_tool_type: "freeform",
         supports_reasoning_summary_parameter: true,
         tool_mode: "direct",
@@ -716,6 +756,34 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_SKIP_PROVIDERS).toBe("patched-providers");
   });
 
+  it("binds plugin authority to the source candidate after caller environment patches", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/current-harness",
+      }),
+      developmentSourceRoot: "/repo/release-candidate",
+      runtimeEnvPatch: {
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
+      },
+    });
+
+    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe("/repo/release-candidate");
+  });
+
+  it("clears inherited and patched source roots for packaged candidates", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/current-harness",
+      }),
+      developmentSourceRoot: null,
+      runtimeEnvPatch: {
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
+      },
+    });
+
+    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBeUndefined();
+  });
+
   it("maps live frontier key aliases into provider env vars", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({
@@ -946,7 +1014,7 @@ describe("buildQaRuntimeEnv", () => {
     },
   );
 
-  it("re-scrubs blocked credentials in the spawned gateway child env", async () => {
+  it("re-scrubs blocked credentials and source authority in a packaged gateway child", async () => {
     const tempParent = await tempDirs.makeTempDir("qa-gateway-env-scrub-");
     qaTempPathState.preferredTmpDir = tempParent;
     const observedEnvPath = path.join(tempParent, "observed-env.json");
@@ -961,6 +1029,7 @@ describe("buildQaRuntimeEnv", () => {
       "OPENCLAW_QA_TELEGRAM_GROUP_ID: process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID,",
       "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN,",
       "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN,",
+      "OPENCLAW_DEV_SOURCE_ROOT: process.env.OPENCLAW_DEV_SOURCE_ROOT,",
       "};",
       `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
     ].join("\n");
@@ -976,6 +1045,7 @@ describe("buildQaRuntimeEnv", () => {
         },
         runtimeEnvPatch: {
           SAFE_VALUE: "patched",
+          OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
           OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
           OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: "anthropic-setup-token",
           OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
@@ -996,6 +1066,73 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(
       JSON.stringify({ SAFE_VALUE: "patched" }),
     );
+  });
+
+  it("clears inherited source authority when the repo CLI resolves to packaged plugins", async () => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-repo-cli-source-root-");
+    const repoRoot = await tempDirs.makeTempDir("qa-gateway-repo-cli-");
+    qaTempPathState.preferredTmpDir = tempParent;
+    const observedEnvPath = path.join(tempParent, "observed-source-root");
+    const runnerPath = path.join(repoRoot, "scripts", "run-node.mjs");
+    await mkdir(path.dirname(runnerPath), { recursive: true });
+    await writeFile(
+      runnerPath,
+      [
+        'import fs from "node:fs";',
+        `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
+      ].join("\n"),
+      "utf8",
+    );
+    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", "/repo/current-harness");
+
+    const owner = ownGateway();
+    await expect(
+      owner.start({
+        repoRoot,
+        useRepoCli: true,
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("gateway exited before listening");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
+
+    await expect(readFile(observedEnvPath, "utf8")).resolves.toBe("");
+  });
+
+  it("binds a spawned source gateway to the candidate repo root", async () => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-source-root-");
+    qaTempPathState.preferredTmpDir = tempParent;
+    const observedEnvPath = path.join(tempParent, "observed-source-root");
+    const candidateRepoRoot = process.cwd();
+    const captureScript = [
+      'const fs = require("node:fs");',
+      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
+    ].join("\n");
+
+    const owner = ownGateway();
+    await expect(
+      owner.start({
+        repoRoot: candidateRepoRoot,
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: ["--eval", captureScript],
+        },
+        runtimeEnvPatch: {
+          OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
+        },
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("gateway exited before listening");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
+
+    await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(candidateRepoRoot);
   });
 
   it("requires an Anthropic key for live Claude CLI API-key mode", async () => {
@@ -1728,7 +1865,7 @@ describe("buildQaRuntimeEnv", () => {
       }
       const prefix = provider
         ? `installed package mock auth bootstrap failed for ${provider}: `
-        : "installed package plugin setup failed: ";
+        : `installed package plugin setup failed (update repair${phase === "help" ? " --help" : ""}): `;
       const detail = provider
         ? "OpenClaw CLI exited 9: Authorization: Bearer <redacted>"
         : "OpenClaw CLI exited 8: plugin fixture rejected: Authorization: Bearer <redacted>";

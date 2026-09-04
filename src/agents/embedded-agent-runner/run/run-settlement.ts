@@ -59,6 +59,9 @@ export async function settleEmbeddedRun(input: {
       ? {
           kind: "durable",
           ...counts,
+          ...(committed?.previousSessionId !== undefined
+            ? { previousSessionId: committed.previousSessionId }
+            : {}),
           target: {
             agentId: target.agentId,
             sessionId: committed?.entry.sessionId ?? target.sessionId,

@@ -1,14 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import { createSessionCapability } from "./index.ts";
-
-function deferred<T>() {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: {
@@ -51,7 +44,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
 
 describe("session capability message cuts", () => {
   it("returns a committed rewind result after the connection is replaced", async () => {
-    const committed = deferred<{
+    const committed = createDeferred<{
       editorText?: string;
       editorAttachments?: Array<{ mimeType: string; data: string }>;
     }>();

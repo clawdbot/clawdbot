@@ -185,6 +185,7 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
   const activationState = resolveEffectivePluginActivationState({
     id: selectedPlugin.pluginId,
     origin: selectedPlugin.origin,
+    channelIds: selectedPlugin.contributions?.channels,
     config: params.pluginsConfig,
     rootConfig: params.config,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(selectedPlugin, params.platform),

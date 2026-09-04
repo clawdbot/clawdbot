@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -8,7 +9,12 @@ import { syncSelectedSessionMessageSubscription } from "./chat-history-subscript
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import {
+  getChatSessionProjection,
+  publishChatSessionProjection,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
+import { handleChatDraftChange } from "./input-history.ts";
 import {
   cacheChatSessionSnapshot,
   readChatMessagesFromCache,
@@ -202,16 +208,13 @@ describe("syncSelectedSessionMessageSubscription", () => {
   it("retries a stale generation's rejected subscription release", async () => {
     const stale = { key: "agent:main:stale", agentId: null };
     const selected = { key: "agent:main:selected", agentId: null };
-    let resolveStale: (subscription: typeof stale) => void = () => undefined;
-    const staleSubscription = new Promise<typeof stale>((resolve) => {
-      resolveStale = resolve;
-    });
+    const staleSubscription = createDeferred<typeof stale>();
     const unsubscribeMessages = vi
       .fn()
       .mockRejectedValueOnce(new Error("stale release temporarily failed"))
       .mockResolvedValueOnce(undefined);
     const subscribeMessages = vi.fn(async (key: string) =>
-      key === stale.key ? await staleSubscription : selected,
+      key === stale.key ? await staleSubscription.promise : selected,
     );
     const state = createState({ messages: [] }) as TestState & {
       chatSessionMessageSubscriptionRequestedKey: string | null;
@@ -231,7 +234,7 @@ describe("syncSelectedSessionMessageSubscription", () => {
     state.sessionKey = selected.key;
     await syncSelectedSessionMessageSubscription(state as never);
 
-    resolveStale(stale);
+    staleSubscription.resolve(stale);
     await staleSync;
 
     expect(state.chatSessionMessageSubscription).toBe(selected);
@@ -249,21 +252,24 @@ describe("rewindChatHistory", () => {
   it("clears the cached snapshot, refetches, and returns the composer text", async () => {
     const state = createState({
       messages: [{ role: "assistant", content: "kept prefix" }],
-    }) as TestState & {
-      chatMessagesBySession: ChatMessageCache;
-      handleChatDraftChange: ReturnType<typeof vi.fn>;
-      sessions: { rewind: ReturnType<typeof vi.fn> };
-    };
+    }) as TestState &
+      Parameters<typeof handleChatDraftChange>[0] & {
+        chatMessagesBySession: ChatMessageCache;
+        handleChatDraftChange: ReturnType<typeof vi.fn>;
+        sessions: { rewind: ReturnType<typeof vi.fn> };
+      };
     state.sessionKey = "agent:main:rewind";
     state.chatMessages = [{ role: "assistant", content: "stale tail" }];
     state.chatMessagesBySession = new Map();
-    state.handleChatDraftChange = vi.fn((next: string) => {
-      state.chatMessage = next;
-    });
+    state.handleChatDraftChange = vi.fn((next: string, mentions?: ChatState["chatMentions"]) =>
+      handleChatDraftChange(state, next, mentions),
+    );
+    state.chatMessage = "@Alex current draft";
+    state.chatMentions = [{ profileId: "alex-profile", start: 0, end: 5 }];
     state.chatAttachments = [{ id: "old", mimeType: "image/jpeg", dataUrl: "data:old" }];
     state.sessions = {
       rewind: vi.fn().mockResolvedValue({
-        editorText: "edit this",
+        editorText: "@Alex edit this",
         editorAttachments: [
           { mimeType: "image/png", data: "aW1hZ2U=" },
           { mimeType: "application/pdf", data: "aW1hZ2U=" },
@@ -292,7 +298,7 @@ describe("rewindChatHistory", () => {
       expect.any(Object),
     );
     expect(result).toEqual({
-      editorText: "edit this",
+      editorText: "@Alex edit this",
       editorAttachments: [
         { mimeType: "image/png", data: "aW1hZ2U=" },
         { mimeType: "application/pdf", data: "aW1hZ2U=" },
@@ -300,7 +306,8 @@ describe("rewindChatHistory", () => {
         { mimeType: "image/png", data: "A" },
       ],
     });
-    expect(state.chatMessage).toBe("edit this");
+    expect(state.chatMessage).toBe("@Alex edit this");
+    expect(state.chatMentions).toEqual([]);
     expect(state.chatAttachments).toEqual([
       {
         id: expect.stringMatching(/^att-/),
@@ -647,12 +654,12 @@ describe("canonical history snapshot projection", () => {
     const reply = message("assistant", "shared reply", { id: "persisted-reply", seq: 2 });
     const state = createState({ messages: [reply] });
     const scope = { sessionKey: state.sessionKey };
-    const projection = reduceSessionProjection(getChatSessionProjection(state, [], scope), {
+    const projection = reduceSessionProjection(getChatSessionProjection(state, scope), {
       type: "messagePersisted",
       message: prompt,
       scope,
     });
-    setChatSessionProjection(state, projection);
+    publishChatSessionProjection(state, projection);
     state.chatMessages = [...projection.messages];
 
     await loadChatHistory(state);
@@ -673,17 +680,18 @@ describe("canonical history snapshot projection", () => {
     const state = createState({ messages: [reply], sessionId: "control-ui-e2e-session" });
     state.currentSessionId = "control-ui-e2e-session";
     state.chatDisplayedLeafEntryId = undefined;
+    state.chatMessages = [reply];
     const scope = {
       sessionKey: state.sessionKey,
       sessionId: state.currentSessionId,
       activeLeafEntryId: null,
     };
-    const projection = reduceSessionProjection(getChatSessionProjection(state, [reply], scope), {
+    const projection = reduceSessionProjection(getChatSessionProjection(state, scope), {
       type: "messagePersisted",
       message: prompt,
       scope,
     });
-    setChatSessionProjection(state, projection);
+    publishChatSessionProjection(state, projection);
     state.chatMessages = [...projection.messages];
 
     await loadChatHistory(state);
@@ -711,19 +719,21 @@ describe("canonical history snapshot projection", () => {
     state.client = { request } as unknown as GatewayBrowserClient;
     const scope = { sessionKey: state.sessionKey };
 
-    const firstProjection = reduceSessionProjection(
-      getChatSessionProjection(state, state.chatMessages, scope),
-      { type: "messagePersisted", message: first, scope },
-    );
-    setChatSessionProjection(state, firstProjection);
+    const firstProjection = reduceSessionProjection(getChatSessionProjection(state, scope), {
+      type: "messagePersisted",
+      message: first,
+      scope,
+    });
+    publishChatSessionProjection(state, firstProjection);
     state.chatMessages = [...firstProjection.messages];
     const firstLoad = loadChatHistory(state);
 
-    const secondProjection = reduceSessionProjection(
-      getChatSessionProjection(state, state.chatMessages, scope),
-      { type: "messagePersisted", message: second, scope },
-    );
-    setChatSessionProjection(state, secondProjection);
+    const secondProjection = reduceSessionProjection(getChatSessionProjection(state, scope), {
+      type: "messagePersisted",
+      message: second,
+      scope,
+    });
+    publishChatSessionProjection(state, secondProjection);
     state.chatMessages = [...secondProjection.messages];
     const secondLoad = loadChatHistory(state);
 
@@ -753,7 +763,11 @@ describe("canonical history snapshot projection", () => {
     } as unknown as GatewayBrowserClient;
 
     const load = loadChatHistory(state);
-    state.chatMessages = [...state.chatMessages, pending];
+    reduceChatSessionProjection(state, {
+      type: "sendPending",
+      runId: "concurrent-run",
+      message: pending,
+    });
     resolveHistory({ messages: [first] });
     await load;
 
@@ -825,16 +839,18 @@ describe("canonical history snapshot projection", () => {
     state.currentSessionId = "shared-session";
     state.chatDisplayedLeafEntryId = branch.previousLeaf;
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 5 };
+    state.chatMessages = [previous, pending];
     const scope = {
       sessionKey: state.sessionKey,
       sessionId: "shared-session",
       activeLeafEntryId: branch.previousLeaf,
     };
-    const projection = reduceSessionProjection(
-      getChatSessionProjection(state, [previous, pending], scope),
-      { type: "messagePersisted", message: live, scope },
-    );
-    setChatSessionProjection(state, projection);
+    const projection = reduceSessionProjection(getChatSessionProjection(state, scope), {
+      type: "messagePersisted",
+      message: live,
+      scope,
+    });
+    publishChatSessionProjection(state, projection);
     state.chatMessages = [...projection.messages];
 
     await loadChatHistory(state);
@@ -847,12 +863,12 @@ describe("canonical history snapshot projection", () => {
     const hidden = message("assistant", "NO_REPLY", { id: "hidden-reply", seq: 1 });
     const state = createState({ messages: [] });
     const scope = { sessionKey: state.sessionKey };
-    const projection = reduceSessionProjection(getChatSessionProjection(state, [], scope), {
+    const projection = reduceSessionProjection(getChatSessionProjection(state, scope), {
       type: "messagePersisted",
       message: hidden,
       scope,
     });
-    setChatSessionProjection(state, projection);
+    publishChatSessionProjection(state, projection);
     state.chatMessages = [...projection.messages];
 
     await loadChatHistory(state);
@@ -875,12 +891,12 @@ describe("canonical history snapshot projection", () => {
     const state = createState({ messages: [] });
     state.client = { request } as unknown as GatewayBrowserClient;
     const scope = { sessionKey: state.sessionKey };
-    const projection = reduceSessionProjection(getChatSessionProjection(state, [], scope), {
+    const projection = reduceSessionProjection(getChatSessionProjection(state, scope), {
       type: "messagePersisted",
       message: live,
       scope,
     });
-    setChatSessionProjection(state, projection);
+    publishChatSessionProjection(state, projection);
     state.chatMessages = [...projection.messages];
 
     await loadChatHistory(state);

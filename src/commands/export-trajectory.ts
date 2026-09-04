@@ -1,6 +1,6 @@
 /** CLI command for exporting a session transcript as a trajectory artifact. */
 import path from "node:path";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { readNonBlankString, readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
@@ -67,11 +67,13 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   if (output !== undefined) {
     opts.output = output;
   }
-  const store = readNonBlankString(request.store);
+  // Keep a present-but-blank store or agent so exportTrajectoryCommand rejects it
+  // the way it rejects a blank flag, instead of silently selecting the default.
+  const store = readStringValue(request.store);
   if (store !== undefined) {
     opts.store = store;
   }
-  const agent = readNonBlankString(request.agent);
+  const agent = readStringValue(request.agent);
   if (agent !== undefined) {
     opts.agent = agent;
   }
@@ -121,6 +123,9 @@ export async function exportTrajectoryCommand(
   const requestedAgent = resolvedOpts.agent?.trim();
   if (resolvedOpts.agent !== undefined && !requestedAgent) {
     throwTrajectoryExportError("--agent must not be blank");
+  }
+  if (resolvedOpts.store !== undefined && !resolvedOpts.store.trim()) {
+    throwTrajectoryExportError("--store must not be blank");
   }
   let targetAgentId: string;
   try {

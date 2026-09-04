@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { hostname as readHostName } from "node:os";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
   CodexAppServerConnectionClass,
@@ -133,6 +134,29 @@ function stableStringifyJson(value: JsonValue): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+/** Explicit MCP prompting must bypass Codex's unconditional Never-policy approval. */
+export function hasCodexMcpToolApprovalOverrides(
+  servers: NonNullable<OpenClawConfig["mcp"]>["servers"],
+  serverNames?: readonly string[],
+  projectedMcpServers?: Record<string, Record<string, unknown>>,
+): boolean {
+  const modes = new Map(
+    Object.entries(projectedMcpServers ?? {}).map(([name, server]) => [
+      name,
+      server.default_tools_approval_mode,
+    ]),
+  );
+  for (const name of serverNames ?? Object.keys(servers ?? {})) {
+    const server = servers?.[name];
+    const mode = server?.codex?.defaultToolsApprovalMode;
+    // Prepared names already include session overrides that can re-enable a saved disabled server.
+    if (mode !== undefined && (serverNames !== undefined || server?.enabled !== false)) {
+      modes.set(name, mode);
+    }
+  }
+  return [...modes.values()].some((mode) => mode === "auto" || mode === "prompt");
 }
 
 export function withMcpElicitationsApprovalPolicy(

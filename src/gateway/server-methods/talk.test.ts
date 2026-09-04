@@ -19,6 +19,7 @@ import { resetClientVoiceConfirmationStateForTest } from "../../talk/client-voic
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view-tool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import { prepareTalkAgentConsultTranscript } from "../talk-agent-consult-transcript.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -281,7 +282,9 @@ async function callTalkHandler(
   { params, respond, context, client = { connId: "conn-1" }, id = "1" }: TalkHandlerCallOptions,
 ) {
   const admission =
-    method === "talk.client.create" || method === "talk.session.create"
+    method === "talk.client.create" ||
+    method === "talk.session.create" ||
+    method === "talk.client.toolCall"
       ? resolveSessionMutationAuthorization({
           client: client as GatewayClient,
           context: context as GatewayRequestContext,
@@ -2837,12 +2840,13 @@ describe("talk.client.toolCall handler", () => {
       params?: Record<string, unknown>;
     };
     expectRecordFields(chatInput.req, { method: "chat.send" });
-    expectRecordFields(chatInput.params, { sessionKey: "main" });
+    expectRecordFields(chatInput.params, { sessionKey: "agent:main:main", agentId: "main" });
     expect(chatInput.params?.message).toContain("What is in this repo?");
     expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
     expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
       toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
-      display: false,
+      transcript: { display: false, excludeFromContext: true },
+      prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
     });
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
@@ -2968,7 +2972,11 @@ describe("talk.client.toolCall handler", () => {
       thinking: "low",
       fastMode: true,
     });
-    expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({ toolsAllow: undefined, display: false });
+    expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
+      toolsAllow: undefined,
+      transcript: { display: false, excludeFromContext: true },
+      prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
+    });
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
 
@@ -2993,7 +3001,7 @@ describe("talk.client.toolCall handler", () => {
     expect(mocks.registerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
       relaySessionId: "relay-1",
       connId: "conn-1",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       runId: "run-voice-1",
       callId: "call-1",
     });

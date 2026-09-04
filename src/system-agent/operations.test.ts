@@ -966,6 +966,7 @@ describe("system agent operations", () => {
     const tempDir = opTempDirs.make("openclaw-plugin-install-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createSystemAgentTestRuntime();
+    const beforePersistentApply = vi.fn();
 
     const plan = await executeSystemAgentOperation(
       { kind: "plugin-install", spec: "clawhub:openclaw-demo" },
@@ -982,6 +983,7 @@ describe("system agent operations", () => {
       runtime,
       {
         approved: true,
+        beforePersistentApply,
         auditDetails: { rescue: true },
       },
     );
@@ -997,6 +999,8 @@ describe("system agent operations", () => {
       opts: {},
       allowInstallPolicyWarningPrompt: false,
     });
+    expect(typeof installRequest.beforePersistentApply).toBe("function");
+    expect(beforePersistentApply).toHaveBeenCalledOnce();
     expectRuntimeArg(installRequest.runtime);
     expect(lines.join("\n")).toContain("[openclaw] done: plugin.install");
     const audit = readLastAuditEntry();

@@ -7,16 +7,12 @@ import {
   prepareSqliteReadOnlyLocationSync,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "../infra/sqlite-readonly-location.js";
-import {
-  createNewerSqliteSchemaVersionError,
-  readSqliteUserVersion,
-} from "../infra/sqlite-user-version.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type OpenClawStateReadOnlyDatabase = {
@@ -42,18 +38,6 @@ function existingPathOrUndefined(pathname: string): string | undefined {
   }
 }
 
-function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
-  const userVersion = readSqliteUserVersion(db);
-  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
-      "OpenClaw state database",
-      pathname,
-      userVersion,
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
-  }
-}
-
 function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions,
@@ -70,7 +54,7 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
     // is checked on the next physical open so hot reads do not poll metadata.
     // A newer build can migrate this file while the handle stays open, so the
     // forward-compatibility gate still runs before any reused read.
-    assertSupportedSchemaVersion(opened.db, pathname);
+    assertSupportedStateSchemaVersion(opened.db, pathname);
     return { reused: true, value: operation(opened) };
   } catch (error) {
     openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(opened, error);
@@ -92,7 +76,7 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   const db = openNodeSqliteDatabase(location, { readOnly: true });
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    assertSupportedSchemaVersion(db, pathname);
+    assertSupportedStateSchemaVersion(db, pathname);
     return operation({ db, path: pathname });
   } finally {
     clearNodeSqliteKyselyCacheForDatabase(db);

@@ -218,6 +218,8 @@ describe("production lint suppressions", () => {
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
         // Cleanup is retained in AggregateError.errors; extraction remains the primary cause.
         "src/commands/backup-restore.ts|preserve-caught-error|1",
+        // Intl.Collator.compare is a getter returning a bound function.
+        "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
@@ -227,6 +229,7 @@ describe("production lint suppressions", () => {
         "src/infra/outbound/sanitize-text.ts|eslint/no-control-regex|1",
         "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
         "src/logging/redact.ts|unicorn/no-new-array|1",
+        "src/model-catalog/manifest-planner.ts|unicorn/no-array-sort|3",
         "src/node-host/invoke.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -239,7 +242,10 @@ describe("production lint suppressions", () => {
         "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
+        // These snapshots own their arrays, so sorting in place avoids another copy.
+        "src/plugins/loader-load-context.ts|unicorn/no-array-sort|1",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
+        "src/plugins/registry-state.ts|unicorn/no-array-sort|1",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",

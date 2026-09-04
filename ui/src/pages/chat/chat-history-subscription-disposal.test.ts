@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -68,22 +69,19 @@ describe("disposed chat message subscriptions", () => {
   });
 
   it("releases a subscription that resolves after its pane is disposed", async () => {
-    let resolveSubscription: (value: typeof subscription) => void = () => undefined;
-    const pendingSubscription = new Promise<typeof subscription>((resolve) => {
-      resolveSubscription = resolve;
-    });
+    const pendingSubscription = createDeferred<typeof subscription>();
     const unsubscribeMessages = vi
       .fn<SessionCapability["unsubscribeMessages"]>()
       .mockResolvedValue(undefined);
     const state = createSubscriptionState(
       unsubscribeMessages,
-      vi.fn<SessionCapability["subscribeMessages"]>().mockReturnValue(pendingSubscription),
+      vi.fn<SessionCapability["subscribeMessages"]>().mockReturnValue(pendingSubscription.promise),
     );
 
     const sync = syncSelectedSessionMessageSubscription(state as never);
     await Promise.resolve();
     disposeSelectedSessionMessageSubscription(state);
-    resolveSubscription(subscription);
+    pendingSubscription.resolve(subscription);
     await sync;
 
     expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(subscription);

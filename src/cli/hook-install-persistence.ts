@@ -1,8 +1,11 @@
 // CLI persistence for hook-pack installs.
 import { replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
+import { stageHookInstall } from "../hooks/install-record-transaction.js";
+import type { HookInstallUpdate } from "../hooks/installs.js";
+import type { PackageDirInstallTransaction } from "../infra/install-package-dir.js";
 import type { ConfigSnapshotForInstallPersist } from "../plugins/install-persistence.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { enableInternalHookEntries, logHookPackRestartHint } from "./plugins-command-helpers.js";
 
@@ -13,20 +16,45 @@ export async function persistHookPackInstall(params: {
   install: Omit<HookInstallUpdate, "hookId" | "hooks">;
   successMessage?: string;
   runtime?: RuntimeEnv;
+  beforePersistentApply?: () => void;
+  payloadTransaction?: PackageDirInstallTransaction;
 }): Promise<OpenClawConfig> {
   const runtime = params.runtime ?? defaultRuntime;
-  let next = enableInternalHookEntries(params.snapshot.config, params.hooks);
-  next = recordHookInstall(next, {
-    hookId: params.hookPackId,
-    hooks: params.hooks,
-    ...params.install,
+  return await withPluginLifecycleLease({}, async (lease) => {
+    const assertPersistentApply = () => {
+      lease.assertOwned();
+      params.snapshot.writeOptions.assertConfigPathForWrite?.();
+      params.beforePersistentApply?.();
+    };
+    const next = enableInternalHookEntries(params.snapshot.config, params.hooks);
+    const transaction = await stageHookInstall({
+      update: { hookId: params.hookPackId, hooks: params.hooks, ...params.install },
+      payloadTransaction: params.payloadTransaction,
+      lease,
+      beforePersistentApply: assertPersistentApply,
+    });
+    try {
+      await replaceConfigFile({
+        nextConfig: next,
+        baseHash: params.snapshot.baseHash,
+        writeOptions: {
+          ...params.snapshot.writeOptions,
+          assertConfigPathForWrite: assertPersistentApply,
+        },
+      });
+    } catch (error) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], "Hook install config rollback failed", {
+          cause: rollbackError,
+        });
+      }
+      throw error;
+    }
+    await transaction.commit();
+    runtime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
+    logHookPackRestartHint(runtime);
+    return next;
   });
-  await replaceConfigFile({
-    nextConfig: next,
-    baseHash: params.snapshot.baseHash,
-    writeOptions: params.snapshot.writeOptions,
-  });
-  runtime.log(params.successMessage ?? `Installed hook pack: ${params.hookPackId}`);
-  logHookPackRestartHint(runtime);
-  return next;
 }

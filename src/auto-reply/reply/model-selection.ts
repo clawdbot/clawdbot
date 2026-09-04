@@ -2,6 +2,7 @@
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAgentConfig,
+  resolveAgentDir,
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -39,6 +40,7 @@ import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import * as storedModelOverrides from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../thinking.shared.js";
 import {
   findSelectedCatalogEntry,
@@ -507,9 +509,13 @@ export async function createModelSelectionState(params: {
     sessionEntry.authProfileOverride
   ) {
     const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
-    const store = ensureAuthProfileStore(undefined, {
-      allowKeychainPrompt: false,
-    });
+    const store = ensureAuthProfileStore(
+      params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined,
+      {
+        allowKeychainPrompt: false,
+        profileId: sessionEntry.authProfileOverride,
+      },
+    );
     logStage("auth-profile-store-loaded", `profiles=${Object.keys(store.profiles).length}`);
     const profile = store.profiles[sessionEntry.authProfileOverride];
     const harnessPolicy = resolveAgentHarnessPolicy({
@@ -524,12 +530,7 @@ export async function createModelSelectionState(params: {
       harnessRuntime: harnessPolicy.runtime,
       config: cfg,
     }).map(normalizeProviderId);
-    // Alias-aware eligibility: a stored credential can be valid for the run
-    // provider through provider-auth aliases (e.g. an `anthropic` credential
-    // serving a `claude-cli` run). A raw provider-string compare wrongly
-    // cleared such overrides, which then let auto-selection re-pick a
-    // different profile on a later turn — flapping the CLI session's auth
-    // profile and invalidating it. Mirror session-override.ts's check.
+    // Provider aliases must preserve the same credential across native and embedded runtimes.
     const overrideStillEligible =
       profile != null &&
       acceptedAuthProviders.some((accepted) =>
@@ -539,7 +540,10 @@ export async function createModelSelectionState(params: {
           credential: profile,
         }),
       );
-    if (!overrideStillEligible) {
+    // Admission rejects a missing personal account; clearing its pin here would bill the next participant.
+    const missingPersonalProfile =
+      !profile && isUserModelAuthProfileId(sessionEntry.authProfileOverride);
+    if (!overrideStillEligible && !missingPersonalProfile) {
       await clearSessionAuthProfileOverride({
         sessionEntry,
         sessionStore,

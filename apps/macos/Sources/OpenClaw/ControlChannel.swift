@@ -82,6 +82,52 @@ struct ControlChannelStateDebouncer {
     }
 }
 
+struct ControlChannelCompatibilityAlerts {
+    struct Presentation: Equatable {
+        let issue: GatewayCompatibilityIssue
+        let id = UUID()
+    }
+
+    private(set) var routeGeneration: UInt64 = 0
+    private(set) var presentation: Presentation?
+    private var endpointRevision: UInt64?
+
+    mutating func observeEndpoint(revision: UInt64) -> Bool {
+        defer { self.endpointRevision = revision }
+        guard let endpointRevision, endpointRevision != revision else { return false }
+        self.routeChanged()
+        return true
+    }
+
+    mutating func routeChanged() {
+        self.routeGeneration &+= 1
+        self.presentation = nil
+    }
+
+    mutating func observeConnection(revision: UInt64?) -> ControlChannel.ConnectionState? {
+        guard let revision, revision == self.endpointRevision else { return nil }
+        return self.updateConnection(generation: self.routeGeneration, state: .connected)
+    }
+
+    mutating func updateConnection(
+        generation: UInt64,
+        state: ControlChannel.ConnectionState) -> ControlChannel.ConnectionState?
+    {
+        guard generation == self.routeGeneration else { return nil }
+        if state == .connected { self.presentation = nil }
+        // A retry may fail before hello. Keep the last authoritative incompatibility
+        // until this route connects successfully or its owner retires it.
+        return self.presentation.map { .degraded($0.issue.message) } ?? state
+    }
+
+    mutating func prepare(_ issue: GatewayCompatibilityIssue, generation: UInt64) -> Presentation? {
+        guard generation == self.routeGeneration, self.presentation?.issue != issue else { return nil }
+        let presentation = Presentation(issue: issue)
+        self.presentation = presentation
+        return presentation
+    }
+}
+
 @MainActor
 @Observable
 final class ControlChannel {
@@ -115,7 +161,6 @@ final class ControlChannel {
                 self.logger.info("control channel state -> connecting")
             case .disconnected:
                 self.logger.info("control channel state -> disconnected")
-                self.scheduleRecovery(reason: "disconnected")
             case let .degraded(message):
                 let detail = message.isEmpty ? "degraded" : "degraded: \(message)"
                 self.logger.info("control channel state -> \(detail, privacy: .public)")
@@ -128,16 +173,47 @@ final class ControlChannel {
     private(set) var authSourceLabel: String?
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "control")
+    private let gateway: GatewayConnection
+    private let endpointRevision: @Sendable () -> UInt64
 
     private var eventTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
     private var lastRecoveryAt: Date?
+    private var compatibilityAlerts = ControlChannelCompatibilityAlerts()
+    private var activityServerLease: GatewayConnection.ServerLease?
+
+    private func synchronizeRouteGeneration() -> UInt64 {
+        // Endpoint stream delivery can lag source adoption; fence UI publication directly.
+        if self.compatibilityAlerts.observeEndpoint(revision: self.endpointRevision()) {
+            self.cancelPendingStateTask()
+            self.cancelRecovery()
+            self.retireActivity()
+        }
+        return self.compatibilityAlerts.routeGeneration
+    }
+
+    @discardableResult
+    private func reconcileCurrentConnection(generation: UInt64) -> Bool {
+        guard generation == self.synchronizeRouteGeneration(),
+              let state = self.compatibilityAlerts.observeConnection(
+                  revision: self.gateway.connectedEndpointRevision)
+        else { return false }
+        // Admission can precede its snapshot; publish success and cancel stale deferred status together.
+        self.setStateThrottled(state, generation: generation)
+        return generation == self.synchronizeRouteGeneration()
+    }
 
     // Coalesce rapid connecting/degraded oscillations while the gateway connection is unstable.
     private var pendingStateTask: Task<Void, Never>?
     private var stateDebouncer = ControlChannelStateDebouncer()
 
-    private func setStateThrottled(_ newState: ConnectionState) {
+    private func setStateThrottled(_ newState: ConnectionState, generation: UInt64? = nil) {
+        let currentGeneration = self.synchronizeRouteGeneration()
+        let generation = generation ?? currentGeneration
+        guard let newState = self.compatibilityAlerts.updateConnection(
+            generation: generation,
+            state: newState)
+        else { return }
         let now = Date()
         if let delay = self.stateDebouncer.delayBeforeApplying(
             currentState: self.state,
@@ -147,7 +223,7 @@ final class ControlChannel {
             self.pendingStateTask?.cancel()
             self.pendingStateTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: Self.nanoseconds(for: delay))
-                guard let self, !Task.isCancelled else { return }
+                guard let self, !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
                 self.pendingStateTask = nil
                 self.stateDebouncer.recordDeferredApply(at: Date())
                 self.applyState(newState)
@@ -172,8 +248,19 @@ final class ControlChannel {
         UInt64(max(0, interval) * 1_000_000_000)
     }
 
-    private init() {
+    init(
+        gateway: GatewayConnection = .shared,
+        endpointRevision: @escaping @Sendable () -> UInt64 = { GatewayEndpointStore.shared.routeRevision })
+    {
+        self.gateway = gateway
+        self.endpointRevision = endpointRevision
         self.startEventStream()
+    }
+
+    isolated deinit {
+        self.eventTask?.cancel()
+        self.recoveryTask?.cancel()
+        self.pendingStateTask?.cancel()
     }
 
     func configure() async {
@@ -186,6 +273,7 @@ final class ControlChannel {
         case .local:
             await self.configure()
         case let .remote(target, identity):
+            let generation = self.synchronizeRouteGeneration()
             do {
                 _ = (target, identity)
                 let idSet = !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -194,50 +282,67 @@ final class ControlChannel {
                         "target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
                 self.setStateThrottled(.connecting)
                 _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
-                await self.refreshEndpoint(reason: "configure")
+                await self.refreshEndpoint(reason: "configure", generation: generation)
             } catch {
-                self.setStateThrottled(.degraded(error.localizedDescription))
+                guard !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
+                self.setStateThrottled(.degraded(error.localizedDescription), generation: generation)
                 throw error
             }
         }
     }
 
-    func refreshEndpoint(reason: String) async {
+    func endpointDidChange(_ state: GatewayEndpointState) {
+        guard state.routeRevision == self.endpointRevision() else { return }
+        let generation = self.synchronizeRouteGeneration()
+        switch state {
+        case .ready:
+            Task { await self.refreshEndpoint(reason: "endpoint changed", generation: generation) }
+        case .connecting:
+            self.setStateThrottled(.connecting)
+        case let .unavailable(_, reason, _):
+            self.setStateThrottled(.degraded(reason))
+        }
+    }
+
+    func refreshEndpoint(reason: String, generation: UInt64? = nil) async {
+        let generation = generation ?? self.synchronizeRouteGeneration()
+        guard !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
         self.logger.info("control channel refresh endpoint reason=\(reason, privacy: .public)")
+        if self.eventTask == nil { self.startEventStream() }
         self.setStateThrottled(.connecting)
         do {
             try await self.establishGatewayConnection()
-            self.setStateThrottled(.connected)
+            guard self.reconcileCurrentConnection(generation: generation) else { return }
             PresenceReporter.shared.sendImmediate(reason: "connect")
         } catch {
-            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-            self.setStateThrottled(.degraded(message))
+            guard !Task.isCancelled else { return }
+            self.reportFailure(error, generation: generation)
         }
     }
 
     func disconnect() async {
+        self.compatibilityAlerts.routeChanged()
+        self.cancelRecovery()
+        self.eventTask?.cancel()
+        self.eventTask = nil
+        self.retireActivity()
         self.setStateThrottled(.disconnected)
-        await GatewayConnection.shared.shutdown()
+        await self.gateway.shutdown()
     }
 
     func health(timeout: TimeInterval? = nil) async throws -> Data {
-        do {
-            let start = Date()
-            var params: [String: AnyHashable]?
-            if let timeout {
-                params = ["timeout": AnyHashable(Int(timeout * 1000))]
-            }
-            let timeoutMs = (timeout ?? 15) * 1000
-            let payload = try await self.request(method: "health", params: params, timeoutMs: timeoutMs)
-            let ms = Date().timeIntervalSince(start) * 1000
-            self.lastPingMs = ms
-            self.setStateThrottled(.connected)
-            return payload
-        } catch {
-            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-            self.setStateThrottled(.degraded(message))
-            throw ControlChannelError.badResponse(message)
+        let generation = self.synchronizeRouteGeneration()
+        let start = Date()
+        var params: [String: AnyHashable]?
+        if let timeout {
+            params = ["timeout": AnyHashable(Int(timeout * 1000))]
         }
+        let timeoutMs = (timeout ?? 15) * 1000
+        let payload = try await self.request(method: "health", params: params, timeoutMs: timeoutMs)
+        if self.reconcileCurrentConnection(generation: generation) {
+            self.lastPingMs = Date().timeIntervalSince(start) * 1000
+        }
+        return payload
     }
 
     func lastHeartbeat() async throws -> ControlHeartbeatEvent? {
@@ -251,21 +356,15 @@ final class ControlChannel {
         timeoutMs: Double? = nil,
         retryTransportFailures: Bool = true) async throws -> Data
     {
-        do {
+        try await self.performRequest {
             let rawParams = params?.reduce(into: [String: OpenClawKit.AnyCodable]()) {
                 $0[$1.key] = OpenClawKit.AnyCodable($1.value.base)
             }
-            let data = try await GatewayConnection.shared.request(
+            return try await self.gateway.request(
                 method: method,
                 params: rawParams,
                 timeoutMs: timeoutMs,
                 retryTransportFailures: retryTransportFailures)
-            self.setStateThrottled(.connected)
-            return data
-        } catch {
-            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-            self.setStateThrottled(.degraded(message))
-            throw ControlChannelError.badResponse(message)
         }
     }
 
@@ -273,23 +372,69 @@ final class ControlChannel {
         _ request: OpenClawChatGatewayRequest,
         retryTransportFailures: Bool = true) async throws -> Data
     {
+        try await self.performRequest {
+            try await self.gateway.request(request, retryTransportFailures: retryTransportFailures)
+        }
+    }
+
+    private func performRequest(_ operation: () async throws -> Data) async throws -> Data {
+        try Task.checkCancellation()
+        let generation = self.synchronizeRouteGeneration()
+        if self.eventTask == nil { self.startEventStream() }
         do {
-            let data = try await GatewayConnection.shared.request(
-                request,
-                retryTransportFailures: retryTransportFailures)
-            self.setStateThrottled(.connected)
+            let data = try await operation()
+            try Task.checkCancellation()
+            self.reconcileCurrentConnection(generation: generation)
             return data
         } catch {
-            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-            self.setStateThrottled(.degraded(message))
+            // Closing a view cancels its requests, not the shared connection.
+            // Only failures belonging to a live caller may trigger recovery.
+            try Task.checkCancellation()
+            let message = self.reportFailure(error, generation: generation)
             throw ControlChannelError.badResponse(message)
         }
+    }
+
+    @discardableResult
+    private func reportFailure(_ error: Error, generation: UInt64) -> String {
+        _ = self.synchronizeRouteGeneration()
+        let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
+        let issue = GatewayCompatibilityIssue(error: error)
+        self.logger.error("control channel operation failed \(message, privacy: .public)")
+        if issue != nil, self.reconcileCurrentConnection(generation: generation) { return message }
+        let presentation = issue.flatMap { self.compatibilityAlerts.prepare($0, generation: generation) }
+        self.setStateThrottled(.degraded(message), generation: generation)
+        if let presentation {
+            let issue = presentation.issue
+            // Present once per route failure. A unique claim also retires queued alerts
+            // after a route switch or successful connection with the same later issue.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.synchronizeRouteGeneration(),
+                      self.compatibilityAlerts.presentation?.id == presentation.id
+                else { return }
+                self.reconcileCurrentConnection(generation: generation)
+                guard generation == self.synchronizeRouteGeneration(),
+                      self.compatibilityAlerts.presentation?.id == presentation.id
+                else { return }
+                let alert = NSAlert()
+                alert.messageText = issue.problem.title
+                alert.informativeText = issue.message
+                alert.addButton(withTitle: String(localized: "OK"))
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+            }
+        }
+        return message
     }
 
     static func friendlyGatewayMessage(_ error: Error, configRoot: [String: Any]) -> String {
         // Map URLSession/WS errors into user-facing, actionable text.
         if let ctrlErr = error as? ControlChannelError, let desc = ctrlErr.errorDescription {
             return desc
+        }
+
+        if let issue = GatewayCompatibilityIssue(error: error) {
+            return issue.message
         }
 
         if let authIssue = RemoteGatewayAuthIssue(error: error) {
@@ -396,7 +541,16 @@ final class ControlChannel {
         return true
     }
 
+    private func cancelRecovery() {
+        self.recoveryTask?.cancel()
+        self.recoveryTask = nil
+        self.lastRecoveryAt = nil
+    }
+
     private func scheduleRecovery(reason: String) {
+        let generation = self.synchronizeRouteGeneration()
+        let mode = AppStateStore.shared.connectionMode
+        guard mode != .unconfigured else { return }
         let now = Date()
         if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 10 { return }
         guard self.recoveryTask == nil else { return }
@@ -404,11 +558,12 @@ final class ControlChannel {
 
         self.recoveryTask = Task { [weak self] in
             guard let self else { return }
-            let mode = await MainActor.run { AppStateStore.shared.connectionMode }
-            guard mode != .unconfigured else {
-                self.recoveryTask = nil
-                return
+            defer {
+                if generation == self.synchronizeRouteGeneration() { self.recoveryTask = nil }
             }
+            // Explicit disconnect and route replacement retire recovery before it can manage a process or tunnel.
+            guard !Task.isCancelled, generation == self.synchronizeRouteGeneration(),
+                  AppStateStore.shared.connectionMode == mode, self.state != .connected else { return }
 
             let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
             let reasonText = trimmedReason.isEmpty ? "unknown" : trimmedReason
@@ -429,20 +584,21 @@ final class ControlChannel {
                 }
             }
 
-            await self.refreshEndpoint(reason: "recovery:\(reasonText)")
+            guard !Task.isCancelled, generation == self.synchronizeRouteGeneration(),
+                  AppStateStore.shared.connectionMode == mode else { return }
+            await self.refreshEndpoint(reason: "recovery:\(reasonText)", generation: generation)
+            guard !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
             if case .connected = self.state {
                 self.logger.info("control channel recovery finished")
             } else if case let .degraded(message) = self.state {
                 self.logger.error("control channel recovery failed \(message, privacy: .public)")
             }
-
-            self.recoveryTask = nil
         }
     }
 
     private func establishGatewayConnection(timeoutMs: Int = 5000) async throws {
-        try await GatewayConnection.shared.refresh()
-        let ok = try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
+        try await self.gateway.refresh()
+        let ok = try await self.gateway.healthOK(timeoutMs: timeoutMs)
         if ok == false {
             throw NSError(
                 domain: "Gateway",
@@ -454,7 +610,7 @@ final class ControlChannel {
 
     private func refreshAuthSourceLabel() async {
         let isRemote = CommandResolver.connectionModeIsRemote()
-        let authSource = await GatewayConnection.shared.authSource()
+        let authSource = await self.gateway.authSource()
         self.authSourceLabel = Self.formatAuthSource(authSource, isRemote: isRemote)
     }
 
@@ -481,12 +637,36 @@ final class ControlChannel {
     }
 
     private func startEventStream() {
-        GatewayPushSubscription.restartTask(task: &self.eventTask) { [weak self] push in
-            self?.handle(push: push)
+        GatewayPushSubscription.restartTask(task: &self.eventTask, connection: self.gateway) { [weak self] delivery in
+            self?.handle(delivery: delivery)
         }
     }
 
-    private func handle(push: GatewayPush) {
+    private func retireActivity() {
+        self.activityServerLease = nil
+        // Keep the last known main key until a current hello replaces it.
+        // Retired deliveries cannot use that metadata to recreate old work.
+        WorkActivityStore.shared.reset()
+    }
+
+    private func handle(delivery: GatewayConnection.PushDelivery) {
+        let generation = self.synchronizeRouteGeneration()
+        guard delivery.isCurrent, delivery.serverLease.endpointRevision == self.endpointRevision() else { return }
+        guard let push = delivery.push else {
+            guard case let .disconnected(reason) = delivery.event else { return }
+            self.retireActivity()
+            self.setStateThrottled(reason.map(ConnectionState.degraded) ?? .disconnected, generation: generation)
+            return
+        }
+        // Agent events may precede the ordinary hello notification. Adopt the
+        // admitted handshake once, before any current work can be projected.
+        if self.activityServerLease != delivery.serverLease {
+            WorkActivityStore.shared.reset()
+            if let mainSessionKey = delivery.mainSessionKey {
+                WorkActivityStore.shared.setMainSessionKey(mainSessionKey)
+            }
+            self.activityServerLease = delivery.serverLease
+        }
         switch push {
         case let .event(evt) where evt.event == "agent":
             if let payload = evt.payload,
@@ -508,18 +688,22 @@ final class ControlChannel {
             // The gateway targets this event at connections bound to the
             // caller's own profile; receipt means our profile appearance
             // changed on another device.
-            self.refreshProfileAccent()
+            self.refreshProfileAccent(delivery: delivery)
         case .snapshot:
-            self.setStateThrottled(.connected)
-            self.refreshProfileAccent()
+            self.reconcileCurrentConnection(generation: self.synchronizeRouteGeneration())
+            self.refreshProfileAccent(delivery: delivery)
         default:
             break
         }
     }
 
-    private func refreshProfileAccent() {
+    private func refreshProfileAccent(delivery: GatewayConnection.PushDelivery) {
         Task {
-            let accent = await Self.fetchProfileAccentHex()
+            guard delivery.isCurrent else { return }
+            let accent = await self.fetchProfileAccentHex(serverLease: delivery.serverLease)
+            // A replaced request can fail as well as succeed; neither outcome
+            // may repaint the newly selected Gateway's profile appearance.
+            guard delivery.isCurrent else { return }
             AppStateStore.shared.profileAccentHex = accent
         }
     }
@@ -530,12 +714,13 @@ final class ControlChannel {
     /// fallback. Goes straight through GatewayConnection: routing this through
     /// ControlChannel.request would mark the channel degraded on the expected
     /// older-gateway failure.
-    private static func fetchProfileAccentHex() async -> String? {
+    private func fetchProfileAccentHex(serverLease: GatewayConnection.ServerLease) async -> String? {
         do {
-            let data = try await GatewayConnection.shared.requestRaw(
+            let data = try await self.gateway.request(
                 method: "users.prefs.get",
                 params: ["keys": OpenClawKit.AnyCodable(["ui.accent"])],
-                timeoutMs: 8000)
+                timeoutMs: 8000,
+                ifCurrentServerLease: serverLease)
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   json["status"] as? String == "ok"
             else { return nil }

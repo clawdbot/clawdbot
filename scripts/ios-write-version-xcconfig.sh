@@ -6,7 +6,7 @@ usage() {
 Usage:
   scripts/ios-write-version-xcconfig.sh [--version 2026.7.2] [--revision 1] [--build-number 3]
 
-Writes apps/ios/build/Version.xcconfig from package.json or explicit --version:
+Writes apps/ios/build/Version.xcconfig from apps/mobile/version.json or explicit --version:
 - OPENCLAW_IOS_VERSION = exact canonical iOS version
 - OPENCLAW_MARKETING_VERSION = short iOS/App Store version
 - OPENCLAW_BUILD_VERSION = explicit build number or local numeric fallback

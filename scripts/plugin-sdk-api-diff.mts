@@ -11,12 +11,22 @@ import {
   parsePluginSdkApiDiffSurface,
   pluginSdkApiAcknowledgement,
   renderPluginSdkApiRoot,
+  type PluginSdkApiDiff,
+  type PluginSdkApiDiffSurface,
 } from "../src/plugin-sdk/api-diff.ts";
-import { createPluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
+import { runTasksWithConcurrency } from "../src/utils/run-with-concurrency.js";
+import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
+import { isRecord } from "./lib/record-shared.mjs";
+import { resolveNpmPreflightSdkSelectors } from "./openclaw-npm-extended-stable-release.mjs";
+import {
+  createPluginSdkApiReleaseEvidence,
+  createPluginSdkApiReleaseEvidenceSet,
+} from "./plugin-sdk-api-release-evidence.mjs";
 
 type Args = {
   acknowledgement: string | null;
   base: string;
+  bases: { beta: string; latest: string } | null;
   evidencePath: string | null;
   head: string;
   jsonPath: string | null;
@@ -29,7 +39,7 @@ const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
 function usage(): never {
   console.error(
-    "Usage: plugin-sdk-api-diff --base <git-ref> --head <git-ref> [--evidence <path>] [--json <path>] [--summary <path>] [--require-acknowledgement --acknowledge <8-hex-digest>]",
+    "Usage: plugin-sdk-api-diff (--base <git-ref> | --bases-json <beta/latest refs>) --head <git-ref> [--evidence <path>] [--json <path>] [--summary <path>] [--require-acknowledgement --acknowledge <8-hex-digest>]",
   );
   process.exit(2);
 }
@@ -46,6 +56,7 @@ function readValue(argv: string[], index: number, flag: string): string {
 function parseArgs(argv: string[]): Args {
   let acknowledgement: string | null = null;
   let base = "";
+  let bases: Args["bases"] = null;
   let evidencePath: string | null = null;
   let head = "";
   let jsonPath: string | null = null;
@@ -65,6 +76,22 @@ function parseArgs(argv: string[]): Args {
         base = readValue(argv, index, arg);
         index += 1;
         break;
+      case "--bases-json": {
+        const value: unknown = JSON.parse(readValue(argv, index, arg));
+        if (
+          !isRecord(value) ||
+          Object.keys(value).length !== 2 ||
+          typeof value.beta !== "string" ||
+          !value.beta ||
+          typeof value.latest !== "string" ||
+          !value.latest
+        ) {
+          throw new Error("--bases-json requires exactly beta and latest Git refs");
+        }
+        bases = { beta: value.beta, latest: value.latest };
+        index += 1;
+        break;
+      }
       case "--evidence":
         evidencePath = path.resolve(readValue(argv, index, arg));
         index += 1;
@@ -92,8 +119,13 @@ function parseArgs(argv: string[]): Args {
         usage();
     }
   }
-  if (!base || !head) {
+  if ((!base && !bases) || (base && bases) || !head) {
     usage();
+  }
+  if (bases && requireAcknowledgement) {
+    throw new Error(
+      "Review beta/latest receipts using the selected publication channel's acknowledgement",
+    );
   }
   if (acknowledgement !== null && !/^[a-f0-9]{8}$/u.test(acknowledgement)) {
     console.error("--acknowledge must be the 8-character lowercase digest printed by the report.");
@@ -102,6 +134,7 @@ function parseArgs(argv: string[]): Args {
   return {
     acknowledgement,
     base,
+    bases,
     evidencePath,
     head,
     jsonPath,
@@ -214,17 +247,26 @@ async function renderWorker(argv: string[]): Promise<boolean> {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const repoRoot = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
-  const baseCommit = git(repoRoot, ["rev-parse", "--verify", `${args.base}^{commit}`]);
   const headCommit = git(repoRoot, ["rev-parse", "--verify", `${args.head}^{commit}`]);
+  if (args.bases) {
+    const { version } = JSON.parse(git(repoRoot, ["show", `${headCommit}:package.json`]));
+    if (resolveNpmPreflightSdkSelectors(version, "beta").length !== 2) {
+      throw new Error("beta/latest SDK evidence requires a regular final release");
+    }
+  }
+  const bases = Object.entries(args.bases ?? { base: args.base }).map(([selector, ref]) => ({
+    selector,
+    ref,
+    commit: git(repoRoot, ["rev-parse", "--verify", `${ref}^{commit}`]),
+  }));
   const temporaryParent = process.env.RUNNER_TEMP ?? os.tmpdir();
   await fs.mkdir(temporaryParent, { recursive: true });
   const temporaryRoot = await fs.mkdtemp(
     path.join(temporaryParent, "openclaw-plugin-sdk-api-diff-"),
   );
-  const roots = [
-    { commit: baseCommit, name: "base" },
-    { commit: headCommit, name: "head" },
-  ] as const;
+  // A regular release compares two npm predecessors against one frozen head.
+  // Install and render each commit once, including selectors already at that head.
+  const commits = [...new Set([...bases.map((base) => base.commit), headCommit])];
   const addedWorktrees: string[] = [];
   const abortController = new AbortController();
   let interruptedExitCode: number | undefined;
@@ -257,57 +299,97 @@ async function main(): Promise<void> {
   process.once("SIGTERM", stopOnTerminate);
 
   try {
-    for (const root of roots) {
-      const worktree = path.join(temporaryRoot, root.name);
-      git(repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree, root.commit]);
-      addedWorktrees.push(worktree);
-      git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
-      git(worktree, ["checkout", "--detach", root.commit]);
-      await installRevisionDependencies(worktree, abortController.signal);
-    }
-
-    const baseRenderPath = path.join(temporaryRoot, "base.json");
-    const headRenderPath = path.join(temporaryRoot, "head.json");
-    await renderRevision(
-      repoRoot,
-      path.join(temporaryRoot, "base"),
-      baseRenderPath,
-      abortController.signal,
-    );
-    await renderRevision(
-      repoRoot,
-      path.join(temporaryRoot, "head"),
-      headRenderPath,
-      abortController.signal,
-    );
-    const before = parsePluginSdkApiDiffSurface(await fs.readFile(baseRenderPath, "utf8"));
-    const after = parsePluginSdkApiDiffSurface(await fs.readFile(headRenderPath, "utf8"));
-    const diff = diffPluginSdkApi(before, after);
-    const report = formatPluginSdkApiDiffReport({
-      baseLabel: baseCommit.slice(0, 12),
-      diff,
-      headLabel: headCommit.slice(0, 12),
+    const surfaces = new Map<string, PluginSdkApiDiffSurface>();
+    // The shared 8-CPU/24-GiB floor leaves headroom for two 6-GiB render heaps.
+    const limit = isConstrainedCiCheckHost({
+      logicalCpuCount: os.availableParallelism(),
+      totalMemoryBytes: Math.min(os.totalmem(), process.constrainedMemory() || Infinity),
+    })
+      ? 1
+      : 2;
+    const rendered = await runTasksWithConcurrency({
+      limit,
+      errorMode: "stop",
+      // Drain aborted siblings before removing their registered worktrees.
+      throwOnError: false,
+      onTaskError: () => abortController.abort(),
+      tasks: commits.map((commit) => async () => {
+        const worktree = path.join(temporaryRoot, commit);
+        git(repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree, commit]);
+        addedWorktrees.push(worktree);
+        git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
+        git(worktree, ["checkout", "--detach", commit]);
+        await installRevisionDependencies(worktree, abortController.signal);
+        const renderPath = path.join(temporaryRoot, `${commit}.json`);
+        await renderRevision(repoRoot, worktree, renderPath, abortController.signal);
+        surfaces.set(commit, parsePluginSdkApiDiffSurface(await fs.readFile(renderPath, "utf8")));
+      }),
     });
+    if (rendered.hasError) {
+      throw rendered.firstError;
+    }
+    const after = surfaces.get(headCommit);
+    if (!after) {
+      throw new Error("Plugin SDK API head snapshot is missing");
+    }
+    const diffs = new Map<string, PluginSdkApiDiff>();
+    const workflowSha = git(repoRoot, ["rev-parse", "HEAD"]);
+    const comparisons = bases.map((base) => {
+      const before = surfaces.get(base.commit);
+      if (!before) {
+        throw new Error("Plugin SDK API predecessor snapshot is missing");
+      }
+      const diff = diffs.get(base.commit) ?? diffPluginSdkApi(before, after);
+      diffs.set(base.commit, diff);
+      return {
+        selector: base.selector,
+        diff,
+        evidence: createPluginSdkApiReleaseEvidence({
+          baseRef: base.ref,
+          baseSha: base.commit,
+          diff,
+          headSha: headCommit,
+          workflowSha,
+        }),
+        report: formatPluginSdkApiDiffReport({
+          baseLabel: args.bases
+            ? `${base.selector}: ${base.ref} (${base.commit.slice(0, 12)})`
+            : base.commit.slice(0, 12),
+          diff,
+          headLabel: headCommit.slice(0, 12),
+        }),
+      };
+    });
+    const primary = comparisons[0];
+    if (!primary) {
+      throw new Error("Plugin SDK API comparison is missing");
+    }
+    const report = comparisons.map((comparison) => comparison.report).join("\n");
     process.stdout.write(report);
     if (args.jsonPath) {
+      const diff = args.bases
+        ? Object.fromEntries(
+            comparisons.map((comparison) => [comparison.selector, comparison.diff]),
+          )
+        : primary.diff;
       await writeFile(args.jsonPath, `${JSON.stringify(diff, null, 2)}\n`);
     }
     if (args.evidencePath) {
-      const evidence = createPluginSdkApiReleaseEvidence({
-        baseRef: args.base,
-        baseSha: baseCommit,
-        diff,
-        headSha: headCommit,
-        workflowSha: git(repoRoot, ["rev-parse", "HEAD"]),
-      });
+      const evidence = args.bases
+        ? createPluginSdkApiReleaseEvidenceSet(
+            Object.fromEntries(
+              comparisons.map((comparison) => [comparison.selector, comparison.evidence]),
+            ),
+          )
+        : primary.evidence;
       await writeFile(args.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
     }
     if (args.summaryPath) {
       await writeFile(args.summaryPath, report);
     }
 
-    if (args.requireAcknowledgement && hasPluginSdkApiChanges(diff)) {
-      const expected = pluginSdkApiAcknowledgement(diff);
+    if (args.requireAcknowledgement && hasPluginSdkApiChanges(primary.diff)) {
+      const expected = pluginSdkApiAcknowledgement(primary.diff);
       if (args.acknowledgement !== expected) {
         console.error(
           `Plugin SDK API changes require acknowledgement digest ${expected}; rerun with --acknowledge ${expected}.`,

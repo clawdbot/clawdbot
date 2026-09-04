@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { startHoverMarqueeFromEvent, stopHoverMarqueeFromEvent } from "../lib/hover-marquee.ts";
 import { writeSidebarSectionDragData } from "../lib/sessions/drag.ts";
 
 export function renderSidebarSessionSectionHeader(params: {
@@ -13,9 +14,9 @@ export function renderSidebarSessionSectionHeader(params: {
   const draggable = params.draggable !== false && !params.disabledReason;
   return html`
     <div
-      class="sidebar-recent-sessions__head ${draggable
-        ? "sidebar-recent-sessions__head--draggable"
-        : ""}"
+      class="sidebar-recent-sessions__head ${
+        draggable ? "sidebar-recent-sessions__head--draggable" : ""
+      }"
       draggable=${draggable ? "true" : "false"}
       title=${params.disabledReason ?? nothing}
       @mousedown=${(event: MouseEvent) => {
@@ -51,6 +52,8 @@ export function renderSidebarSessionSectionHeader(params: {
         (event.currentTarget as HTMLElement).removeAttribute("data-section-drag-blocked");
         params.onFinishDrag();
       }}
+      @mouseenter=${startHoverMarqueeFromEvent}
+      @mouseleave=${stopHoverMarqueeFromEvent}
       @contextmenu=${params.onContextMenu ?? nothing}
     >
       <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>

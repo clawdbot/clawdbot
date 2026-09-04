@@ -10,6 +10,7 @@ import {
 } from "../../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { isMainSessionRestartRecoveryInputProvenance } from "../../../sessions/input-provenance.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import {
@@ -360,6 +361,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
 type SessionBoundaryAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
+  | "inputProvenance"
   | "onUserMessagePersistenceInvalidated"
   | "operation"
   | "prompt"
@@ -375,6 +377,7 @@ type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserT
 export async function prepareEmbeddedAttemptSessionBoundary(input: {
   abortSignal?: AbortSignal;
   activeSession: Pick<AgentSession, "agent">;
+  appendOnlyRuntimeContext?: boolean;
   attempt: SessionBoundaryAttempt;
   getUserTranscriptContexts: () => LlmBoundaryOptions["userTranscriptContexts"];
   isRawModelRun: boolean;
@@ -401,6 +404,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     : resolveOrphanRepairPlan({
         sessionManager,
         prompt: attempt.prompt,
+        preserveLeaf: isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
         trigger: attempt.trigger,
       });
   // Admission can persist the turn before prompt preparation intentionally omits it.
@@ -443,9 +447,16 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     // discard the merged replacement prompt.
     sessionManager.clearNextUserMessagePersistenceSuppression?.();
     attempt.onUserMessagePersistenceInvalidated?.();
-    activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+  }
+  if (orphanRepair) {
+    const repairedMessages = sanitizeCompactionReplayMessages(
       sessionManager.buildSessionContext().messages,
     );
+    // A preserved orphan is the final message in this canonical context. Keep
+    // it durable, but omit it from this provider call because prompt assembly includes it.
+    activeSession.agent.state.messages = orphanRepair.removeLeaf
+      ? repairedMessages
+      : repairedMessages.slice(0, -1);
   }
 
   // This is the single timestamping source for user messages sent to the LLM.
@@ -457,10 +468,14 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   let currentUserTimestampOverride: CurrentUserTimestampOverride | undefined;
   const buildBoundaryOptions = (): LlmBoundaryOptions => {
     if (preserveExactPrompt) {
-      return { projectPersistedSenderContext: false };
+      return {
+        appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
+        projectPersistedSenderContext: false,
+      };
     }
     const userTranscriptContexts = input.getUserTranscriptContexts();
     return {
+      appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
       ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
       ...(userTranscriptContexts?.length ? { userTranscriptContexts } : {}),
@@ -470,14 +485,16 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
 
   if (typeof activeSession.agent.convertToLlm === "function") {
     const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
-    activeSession.agent.convertToLlm = async (messages) =>
-      await baseConvertToLlm(
-        // Wire-only relocation keeps the request append-only through the active
-        // user turn without changing position-sensitive precheck normalization.
-        relocateCurrentRuntimeContextCarrierToTail(
-          normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()),
-        ),
+    activeSession.agent.convertToLlm = async (messages) => {
+      const normalized = normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions());
+      return await baseConvertToLlm(
+        // Persisted carriers stay after their user turn, including during tool loops;
+        // moving one would change the prefix bound to later thinking signatures.
+        input.appendOnlyRuntimeContext
+          ? normalized
+          : relocateCurrentRuntimeContextCarrierToTail(normalized),
       );
+    };
   }
 
   return {
@@ -510,6 +527,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
 }) {
   const { attempt } = input;
   const transcriptState = await resolveExistingAttemptTranscriptState({
+    sessionManager: attempt.sessionManager,
     agentId: input.sessionAgentId,
     config: attempt.config,
     sessionFile: attempt.sessionFile,

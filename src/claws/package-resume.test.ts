@@ -155,6 +155,6 @@ describe("findResumableIntroducedPluginRequirement", () => {
     expect(state?.record.bootstrap).toBeUndefined();
     expect(state?.packageRefs).toHaveLength(1);
     expect(state?.packageRefs[0]?.extension).toBeUndefined();
-    await expect(readFile(databasePath)).resolves.toEqual(before);
+    expect(before.equals(await readFile(databasePath))).toBe(true);
   });
 });

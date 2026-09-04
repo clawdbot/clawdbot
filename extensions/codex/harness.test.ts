@@ -491,7 +491,7 @@ describe("Codex agent harness reset()", () => {
         binding: { threadId: "thread-1", cwd: "/repo" },
       }),
     ).resolves.toBe(true);
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-1" });
+    expect(bindingStore.read(identity)).toMatchObject({ threadId: "thread-1" });
   });
 
   it("clears an in-place session generation without stranding its replacement", async () => {
@@ -517,14 +517,14 @@ describe("Codex agent harness reset()", () => {
       reason: "reset",
     });
 
-    await expect(bindingStore.read(identity)).resolves.toBeUndefined();
+    expect(bindingStore.read(identity)).toBeUndefined();
     await expect(
       bindingStore.mutate(identity, {
         kind: "set",
         binding: { threadId: "thread-2", cwd: "/repo" },
       }),
     ).resolves.toBe(true);
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-2" });
+    expect(bindingStore.read(identity)).toMatchObject({ threadId: "thread-2" });
   });
 
   it("repairs a retirement fence left by an earlier in-place reset", async () => {
@@ -643,7 +643,7 @@ describe("Codex agent harness reset()", () => {
       ),
     ).rejects.toThrow("owned by supervision");
     expect(run).not.toHaveBeenCalled();
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({
+    expect(bindingStore.read(identity)).toMatchObject({
       threadId: "thread-supervised",
     });
   });

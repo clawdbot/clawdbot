@@ -2,6 +2,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import { stableStringify } from "@openclaw/normalization-core";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -90,9 +91,9 @@ function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
       manifestPath: row.manifest_path,
       integrityKind: row.integrity_kind,
       integrity: row.integrity,
-      byteLength: Number(row.source_byte_length),
+      byteLength: sqliteNumber(row.source_byte_length),
     },
-    manifestSchemaVersion: Number(
+    manifestSchemaVersion: sqliteNumber(
       row.manifest_schema_version,
     ) as ClawAddPlan["manifestSchemaVersion"],
     planIntegrity: row.plan_integrity,
@@ -102,8 +103,8 @@ function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
     agentOwnedPaths: JSON.parse(row.agent_owned_paths_json) as string[],
     ...clawBootstrapProvenanceFromRow(row),
     status: row.status,
-    addedAtMs: Number(row.added_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    addedAtMs: sqliteNumber(row.added_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
 }
 

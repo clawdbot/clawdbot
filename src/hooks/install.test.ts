@@ -121,6 +121,7 @@ function writeHookPackManifest(params: {
   pkgDir: string;
   hooks: string[];
   dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
   extensions?: string[];
 }) {
   fs.writeFileSync(
@@ -133,6 +134,7 @@ function writeHookPackManifest(params: {
         ...(params.extensions ? { extensions: params.extensions } : {}),
       },
       ...(params.dependencies ? { dependencies: params.dependencies } : {}),
+      ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
     }),
     "utf-8",
   );
@@ -152,10 +154,14 @@ function writeHookPackFiles(params: {
   hookName: string;
   hookDescription: string;
   heading: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
 }) {
   writeHookPackManifest({
     pkgDir: params.pkgDir,
     hooks: [`./hooks/${params.hookName}`],
+    dependencies: params.dependencies,
+    optionalDependencies: params.optionalDependencies,
   });
   const hookDir = path.join(params.pkgDir, "hooks", params.hookName);
   fs.mkdirSync(hookDir, { recursive: true });
@@ -390,45 +396,33 @@ describe("installHooksFromPath", () => {
     }
   });
 
-  it("uses --ignore-scripts for dependency install", async () => {
-    const workDir = makeTempDir();
-    const stateDir = makeTempDir();
-    const pkgDir = path.join(workDir, "package");
-    fs.mkdirSync(path.join(pkgDir, "hooks", "one-hook"), { recursive: true });
-    writeHookPackManifest({
-      pkgDir,
-      hooks: ["./hooks/one-hook"],
-      dependencies: { "left-pad": "1.3.0" },
-    });
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "one-hook", "HOOK.md"),
-      [
-        "---",
-        "name: one-hook",
-        "description: One hook",
-        'metadata: {"openclaw":{"events":["command:new"]}}',
-        "---",
-        "",
-        "# One Hook",
-      ].join("\n"),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "one-hook", "handler.ts"),
-      "export default async () => {};\n",
-      "utf-8",
-    );
+  it.each(["dependencies", "optionalDependencies"] as const)(
+    "installs %s with lifecycle scripts disabled",
+    async (dependencyField) => {
+      const workDir = makeTempDir();
+      const stateDir = makeTempDir();
+      const pkgDir = path.join(workDir, "package");
+      fs.mkdirSync(pkgDir, { recursive: true });
+      writeHookPackFiles({
+        pkgDir,
+        packageName: "@openclaw/test-hooks",
+        hookName: "one-hook",
+        hookDescription: "One hook",
+        heading: "One Hook",
+        [dependencyField]: { "left-pad": "1.3.0" },
+      });
 
-    const run = runCommandWithTimeoutMock;
-    await expectInstallUsesIgnoreScripts({
-      run,
-      install: async () =>
-        await installHooksFromPath({
-          path: pkgDir,
-          hooksDir: path.join(stateDir, "hooks"),
-        }),
-    });
-  });
+      const run = runCommandWithTimeoutMock;
+      await expectInstallUsesIgnoreScripts({
+        run,
+        install: async () =>
+          await installHooksFromPath({
+            path: pkgDir,
+            hooksDir: path.join(stateDir, "hooks"),
+          }),
+      });
+    },
+  );
 
   it("installs a single hook directory", async () => {
     const stateDir = makeTempDir();

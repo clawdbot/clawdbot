@@ -56,7 +56,7 @@ import { createTestAdmittedRunContext } from "./admitted-run-context.test-suppor
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   restoreCliRunnerTestDeps,
-  runPreparedCliAgent,
+  runPreparedCliAgent as runPreparedCliAgentCore,
   setCliRunnerTestDeps,
 } from "./cli-runner.js";
 import {
@@ -66,7 +66,8 @@ import {
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { runCliRecovery } from "./cli-runner/cli-run-recovery.js";
-import { executePreparedCliRun } from "./cli-runner/execute.js";
+import { executePreparedCliRun as executePreparedCliRunCore } from "./cli-runner/execute.js";
+import { wrapPreparedCliRunWithTestAdmission } from "./cli-runner/execute.test-support.js";
 import {
   resolveCliNoOutputTimeoutMs,
   resolveCliRunTimeoutOverrideMs,
@@ -75,12 +76,15 @@ import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+const runPreparedCliAgent = wrapPreparedCliRunWithTestAdmission(runPreparedCliAgentCore);
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunCore);
 
 // Gateway unit coverage owns quiet-admission timing. These reliability cases only
 // need to drain calls already in flight, so skip the repeated 250 ms quiet window.
@@ -2497,30 +2501,125 @@ describe("runCliAgent reliability", () => {
     expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
   });
 
-  it("marks CLI runs as paused after sessions_yield", async () => {
+  it("returns accepted CLI session spawns when sessions_yield pauses the requester", async () => {
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
+    const requesterTurnRunId = "run-cli-yield";
+    const childRunId = "run-cli-child";
+    const childSessionKey = "agent:main:subagent:cli-child";
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const spawnCapture = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+        toolName: "sessions_spawn",
+        args: { task: "review" },
+      });
+      if (!spawnCapture) {
+        throw new Error("missing sessions_spawn capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle: spawnCapture,
+        toolName: "sessions_spawn",
+        args: { task: "review" },
+        outcome: "completed",
+        result: {
+          details: {
+            status: "accepted",
+            runId: childRunId,
+            childSessionKey,
+            expectsCompletionMessage: true,
+          },
+        },
+      });
+      markMcpLoopbackToolCallFinished(spawnCapture);
       const captureHandle = markMcpLoopbackRequestStarted(input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY);
       await resolveMcpLoopbackYieldContext(captureHandle)?.onYield("waiting on subagents");
       markMcpLoopbackRequestFinished(captureHandle);
       input.onStdout?.("yield acknowledged");
       return makeManagedRun();
     });
-    const context = buildPreparedContext();
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:main",
+      runId: requesterTurnRunId,
+    });
+    context.mcpDeliveryCapture = true;
+    Object.assign(context.params, {
+      sessionFile,
+      sessionTarget,
+      storePath,
+      workspaceDir: dir,
+      persistAssistantTranscript: true,
+    });
+
+    try {
+      const result = await runPreparedCliAgent(context);
+
+      expect(result).toMatchObject({
+        acceptedSessionSpawns: [
+          { runId: childRunId, childSessionKey, expectsCompletionMessage: true },
+        ],
+        meta: {
+          yielded: true,
+          livenessState: "paused",
+          stopReason: "end_turn",
+          completion: {
+            finishReason: "end_turn",
+            stopReason: "end_turn",
+            refusal: false,
+          },
+        },
+      });
+      const messages = await readTranscriptMessages(sessionTarget);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "yield acknowledged" }],
+          idempotencyKey: `cli-assistant:${requesterTurnRunId}`,
+        }),
+      ]);
+      expect(isIntermediateAssistantTranscriptMessage(messages[0])).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["rejected", { details: { status: "rejected", error: "not accepted" } }],
+    ["malformed accepted", { details: { status: "accepted", runId: "run-without-session" } }],
+  ] as const)("does not retain a %s CLI session spawn", async (_label, spawnResult) => {
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const spawnCapture = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY,
+        toolName: "sessions_spawn",
+        args: { task: "review" },
+      });
+      if (!spawnCapture) {
+        throw new Error("missing sessions_spawn capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle: spawnCapture,
+        toolName: "sessions_spawn",
+        args: { task: "review" },
+        outcome: "completed",
+        result: spawnResult,
+      });
+      markMcpLoopbackToolCallFinished(spawnCapture);
+      const yieldCapture = markMcpLoopbackRequestStarted(input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY);
+      await resolveMcpLoopbackYieldContext(yieldCapture)?.onYield("waiting on subagents");
+      markMcpLoopbackRequestFinished(yieldCapture);
+      input.onStdout?.("yield acknowledged");
+      return makeManagedRun();
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:main",
+      runId: "run-cli-unproven-spawn",
+    });
     context.mcpDeliveryCapture = true;
 
     const result = await runPreparedCliAgent(context);
 
-    expect(result.meta).toMatchObject({
-      yielded: true,
-      livenessState: "paused",
-      stopReason: "end_turn",
-      completion: {
-        finishReason: "end_turn",
-        stopReason: "end_turn",
-        refusal: false,
-      },
-    });
+    expect(result.acceptedSessionSpawns).toBeUndefined();
+    expect(result.meta).toMatchObject({ yielded: true, livenessState: "paused" });
   });
 
   it("seeds fresh CLI sessions from the OpenClaw transcript", async () => {

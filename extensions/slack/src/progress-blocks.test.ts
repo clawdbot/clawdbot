@@ -7,6 +7,14 @@ import {
   reconcileSlackNativeTaskChunks,
 } from "./progress-blocks.js";
 
+const failedCommand: ChannelProgressDraftLine = {
+  kind: "command-output",
+  label: "Bash",
+  detail: "run checks",
+  status: "exit 1",
+  text: "🛠️ Bash: run checks · exit 1",
+};
+
 function progressLine(index: number) {
   return {
     kind: "tool" as const,
@@ -42,6 +50,69 @@ function taskUpdate(
 }
 
 describe("Slack progress presentation", () => {
+  it.each([
+    ["Run `pnpm test`", "*Run `pnpm test`*"],
+    ["Run **bold** checks", "*Run bold checks*"],
+    ["Read C:\\path", "*Read C:\\path*"],
+    [
+      "Check `code` for <@U123> & <!channel>",
+      "*Check `code` for &lt;@U123&gt; &amp; &lt;!channel&gt;*",
+    ],
+  ])("renders authored card title %s inside one bold wrapper", (title, expected) => {
+    expect(buildSlackProgressCardBlocks({ state: "working", title, lines: [] })).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: expected } },
+    ]);
+  });
+
+  it("renders authored narration inside one italic wrapper while preserving inline code", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Working",
+      narration: "Check _x_ and *x* with `pnpm test` for <@U123> & <!channel>",
+      lines: [],
+    });
+    expect(blocks[1]).toEqual({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "_Check x and x with `pnpm test` for &lt;@U123&gt; &amp; &lt;!channel&gt;_",
+      },
+    });
+  });
+
+  it("renders authored plan Markdown without activating Slack mentions", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Working",
+      plan: [
+        { step: "Run `pnpm test` for **checks** <@U123> & <!channel>", status: "in_progress" },
+      ],
+      lines: [],
+    });
+    expect(blocks[1]).toEqual({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "In progress: Run `pnpm test` for *checks* &lt;@U123&gt; &amp; &lt;!channel&gt;",
+      },
+    });
+  });
+
+  it("escapes only entities in literal attention text", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Working",
+      lines: [{ ...toolLine("`pnpm test` <@U123> & <!channel>"), status: "exit 1" }],
+    });
+    expect(blocks[1]).toEqual({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "Exec — `pnpm test` &lt;@U123&gt; &amp; &lt;!channel&gt; — exit 1",
+      },
+    });
+  });
+
   it.each([
     { state: "working" as const, prefix: "" },
     { state: "success" as const, prefix: "Completed: " },
@@ -85,14 +156,27 @@ describe("Slack progress presentation", () => {
       state: "working",
       title: "Checking the workspace",
       lines: [
-        { id: "reasoning", kind: "item", label: "Reasoning", text: "Compare the approaches 🔍" },
-        { id: "commentary:1", kind: "item", label: "Update", text: "Checking **the fix** 🔧" },
+        {
+          id: "reasoning",
+          kind: "item",
+          label: "Reasoning",
+          text: "Compare <#C123> approaches 🔍",
+        },
+        {
+          id: "commentary:1",
+          kind: "item",
+          label: "Update",
+          text: "Checking **the fix** <@U123> & <!channel> 🔧",
+        },
         toolLine("run tests"),
       ],
     });
     expect(blocks[1]).toEqual({
       type: "section",
-      text: { type: "mrkdwn", text: "Compare the approaches 🔍\nChecking *the fix* 🔧" },
+      text: {
+        type: "mrkdwn",
+        text: "Compare &lt;#C123&gt; approaches 🔍\nChecking *the fix* &lt;@U123&gt; &amp; &lt;!channel&gt; 🔧",
+      },
     });
   });
 
@@ -177,33 +261,76 @@ describe("Slack progress presentation", () => {
       type: "section",
       text: { type: "mrkdwn", text: "Approval required: Run the command" },
     });
+    const completed = reconcileSlackNativeTaskChunks({
+      previous: first.snapshot,
+      chunks: buildSlackProgressStreamChunks({
+        title: "Working",
+        lines: [approval],
+        finalInProgressStatus: "complete",
+      }),
+    });
+    expect(completed.chunks).toEqual([
+      taskUpdate("openclaw_summary", "Working", "complete"),
+      taskUpdate("openclaw_attention", "Approval required: Run the command", "complete"),
+    ]);
+    expect(
+      buildSlackProgressCardBlocks({ state: "success", title: "Working", lines: [approval] }),
+    ).toEqual([{ type: "section", text: { type: "mrkdwn", text: "Completed: *Working*" } }]);
   });
 
-  it("shows a failed tool without declaring the whole run failed", () => {
-    const failed: ChannelProgressDraftLine = {
-      kind: "command-output",
-      label: "Bash",
-      detail: "run checks",
-      status: "exit 1",
-      text: "🛠️ Bash: run checks · exit 1",
-    };
-    const chunks = buildSlackProgressStreamChunks({
-      title: "Checking the workspace",
-      lines: [failed],
-    });
-    expect(chunks).toEqual([
-      planUpdate("Checking the workspace"),
-      taskUpdate("openclaw_summary", "Checking the workspace", "in_progress"),
-      taskUpdate("openclaw_attention", "Bash — run checks — exit 1", "error"),
-    ]);
+  it.each(["complete", "error"] as const)(
+    "settles failed tool attention when the native turn ends as %s",
+    (finalInProgressStatus) => {
+      const first = reconcileSlackNativeTaskChunks({
+        previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
+        chunks: buildSlackProgressStreamChunks({
+          title: "Checking the workspace",
+          lines: [failedCommand],
+        }),
+      });
+      expect(first.chunks).toEqual([
+        planUpdate("Checking the workspace"),
+        taskUpdate("openclaw_summary", "Checking the workspace", "in_progress"),
+        taskUpdate("openclaw_attention", "Bash — run checks — exit 1", "error"),
+      ]);
+      const final = reconcileSlackNativeTaskChunks({
+        previous: first.snapshot,
+        chunks: buildSlackProgressStreamChunks({
+          title: "Checking the workspace",
+          lines: [failedCommand],
+          finalInProgressStatus,
+        }),
+      });
+      const attentionTitle =
+        finalInProgressStatus === "complete"
+          ? "Recovered: Bash — run checks — exit 1"
+          : "Bash — run checks — exit 1";
+      expect(final.chunks).toEqual([
+        taskUpdate("openclaw_summary", "Checking the workspace", finalInProgressStatus),
+        ...(finalInProgressStatus === "complete"
+          ? [taskUpdate("openclaw_attention", attentionTitle, "complete")]
+          : []),
+      ]);
+      expect(final.snapshot.tasks.get("openclaw_attention")).toEqual({
+        title: attentionTitle,
+        status: finalInProgressStatus,
+      });
+    },
+  );
+
+  it.each([
+    { state: "working", attentionTitle: "Bash — run checks — exit 1" },
+    { state: "success", attentionTitle: "Recovered: Bash — run checks — exit 1" },
+    { state: "error", attentionTitle: "Bash — run checks — exit 1" },
+  ] as const)("renders failed tool attention on a $state card", ({ state, attentionTitle }) => {
     const blocks = buildSlackProgressCardBlocks({
-      state: "working",
+      state,
       title: "Checking the workspace",
-      lines: [failed],
+      lines: [failedCommand],
     });
     expect(blocks.at(-1)).toEqual({
       type: "section",
-      text: { type: "mrkdwn", text: "Bash — run checks — exit 1" },
+      text: { type: "mrkdwn", text: attentionTitle },
     });
   });
 

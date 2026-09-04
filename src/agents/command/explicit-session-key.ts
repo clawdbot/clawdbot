@@ -12,11 +12,8 @@ export function resolveExplicitAgentCommandSessionKey(params: {
   shouldScopeDefaultAgentKey?: boolean;
   cfg: OpenClawConfig;
 }): string | undefined {
-  if (
-    isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
-    !params.agentIdOverride &&
-    !params.shouldScopeDefaultAgentKey
-  ) {
+  // Storage sentinels keep their logical key; resolveSession validates the separate owner.
+  if (isUnscopedSessionKeySentinel(params.rawExplicitSessionKey)) {
     return params.rawExplicitSessionKey;
   }
   const unscopedOwnerAgentId =

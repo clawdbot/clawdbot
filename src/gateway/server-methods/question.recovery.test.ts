@@ -37,7 +37,7 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
-import { startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
+import { diagnosticLogger, startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
@@ -240,6 +240,94 @@ function recover() {
   });
 }
 
+it.each(["resumed", "replacement"] as const)(
+  "keeps the %s owner alive when a heartbeat expires its pending question",
+  async (owner) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const heartbeatAtMs = Date.now() + 900_000;
+      const recovery = vi.fn(recoverStuckDiagnosticSession);
+      const replacement: EmbeddedAgentQueueHandle = {
+        ...handle,
+        abort: vi.fn(() => clearActiveEmbeddedRun(ref.sessionId, replacement, ref.sessionKey)),
+      };
+      if (owner === "replacement") {
+        onBroadcast = (event) => {
+          if (event === "question.resolved") {
+            setActiveEmbeddedRun(ref.sessionId, replacement, ref.sessionKey);
+          }
+        };
+      }
+      startDiagnosticHeartbeat(
+        {},
+        {
+          recoverStuckSession: recovery,
+          emitMemorySample: () => {
+            if (Date.now() === heartbeatAtMs) {
+              // Synchronous sampling crosses expiry before its timer can run;
+              // this does not depend on equal-deadline timer ordering.
+              vi.setSystemTime(heartbeatAtMs + 100);
+            }
+            return {
+              rssBytes: 100,
+              heapTotalBytes: 80,
+              heapUsedBytes: 40,
+              externalBytes: 10,
+              arrayBuffersBytes: 5,
+            };
+          },
+          sampleLiveness: () => null,
+        },
+      );
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.started",
+        ...ref,
+        toolName: "ask_user",
+        toolCallId: "heartbeat-expiry-call",
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      const id = await request("ask_user", true, 900_000);
+      const answer = manager.waitAnswer(id);
+
+      await vi.advanceTimersByTimeAsync(899_950);
+      await Promise.all(recovery.mock.results.map((result) => result.value));
+
+      await expect(answer).resolves.toEqual({ status: "expired" });
+      expect(abort).not.toHaveBeenCalled();
+      expect(replacement.abort).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it("keeps resumed question work alive when attention logging settles the question", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const recoveryAtMs = Date.now() + 900_000;
+    const recovery = vi.fn(recoverStuckDiagnosticSession);
+    startDiagnosticHeartbeat({}, { recoverStuckSession: recovery, sampleLiveness: () => null });
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      ...ref,
+      toolName: "ask_user",
+      toolCallId: "logging-settlement-call",
+    });
+    const id = await request("ask_user");
+    const answer = manager.waitAnswer(id);
+    const warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation((message) => {
+      if (message.startsWith("stalled session:") && Date.now() === recoveryAtMs) {
+        manager.cancel(id);
+      }
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(900_000);
+      await Promise.all(recovery.mock.results.map((result) => result.value));
+
+      await expect(answer).resolves.toEqual({ status: "cancelled" });
+      expect(abort).not.toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+    }
+  });
+});
+
 it.each([900_000, 3_600_000])(
   "releases an expired %ims wait even before its timer callback runs",
   async (timeoutMs) => {
@@ -307,13 +395,18 @@ it("keeps explicit user abort authoritative during human input", async () => {
 it("keeps an explicit 600-second attempt budget authoritative over a one-hour question", async () => {
   const id = await request("ask_user");
   const timedOut = vi.fn();
+  const runAbortController = new AbortController();
   const deadline = prepareEmbeddedAttemptTimeout({
     attempt: { ...ref, timeoutMs: 600_000 },
     activeSession: { isCompacting: false, isStreaming: false },
     compactionState: { isCompacting: () => false },
     compactionTimeoutMs: 600_000,
+    runAbortSignal: runAbortController.signal,
     isProbeSession: true,
-    abortRun: abort,
+    abortRun: (isTimeout, reason) => {
+      runAbortController.abort(reason);
+      abort(isTimeout, reason);
+    },
     markTimedOutByRunBudget: timedOut,
     markTimedOutDuringCompaction: () => {},
   });

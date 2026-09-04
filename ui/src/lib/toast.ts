@@ -20,6 +20,8 @@ export type ToastOptions = {
   onAction?: () => void;
   onDismiss?: (reason: ToastDismissReason) => void;
   durationMs?: number;
+  /** Wait behind the active toast instead of replacing it. */
+  fifo?: boolean;
 };
 
 const DEFAULT_TOAST_DURATION_MS = 6_000;
@@ -43,6 +45,7 @@ let queuedToast: ToastOptions | null = null;
 class OpenClawToastHost extends OpenClawLightDomContentsElement {
   @state() private toast: ToastOptions | null = null;
   @state() private active = false;
+  private readonly toastQueue: ToastOptions[] = [];
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private exitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private exitReason: ToastDismissReason | null = null;
@@ -77,6 +80,10 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   }
 
   show(options: ToastOptions) {
+    if (options.fifo && this.toast) {
+      this.toastQueue.push(options);
+      return;
+    }
     this.finishDismiss(this.exitReason ?? "replaced");
     this.toast = options;
     this.active = true;
@@ -105,6 +112,12 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     this.exitReason = null;
     this.toast = null;
     toast?.onDismiss?.(reason);
+    if (reason !== "replaced") {
+      const next = this.toastQueue.shift();
+      if (next) {
+        this.show(next);
+      }
+    }
   }
 
   private dismiss(reason: ToastDismissReason) {
@@ -168,28 +181,32 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
           }
         }}
       >
-        ${toast.icon
-          ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
-          : nothing}
+        ${
+          toast.icon
+            ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
+            : nothing
+        }
         <span class="app-toast__message"
-          >${typeof toast.message === "string"
-            ? formatUiExternalText(toast.message)
-            : toast.message}</span
+          >${
+            typeof toast.message === "string" ? formatUiExternalText(toast.message) : toast.message
+          }</span
         >
-        ${toast.actionLabel && toast.onAction
-          ? html`
-              <button
-                type="button"
-                class="app-toast__action"
-                @click=${() => {
-                  this.dismiss("action");
-                  toast.onAction?.();
-                }}
-              >
-                ${toast.actionLabel}
-              </button>
-            `
-          : nothing}
+        ${
+          toast.actionLabel && toast.onAction
+            ? html`
+                <button
+                  type="button"
+                  class="app-toast__action"
+                  @click=${() => {
+                    this.dismiss("action");
+                    toast.onAction?.();
+                  }}
+                >
+                  ${toast.actionLabel}
+                </button>
+              `
+            : nothing
+        }
         <button
           type="button"
           class="app-toast__dismiss"

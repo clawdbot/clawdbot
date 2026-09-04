@@ -136,7 +136,9 @@ function validateConfigObjectWithPluginMode(
   applyDefaults: boolean,
 ): ValidateConfigWithPluginsResult {
   const contextBudgetConfig = migrateLegacyContextBudgetConfig(raw).config;
-  const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig).config as OpenClawConfig;
+  const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
+    env: params?.env,
+  }).config as OpenClawConfig;
   let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
   const result = validateConfigObjectWithPluginsBase(migrated, {
     applyDefaults,
@@ -173,7 +175,11 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
   legacyDefaultAgentId: string,
   env?: NodeJS.ProcessEnv,
   manifestRecords?: PluginManifestRegistry["plugins"],
-  options?: { materializeSessionStore?: boolean; materializeWorkspace?: boolean },
+  options?: {
+    materializeSessionStore?: boolean;
+    materializeWorkspace?: boolean;
+    homedir?: () => string;
+  },
 ): ReturnType<typeof materializeLegacyDefaultAgentRoles> {
   const ambientChannelIds = listChannelIdsForOwnershipMigration({
     config,
@@ -183,6 +189,7 @@ export function materializeLegacyAgentOwnershipForActiveChannelsResult(
   const materialized = materializeLegacyDefaultAgentRoles(config, legacyDefaultAgentId, {
     ambientChannelIds,
     env,
+    homedir: options?.homedir,
     materializeSessionStore: options?.materializeSessionStore,
     materializeWorkspace: options?.materializeWorkspace,
   });
@@ -640,7 +647,7 @@ function validateConfigObjectWithPluginsBase(
         schema: channelSchema.schema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],
-        applyDefaults: true, // Always apply defaults for AJV schema validation;
+        applyDefaults: true, // Always apply defaults for plugin schema validation;
         // writeConfigFile persists persistCandidate, not validated.config (#61841)
       });
       if (!result.ok) {

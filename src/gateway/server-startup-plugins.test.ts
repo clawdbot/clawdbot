@@ -25,25 +25,23 @@ const loadGatewayStartupPlugins = vi.hoisted(() =>
     gatewayMethods: ["ping"],
   })),
 );
-const pluginManifestRegistry = vi.hoisted(
-  (): PluginManifestRegistry => ({
-    plugins: [
-      {
-        id: "telegram",
-        origin: "bundled",
-        rootDir: "/package/dist/extensions/telegram",
-        source: "/package/dist/extensions/telegram/index.js",
-        manifestPath: "/package/dist/extensions/telegram/package.json",
-        channels: ["telegram"],
-        providers: [],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-      },
-    ],
-    diagnostics: [],
-  }),
-);
+const pluginManifestRegistry = vi.hoisted((): PluginManifestRegistry => ({
+  plugins: [
+    {
+      id: "telegram",
+      origin: "bundled",
+      rootDir: "/package/dist/extensions/telegram",
+      source: "/package/dist/extensions/telegram/index.js",
+      manifestPath: "/package/dist/extensions/telegram/package.json",
+      channels: ["telegram"],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+    },
+  ],
+  diagnostics: [],
+}));
 const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
   const index: PluginMetadataSnapshot["index"] = {
     version: 1,
@@ -75,6 +73,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,

@@ -21,7 +21,12 @@ export type EmbeddedContextAccountingEvent = Readonly<
 /** Writer custody is independent of telemetry; an absent snapshot is not observed unknown context. */
 export type CompactionAccountingFact = Readonly<
   { count: number; currentContextSnapshot?: { tokens: number | undefined } } & (
-    | { kind: "durable"; target: CompactionAccountingTarget }
+    | {
+        kind: "durable";
+        target: CompactionAccountingTarget;
+        /** Present only when the host committed a successor session rotation. */
+        previousSessionId?: string;
+      }
     | { kind: "presentation-only" }
   )
 >;

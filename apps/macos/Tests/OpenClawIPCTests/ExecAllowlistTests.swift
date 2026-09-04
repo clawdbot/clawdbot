@@ -41,7 +41,9 @@ struct ExecAllowlistTests {
     }
 
     private static func cwdBoundArgPattern(_ argv: [String], cwd: String) -> String {
-        let normalizedCwd = URL(fileURLWithPath: cwd).standardizedFileURL.resolvingSymlinksInPath().path
+        // Use the approval cwd identity: Foundation folds existing /private paths back to their
+        // aliases, so a local copy of this normalization changes the bytes these fixtures hash.
+        let normalizedCwd = ExecCommandResolution.canonicalApprovalCwd(cwd)
         let arguments = Array(argv.dropFirst())
         let argvSubject = "\(arguments.count)\0" + arguments
             .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
@@ -314,11 +316,41 @@ struct ExecAllowlistTests {
     }
 
     @Test func `cwd bound hash matches the shared cross platform vector`() {
-        #expect(
-            Self.cwdBoundArgPattern(
-                ["/usr/bin/printf", "hello world", ""],
-                cwd: "/workspace") ==
-                "sha256:cwd-argv:v1:2b4f4aed226aa1fd771c852b8f74e4c162d440aafaf60bfef19746f3b2ee5890")
+        let argv = ["/usr/bin/printf", "hello world", ""]
+        let vector = "sha256:cwd-argv:v1:2b4f4aed226aa1fd771c852b8f74e4c162d440aafaf60bfef19746f3b2ee5890"
+        #expect(Self.cwdBoundArgPattern(argv, cwd: "/workspace") == vector)
+        // src/infra/exec-approvals-allow-always.test.ts pins the same literal through its own
+        // builder; the app must reach it through production, not only through this fixture.
+        let patterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
+            command: argv,
+            cwd: "/workspace",
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(patterns.first?.argPattern == vector)
+    }
+
+    @Test func `cwd bound patterns give a symlinked working directory one identity`() throws {
+        let fm = FileManager()
+        // macOS reaches one directory through /tmp and /private/tmp, and Foundation folds the real
+        // path back to the link. Approval identity must stay the realpath for either spelling.
+        let name = "oc-exec-cwd-\(UUID().uuidString)"
+        let realDirectory = "/private/tmp/\(name)"
+        let linkedDirectory = "/tmp/\(name)"
+        try fm.createDirectory(atPath: realDirectory, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(atPath: realDirectory) }
+        try #require(fm.fileExists(atPath: linkedDirectory))
+
+        #expect(ExecCommandResolution.canonicalApprovalCwd(linkedDirectory) == realDirectory)
+        #expect(ExecCommandResolution.canonicalApprovalCwd(realDirectory) == realDirectory)
+
+        let command = ["/usr/bin/printf", "safe_marker"]
+        let env = ["PATH": "/usr/bin:/bin"]
+        let viaLink = ExecCommandResolution.resolveAllowAlwaysPatterns(
+            command: command, cwd: linkedDirectory, env: env)
+        let viaReal = ExecCommandResolution.resolveAllowAlwaysPatterns(
+            command: command, cwd: realDirectory, env: env)
+        let linkedPattern = try #require(viaLink.first?.argPattern)
+        #expect(linkedPattern == viaReal.first?.argPattern)
+        #expect(linkedPattern == Self.cwdBoundArgPattern(command, cwd: linkedDirectory))
     }
 
     @Test func `arg pattern does not discard redirect shaped direct argv literal`() {

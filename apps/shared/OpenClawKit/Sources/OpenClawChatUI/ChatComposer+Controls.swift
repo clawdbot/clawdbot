@@ -20,28 +20,33 @@ extension OpenClawChatComposer {
             Text("Thinking")
                 .font(OpenClawChatTypography.captionSemiBold)
         }
-        .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 140, alignment: .leading)
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 
-    #if os(macOS)
     var verbosityPicker: some View {
         Picker(selection: Binding(
             get: { self.viewModel.verboseLevel },
             set: { self.viewModel.selectVerboseLevel($0) }))
         {
             Text(String(localized: "Default (inherited)"))
+                .font(OpenClawChatTypography.captionSemiBold)
                 .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
-            Text(String(localized: "Off")).tag("off")
-            Text(String(localized: "On")).tag("on")
-            Text(String(localized: "Full")).tag("full")
+            Text(String(localized: "Off"))
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag("off")
+            Text(String(localized: "On"))
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag("on")
+            Text(String(localized: "Full"))
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag("full")
         } label: {
             Text(String(localized: "Verbosity"))
+                .font(OpenClawChatTypography.captionSemiBold)
         }
-        .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
         .help(String(localized: "Verbosity"))
@@ -54,19 +59,23 @@ extension OpenClawChatComposer {
             set: { self.viewModel.selectFastMode($0) }))
         {
             Text(String(localized: "Default (inherited)"))
+                .font(OpenClawChatTypography.captionSemiBold)
                 .tag(OpenClawChatViewModel.inheritedThinkingSelectionID)
-            Text(String(localized: "On")).tag("on")
-            Text(String(localized: "Off")).tag("off")
+            Text(String(localized: "On"))
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag("on")
+            Text(String(localized: "Off"))
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag("off")
         } label: {
             Label(String(localized: "Fast"), systemImage: "bolt.fill")
+                .font(OpenClawChatTypography.captionSemiBold)
         }
-        .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
         .help(String(localized: "Fast responses"))
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }
-    #endif
 
     var modelPicker: some View {
         // Sections come from an O(n) recompute over the catalog; bind once per body eval.
@@ -112,7 +121,6 @@ extension OpenClawChatComposer {
             Text("Model")
                 .font(OpenClawChatTypography.captionSemiBold)
         }
-        .labelsHidden()
         .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 240, alignment: .leading)
