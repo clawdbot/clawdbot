@@ -1846,7 +1846,8 @@ describe("models.authStatus", () => {
         await waitForFast(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2));
         await waitForFast(async () => {
           refreshed = await readAuthStatus();
-          expect(refreshed.providers[0]?.usageScope).toBe("provider");
+          expect(refreshed.providers[0]?.usageScope).toBe("account");
+          expect(refreshed.providers[0]?.independentUsage?.usageScope).toBe("provider");
           expect(refreshed.providers[0]?.profiles[0]?.usage).toBeDefined();
         });
 
@@ -1942,12 +1943,19 @@ describe("models.authStatus", () => {
     pending.resolve();
     await waitForFast(async () => {
       const result = (await readAuthStatus()).providers[0];
-      expect(result?.usage?.summary).toBe("Organization billing");
+      expect(result?.usage?.summary).toBe("Account quota");
+      expect(result?.usageProfileId).toBe(oauthProfileId);
+      expect(result?.independentUsage?.summary).toBe("Organization billing");
       expect(result?.profiles[0]?.usage?.summary).toBe("Account quota");
     });
   });
 
-  it.each([false, true])("keeps login priority with pending=%s", async (pending) => {
+  it.each([
+    { pending: false, backupType: "token" },
+    { pending: true, backupType: "token" },
+    { pending: false, backupType: "api_key" },
+    { pending: true, backupType: "api_key" },
+  ] as const)("keeps login priority ($backupType, $pending)", async ({ pending, backupType }) => {
     const loginId = "openrouter:login";
     const tokenId = "openrouter:token";
     const profiles = [
@@ -1955,7 +1963,7 @@ describe("models.authStatus", () => {
       {
         profileId: tokenId,
         provider: "openrouter",
-        type: "token",
+        type: backupType,
         status: "ok",
         source: "store",
         label: "Saved token",
@@ -1970,7 +1978,10 @@ describe("models.authStatus", () => {
           key: "synthetic-login-key",
           metadata: { authFlow: "oauth-pkce" },
         },
-        [tokenId]: { type: "token", provider: "openrouter", token: "synthetic-saved-token" },
+        [tokenId]:
+          backupType === "token"
+            ? { type: "token", provider: "openrouter", token: "synthetic-saved-token" }
+            : { type: "api_key", provider: "openrouter", key: "synthetic-backup-key" },
       },
       order: { openrouter: [loginId, tokenId] },
     });
@@ -2015,18 +2026,27 @@ describe("models.authStatus", () => {
       if (pending) {
         await waitForFast(async () => {
           const result = (await readAuthStatus()).providers[0];
-          expect(result?.profiles[1]?.usage?.windows[0]?.usedPercent).toBe(90);
+          expect(
+            (backupType === "token" ? result?.profiles[1]?.usage : result?.independentUsage)
+              ?.windows[0]?.usedPercent,
+          ).toBe(90);
           expect(result?.profiles[0]?.usageRefreshPending).toBe(true);
           expect(result?.usage).toBeUndefined();
+          expect(result?.usageProfileId).toBeUndefined();
         });
         login.resolve();
       }
       await waitForFast(async () => {
         const result = (await readAuthStatus()).providers[0];
         expect(result?.profiles.map((profile) => profile.usage?.windows[0]?.usedPercent)).toEqual([
-          10, 90,
+          10,
+          backupType === "token" ? 90 : undefined,
         ]);
         expect(result?.usage?.windows[0]?.usedPercent).toBe(10);
+        expect(result?.usageProfileId).toBe(loginId);
+        expect(result?.independentUsage?.windows[0]?.usedPercent).toBe(
+          backupType === "api_key" ? 90 : undefined,
+        );
       });
     } finally {
       login.resolve();
@@ -2088,7 +2108,11 @@ describe("models.authStatus", () => {
       }));
       await waitForFast(async () => {
         const result = (await readAuthStatus()).providers[0];
-        expect(result?.usage?.error).toBe("Synthetic endpoint error");
+        expect(result?.independentUsage?.error).toBe("Synthetic endpoint error");
+        expect(result?.independentUsage?.usageScope).toBe(usageScope);
+        expect(result?.independentUsage?.accountEmail).toBe("synthetic@example.com");
+        expect(result?.usageProfileId).toBe(oauthId);
+        expect(result?.usage?.windows[0]?.usedPercent).toBe(25);
         expect(result?.profiles[0]?.usage?.windows[0]?.usedPercent).toBe(25);
         expect(result?.usageScope).toBe(usageScope);
         expect(result?.usage?.usageScope).toBe(usageScope);
@@ -2101,6 +2125,8 @@ describe("models.authStatus", () => {
       expect(result?.usageScope).toBe(usageScope);
       expect(result?.usage?.usageScope).toBe(usageScope);
       expect(result?.usage?.accountEmail).toBeUndefined();
+      expect(result?.independentUsage).toBeUndefined();
+      expect(result?.usageProfileId).toBeUndefined();
       expect(result?.profiles.every((profile) => profile.usage === undefined)).toBe(true);
       expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(calls);
     },

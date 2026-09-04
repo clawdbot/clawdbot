@@ -174,6 +174,7 @@ export function mapAuthStatusProvider(params: {
   authAliasLookupParams: ProviderAuthAliasLookupParams;
   usageByProvider: Map<string, ProviderUsageStatus>;
   usageByProfile: Map<string, ProviderUsageStatus>;
+  usageTargetProfileIds: ReadonlySet<string>;
   pendingUsageProfileIds: ReadonlySet<string>;
   expectsOAuthSet: Set<string>;
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>;
@@ -218,7 +219,11 @@ export function mapAuthStatusProvider(params: {
       .find((id) => id !== undefined) ?? resolveUsageProviderId(provider.provider);
   const providerUsage = usageKey ? params.usageByProvider.get(usageKey) : undefined;
   const accountUsage = usageProfile ? params.usageByProfile.get(usageProfile.profileId) : undefined;
-  const usage = providerUsage ?? accountUsage;
+  const hasAccountUsageTarget =
+    usageProfile !== undefined && params.usageTargetProfileIds.has(usageProfile.profileId);
+  // The selected account owns the summary even while its quota is pending.
+  // Independently fetched usage must not replace it with another credential.
+  const usage = hasAccountUsageTarget ? accountUsage : providerUsage;
   const rawRollup = aggregateRefreshableAuthStatus(
     provider,
     Date.now(),
@@ -274,6 +279,10 @@ export function mapAuthStatusProvider(params: {
         : {}),
     ...(apiKey ? { apiKey } : {}),
     usage: usage ? mapUsageStatus(usage, params.includeProfileDetails) : undefined,
+    ...(hasAccountUsageTarget && accountUsage ? { usageProfileId: usageProfile.profileId } : {}),
+    ...(hasAccountUsageTarget && providerUsage
+      ? { independentUsage: mapUsageStatus(providerUsage, params.includeProfileDetails) }
+      : {}),
     ...(usage?.usageScope ? { usageScope: usage.usageScope } : {}),
   };
 }

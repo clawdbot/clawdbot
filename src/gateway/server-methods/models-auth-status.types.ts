@@ -72,6 +72,10 @@ export type ModelAuthStatusProvider = {
     envVar?: string;
   };
   usage?: ModelAuthUsage;
+  /** Exact saved account that produced usage; absent for independent provider reads. */
+  usageProfileId?: string;
+  /** Separately fetched usage retained alongside the selected account summary. */
+  independentUsage?: ModelAuthUsage;
   /** Endpoint-declared scope of usage; absent means unknown. */
   usageScope?: ProviderUsageSnapshot["usageScope"];
 };

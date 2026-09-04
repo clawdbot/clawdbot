@@ -472,6 +472,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           })
         : {
             usageByProfile: new Map<string, ProviderUsageStatus>(),
+            targetProfileIds: new Set<string>(),
             pendingProfileIds: new Set<string>(),
             refreshPending: false,
           };
@@ -495,6 +496,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           authAliasLookupParams,
           usageByProvider,
           usageByProfile: profileUsage.usageByProfile,
+          usageTargetProfileIds: profileUsage.targetProfileIds,
           pendingUsageProfileIds: profileUsage.pendingProfileIds,
           expectsOAuthSet: configured.expectsOAuth,
           apiKeys,

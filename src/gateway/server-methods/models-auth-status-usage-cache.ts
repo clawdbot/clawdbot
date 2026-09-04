@@ -325,6 +325,7 @@ export function readProfileUsageStaleWhileRevalidate(params: {
   now: number;
 }): {
   usageByProfile: Map<string, ProviderUsageStatus>;
+  targetProfileIds: Set<string>;
   pendingProfileIds: Set<string>;
   refreshPending: boolean;
 } {
@@ -363,6 +364,7 @@ export function readProfileUsageStaleWhileRevalidate(params: {
   }
   return {
     usageByProfile,
+    targetProfileIds: new Set(params.targets.map((target) => target.profileId)),
     pendingProfileIds,
     refreshPending: pendingProfileIds.size > 0,
   };

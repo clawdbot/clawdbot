@@ -427,6 +427,57 @@ describe("provider-usage.load", () => {
     }
   });
 
+  it("refreshes every healthy profile across successive batches larger than the queue deadline", async () => {
+    vi.useFakeTimers();
+    const profileIds = Array.from({ length: 10 }, (_, index) => `openai:${index}`);
+    const batches: string[][] = [];
+    let active = 0;
+    let peakActive = 0;
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValue({ token: "profile-token" });
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider, context }) => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      try {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 40);
+        });
+        return {
+          provider,
+          displayName: provider,
+          windows: [{ label: context.authProfileId ?? "missing profile", usedPercent: 12 }],
+        };
+      } finally {
+        active -= 1;
+      }
+    });
+    try {
+      for (let batch = 0; batch < 2; batch += 1) {
+        const pending = profileIds.map((profileId) =>
+          loadProviderUsageSummary({
+            authProfile: { provider: "openai", profileId },
+            authStore: { version: 1, profiles: {} },
+            config: {},
+            env: {},
+            timeoutMs: 50,
+            isAuthProfileCurrent: () => true,
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(160);
+        batches.push(
+          (await Promise.all(pending)).map((summary) => {
+            const snapshot = summary.providers[0];
+            return snapshot?.windows[0]?.label ?? snapshot?.error ?? "missing usage";
+          }),
+        );
+      }
+      expect(batches).toEqual([profileIds, profileIds]);
+      expect(peakActive).toBe(3);
+      expect(active).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps timed-out profile work inside the three-request cap until I/O settles", async () => {
     vi.useFakeTimers();
     let releaseWork: (() => void) | undefined;

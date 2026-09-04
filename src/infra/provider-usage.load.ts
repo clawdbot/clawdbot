@@ -29,6 +29,7 @@ import type {
 
 const PROFILE_USAGE_REFRESH_CONCURRENCY = 3;
 const profileUsageRefreshLimit = pLimit(PROFILE_USAGE_REFRESH_CONCURRENCY);
+let profileUsageRefreshProgress = 0;
 
 // Built-in fallback intentionally reports unsupported until a plugin supplies usage behavior.
 async function fetchProviderUsageSnapshotFallback(params: {
@@ -162,6 +163,7 @@ export async function loadProviderUsageSummary(
   const getAuthStore = () =>
     (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
   const tasks = descriptors.map(async ({ provider }) => {
+    let providerWorkStarted = false;
     const work = async () => {
       if (opts.authProfile && opts.isAuthProfileCurrent?.() === false) {
         return undefined;
@@ -205,6 +207,7 @@ export async function loadProviderUsageSummary(
       if (opts.authProfile && opts.isAuthProfileCurrent?.() === false) {
         return undefined;
       }
+      providerWorkStarted = true;
       return await fetchProviderUsageSnapshot({
         auth,
         config,
@@ -230,16 +233,24 @@ export async function loadProviderUsageSummary(
           return undefined;
         }
         markStarted?.();
-        return await work();
+        try {
+          return await work();
+        } finally {
+          if (providerWorkStarted) {
+            profileUsageRefreshProgress += 1;
+          }
+        }
       });
-      const acquired = await raceUsageTimeout(
-        started.then(() => true),
-        timeoutMs * 2,
-        false,
-      );
-      if (!acquired) {
-        queued = false;
-        return failureSnapshot(provider, "Refresh queue timeout");
+      const acquired = started.then(() => true);
+      let observedProgress = profileUsageRefreshProgress;
+      // Healthy batches may span several queue deadlines. Only settled provider
+      // work renews the wait; caller timeouts and skipped admissions cannot do so.
+      while (!(await raceUsageTimeout(acquired, timeoutMs * 2, false))) {
+        if (observedProgress === profileUsageRefreshProgress) {
+          queued = false;
+          return failureSnapshot(provider, "Refresh queue timeout");
+        }
+        observedProgress = profileUsageRefreshProgress;
       }
     } else {
       workPromise = work();
