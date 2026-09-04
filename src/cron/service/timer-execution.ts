@@ -1,4 +1,6 @@
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
+import { isAbortError } from "../../infra/abort-signal.js";
+import { sleepWithAbort } from "../../infra/backoff.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
@@ -66,30 +68,6 @@ export async function executeJobCore(
     status: "error" as const,
     error: abortErrorMessage(abortSignal),
   });
-  const waitWithAbort = async (ms: number) => {
-    if (!abortSignal) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      });
-      return;
-    }
-    if (abortSignal.aborted) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        abortSignal.removeEventListener("abort", onAbort);
-        resolve();
-      }, ms);
-      const onAbort = () => {
-        clearTimeout(timer);
-        abortSignal.removeEventListener("abort", onAbort);
-        resolve();
-      };
-      abortSignal.addEventListener("abort", onAbort, { once: true });
-    });
-  };
-
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
@@ -174,6 +152,7 @@ export async function executeJobCore(
     }
   }
   options?.assertRunCurrent?.();
+  options?.onPayloadExecutionStarted?.();
   if (effectiveJob.payload.kind === "script") {
     const result = await executeScriptCronJob(
       state,
@@ -267,7 +246,6 @@ export async function executeJobCore(
       state,
       effectiveJob,
       abortSignal,
-      waitWithAbort,
       options?.onHeartbeatExecutionStarted,
       options?.activeJobMarker,
       options?.owningCronLaneTaskMarker,
@@ -283,7 +261,6 @@ async function executeMainSessionCronJob(
   state: CronServiceState,
   job: CronJob,
   abortSignal: AbortSignal | undefined,
-  waitWithAbort: (ms: number) => Promise<void>,
   onHeartbeatExecutionStarted?: ExecuteJobCoreOptions["onHeartbeatExecutionStarted"],
   activeJobMarker?: CronActiveJobMarker,
   owningCronLaneTaskMarker?: CommandLaneTaskMarker,
@@ -380,7 +357,14 @@ async function executeMainSessionCronJob(
         requestCronHeartbeat(state, heartbeatWake, heartbeatResult);
         return { status: "ok", summary: text };
       }
-      await waitWithAbort(delayMs);
+      try {
+        // Keep a one-millisecond turn for expired deadlines; the loop owns abort cleanup.
+        await sleepWithAbort(Math.max(1, delayMs), abortSignal);
+      } catch (error) {
+        if (!isAbortError(error)) {
+          throw error;
+        }
+      }
     }
 
     if (heartbeatResult.status === "ran") {
