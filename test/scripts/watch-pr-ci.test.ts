@@ -77,11 +77,12 @@ if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/wa
             },
           },
           (error, stdout, stderr) => {
-            if (error && typeof error.code !== "number") {
+            const status = error ? error.code : 0;
+            if (typeof status !== "number") {
               reject(new Error("watcher process did not report an exit code", { cause: error }));
               return;
             }
-            resolve({ status: error?.code ?? 0, stdout, stderr });
+            resolve({ status, stdout, stderr });
           },
         );
       },
