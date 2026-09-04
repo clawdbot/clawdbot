@@ -1324,7 +1324,7 @@ describe("applyExtraParamsToAgent", () => {
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131072,
+        contextWindow: 65536,
         maxTokens: 4096,
         compat: {
           requiresStringContent: true,

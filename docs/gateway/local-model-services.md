@@ -90,7 +90,7 @@ Set `timeoutSeconds` on the provider entry (not `localService`) so slow cold sta
 
 ## llmman example
 
-llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. `llmman serve` always listens on the fixed address `127.0.0.1:17434` — there are no `--host`/`--port`/`--device` flags:
+llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Its API has no authentication, so keep the default loopback bind unless a trusted network boundary restricts access.
 
 ```json5
 {
@@ -110,6 +110,7 @@ llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` A
         localService: {
           command: "/opt/homebrew/bin/llmman",
           args: ["serve", "gemma4"],
+          env: { LLMMAN_CONTEXT_LENGTH: "65536" },
           healthUrl: "http://127.0.0.1:17434/v1/models",
           readyTimeoutMs: 180000,
           idleStopMs: 0,
@@ -121,7 +122,7 @@ llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` A
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 131072,
+            contextWindow: 65536,
             maxTokens: 4096,
           },
         ],

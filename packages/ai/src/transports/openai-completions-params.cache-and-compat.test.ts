@@ -337,7 +337,7 @@ describe("openai completions params", () => {
         provider: "llmman",
         baseUrl: "http://127.0.0.1:17434/v1",
         reasoning: false,
-        contextWindow: 131072,
+        contextWindow: 65536,
         maxTokens: 4096,
         compat: {
           requiresStringContent: true,

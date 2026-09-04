@@ -7,29 +7,35 @@ read_when:
 title: "llmman"
 ---
 
-[llmman](https://github.com/llmmanorg/llmman) pulls GGUF/safetensors models from OCI registries and serves them behind Ollama-, OpenAI-, and Anthropic-compatible APIs, spawning a `llama-server` (or `vllm`) subprocess per model on demand. OpenClaw talks to it through the generic `openai-completions` adapter.
+[llmman](https://github.com/llmmanorg/llmman) pulls GGUF/safetensors models from OCI registries and serves them behind Ollama-, OpenAI-, and Anthropic-compatible APIs. It uses `llama-server` for GGUF models and `vllm` or `mlx_lm.server` for safetensors models. OpenClaw talks to it through the generic `openai-completions` adapter.
 
-| Property         | Value                                                               |
-| ---------------- | ------------------------------------------------------------------- |
-| Provider id      | `llmman` (custom; configure under `models.providers.llmman`)        |
-| Plugin           | none — not a bundled OpenClaw provider plugin                       |
-| Auth env var     | none required; any value works, `llmman serve` has no auth          |
-| API              | OpenAI-compatible (`openai-completions`)                            |
-| Default base URL | `http://127.0.0.1:17434/v1` (fixed; not configurable via CLI flags) |
+| Property         | Value                                                        |
+| ---------------- | ------------------------------------------------------------ |
+| Provider id      | `llmman` (custom; configure under `models.providers.llmman`) |
+| Plugin           | none — not a bundled OpenClaw provider plugin                |
+| Auth env var     | none required; any value works, `llmman serve` has no auth   |
+| API              | OpenAI-compatible (`openai-completions`)                     |
+| Default base URL | `http://127.0.0.1:17434/v1`                                  |
 
 <Note>
   `llmman` is a custom self-hosted OpenAI-compatible backend, not a dedicated OpenClaw provider plugin: you configure it under `models.providers.llmman` instead of picking an onboarding auth choice. For a bundled plugin with auto-discovery, see [SGLang](/providers/sglang) or [vLLM](/providers/vllm).
 </Note>
+
+<Warning>
+  `llmman serve` does not authenticate API requests. Keep the default loopback bind unless access is restricted by a trusted network boundary.
+</Warning>
 
 ## Getting started
 
 <Steps>
   <Step title="Start llmman with a model">
     ```bash
-    llmman serve gemma4
+    LLMMAN_CONTEXT_LENGTH=65536 llmman serve gemma4
     ```
 
-    `llmman serve` always listens on `127.0.0.1:17434` (no `--host`/`--port` flags). GPU acceleration (CUDA, ROCm, Vulkan, or Metal) is auto-detected; there is no `--device` flag. The model argument is optional — omit it to start the server and load models on the first request that names them instead.
+    `llmman serve` listens on `127.0.0.1:17434` by default. Set `LLMMAN_HOST` before startup to override the bind address; there are no `--host`/`--port` flags. GPU acceleration (CUDA, ROCm, Vulkan, or Metal) is auto-detected; set `LLMMAN_LLM_LIBRARY` to override it because there is no `--device` flag. The model argument is optional — omit it to start the server and load models on the first request that names them instead.
+
+    The example fixes the server context at 65,536 tokens and uses the same value in OpenClaw below. If you change `LLMMAN_CONTEXT_LENGTH`, keep the OpenClaw model's `contextWindow` at or below that value.
 
   </Step>
   <Step title="Verify the server is reachable">
@@ -76,7 +82,7 @@ Gemma 4 on a local `llmman` server:
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 131072,
+            contextWindow: 65536,
             maxTokens: 4096,
           },
         ],
@@ -102,6 +108,7 @@ OpenClaw can start `llmman` itself only when an `llmman/...` model is selected. 
         localService: {
           command: "/opt/homebrew/bin/llmman",
           args: ["serve", "gemma4"],
+          env: { LLMMAN_CONTEXT_LENGTH: "65536" },
           healthUrl: "http://127.0.0.1:17434/v1/models",
           readyTimeoutMs: 180000,
           idleStopMs: 0,
@@ -113,7 +120,7 @@ OpenClaw can start `llmman` itself only when an `llmman/...` model is selected. 
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 131072,
+            contextWindow: 65536,
             maxTokens: 4096,
           },
         ],
@@ -129,7 +136,7 @@ OpenClaw can start `llmman` itself only when an `llmman/...` model is selected. 
 
 <AccordionGroup>
   <Accordion title="Why requiresStringContent might matter">
-    `llmman`'s `/v1/chat/completions` route is a plain pass-through proxy to the `llama-server` subprocess it spawns for the requested model, so any Chat Completions request-shape quirks come from your `llama-server` build, not from `llmman` itself.
+    `llmman` resolves and loads the requested model, rewrites its id for the selected backend, and adds generation defaults such as `repeat_penalty`. It forwards message content and tool schemas without normalizing them, so compatibility for those fields depends on the selected backend and model.
 
     <Warning>
     If OpenClaw runs fail with:
@@ -185,7 +192,7 @@ OpenClaw can start `llmman` itself only when an `llmman/...` model is selected. 
 
 <AccordionGroup>
   <Accordion title="curl /v1/models fails">
-    `llmman serve` is not running or not reachable at `127.0.0.1:17434`. Confirm the process is started; there is no host/port to misconfigure since the address is fixed.
+    `llmman serve` is not running or is not reachable at the configured address. The default is `127.0.0.1:17434`; if you set `LLMMAN_HOST`, update the OpenClaw `baseUrl` and `healthUrl` to match.
   </Accordion>
 
   <Accordion title="messages[].content expected a string">
@@ -193,7 +200,11 @@ OpenClaw can start `llmman` itself only when an `llmman/...` model is selected. 
   </Accordion>
 
   <Accordion title="Direct /v1/chat/completions calls pass but openclaw infer model run fails">
-    Set `compat.supportsTools: false` to disable the tool schema surface (see the tool-schema caveat above).
+    Both probes are tool-free, so `compat.supportsTools` cannot change this failure. Check the configured base URL and model id, inspect the `llmman`/backend logs, and compare the two request payloads and responses.
+  </Accordion>
+
+  <Accordion title="Model run passes but a normal agent turn fails">
+    The agent turn includes a larger prompt and may include tool schemas. Try `compat.supportsTools: false` to isolate tool-schema pressure (see the tool-schema caveat above).
   </Accordion>
 
   <Accordion title="llama-server still crashes on larger agent turns">
