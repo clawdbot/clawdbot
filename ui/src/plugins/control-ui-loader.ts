@@ -1,3 +1,4 @@
+import { controlUiPluginAssetPrefix } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type { ControlUiDisposer, ControlUiPlugin } from "../../../src/plugin-sdk/control-ui.js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -6,9 +7,8 @@ import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-
 // Native mounts must be defined before activation can publish their registrations.
 import "./control-ui-view.runtime.ts";
 
-function assetUrl(descriptor: ControlUiPluginOwner["descriptor"], path: string): string {
+function assetUrl(path: string, prefix: string): string {
   const url = new URL(path, window.location.href);
-  const prefix = `/__openclaw__/plugins/control-ui/${encodeURIComponent(descriptor.pluginId)}/${encodeURIComponent(descriptor.revision)}/`;
   if (url.origin !== window.location.origin || !url.pathname.startsWith(prefix)) {
     throw new Error("Native plugin assets must be served by this Control UI Gateway.");
   }
@@ -26,15 +26,16 @@ export async function initializeControlUiPlugin(
     return undefined;
   }
   const { descriptor, abort } = owner;
+  const prefix = `${controlUiPluginAssetPrefix(descriptor.pluginId, getContext().resourceBasePath)}${encodeURIComponent(descriptor.revision)}/`;
   const complete: ControlUiPluginOwner = Object.assign(owner, {
     host: createControlUiPluginHost(getContext, runtime, owner),
   });
-  const url = assetUrl(descriptor, descriptor.entryUrl);
+  const url = assetUrl(descriptor.entryUrl, prefix);
   for (const path of descriptor.styles) {
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.media = "not all";
-    link.href = assetUrl(descriptor, path);
+    link.href = assetUrl(path, prefix);
     const loaded = new Promise<void>((resolve, reject) => {
       link.addEventListener("load", () => resolve(), { once: true, signal: abort.signal });
       link.addEventListener(

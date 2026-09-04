@@ -207,6 +207,7 @@ describe("PluginPage", () => {
       listeners.forEach((listener) => listener());
       await page.updateComplete;
       expect(page.textContent).toContain("Plugin panel unavailable");
+      expect(page.textContent).toContain("Custom plugin UI is off");
       expect(page.textContent).not.toContain("Open Labs");
     } finally {
       provider.remove();

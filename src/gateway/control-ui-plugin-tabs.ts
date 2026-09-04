@@ -1,6 +1,7 @@
 // Projects plugin "tab" Control UI descriptors into the hello payload so the
 // dashboard renders plugin tabs without hardcoding plugin ids in core.
 // Descriptors come from the process-root registry installed by the gateway.
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";
@@ -177,6 +178,7 @@ export function listControlUiPluginTabAuthGrants(
     return [];
   }
   const grants = new Map<string, ControlUiPluginTabAuthGrant>();
+  const basePath = getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath;
   for (const plugin of registry.plugins) {
     if (
       !plugin.enabled ||
@@ -186,7 +188,7 @@ export function listControlUiPluginTabAuthGrants(
     ) {
       continue;
     }
-    const assetPath = controlUiPluginAssetPrefix(plugin.id);
+    const assetPath = controlUiPluginAssetPrefix(plugin.id, basePath);
     grants.set(`${plugin.id}\n${assetPath}`, {
       pluginId: plugin.id,
       path: assetPath,

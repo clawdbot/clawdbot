@@ -3,6 +3,7 @@ import type {
   PluginControlUiModule,
   PluginsControlUiCatalog,
 } from "../../../packages/gateway-protocol/src/schema/plugins.js";
+import { controlUiPluginAssetPrefix } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type {
   ControlUiDisposer,
@@ -192,19 +193,26 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           throw new Error("Could not authenticate native plugin assets. Reconnect and retry.");
         }
         for (const descriptor of catalog.plugins) {
-          const prefix = `/__openclaw__/plugins/control-ui/${encodeURIComponent(descriptor.pluginId)}/`;
+          const prefix = controlUiPluginAssetPrefix(
+            descriptor.pluginId,
+            this.getContext().resourceBasePath,
+          );
+          // Secure asset cookies cannot authenticate requests from non-local HTTP.
           if (
             bootstrap.pluginAssetsRequireAuth &&
-            !bootstrap.pluginFrameGrants.some(
-              (grant) =>
-                grant.pluginId === descriptor.pluginId &&
-                grant.match === "prefix" &&
-                grant.path === prefix,
-            )
+            (!window.isSecureContext ||
+              !bootstrap.pluginFrameGrants.some(
+                (grant) =>
+                  grant.pluginId === descriptor.pluginId &&
+                  grant.match === "prefix" &&
+                  grant.path === prefix,
+              ))
           ) {
-            this.loadingCatalog.delete(descriptor.pluginId);
+            installed.delete(descriptor.pluginId);
             const error = new Error(
-              `Native plugin asset grant unavailable: ${descriptor.pluginId}`,
+              window.isSecureContext
+                ? `Native plugin asset grant unavailable: ${descriptor.pluginId}`
+                : "Native plugin UI requires HTTPS or localhost to authenticate its assets. Open this Gateway through HTTPS/Tailscale Serve, or use its loopback dashboard.",
             );
             this.reportError(descriptor.pluginId, error);
             await this.reportActivation(descriptor, client, current, "failed", error);

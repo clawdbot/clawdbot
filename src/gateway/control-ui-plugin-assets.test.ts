@@ -146,7 +146,7 @@ describe("native Control UI browser assets", () => {
         const cookie = cookieForGrant();
         const server = createTestGatewayServer({
           resolvedAuth: AUTH_TOKEN,
-          overrides: { controlUiEnabled: true },
+          overrides: { controlUiEnabled: true, controlUiBasePath: "" },
         });
         expect(
           (await sendRequest(server, { path: entry.entryUrl, headers: { cookie } })).res.statusCode,
@@ -176,29 +176,40 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it.each([AUTH_NONE, AUTH_TOKEN])(
-    "reports and enforces native asset authentication for $mode Gateways",
-    async (auth) => {
-      activateFixture();
-      const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+  it.each(
+    [AUTH_NONE, AUTH_TOKEN].flatMap((auth) =>
+      ["", "/openclaw"].map((basePath) => ({ auth, basePath })),
+    ),
+  )(
+    "reports and enforces native asset authentication for $auth.mode Gateways at '$basePath'",
+    async ({ auth, basePath }) => {
       const requiresAuth = auth.mode !== "none";
-      await withGatewayServer({
+      await withTempConfig({
         prefix: "native-ui-bootstrap-",
-        resolvedAuth: auth,
-        overrides: { controlUiEnabled: true, controlUiBasePath: "" },
-        run: async (server) => {
+        cfg: { gateway: { controlUi: { basePath } } },
+        run: async () => {
+          activateFixture();
+          const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+          const assetPath = `${basePath}/__openclaw__/plugins/control-ui/native-ui/`;
+          expect(entry.entryUrl).toBe(`${assetPath}${entry.revision}/index.js`);
+          expect(entry.styles).toEqual([`${assetPath}${entry.revision}/theme.css`]);
+          const server = createTestGatewayServer({
+            resolvedAuth: auth,
+            overrides: { controlUiEnabled: true, controlUiBasePath: basePath },
+          });
           const bootstrap = await sendRequest(server, {
-            path: "/control-ui-config.json",
+            path: `${basePath}/control-ui-config.json`,
             ...(requiresAuth ? { authorization: "Bearer test-token" } : {}),
           });
           expect(bootstrap.res.statusCode).toBe(200);
           expect(JSON.parse(bootstrap.getBody())).toMatchObject({
+            basePath,
             pluginAssetsRequireAuth: requiresAuth,
             pluginFrameGrants: requiresAuth
               ? [
                   {
                     pluginId: "native-ui",
-                    path: "/__openclaw__/plugins/control-ui/native-ui/",
+                    path: assetPath,
                     match: "prefix",
                   },
                 ]
@@ -208,14 +219,30 @@ describe("native Control UI browser assets", () => {
             .filter(([name]) => name === "Set-Cookie")
             .flatMap(([, value]) => (Array.isArray(value) ? value : [value]));
           expect(cookieHeaders).toHaveLength(requiresAuth ? 1 : 0);
-          expect((await sendRequest(server, { path: entry.entryUrl })).res.statusCode).toBe(
-            requiresAuth ? 401 : 200,
-          );
-          if (requiresAuth) {
-            const cookie = cookieHeaders.map((value) => String(value).split(";")[0]).join("; ");
-            const asset = await sendRequest(server, { path: entry.entryUrl, headers: { cookie } });
+          for (const header of cookieHeaders) {
+            expect(header).toContain(`Path=${assetPath};`);
+          }
+          const cookie = cookieHeaders.map((value) => String(value).split(";")[0]).join("; ");
+          for (const { assetUrl, source } of [
+            { assetUrl: entry.entryUrl, source: firstSource },
+            { assetUrl: entry.styles[0]!, source: "body { color: red; }" },
+          ]) {
+            expect((await sendRequest(server, { path: assetUrl })).res.statusCode).toBe(
+              requiresAuth ? 401 : 200,
+            );
+            const asset = await sendRequest(server, { path: assetUrl, headers: { cookie } });
             expect(asset.res.statusCode).toBe(200);
-            expect(asset.end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
+            expect(asset.end.mock.calls[0]?.[0]?.toString()).toBe(source);
+            if (basePath) {
+              expect(
+                (
+                  await sendRequest(server, {
+                    path: assetUrl.slice(basePath.length),
+                    headers: { cookie },
+                  })
+                ).res.statusCode,
+              ).toBe(404);
+            }
           }
         },
       });
@@ -241,7 +268,7 @@ describe("native Control UI browser assets", () => {
     await withGatewayServer({
       prefix: "native-ui-http-",
       resolvedAuth: AUTH_TOKEN,
-      overrides: { controlUiEnabled: true },
+      overrides: { controlUiEnabled: true, controlUiBasePath: "" },
       run: async (server) => {
         const read = (url: string, method = "GET") =>
           sendRequest(server, {
@@ -386,7 +413,7 @@ describe("native Control UI browser assets", () => {
       await withGatewayServer({
         prefix: "native-ui-retained-",
         resolvedAuth: AUTH_TOKEN,
-        overrides: { controlUiEnabled: true },
+        overrides: { controlUiEnabled: true, controlUiBasePath: "" },
         run: async (server) => {
           const original = await sendRequest(server, {
             path: entry.entryUrl,
@@ -420,7 +447,7 @@ describe("native Control UI browser assets", () => {
     await withGatewayServer({
       prefix: "native-ui-auth-",
       resolvedAuth: AUTH_TOKEN,
-      overrides: { controlUiEnabled: true },
+      overrides: { controlUiEnabled: true, controlUiBasePath: "" },
       run: async (server) => {
         const unauthorizedHeaders: Record<string, string>[] = [
           {},

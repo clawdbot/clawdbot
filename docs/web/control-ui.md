@@ -574,6 +574,10 @@ Backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and
 MCP Apps are unaffected. All plugin APIs are experimental; see
 [Feature plugins](/plugins/feature-plugins) for authoring and the trust model.
 
+Authenticated native UI requires HTTPS or a browser-trusted loopback URL.
+On non-local plain HTTP, plugin pages explain how to open a supported URL;
+dashboard pairing and backend plugin operations remain available.
+
 ## Import assistant memory
 
 Open **Settings** → **Import Memory** to bring local Codex, Claude Code, or Hermes memory

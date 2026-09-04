@@ -671,7 +671,12 @@ export class PluginPage extends OpenClawLightDomContentsElement {
           disabled ??
           html`
             <div class="card-title">${t("pluginTabs.unavailableTitle")}</div>
-            <div class="card-sub">${t("pluginTabs.unavailableSubtitle")}</div>
+            <div class="card-sub">
+              ${
+                context.plugins?.errors.find((entry) => entry.pluginId === this.pluginId)
+                  ?.message ?? t("pluginTabs.unavailableSubtitle")
+              }
+            </div>
           `
         }
       </section>

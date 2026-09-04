@@ -6,6 +6,7 @@ import type {
   PluginControlUiModule,
   PluginsControlUiCatalog,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   readPluginControlUiAssets,
   type PluginControlUiAsset,
@@ -19,8 +20,8 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import {
-  CONTROL_UI_PLUGIN_ASSET_PREFIX,
   controlUiPluginAssetPrefix,
+  controlUiPluginAssetRoot,
 } from "./control-ui-plugin-assets-contract.js";
 import {
   CUSTOM_PLUGIN_UI_DISABLED_MESSAGE,
@@ -106,7 +107,8 @@ async function snapshotBrowserBuild(
     digest.update(`${name}\0${asset.body.length}\0`).update(asset.body);
   }
   const revision = digest.digest("hex");
-  const prefix = `${controlUiPluginAssetPrefix(record.id)}${revision}/`;
+  const basePath = getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath;
+  const prefix = `${controlUiPluginAssetPrefix(record.id, basePath)}${revision}/`;
   const assetUrl = (name: string) =>
     `${prefix}${name.split("/").map(encodeURIComponent).join("/")}`;
   if (!isCurrent()) {
@@ -327,13 +329,15 @@ export async function handleControlUiPluginAssetRequest(
   res: ServerResponse,
   params: {
     auth: ResolvedGatewayAuth;
+    basePath: string;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
   const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-  if (!pathname.startsWith(CONTROL_UI_PLUGIN_ASSET_PREFIX)) {
+  const assetRoot = controlUiPluginAssetRoot(params.basePath);
+  if (!pathname.startsWith(assetRoot)) {
     return false;
   }
   if (req.method !== "GET" && req.method !== "HEAD") {
@@ -342,10 +346,7 @@ export async function handleControlUiPluginAssetRequest(
   }
   let segments: string[];
   try {
-    segments = pathname
-      .slice(CONTROL_UI_PLUGIN_ASSET_PREFIX.length)
-      .split("/")
-      .map(decodeURIComponent);
+    segments = pathname.slice(assetRoot.length).split("/").map(decodeURIComponent);
   } catch {
     respondNotFound(res);
     return true;

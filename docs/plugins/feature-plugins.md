@@ -26,6 +26,12 @@ Open the Control UI served by the connected Gateway. Native plugin assets
 require that same origin; a separately hosted UI connected to another Gateway
 cannot load them and explains which Control UI to open.
 
+Authenticated native UI also requires HTTPS or a browser-trusted loopback URL
+such as `http://127.0.0.1:18789/`. Plain HTTP on a LAN address can pair and use
+the dashboard, but cannot send the secure cookies used for native assets.
+Plugin pages explain how to switch to HTTPS/Tailscale Serve or localhost;
+backend operations remain available.
+
 ## Enable custom plugin UI
 
 In the Control UI, open **Settings → Labs → Custom plugin UI**. The setting
