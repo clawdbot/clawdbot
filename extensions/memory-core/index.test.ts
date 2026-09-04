@@ -102,10 +102,10 @@ function captureMemoryModelContract(initialConfig: OpenClawConfig) {
     getRuntimeConfig: () => initialConfig,
   };
   const search = factories.get("memory_search")?.(context) as
-    | { description: string; parameters: unknown }
+    | { description: string; parameters: unknown; catalogMode?: string }
     | undefined;
   const get = factories.get("memory_get")?.(context) as
-    | { description: string; parameters: unknown }
+    | { description: string; parameters: unknown; catalogMode?: string }
     | undefined;
   if (!search || !get || !promptBuilder) {
     throw new Error("expected memory model contract");
@@ -204,6 +204,10 @@ describe("buildPromptSection", () => {
       })
       .join("\n");
 
+    expect(lazy.search.catalogMode).toBe("direct-only");
+    expect(lazy.get.catalogMode).toBe("direct-only");
+    expect(eagerSearch.catalogMode).toBe("direct-only");
+    expect(eagerGet.catalogMode).toBe("direct-only");
     expect(lazy.search.parameters).toStrictEqual(eagerSearch.parameters);
     expect(lazy.get.parameters).toStrictEqual(eagerGet.parameters);
     expect(lazy.search.description).toBe(eagerSearch.description);
