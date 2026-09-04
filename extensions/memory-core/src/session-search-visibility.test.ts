@@ -45,7 +45,6 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
   });
 
   it("drops sessions-sourced hits when requester key is missing (fail closed)", async () => {
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
     const hits: MemorySearchResult[] = [
       {
         path: "sessions/u1.jsonl",
@@ -57,7 +56,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       },
     ];
     const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "all" } } }),
       requesterSessionKey: undefined,
       sandboxed: false,
       hits,
@@ -69,7 +68,6 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     "does not load session history for memory-only hits with recall corpus %s",
     async (corpus) => {
       const guard = vi.spyOn(sessionVisibility, "createSessionVisibilityGuard");
-      const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "all" } } });
       const hits: MemorySearchResult[] = [
         {
           path: "memory/foo.md",
@@ -81,19 +79,17 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
         },
       ];
       const filtered = await filterMemorySearchHitsBySessionVisibility({
-        cfg,
+        cfg: asOpenClawConfig({ tools: { sessions: { visibility: "all" } } }),
         requesterSessionKey: "agent:main:main",
         sandboxed: false,
         hits,
-        ...(corpus
+        conversationRecall: corpus
           ? {
-              conversationRecall: {
-                anchorSessionKey: "agent:main:main",
-                scope: "same-agent-private" as const,
-                corpus,
-              },
+              anchorSessionKey: "agent:main:main",
+              scope: "same-agent-private",
+              corpus,
             }
-          : {}),
+          : undefined,
       });
       expect(filtered).toEqual(corpus === "sessions" ? [] : hits);
       expect(sessionTranscriptHit.loadCombinedSessionStoreForGateway).not.toHaveBeenCalled();
@@ -170,10 +166,8 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       startLine: 1,
       endLine: 2,
     };
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
-
     const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "self" } } }),
       requesterSessionKey: "agent:main:telegram:direct:owner",
       sandboxed: false,
       hits: [hit],
@@ -263,10 +257,8 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       startLine: 1,
       endLine: 2,
     };
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
-
     const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "self" } } }),
       requesterSessionKey: `${anchorSessionKey}:active-memory:123456abcdef`,
       sandboxed: false,
       hits: [hit],
@@ -309,10 +301,8 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       startLine: 1,
       endLine: 2,
     };
-    const cfg = asOpenClawConfig({ tools: { sessions: { visibility: "self" } } });
-
     const filtered = await filterMemorySearchHitsBySessionVisibility({
-      cfg,
+      cfg: asOpenClawConfig({ tools: { sessions: { visibility: "self" } } }),
       requesterSessionKey: "agent:main:telegram:direct:owner",
       sandboxed: false,
       hits: [hit],
