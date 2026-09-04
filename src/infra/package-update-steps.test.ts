@@ -905,6 +905,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         }
         return await realRename(...args);
       });
+      const beforeActivate = vi.fn(async () => {});
 
       let result: Awaited<ReturnType<typeof runGlobalPackageUpdateSteps>>;
       try {
@@ -914,6 +915,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageName: "openclaw",
           packageRoot,
           runCommand: createRootRunner(globalRoot),
+          beforeActivate,
           runStep: async ({ name, argv, cwd }) => {
             const stagePrefix = argv[argv.indexOf("--prefix") + 1];
             if (!stagePrefix) {
@@ -1003,8 +1005,15 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(retry.failedStep).not.toBeNull();
         expect(await fs.readdir(globalRoot)).toEqual(expect.arrayContaining(backups));
       }
-      // Package and launcher rollback does not reverse possible lifecycle state changes.
-      expect(result.recovery?.serviceRestartSafe).toBe(false);
+      if (failure === "backup copy") {
+        // Launcher backup failed before activation; the original runtime was verified again.
+        expect(beforeActivate).not.toHaveBeenCalled();
+        expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "1.0.0" });
+      } else {
+        // After activation, package rollback alone cannot reverse lifecycle state changes.
+        expect(beforeActivate).toHaveBeenCalledOnce();
+        expect(result.recovery?.serviceRestartSafe).toBe(false);
+      }
     });
   });
 

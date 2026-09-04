@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { hasErrnoCode } from "./errno.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
@@ -14,6 +15,7 @@ import {
 } from "./update-package-manager.js";
 import { MAX_LOG_CHARS, runStep } from "./update-runner-command.js";
 import {
+  gitCleanCheckArgs,
   resolveBuildEnv,
   resolveDevPreflightLintEnv,
   resolveInstallEnv,
@@ -41,10 +43,10 @@ type StepFactory = (
   env?: NodeJS.ProcessEnv,
 ) => RunStepOptions;
 
-type GitDevPreflightResult =
+type GitCandidatePreflightResult =
   | {
       status: "ok";
-      selectedSha: string;
+      candidateSha: string;
       selectedDevUpstream: string | null;
       localDevBranchExists: boolean | null;
     }
@@ -314,7 +316,7 @@ async function resolveUpstreamCandidates(params: {
 }
 
 type PreflightCandidateResult =
-  | { status: "ok"; selectedSha: string }
+  | { status: "ok"; candidateSha: string }
   | { status: "manager-unavailable"; reason: string }
   | { status: "failed" | "insufficient-space" };
 
@@ -338,6 +340,11 @@ async function testPreflightCandidate(params: {
   gitRoot: string;
   worktreeDir: string;
   sha: string;
+  rebaseFrom?: string;
+  runLint: boolean;
+  validateCandidate?: (root: string) => Promise<void>;
+  prepareGitExposure?: (root: string, sha: string) => Promise<void>;
+  prepareCandidate?: (root: string) => Promise<void>;
   runCommand: CommandRunner;
   timeoutMs: number;
   defaultCommandEnv: NodeJS.ProcessEnv | undefined;
@@ -364,6 +371,40 @@ async function testPreflightCandidate(params: {
   if (checkout) {
     return { status: classifyPreflightFailure(checkout) };
   }
+  if (params.rebaseFrom) {
+    const source = await runCandidateCheck("local checkout", [
+      "git",
+      "-C",
+      params.worktreeDir,
+      "checkout",
+      "--detach",
+      params.rebaseFrom,
+    ]);
+    const rebase =
+      source ??
+      (await runCandidateCheck("rebase", ["git", "-C", params.worktreeDir, "rebase", params.sha]));
+    if (rebase) {
+      await runCandidateCheck("rebase --abort", [
+        "git",
+        "-C",
+        params.worktreeDir,
+        "rebase",
+        "--abort",
+      ]);
+      return { status: classifyPreflightFailure(rebase) };
+    }
+  }
+  const candidateHead = await params.runCommand(
+    ["git", "-C", params.worktreeDir, "rev-parse", "HEAD"],
+    {
+      cwd: params.worktreeDir,
+      timeoutMs: params.timeoutMs,
+    },
+  );
+  if (candidateHead.code !== 0 || !candidateHead.stdout.trim()) {
+    return { status: "failed" };
+  }
+  const candidateSha = candidateHead.stdout.trim();
   const manager = await resolveUpdateBuildManager(
     params.runCommand,
     params.worktreeDir,
@@ -407,31 +448,82 @@ async function testPreflightCandidate(params: {
       "--json",
     ]);
     const lintArgs = managerScriptArgs(manager.manager, "lint");
-    const failure =
+    let failure =
       (await runCandidateCheck(installName, installArgv, installEnv)) ??
-      (await runCandidateCheck("build", buildArgs, buildEnv)) ??
-      (await runCandidateCheck("config validate", configArgs, manager.env)) ??
-      (shouldRunDevPreflightLint()
-        ? await runCandidateCheck("lint", lintArgs, resolveDevPreflightLintEnv(manager.env))
-        : null);
-    return failure
-      ? { status: classifyPreflightFailure(failure) }
-      : { status: "ok", selectedSha: params.sha };
+      (await runCandidateCheck("build", buildArgs, buildEnv));
+    if (
+      !failure &&
+      (await resolveControlUiAssetHealth({ root: params.worktreeDir })).kind !== "ready"
+    ) {
+      failure = await runCandidateCheck(
+        "ui:build",
+        managerScriptArgs(manager.manager, "ui:build"),
+        manager.env,
+      );
+    }
+    if (
+      !failure &&
+      (await resolveControlUiAssetHealth({ root: params.worktreeDir })).kind !== "ready"
+    ) {
+      params.steps.push({
+        name: `preflight ui assets verify (${shortSha})`,
+        command: "verify startup assets",
+        cwd: params.worktreeDir,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: "Candidate Control UI startup assets are missing or incomplete",
+      });
+      return { status: "failed" };
+    }
+    if (!failure) {
+      const cleanCheck = await runCandidateCheck(
+        "build clean check",
+        gitCleanCheckArgs(params.worktreeDir),
+      );
+      const status = params.steps.at(-1);
+      if (cleanCheck || status?.stdoutTail?.trim()) {
+        if (status) {
+          status.exitCode = 1;
+        }
+        return { status: "failed" };
+      }
+      failure =
+        (params.validateCandidate
+          ? null
+          : await runCandidateCheck("config validate", configArgs, manager.env)) ??
+        (params.runLint
+          ? await runCandidateCheck("lint", lintArgs, resolveDevPreflightLintEnv(manager.env))
+          : null);
+    }
+    if (failure) {
+      return { status: classifyPreflightFailure(failure) };
+    }
+    // Global source exposure can run package lifecycle scripts. Validate and retain
+    // the resulting candidate only after that preparation finishes.
+    await params.prepareGitExposure?.(params.worktreeDir, candidateSha);
+    await params.validateCandidate?.(params.worktreeDir);
+    await params.prepareCandidate?.(params.worktreeDir);
+    return { status: "ok", candidateSha };
   } finally {
     await manager.cleanup?.();
   }
 }
 
-export async function runGitDevPreflight(params: {
+export async function runGitCandidatePreflight(params: {
   gitRoot: string;
   devTarget?: DevUpdateTarget;
+  targetRevision?: string;
+  beforeSha?: string | null;
+  validateCandidate?: (root: string) => Promise<void>;
+  prepareGitExposure?: (root: string, sha: string) => Promise<void>;
+  prepareCandidate?: (root: string) => Promise<void>;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;
   defaultCommandEnv: NodeJS.ProcessEnv | undefined;
   steps: UpdateStepResult[];
   step: StepFactory;
-}): Promise<GitDevPreflightResult> {
+}): Promise<GitCandidatePreflightResult> {
   const devTargetRef = params.devTarget
     ? normalizeDevTargetRef(resolveDevUpdateTargetRevision(params.devTarget))
     : null;
@@ -439,7 +531,20 @@ export async function runGitDevPreflight(params: {
   let candidates: string[];
   let selectedDevUpstream: string | null = null;
   let localDevBranchExists: boolean | null = null;
-  if (devTargetRef) {
+  if (params.targetRevision) {
+    const result = await params.runCommand(
+      ["git", "-C", params.gitRoot, "rev-parse", `${params.targetRevision}^{commit}`],
+      {
+        cwd: params.gitRoot,
+        timeoutMs: params.timeoutMs,
+      },
+    );
+    if (result.code !== 0 || !result.stdout.trim()) {
+      return { status: "error", reason: "no-target-sha" };
+    }
+    preflightBaseSha = result.stdout.trim();
+    candidates = [preflightBaseSha];
+  } else if (devTargetRef) {
     const targetSha = await resolveExplicitTarget({ ...params, devTargetRef });
     if (!targetSha) {
       return { status: "error", reason: "no-target-sha" };
@@ -477,6 +582,17 @@ export async function runGitDevPreflight(params: {
     localDevBranchExists = upstream.localDevBranchExists;
   }
 
+  // A resolved no-op must not enter validation, stop the service, or rewrite its runtime.
+  if (!params.prepareGitExposure && preflightBaseSha === params.beforeSha) {
+    return { status: "skipped", reason: "already-current" };
+  }
+  const rebaseFrom =
+    !params.targetRevision && !params.devTarget && localDevBranchExists !== false
+      ? params.needsCheckoutMain
+        ? DEV_BRANCH
+        : (params.beforeSha ?? undefined)
+      : undefined;
+
   let preflightRoot: string;
   try {
     preflightRoot = await createPreflightRoot(params.gitRoot);
@@ -509,7 +625,16 @@ export async function runGitDevPreflight(params: {
       };
     }
     for (const sha of candidates) {
-      const candidate = await testPreflightCandidate({ ...params, worktreeDir, sha });
+      if (!params.prepareGitExposure && sha === params.beforeSha) {
+        return { status: "skipped", reason: "already-current" };
+      }
+      const candidate = await testPreflightCandidate({
+        ...params,
+        worktreeDir,
+        sha,
+        rebaseFrom,
+        runLint: !params.targetRevision && shouldRunDevPreflightLint(),
+      });
       if (candidate.status === "ok" || candidate.status === "insufficient-space") {
         tested = candidate;
         break;
@@ -570,7 +695,7 @@ export async function runGitDevPreflight(params: {
   }
   return {
     status: "ok",
-    selectedSha: tested.selectedSha,
+    candidateSha: tested.candidateSha,
     selectedDevUpstream,
     localDevBranchExists,
   };

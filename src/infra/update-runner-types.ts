@@ -28,7 +28,7 @@ export type UpdateRunResult = {
   mode: "git" | "pnpm" | "bun" | "npm" | "unknown";
   root?: string;
   reason?: string;
-  before?: { sha?: string | null; version?: string | null };
+  before?: { sha?: string | null; version?: string | null; buildId?: string | null };
   after?: {
     sha?: string | null;
     version?: string | null;
@@ -123,6 +123,8 @@ export type UpdateRunnerOptions = {
   deferConfiguredPluginInstallRepair?: boolean;
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
+  validateCandidate?: (root: string) => Promise<void>;
+  prepareGitExposure?: (candidateRoot: string, candidateSha: string) => Promise<void>;
   beforeGitMutation?: (target: {
     schemaVersions?: OpenClawSchemaVersions;
     metadataUnreadable?: string;
