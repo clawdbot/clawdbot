@@ -2040,10 +2040,10 @@ async function createChatPickerScenario(
     fixture === "avatars"
       ? buildAvatarChatHistory(baseTime)
       : fixture === "attachments"
-      ? buildChatAttachmentHistory(baseTime)
-      : fixture === "code-fences"
-        ? buildCodeFenceChatHistory(baseTime)
-        : buildScrollableChatHistory(baseTime);
+        ? buildChatAttachmentHistory(baseTime)
+        : fixture === "code-fences"
+          ? buildCodeFenceChatHistory(baseTime)
+          : buildScrollableChatHistory(baseTime);
   const planInFlightRun = {
     runId: PLAN_DEMO_RUN_ID,
     text: "",
