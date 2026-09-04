@@ -125,13 +125,21 @@ agent runtime. The runtime uses a capability only when the backend both
 advertises it and implements its matching method; absent capabilities preserve
 the existing Gateway-owned behavior.
 
-OpenShell currently advertises protocol version 1 with process and filesystem
-access plus workspace capability discovery. At
-the start of a built-in agent turn, OpenClaw can discover a `.mcp.json` in the
-sandbox workspace and start its stdio MCP servers inside the same OpenShell
-environment. Their tools still pass through the normal MCP and sandbox tool
-policies. The MCP processes are scoped to the agent attempt and are closed when
-that attempt ends.
+OpenShell in `remote` mode advertises protocol version 1 with process and
+filesystem access plus workspace capability discovery. Each built-in agent
+attempt shares one bounded discovery snapshot between workspace stdio MCP
+servers declared in `.mcp.json` and environment-owned `SKILL.md` files. Skill
+metadata uses the existing eligibility, session policy, and prompt limits; full
+instructions are read on demand through the sandbox filesystem bridge.
+
+MCP working directories are resolved against the discovery root and validated
+by the backend before launch. The processes belong to the attempt, including
+startup cancellation and remote descendant cleanup. Their tools still pass
+through normal MCP and sandbox tool policies. `mirror` mode does not advertise
+these capabilities: its local-canonical synchronization transaction cannot own
+an attempt-long process without blocking later tools. See
+[OpenShell environment-owned skills](/gateway/openshell#environment-owned-skills)
+for discovery limits and exclusions.
 
 Native plugins, `web_search`, `web_fetch`, configured Gateway MCP servers, and
 HTTP/SSE MCP servers continue to run from the Gateway.

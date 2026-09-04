@@ -8,7 +8,10 @@ import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
 type LifecycleSession = {
   client: Pick<Client, "close">;
-  transport: Transport & { terminateSession?: () => Promise<void> };
+  transport: Transport & {
+    terminateSession?: () => Promise<void>;
+    forceClose?: () => Promise<void>;
+  };
   transportType: "stdio" | "sse" | "streamable-http";
   detachStderr?: () => void;
 };
@@ -128,10 +131,7 @@ export async function disposeMcpClient(
     // Closing an HTTP transport aborts a hung DELETE. Stdio owns a process
     // group, so force it dead before disposal can report completion.
     const { transport } = session;
-    const closeTransport =
-      session.transportType === "stdio" && transport instanceof OpenClawStdioClientTransport
-        ? () => transport.forceClose()
-        : () => transport.close();
+    const closeTransport = transport.forceClose?.bind(transport) ?? transport.close.bind(transport);
     await settleWithin(
       Promise.all([
         ignoreCloseFailure(closeTransport),

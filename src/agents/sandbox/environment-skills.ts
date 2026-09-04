@@ -44,7 +44,7 @@ const factsSchema = z.object({
 });
 
 /** Prepared exclusions distinguish delivered host resources from executor-owned files. */
-function resolveSandboxEnvironmentSkillExclusions(sandbox: SandboxContext): string[] {
+export function resolveSandboxEnvironmentSkillExclusions(sandbox: SandboxContext): string[] {
   const inputs = resolveSandboxSkillRuntimeInputs({
     sandbox,
     skillsAnchorWorkspace: sandbox.workspaceDir,

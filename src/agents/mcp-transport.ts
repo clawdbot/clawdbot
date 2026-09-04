@@ -38,7 +38,10 @@ export type ResolvedMcpTransport = {
 
 const MAX_MCP_STDERR_LINE_BYTES = 8 * 1024;
 
-function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
+export function attachMcpStderrLogging(
+  serverName: string,
+  transport: OpenClawStdioClientTransport,
+) {
   const stderr = transport.stderr;
   if (!stderr) {
     return undefined;
@@ -152,7 +155,7 @@ export function resolveMcpTransport(
       connectionTimeoutMs: resolved.connectionTimeoutMs,
       requestTimeoutMs: resolved.requestTimeoutMs,
       supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-      detachStderr: attachStderrLogging(serverName, transport),
+      detachStderr: attachMcpStderrLogging(serverName, transport),
     };
   }
   const authProfileId = resolveMcpAuthProfileId(rawServer);

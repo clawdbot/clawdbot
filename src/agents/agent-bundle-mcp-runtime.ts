@@ -509,6 +509,7 @@ function createServerMcpRuntime(
       client: session.client,
       transport: session.transport,
       timeoutMs: connectionTimeoutMs,
+      signal: lifecycleAbortController.signal,
     })
       .catch((error: unknown) => {
         if (error instanceof McpClientConnectTimeoutError) {

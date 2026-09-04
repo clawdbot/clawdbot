@@ -14,6 +14,8 @@ import {
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
+import { discoverSandboxEnvironmentCapabilities } from "../../sandbox/environment-capabilities.js";
+import { resolveSandboxEnvironmentSkillExclusions } from "../../sandbox/environment-skills.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import {
@@ -159,8 +161,27 @@ export async function runEmbeddedAttempt(
     assertCurrent: externalAbortController.throwIfFired,
   });
   try {
+    const environmentCapabilities = await prepare("attempt.environment-capabilities", () =>
+      discoverSandboxEnvironmentCapabilities({
+        backend:
+          sandbox?.enabled &&
+          !params.disableTools &&
+          !params.modelRun &&
+          params.promptMode !== "none" &&
+          !params.forceRestartSafeTools &&
+          params.operation !== "settled-tool-finalization"
+            ? sandbox.backend
+            : undefined,
+        excludePaths: sandbox?.enabled
+          ? resolveSandboxEnvironmentSkillExclusions(sandbox)
+          : undefined,
+        signal: runAbortController.signal,
+        warn: (message) => log.warn(message),
+      }),
+    );
     const preparedSkills = await prepare("attempt.skills", () =>
       prepareEmbeddedAttemptSkills({
+        environmentCapabilities,
         attempt: params,
         effectiveWorkspace,
         sandbox,
@@ -274,6 +295,7 @@ export async function runEmbeddedAttempt(
     let yieldAbortSettled: Promise<void> | null = null;
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
       prepareEmbeddedAttemptBundleTools({
+        environmentCapabilities,
         agentDir,
         attempt: params,
         effectiveWorkspace,

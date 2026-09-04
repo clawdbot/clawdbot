@@ -349,14 +349,19 @@ class OpenShellSandboxBackendImpl {
       workdirValidation: "backend",
       validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
       workdirRoots: [this.params.remoteWorkspaceDir, this.params.remoteAgentWorkspaceDir],
-      capabilities: {
-        environment: {
-          protocolVersion: 1,
-          process: true,
-          filesystem: true,
-          capabilityRootDiscovery: true,
-        },
-      },
+      // Mirror exec owns a complete upload/process/download transaction. A
+      // long-lived service would hold its lease and block every later tool.
+      capabilities:
+        this.params.execContext.config.mode === "remote"
+          ? {
+              environment: {
+                protocolVersion: 1,
+                process: true,
+                filesystem: true,
+                capabilityRootDiscovery: true,
+              },
+            }
+          : undefined,
       remoteWorkspaceDir: this.params.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
       buildExecSpec: async ({ command, workdir, env, usePty }) => {
@@ -372,16 +377,19 @@ class OpenShellSandboxBackendImpl {
         await this.finalizeExec(token as PendingExec | undefined);
       },
       runShellCommand: runRemoteShellScript,
-      discoverCapabilityRoots: async ({ roots, signal }) => {
-        for (const root of roots) {
-          this.resolveRemoteTarget(root.path);
-        }
-        return await discoverOpenShellCapabilityRoots({
-          roots,
-          signal,
-          runCommand: runRemoteShellScript,
-        });
-      },
+      discoverCapabilityRoots:
+        this.params.execContext.config.mode === "remote"
+          ? async ({ roots, signal }) => {
+              for (const root of roots) {
+                this.resolveRemoteTarget(root.path);
+              }
+              return await discoverOpenShellCapabilityRoots({
+                roots,
+                signal,
+                runCommand: runRemoteShellScript,
+              });
+            }
+          : undefined,
       createFsBridge: ({ sandbox }) =>
         this.params.execContext.config.mode === "remote"
           ? createRemoteShellSandboxFsBridge({

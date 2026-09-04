@@ -6,9 +6,11 @@ import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import type { BundleMcpToolRuntime } from "../../agent-bundle-mcp-types.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
+import type { SandboxCapabilityRootDiscovery } from "../../sandbox/backend-handle.types.js";
 import { createSandboxEnvironmentMcpToolRuntime } from "../../sandbox/environment-mcp.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
@@ -31,6 +33,7 @@ type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 type PreparedToolBase = ReturnType<typeof prepareEmbeddedAttemptToolBase>;
 
 export async function prepareEmbeddedAttemptBundleTools(params: {
+  environmentCapabilities?: readonly SandboxCapabilityRootDiscovery[];
   agentDir: string;
   attempt: EmbeddedRunAttemptParams;
   effectiveWorkspace: string;
@@ -150,79 +153,55 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         ],
       })
     : undefined;
-  const sandboxBackend = params.sandbox?.backend;
-  const discoverCapabilityRoots = sandboxBackend?.discoverCapabilityRoots;
-  const environmentCapabilities = sandboxBackend?.capabilities?.environment;
-  const environmentMcpRuntime =
-    bundleMcpEnabled &&
-    environmentCapabilities?.protocolVersion === 1 &&
-    environmentCapabilities.process === true &&
-    environmentCapabilities.filesystem === true &&
-    environmentCapabilities.capabilityRootDiscovery === true &&
-    discoverCapabilityRoots
-      ? await (async () => {
-          try {
-            const discoveries = await discoverCapabilityRoots({
-              roots: [{ id: "workspace", path: sandboxBackend.workdir }],
-              signal: params.attempt.abortSignal,
-            });
-            for (const discovery of discoveries) {
-              for (const warning of discovery.warnings ?? []) {
-                log.warn(`sandbox capability discovery: ${warning}`);
-              }
-              if (discovery.error) {
-                log.warn(`sandbox capability discovery: ${discovery.error}`);
-              }
-            }
-            return await createSandboxEnvironmentMcpToolRuntime({
-              backend: sandboxBackend,
-              discoveries,
-              sessionId: `${params.attempt.sessionId}:sandbox:${params.sandbox?.runtimeId}`,
-              sessionKey: params.attempt.sessionKey,
-              workspaceDir: params.effectiveWorkspace,
-              toolOverrides: params.attempt.toolOverrides,
-              reservedToolNames: [
-                ...tools.map((tool) => tool.name),
-                ...(clientTools?.map((tool) => tool.function.name) ?? []),
-                ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
-              ],
-            });
-          } catch (error) {
-            log.warn(`sandbox capability discovery failed: ${String(error)}`);
-            return undefined;
-          }
-        })()
-      : undefined;
-  const effectiveMcpRuntime = environmentMcpRuntime
-    ? {
-        tools: [...(bundleMcpRuntime?.tools ?? []), ...environmentMcpRuntime.tools],
-        appTools: [
-          ...(bundleMcpRuntime?.appTools ?? []),
-          ...(environmentMcpRuntime.appTools ?? []),
-        ],
-        diagnostics: [
-          ...(bundleMcpRuntime?.diagnostics ?? []),
-          ...(environmentMcpRuntime.diagnostics ?? []),
-        ],
-        restrictAppTools: (
-          allowedTools: Parameters<
-            NonNullable<NonNullable<typeof bundleMcpRuntime>["restrictAppTools"]>
-          >[0],
-        ) => {
-          bundleMcpRuntime?.restrictAppTools?.(allowedTools);
-          environmentMcpRuntime.restrictAppTools?.(allowedTools);
-        },
-        dispose: async () => {
-          try {
-            await bundleMcpRuntime?.dispose();
-          } finally {
-            await environmentMcpRuntime.dispose();
-          }
-        },
-      }
-    : bundleMcpRuntime;
+  let environmentMcpRuntime: BundleMcpToolRuntime | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   try {
+    const sandboxBackend = params.sandbox?.backend;
+    environmentMcpRuntime =
+      bundleMcpEnabled && sandboxBackend && params.environmentCapabilities?.length
+        ? await createSandboxEnvironmentMcpToolRuntime({
+            backend: sandboxBackend,
+            discoveries: params.environmentCapabilities,
+            sessionId: params.attempt.sessionId + ":sandbox:" + sandboxBackend.runtimeId,
+            sessionKey: params.attempt.sessionKey,
+            workspaceDir: params.effectiveWorkspace,
+            cfg: params.attempt.config,
+            agentId: params.sessionAgentId,
+            signal: params.attempt.abortSignal,
+            toolOverrides: params.attempt.toolOverrides,
+            reservedToolNames: [
+              ...tools.map((tool) => tool.name),
+              ...(clientTools?.map((tool) => tool.function.name) ?? []),
+              ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+            ],
+          })
+        : undefined;
+    const environmentRuntime = environmentMcpRuntime;
+    const effectiveMcpRuntime = environmentRuntime
+      ? {
+          tools: [...(bundleMcpRuntime?.tools ?? []), ...environmentRuntime.tools],
+          appTools: [...(bundleMcpRuntime?.appTools ?? []), ...(environmentRuntime.appTools ?? [])],
+          diagnostics: [
+            ...(bundleMcpRuntime?.diagnostics ?? []),
+            ...(environmentRuntime.diagnostics ?? []),
+          ],
+          restrictAppTools: (
+            allowedTools: Parameters<
+              NonNullable<NonNullable<typeof bundleMcpRuntime>["restrictAppTools"]>
+            >[0],
+          ) => {
+            bundleMcpRuntime?.restrictAppTools?.(allowedTools);
+            environmentRuntime.restrictAppTools?.(allowedTools);
+          },
+          dispose: async () => {
+            try {
+              await bundleMcpRuntime?.dispose();
+            } finally {
+              await environmentRuntime.dispose();
+            }
+          },
+        }
+      : bundleMcpRuntime;
     const bundleLspEnabled =
       !params.attempt.forceRestartSafeTools &&
       shouldCreateBundleLspRuntimeForAttempt({

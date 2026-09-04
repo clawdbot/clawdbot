@@ -46,6 +46,7 @@ export {
   shellEscape,
   uploadDirectoryToSshTarget,
 } from "./sandbox/ssh.js";
+export { prepareSandboxRemoteProcess } from "./sandbox/remote-process.js";
 export { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 export { createWritableRenameTargetResolver } from "./sandbox/fs-bridge-rename-targets.js";

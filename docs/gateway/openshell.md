@@ -303,8 +303,9 @@ Sandbox-level settings (`mode`, `scope`, `workspaceAccess`) live under
 
 To pass non-secret environment values into sandboxed commands, use the existing
 `agents.defaults.sandbox.docker.env` setting; the OpenShell backend also
-applies those values during command execution. OpenShell does not currently
-inject them into sandbox creation or background services. Keep credentials in
+applies those values during command execution and to workspace MCP servers
+launched by the built-in runtime. OpenShell does not currently inject them into
+sandbox creation or unrelated background services. Keep credentials in
 OpenShell providers or another dedicated secret-delivery mechanism.
 
 ## Examples
