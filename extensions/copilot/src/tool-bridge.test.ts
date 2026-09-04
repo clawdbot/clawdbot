@@ -2470,7 +2470,7 @@ describe("createCopilotToolBridge tool conversion", () => {
                 await second.promise;
               }
               events.push(`finish:${callId}`);
-              return { content: [{ type: "text", text: callId }], details: null };
+              return textToolResult(callId);
             }),
           }),
         ),
@@ -2529,7 +2529,7 @@ describe("createCopilotToolBridge tool conversion", () => {
               events.push(index);
               expectDefined(started[index], "tool start").resolve();
               await gate.promise;
-              return { content: [{ type: "text", text: String(index) }], details: null };
+              return textToolResult(String(index));
             }),
           }),
         ),
