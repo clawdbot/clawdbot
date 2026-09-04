@@ -83,6 +83,7 @@ export type BrowserToolCapabilities = {
 export function resolveBrowserToolCapabilities(params?: {
   tabBound?: boolean;
   evaluateEnabled?: boolean;
+  senderIsOwner?: boolean;
   profileCapabilities?: Pick<
     BrowserProfileCapabilities,
     "supportsBatchActions" | "supportsDownloads" | "supportsPdf"
@@ -100,6 +101,7 @@ export function resolveBrowserToolCapabilities(params?: {
   return {
     actions: actions.filter(
       (action) =>
+        (params?.senderIsOwner !== false || action !== "importprofile") &&
         (profileCapabilities?.supportsPdf !== false || action !== "pdf") &&
         (profileCapabilities?.supportsRequests !== false || action !== "requests") &&
         (profileCapabilities?.supportsErrors !== false || action !== "errors") &&

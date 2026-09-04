@@ -5335,3 +5335,39 @@ describe("resolveBrowserToolTimeoutMs", () => {
     },
   );
 });
+
+describe("importprofile owner gate", () => {
+  beforeEach(() => {
+    browserClientMocks.browserImportProfile.mockClear();
+  });
+
+  it("refuses agent-triggered import for a non-owner sender", async () => {
+    const tool = createBrowserTool({ senderIsOwner: false });
+    await expect(
+      tool.execute?.("call-1", { action: "importprofile", target: "host" }),
+    ).rejects.toThrow(/system profile import requires the owner/i);
+    expect(browserClientMocks.browserImportProfile).not.toHaveBeenCalled();
+  });
+
+  it("allows import for an owner sender", async () => {
+    const tool = createBrowserTool({ senderIsOwner: true });
+    await tool.execute?.("call-1", { action: "importprofile", target: "host" });
+    expect(browserClientMocks.browserImportProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows import when no inbound sender context is present", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "importprofile", target: "host" });
+    expect(browserClientMocks.browserImportProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides importprofile from the advertised actions for a non-owner sender", () => {
+    expect(resolveBrowserToolCapabilities({ senderIsOwner: false }).actions).not.toContain(
+      "importprofile",
+    );
+    expect(resolveBrowserToolCapabilities({ senderIsOwner: true }).actions).toContain(
+      "importprofile",
+    );
+    expect(resolveBrowserToolCapabilities().actions).toContain("importprofile");
+  });
+});
