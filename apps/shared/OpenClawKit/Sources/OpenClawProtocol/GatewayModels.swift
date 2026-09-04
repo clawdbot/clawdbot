@@ -21318,18 +21318,22 @@ public struct PluginControlUiModule: Codable, Sendable {
 public struct PluginControlUiDiagnostic: Codable, Sendable {
     public let pluginid: String
     public let message: String
+    public let code: String?
 
     public init(
         pluginid: String,
-        message: String)
+        message: String,
+        code: String? = nil)
     {
         self.pluginid = pluginid
         self.message = message
+        self.code = code
     }
 
     private enum CodingKeys: String, CodingKey {
         case pluginid = "pluginId"
         case message
+        case code
     }
 }
 

@@ -188,9 +188,11 @@ openclaw plugins install .
 openclaw gateway restart
 \`\`\`
 
-Open the Control UI and select ${params.name} in the sidebar. Choose Draft composer in the UI customization controls to try the replacement; choose Built-in to restore it.
+For native UI, enable **Settings > Labs > Custom plugin UI** (\`gateway.controlUi.experimental.customPlugins: true\`), then restart the Gateway and reload the browser tab. This setting is off by default; backend installation does not require it.
 
-For agent-requested activation, run \`npm run pack\`. The receipt contains the exact archive path and SHA-256 digest for \`plugin_activate_artifact\`. Approval applies to those bundled bytes. The archive has no install scripts or package dependencies; backend activation still requires a Gateway restart.
+Select ${params.name} in the Control UI sidebar. Choose Draft composer in the UI customization controls to try the replacement; choose Built-in to restore it.
+
+For agent-requested activation, run \`npm run pack\`. The receipt contains the exact archive path and SHA-256 digest for \`plugin_activate_artifact\`. Approval applies to those bundled bytes and does not enable Custom plugin UI. The archive has no install scripts or package dependencies; backend activation still requires a Gateway restart.
 
 After browser-only changes, run the build again and use Reload plugin UI. Backend changes require the normal plugin update and Gateway restart. Native plugins run trusted code in the Gateway and browser; install only code you trust.
 

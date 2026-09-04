@@ -6,6 +6,7 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";
 import { resolveControlUiPluginTabPathname } from "./control-ui-contract.js";
 import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.js";
+import { isControlUiPluginAllowed } from "./control-ui-plugin-policy.js";
 import {
   authorizeOperatorScopesForRequiredScope,
   READ_SCOPE,
@@ -134,13 +135,19 @@ export function listControlUiPluginTabs(
 export function listControlUiPluginWidgetKinds(
   scopes: readonly string[],
 ): ControlUiPluginWidgetKind[] {
-  const entries = getActivePluginSessionExtensionRegistry()?.controlUiDescriptors ?? [];
+  const registry = getActivePluginSessionExtensionRegistry();
+  const entries = registry?.controlUiDescriptors ?? [];
+  const disabled = new Set(
+    registry?.plugins
+      .filter((plugin) => plugin.controlUi && !isControlUiPluginAllowed(plugin))
+      .map((plugin) => plugin.id),
+  );
   const coreEntries = authorizeOperatorScopesForRequiredScope(READ_SCOPE, scopes).allowed
     ? CORE_CONTROL_UI_WIDGET_KINDS
     : [];
   const pluginEntries = entries.flatMap((entry) => {
     const descriptor = entry.descriptor;
-    if (descriptor.surface !== "widget") {
+    if (descriptor.surface !== "widget" || disabled.has(entry.pluginId)) {
       return [];
     }
     const visible = (descriptor.requiredScopes ?? []).every(
@@ -171,7 +178,12 @@ export function listControlUiPluginTabAuthGrants(
   }
   const grants = new Map<string, ControlUiPluginTabAuthGrant>();
   for (const plugin of registry.plugins) {
-    if (!plugin.enabled || plugin.status !== "loaded" || !plugin.controlUi) {
+    if (
+      !plugin.enabled ||
+      plugin.status !== "loaded" ||
+      !plugin.controlUi ||
+      !isControlUiPluginAllowed(plugin)
+    ) {
       continue;
     }
     const assetPath = controlUiPluginAssetPrefix(plugin.id);

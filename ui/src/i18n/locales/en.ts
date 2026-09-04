@@ -21,6 +21,10 @@ export const en: TranslationMap & {
     reload: "Reload plugin UI",
     dashboardTitle: "Session dashboard",
     dashboardEmpty: "This session has no dashboard widgets yet.",
+    customPluginsDisabled: "Custom plugin UI is off",
+    customPluginsEnableHint:
+      "Enable Custom plugin UI in Labs, then restart the Gateway and reload this browser tab.",
+    openLabs: "Open Labs",
     surface: {
       "session-list": "Session list",
       composer: "Composer",
@@ -3138,7 +3142,7 @@ export const en: TranslationMap & {
     intro:
       "Labs contains experimental capabilities that may change, break, or disappear between releases.",
     sectionTitle: "Experimental features",
-    sectionDescription: "Changes save immediately and apply to future agent runs.",
+    sectionDescription: "Changes save immediately. Some features require a restart to take effect.",
     documentation: "Documentation",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Could not update feature",
@@ -3173,6 +3177,13 @@ export const en: TranslationMap & {
       title: "CLI agents",
       description:
         "Show external CLI session engines in the new-session model picker when their plugins support creating sessions.",
+    },
+    customPluginUi: {
+      title: "Custom plugin UI",
+      description:
+        "Let installed plugins add pages, widgets, and custom views. Their JavaScript runs with your signed-in permissions, so enable only plugins you trust. Bundled plugin views remain available.",
+      restartRequired:
+        "Restart the Gateway and reload this browser tab after changing this setting.",
     },
     auditMessages: {
       title: "Message audit metadata",

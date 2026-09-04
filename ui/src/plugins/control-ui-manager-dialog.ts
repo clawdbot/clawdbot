@@ -1,16 +1,22 @@
+import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
+import { renderCustomPluginUiDisabled } from "./control-ui-disabled.ts";
 import "../components/modal-dialog.ts";
 
 class ControlUiPluginManagerDialog extends OpenClawLightDomContentsElement {
+  @consume({ context: applicationContext, subscribe: true }) private context?: ApplicationContext;
   @property({ attribute: false }) runtime?: ControlUiPluginCapability;
   @property({ type: Boolean }) open = false;
   @state() private reloading = false;
   @state() private reloadError = "";
+  private readonly close = () =>
+    this.dispatchEvent(new Event("modal-cancel", { bubbles: true, composed: true }));
 
   constructor() {
     super();
@@ -59,9 +65,12 @@ class ControlUiPluginManagerDialog extends OpenClawLightDomContentsElement {
             </select></label
           >`,
         )}
-        ${runtime.errors.map(
-          (entry) => html`<p role="alert"><strong>${entry.pluginId}</strong>: ${entry.message}</p>`,
-        )}
+        ${runtime.errors.map((entry) => {
+          const disabled = renderCustomPluginUiDisabled(this.context, entry.pluginId, this.close);
+          return disabled
+            ? html`<section role="status"><strong>${entry.pluginId}</strong>${disabled}</section>`
+            : html`<p role="alert"><strong>${entry.pluginId}</strong>: ${entry.message}</p>`;
+        })}
         ${this.reloadError ? html`<p role="alert">${this.reloadError}</p>` : nothing}
         ${
           runtime.canReload
@@ -85,13 +94,7 @@ class ControlUiPluginManagerDialog extends OpenClawLightDomContentsElement {
             : nothing
         }
         <button class="btn" @click=${() => void runtime.refresh()}>${t("common.retry")}</button>
-        <button
-          class="btn"
-          @click=${() =>
-            this.dispatchEvent(new Event("modal-cancel", { bubbles: true, composed: true }))}
-        >
-          ${t("common.close")}
-        </button>
+        <button class="btn" @click=${this.close}>${t("common.close")}</button>
       </section>
     </openclaw-modal-dialog>`;
   }

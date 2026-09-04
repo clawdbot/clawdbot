@@ -1,3 +1,8 @@
+import type {
+  PluginControlUiDiagnostic,
+  PluginControlUiModule,
+  PluginsControlUiCatalog,
+} from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type {
   ControlUiDisposer,
@@ -17,21 +22,8 @@ import type {
   ControlUiRegistration,
 } from "./control-ui-capability.ts";
 
-type PluginAsset = {
-  pluginId: string;
-  name: string;
-  revision: string;
-  entryUrl: string;
-  styles: string[];
-};
-type PluginCatalog = {
-  revision: string;
-  plugins: PluginAsset[];
-  diagnostics: { pluginId: string; message: string }[];
-};
-
 export type ControlUiPluginOwner = {
-  descriptor: PluginAsset;
+  descriptor: PluginControlUiModule;
   client: GatewayBrowserClient;
   abort: AbortController;
   disposers: Set<ControlUiDisposer>;
@@ -59,12 +51,12 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private hello: object | null = null;
   private refreshGeneration = 0;
   private disposed = false;
-  private diagnostics: { pluginId: string; message: string }[] = [];
+  private diagnostics: PluginControlUiDiagnostic[] = [];
   private grantTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly getContext: () => ApplicationContext<RouteId>) {}
 
-  get errors(): readonly { pluginId: string; message: string }[] {
+  get errors(): readonly PluginControlUiDiagnostic[] {
     return this.diagnostics;
   }
 
@@ -162,7 +154,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     const current = () =>
       !this.disposed && this.client === client && this.refreshGeneration === generation;
     try {
-      const catalog = await client.request<PluginCatalog>("plugins.controlUi.list", {});
+      const catalog = await client.request<PluginsControlUiCatalog>("plugins.controlUi.list", {});
       if (!current()) {
         return;
       }
@@ -263,7 +255,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   }
 
   private async activate(
-    descriptor: PluginAsset,
+    descriptor: PluginControlUiModule,
     client: GatewayBrowserClient,
     current: () => boolean,
   ) {
@@ -386,7 +378,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   }
 
   private async reportActivation(
-    descriptor: PluginAsset,
+    descriptor: PluginControlUiModule,
     client: GatewayBrowserClient,
     current: () => boolean,
     status: "activated" | "failed",

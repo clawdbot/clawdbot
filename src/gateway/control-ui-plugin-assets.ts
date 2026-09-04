@@ -23,6 +23,10 @@ import {
   controlUiPluginAssetPrefix,
 } from "./control-ui-plugin-assets-contract.js";
 import {
+  CUSTOM_PLUGIN_UI_DISABLED_MESSAGE,
+  isControlUiPluginAllowed,
+} from "./control-ui-plugin-policy.js";
+import {
   authorizeControlUiPluginCookieRequest,
   authorizeControlUiReadRequestOrReply,
 } from "./http-auth-utils.js";
@@ -86,8 +90,9 @@ async function snapshotBrowserBuild(
   record: PluginRecord,
   declaration = record.controlUi,
 ): Promise<BrowserBuild> {
-  const isCurrent = capturePluginLifecycleAuthority(registry, record);
-  if (!declaration || !record.rootDir || !isCurrent?.()) {
+  const authority = capturePluginLifecycleAuthority(registry, record);
+  const isCurrent = () => authority?.() === true && isControlUiPluginAllowed(record);
+  if (!declaration || !record.rootDir || !isCurrent()) {
     throw new Error("plugin is no longer active");
   }
   const { entryName, styles, assets, bytes } = await readPluginControlUiAssets(
@@ -139,6 +144,9 @@ async function refreshBrowserCatalog(
     throw new Error("No active Control UI entrypoint for this plugin");
   }
   for (const record of owners) {
+    if (!isControlUiPluginAllowed(record)) {
+      continue;
+    }
     if (state.initialized && pluginId && record.id !== pluginId) {
       continue;
     }
@@ -156,8 +164,8 @@ async function refreshBrowserCatalog(
         declaration = loaded.manifest.controlUi;
       }
       const build = await snapshotBrowserBuild(registry, record, declaration);
-      // Advertised revisions remain usable by old tabs and failed-activation fallbacks.
-      // Only retired backend owners can release them; browser receipts are observations.
+      // Old tabs and failed activations retain revisions until the backend owner
+      // retires or native UI admission is withdrawn; browser receipts are observations.
       for (const [key, retained] of state.revisions) {
         if (!retained.isCurrent()) {
           state.revisions.delete(key);
@@ -208,14 +216,24 @@ function projectBrowserCatalog(
   if (state && !state.isCurrent()) {
     throw new Error("plugin registry is no longer active");
   }
-  const owners = new Set(registry ? browserOwners(registry).map((record) => record.id) : []);
+  const active = registry ? browserOwners(registry) : [];
+  const owners = new Set(active.filter(isControlUiPluginAllowed).map((record) => record.id));
   const plugins = [...(state?.builds.values() ?? [])]
     .filter((build) => owners.has(build.owner.id) && build.isCurrent())
     .map((build) => build.module)
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
-  const diagnostics = [...(state?.diagnostics.values() ?? [])]
-    .filter((diagnostic) => owners.has(diagnostic.pluginId))
-    .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
+  const diagnostics: PluginControlUiDiagnostic[] = [
+    ...[...(state?.diagnostics.values() ?? [])].filter((diagnostic) =>
+      owners.has(diagnostic.pluginId),
+    ),
+    ...active
+      .filter((record) => !isControlUiPluginAllowed(record))
+      .map((record): PluginControlUiDiagnostic => ({
+        pluginId: record.id,
+        code: "custom-plugin-ui-disabled",
+        message: CUSTOM_PLUGIN_UI_DISABLED_MESSAGE,
+      })),
+  ].toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
   const revision = createHash("sha256")
     .update(JSON.stringify({ plugins, diagnostics }))
     .digest("hex");

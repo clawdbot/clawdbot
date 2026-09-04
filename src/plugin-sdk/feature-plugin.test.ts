@@ -24,7 +24,10 @@ const contract = defineFeatureContract({
       kind: "query",
       description: "Read a fixture value.",
       input: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-      output: Type.Object({ value: Type.String() }, { additionalProperties: false }),
+      output: Type.Object(
+        { value: Type.String({ minLength: 1 }) },
+        { additionalProperties: false },
+      ),
       tool: { name: "fixture_inspect" },
     },
   },
@@ -113,13 +116,12 @@ describe("typed feature plugins", () => {
   });
 
   it("rejects invalid inputs before execution and invalid outputs before returning success", async () => {
-    const execute = vi.fn(() => ({ value: 42 }));
+    const execute = vi.fn(() => ({ value: "" }));
     const entry = defineFeaturePlugin({
       contract,
       name: "Feature fixture",
       description: "Fixture operations.",
       setup: () => ({
-        // @ts-expect-error Exercise runtime rejection of an invalid handler result.
         inspect: execute,
       }),
     });

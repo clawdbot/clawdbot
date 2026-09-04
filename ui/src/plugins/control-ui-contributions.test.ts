@@ -1,5 +1,6 @@
 import type { LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginControlUiDiagnostic } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -37,9 +38,16 @@ it("opens customization once and retains reload state across close and reopen", 
   };
   let selected: typeof replacement | undefined;
   const pendingReload = createDeferred();
+  const diagnostics: PluginControlUiDiagnostic[] = [
+    {
+      pluginId: "custom-review",
+      message: "Disabled by Labs",
+      code: "custom-plugin-ui-disabled",
+    },
+  ];
   const plugins = {
     hasPlugins: true,
-    errors: [],
+    errors: diagnostics,
     canReload: true,
     registrations: () => [replacement],
     selectedReplacement: () => selected,
@@ -54,8 +62,13 @@ it("opens customization once and retains reload state across close and reopen", 
       return () => listeners.delete(listener);
     },
   };
-  // SAFETY: this fixture supplies the only application service consumed by the manager.
-  const provider = createApplicationContextProvider({ plugins } as unknown as ApplicationContext);
+  const navigate = vi.fn();
+  // SAFETY: this fixture supplies the application services consumed by the manager.
+  const provider = createApplicationContextProvider({
+    plugins,
+    basePath: "/console",
+    navigate,
+  } as unknown as ApplicationContext);
   // SAFETY: the imported contributions module registers this Lit element.
   const manager = document.createElement("openclaw-plugin-manager") as LitElement;
   const button = (label: string) => {
@@ -80,6 +93,14 @@ it("opens customization once and retains reload state across close and reopen", 
     button(t("pluginUi.customize")).click();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
     expect(mostDialogs).toBe(1);
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+    const labs = manager.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
+    expect(labs?.textContent?.trim()).toBe("Open Labs");
+    labs?.click();
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
+    await vi.waitFor(() => expect(manager.querySelector("openclaw-modal-dialog")).toBeNull());
+    button(t("pluginUi.customize")).click();
+    await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
 
     const select = manager.querySelector<HTMLSelectElement>("select");
     if (!select) {

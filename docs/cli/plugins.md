@@ -104,6 +104,11 @@ and composer replacement. Run `npm install`, `npm run build`, and
 `package.json.openclaw.controlUi`; `plugins build` writes immutable bundled
 assets and their manifest declaration.
 
+Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). To load the
+scaffold's native browser UI, enable **Settings → Labs → Custom plugin UI**, then
+restart the Gateway and reload the browser. See
+[Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
+
 `plugins pack` validates a built project, bundles its backend dependencies, and
 writes an archive containing compiled code and UI with no install scripts or
 runtime package dependencies. `--json` returns its absolute path, SHA-256 digest,

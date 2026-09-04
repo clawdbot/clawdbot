@@ -12,6 +12,10 @@ pages, navigation, session actions, panels, dashboard widgets, and header
 accessories, or provide replacements for the workspace, session list, composer,
 transcript, and tool results.
 
+All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
+including the backend and browser contracts on this page. Pin and test your
+OpenClaw host version.
+
 Native UI runs trusted JavaScript in the Control UI origin. Install it only from
 authors you trust. Native modules share the signed-in operator's Gateway
 authority: `host.request` can call any method that connection's scopes allow,
@@ -22,7 +26,36 @@ Open the Control UI served by the connected Gateway. Native plugin assets
 require that same origin; a separately hosted UI connected to another Gateway
 cannot load them and explains which Control UI to open.
 
+## Enable custom plugin UI
+
+In the Control UI, open **Settings → Labs → Custom plugin UI**. The setting
+defaults to off and controls native browser code from user-installed plugins,
+including local development plugins. The equivalent config is:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      experimental: { customPlugins: true },
+    },
+  },
+}
+```
+
+Restart the Gateway and reload connected browser tabs after changing this
+setting. Disabling it prevents custom native UI from loading; it does not
+uninstall plugins or disable their backend operations, tools, or services.
+Ordinary plugin APIs, sandboxed dashboard widgets, and MCP Apps are unaffected.
+
+Native UI shipped with OpenClaw remains available for enabled bundled plugins,
+including Workboard. OpenClaw determines bundled status from the loaded
+plugin's origin, not its name or a manifest claim. A separately installed copy
+uses the custom-plugin setting.
+
 ## Create a feature plugin
+
+Enable the [Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui) before opening the
+scaffold's browser views.
 
 ```bash
 openclaw plugins init draft-review --name "Draft Review" --type feature
@@ -278,6 +311,9 @@ declared capabilities and native UI presence without executing the plugin.
 Approved application uses those retained bytes through the managed plugin
 installer. Changing the source file while approval is pending cannot change
 what is installed. Existing install policy and capability checks still apply.
+
+Artifact approval does not enable the Custom plugin UI lab. The installed
+backend can run with that setting off; its native browser UI remains gated.
 
 Pending imports expire after one hour. OpenClaw keeps at most eight pending
 archives of up to 32 MiB each and prunes expired or oldest imports when another

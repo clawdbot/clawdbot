@@ -560,6 +560,20 @@ This label does not change which request the approval buttons resolve.
   </Accordion>
 </AccordionGroup>
 
+## Custom plugin UI
+
+**Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
+and view replacements from user-installed plugins. It defaults to off and
+writes `gateway.controlUi.experimental.customPlugins`. Restart the Gateway and
+reload connected browser tabs after changing it.
+
+Only enable it for plugin authors you trust: native UI runs in the Control UI
+origin with the signed-in operator's Gateway authority. Native UI from enabled
+bundled plugins, including Workboard, remains available with the lab off.
+Backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and
+MCP Apps are unaffected. All plugin APIs are experimental; see
+[Feature plugins](/plugins/feature-plugins) for authoring and the trust model.
+
 ## Import assistant memory
 
 Open **Settings** → **Import Memory** to bring local Codex, Claude Code, or Hermes memory

@@ -2,7 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRecord } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
@@ -12,21 +14,26 @@ import {
   reloadControlUiPluginCatalog,
 } from "./control-ui-plugin-assets.js";
 import { setControlUiPluginAuthCookie } from "./control-ui-plugin-auth-cookie.js";
-import { listControlUiPluginTabAuthGrants } from "./control-ui-plugin-tabs.js";
+import {
+  listControlUiPluginTabAuthGrants,
+  listControlUiPluginWidgetKinds,
+} from "./control-ui-plugin-tabs.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   AUTH_NONE,
   AUTH_TOKEN,
   createResponse,
+  createTestGatewayServer,
   sendRequest,
   withGatewayServer,
 } from "./server-http.test-harness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { withTempConfig } from "./test-temp-config.js";
 
 const roots: string[] = [];
 const firstSource = 'export default { id: "native-ui" };';
 
-function activateFixture() {
+function activateFixture(origin: PluginRecord["origin"] = "bundled") {
   const rootDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "native-ui-")));
   roots.push(rootDir);
   const directory = path.join(rootDir, "dist/control-ui");
@@ -36,6 +43,7 @@ function activateFixture() {
   const registry = createEmptyPluginRegistry();
   const record = createPluginRecord({
     id: "native-ui",
+    origin,
     rootDir,
     controlUi: { entry: "dist/control-ui/index.js", styles: ["dist/control-ui/theme.css"] },
   });
@@ -48,6 +56,11 @@ function activateFixture() {
     }),
   );
   registry.plugins.push(record);
+  registry.controlUiDescriptors.push({
+    pluginId: record.id,
+    source: record.source,
+    descriptor: { id: "summary", surface: "widget", label: "Native summary" },
+  });
   setActivePluginRegistry(registry);
   return { rootDir, directory, registry, record };
 }
@@ -85,6 +98,78 @@ describe("native Control UI browser assets", () => {
   beforeAll(async () => {
     // Compile the real Control UI owner during setup, before the HTTP request deadline starts.
     await import("./control-ui.js");
+  });
+
+  it.each(["global", "workspace", "config"] as const)(
+    "keeps Custom plugin UI off by default for %s plugins",
+    async (origin) => {
+      await withTempConfig({
+        cfg: {},
+        run: async () => {
+          const fixture = activateFixture(origin);
+          fixture.record.trustedOfficialInstall = true;
+          const catalog = await listControlUiPluginCatalog();
+          expect(catalog.plugins).toEqual([]);
+          expect(catalog.diagnostics).toEqual([
+            {
+              pluginId: fixture.record.id,
+              code: "custom-plugin-ui-disabled",
+              message: expect.stringContaining("Settings > Labs"),
+            },
+          ]);
+          expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+          expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
+            expect.objectContaining({ pluginId: fixture.record.id }),
+          );
+          expect(await reloadControlUiPluginCatalog(fixture.record.id)).toEqual(catalog);
+        },
+      });
+    },
+  );
+
+  it("withdraws Custom plugin UI assets and receipts when the applied lab setting turns off", async () => {
+    await withTempConfig({
+      cfg: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      run: async () => {
+        activateFixture("workspace");
+        const entry = (await listControlUiPluginCatalog()).plugins[0]!;
+        expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(
+          expect.objectContaining({ pluginId: entry.pluginId }),
+        );
+        const browser = {};
+        const report = {
+          pluginId: entry.pluginId,
+          revision: entry.revision,
+          status: "activated" as const,
+        };
+        expect(reportControlUiPluginActivation(browser, report)).toBe(true);
+        const cookie = cookieForGrant();
+        const server = createTestGatewayServer({
+          resolvedAuth: AUTH_TOKEN,
+          overrides: { controlUiEnabled: true },
+        });
+        expect(
+          (await sendRequest(server, { path: entry.entryUrl, headers: { cookie } })).res.statusCode,
+        ).toBe(200);
+
+        setRuntimeConfigSnapshot({
+          gateway: { controlUi: { experimental: { customPlugins: false } } },
+        });
+
+        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+        expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
+          expect.objectContaining({ pluginId: entry.pluginId }),
+        );
+        expect(reportControlUiPluginActivation(browser, report)).toBe(false);
+        expect(listControlUiPluginActivations(browser)).toEqual([]);
+        for (const headers of [{ cookie }, { authorization: "Bearer test-token" }]) {
+          for (const asset of [entry.entryUrl, ...entry.styles]) {
+            expect((await sendRequest(server, { path: asset, headers })).res.statusCode).toBe(404);
+          }
+        }
+      },
+    });
   });
 
   it.each([AUTH_NONE, AUTH_TOKEN])(

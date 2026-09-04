@@ -12,6 +12,10 @@ Every plugin exports a default entry object. The SDK provides a helper for
 each entry shape: `defineToolPlugin`, `definePluginEntry`,
 `defineChannelPluginEntry`, `defineSetupPluginEntry`.
 
+All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
+including these entry helpers. Pin and test the OpenClaw host versions your
+plugin supports.
+
 <Tip>
   **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
   [Channel Plugins](/plugins/sdk-channel-plugins), or

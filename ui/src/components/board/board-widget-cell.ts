@@ -25,6 +25,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { showToast } from "../../lib/toast.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderCustomPluginUiDisabled } from "../../plugins/control-ui-disabled.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
@@ -335,7 +336,8 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       ) {
         return html`<p class="board-widget__plugin-loading">${t("board.widget.pluginLoading")}</p>`;
       }
-      if (advertised && runtime) {
+      const disabled = renderCustomPluginUiDisabled(this.context, pluginId);
+      if (!disabled && advertised && runtime) {
         const error = runtime.errors.find(
           (entry) => entry.pluginId === pluginId || entry.pluginId === "host",
         );
@@ -345,6 +347,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       }
       return renderBoardDisabledPlugin({
         pluginId,
+        content: disabled,
         disabled: this.busy || this.actionPending || !this.canMutate,
         onRemove: () => void this.runAction(() => callbacks.remove(widget)),
       });

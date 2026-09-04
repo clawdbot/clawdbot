@@ -37,36 +37,75 @@ afterEach(() => {
 const CHUNK_LOAD_WAIT = { timeout: 10_000 };
 
 describe("plugin board widget cells", () => {
-  it("renders a removable placeholder when the owning plugin is inactive", async () => {
-    const widget: BoardWidget = {
-      name: "work-item",
-      tabId: "main",
-      title: "Work item",
-      contentKind: "plugin",
-      pluginKind: "workboard:card",
-      props: { cardId: "card-123" },
-      sizeW: 6,
-      sizeH: 4,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    };
-    const cellCallbacks = callbacks();
-    const cell = document.createElement("openclaw-board-widget-cell");
-    cell.widget = widget;
-    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
-    cell.sessionKey = "agent:main:test";
-    cell.callbacks = cellCallbacks;
-    document.body.append(cell);
-    await cell.updateComplete;
+  it.each([false, true])(
+    "preserves a removable unavailable widget (Labs disabled: %s)",
+    async (labsDisabled) => {
+      const widget: BoardWidget = {
+        name: "work-item",
+        tabId: "main",
+        title: "Work item",
+        contentKind: "plugin",
+        pluginKind: "custom-review:card",
+        props: { cardId: "card-123" },
+        sizeW: 6,
+        sizeH: 4,
+        position: 0,
+        grantState: "none",
+        revision: 1,
+      };
+      const cellCallbacks = callbacks();
+      const navigate = vi.fn();
+      const provider = createApplicationContextProvider({
+        basePath: "/console",
+        navigate,
+        gateway: { snapshot: { phase: "connected" } },
+        plugins: {
+          errors: labsDisabled
+            ? [
+                {
+                  pluginId: "custom-review",
+                  code: "custom-plugin-ui-disabled",
+                  message: "Disabled",
+                },
+              ]
+            : [],
+          registrations: () => [],
+          isLoading: () => false,
+          subscribe: () => () => undefined,
+        },
+      } as unknown as ApplicationContext);
+      const cell = document.createElement("openclaw-board-widget-cell");
+      cell.widget = widget;
+      cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+      cell.sessionKey = "agent:main:test";
+      cell.callbacks = cellCallbacks;
+      provider.append(cell);
+      document.body.append(provider);
+      await cell.updateComplete;
 
-    const placeholder = cell.querySelector('[data-test-id="board-disabled-plugin"]');
-    expect(placeholder?.textContent).toContain("Widget from disabled plugin workboard");
-    const removeButton = placeholder?.querySelector("button");
-    expect(removeButton).not.toBeNull();
-    removeButton?.click();
-    await vi.waitFor(() => expect(cellCallbacks.remove).toHaveBeenCalledWith(widget));
-  });
+      const placeholder = cell.querySelector('[data-test-id="board-disabled-plugin"]');
+      expect(placeholder?.textContent).toContain(
+        labsDisabled ? "Custom plugin UI is off" : "Widget from disabled plugin custom-review",
+      );
+      expect(cell.widget).toBe(widget);
+      expect(cellCallbacks.remove).not.toHaveBeenCalled();
+      const labsLink = placeholder?.querySelector<HTMLAnchorElement>(
+        'a[href="/console/settings/labs"]',
+      );
+      if (labsDisabled) {
+        expect(labsLink?.textContent?.trim()).toBe("Open Labs");
+        labsLink?.click();
+        expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
+        expect(cellCallbacks.remove).not.toHaveBeenCalled();
+      } else {
+        expect(labsLink).toBeNull();
+      }
+      const removeButton = placeholder?.querySelector("button");
+      expect(removeButton).not.toBeNull();
+      removeButton?.click();
+      await vi.waitFor(() => expect(cellCallbacks.remove).toHaveBeenCalledWith(widget));
+    },
+  );
 
   it("renders an advertised session progress card and its empty state", async () => {
     const dashboardSessionKey = "agent:main:dashboard";

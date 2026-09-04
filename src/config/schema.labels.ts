@@ -376,6 +376,8 @@ export const FIELD_LABELS: Record<string, string> = {
     "Web Fetch Allow RFC 2544 Benchmark Range",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange": "Web Fetch Allow IPv6 Unique Local Range",
   "gateway.controlUi.basePath": "Control UI Base Path",
+  "gateway.controlUi.experimental": "Experimental Control UI Features",
+  "gateway.controlUi.experimental.customPlugins": "Custom Plugin UI",
   "gateway.controlUi.environment": "Control UI Environment",
   "gateway.controlUi.environment.label": "Control UI Environment Label",
   "gateway.controlUi.environment.color": "Control UI Environment Color",

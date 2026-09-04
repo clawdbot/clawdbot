@@ -55,6 +55,7 @@ export const PluginControlUiModuleSchema = closedObject({
 export const PluginControlUiDiagnosticSchema = closedObject({
   pluginId: NonEmptyString,
   message: Type.String({ maxLength: 512 }),
+  code: Type.Optional(Type.Literal("custom-plugin-ui-disabled")),
 });
 
 /** Lists browser builds; reading this catalog never reloads backend plugin code. */

@@ -24,6 +24,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { renderCustomPluginUiDisabled } from "../../plugins/control-ui-disabled.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { pluginTabKey } from "./route.ts";
 
@@ -663,10 +664,16 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     ) {
       return renderLoadingState();
     }
+    const disabled = renderCustomPluginUiDisabled(context, this.pluginId);
     return html`
       <section class="card lazy-view-state" role="status">
-        <div class="card-title">${t("pluginTabs.unavailableTitle")}</div>
-        <div class="card-sub">${t("pluginTabs.unavailableSubtitle")}</div>
+        ${
+          disabled ??
+          html`
+            <div class="card-title">${t("pluginTabs.unavailableTitle")}</div>
+            <div class="card-sub">${t("pluginTabs.unavailableSubtitle")}</div>
+          `
+        }
       </section>
     `;
   }

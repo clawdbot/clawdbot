@@ -1,3 +1,4 @@
+import type { PluginControlUiDiagnostic } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type {
   ControlUiAction,
   ControlUiAccessory,
@@ -32,7 +33,7 @@ export type ControlUiContributions = {
 // Application consumers use the registry contract; construction and activation
 // ownership stay in the runtime without a dependency back through app context.
 export type ControlUiPluginCapability = {
-  readonly errors: readonly { pluginId: string; message: string }[];
+  readonly errors: readonly PluginControlUiDiagnostic[];
   readonly hasPlugins: boolean;
   readonly canReload: boolean;
   isLoading: (pluginId: string) => boolean;

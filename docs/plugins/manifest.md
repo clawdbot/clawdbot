@@ -300,6 +300,13 @@ JavaScript and CSS. Assets follow the Gateway's authentication policy, are
 captured as immutable revisions, and refresh only through the explicit UI reload
 flow.
 
+User-installed native UI requires **Settings → Labs → Custom plugin UI**
+(`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI
+from enabled bundled plugins remains available. See
+[Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui) for
+restart and browser reload requirements. This gate does not disable the
+plugin's backend APIs or the sandboxed dashboard bindings below.
+
 ```json
 {
   "controlUi": {
