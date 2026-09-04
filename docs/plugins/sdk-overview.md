@@ -22,7 +22,29 @@ reference for **what to import** and **what you can register**.
 Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins). Use [Channel plugins](/plugins/sdk-channel-plugins) for channels, [Provider plugins](/plugins/sdk-provider-plugins) for model providers, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, [Agent harness plugins](/plugins/sdk-agent-harness) for native agent executors, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hooks.
 </Tip>
 
+## API stability
+
+All OpenClaw plugin APIs are **experimental**. This includes every
+`openclaw/plugin-sdk/*` subpath, registration and runtime APIs, channel and
+provider contracts, hooks, and native Control UI APIs. These contracts can
+change between OpenClaw releases.
+
+Pin the OpenClaw version used to develop and deploy your plugin, and test each
+host version you declare compatible. Set package compatibility ranges from
+those tested versions; do not assume a working build supports future releases.
+Existing [compatibility windows and upgrade migrations](/plugins/compatibility)
+still apply. Experimental status does not remove a documented migration path.
+
+Native UI from user-installed plugins also requires the default-off
+[Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui).
+Backend plugin APIs and ordinary plugin loading do not require that setting.
+
 ## Import convention
+
+For features with native Control UI, use [Feature plugins](/plugins/feature-plugins):
+`feature-contract` defines shared operations, `feature-plugin` registers their
+backend implementations, and `control-ui` exposes browser contribution and
+replacement contracts.
 
 Always import from a specific subpath:
 

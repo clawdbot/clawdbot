@@ -37,13 +37,13 @@ type ApplicationConfig = {
   communityInvite: boolean;
   terminalEnabled: boolean;
   cliAgentsEnabled?: boolean;
+  pluginAssetsRequireAuth: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
 };
 
 export type ApplicationConfigCapability = {
   readonly current: ApplicationConfig;
   refresh: (options?: {
-    auth?: ApplicationConfigAuthSource;
     skipWithoutAuthCandidate?: boolean;
     signal?: AbortSignal;
   }) => Promise<ApplicationConfig | null>;
@@ -71,10 +71,15 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   communityInvite: false,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
   cliAgentsEnabled: false,
+  pluginAssetsRequireAuth: true,
   pluginFrameGrants: [],
 };
 
-function loadControlUiPresentation(environment: ControlUiEnvironment | null, seamColor?: string) {
+function loadControlUiPresentation(
+  environment: ControlUiEnvironment | null,
+  seamColor: string | undefined,
+  isCurrent: () => boolean,
+) {
   const root = document.documentElement;
   if (
     environment ||
@@ -83,7 +88,11 @@ function loadControlUiPresentation(environment: ControlUiEnvironment | null, sea
     root.style.getPropertyValue("--ring")
   ) {
     void import("./control-ui-environment-presentation.runtime.ts").then(
-      ({ applyControlUiPresentation }) => applyControlUiPresentation({ environment, seamColor }),
+      ({ applyControlUiPresentation }) => {
+        if (isCurrent()) {
+          applyControlUiPresentation({ environment, seamColor });
+        }
+      },
     );
   }
 }
@@ -109,6 +118,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     communityInvite: parsed.communityInvite === true,
     terminalEnabled: Boolean(parsed.terminalEnabled),
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
+    pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,
     pluginFrameGrants: (parsed.pluginFrameGrants ?? []).filter(
       (grant): grant is ControlUiPluginFrameGrantAck =>
         typeof grant?.pluginId === "string" &&
@@ -119,30 +129,22 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
 }
 
 async function loadApplicationConfig(params: {
-  resourceBasePath: string;
-  auth?: ApplicationConfigAuthSource;
-  skipWithoutAuthCandidate?: boolean;
+  url: string;
+  authCandidates: readonly string[];
   signal?: AbortSignal;
-}): Promise<ApplicationConfig | null> {
+}): Promise<{ config: ApplicationConfig; seamColor?: string } | null> {
   if (typeof window === "undefined" || typeof fetch !== "function") {
     return null;
   }
 
-  const url = `${normalizeRouteBasePath(params.resourceBasePath)}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
-
   try {
-    const sameOrigin = new URL(url, window.location.origin).origin === window.location.origin;
-    const authCandidates = sameOrigin ? resolveControlUiAuthCandidates(params.auth ?? {}) : [];
-    if (params.skipWithoutAuthCandidate && sameOrigin && !authCandidates.length) {
-      return null;
-    }
     let res: Response | null = null;
-    for (const candidate of authCandidates.length ? authCandidates : [""]) {
+    for (const candidate of params.authCandidates.length ? params.authCandidates : [""]) {
       const headers: Record<string, string> = { Accept: "application/json" };
       if (candidate) {
         headers.Authorization = `Bearer ${candidate}`;
       }
-      res = await fetch(url, {
+      res = await fetch(params.url, {
         method: "GET",
         headers,
         credentials: "same-origin",
@@ -159,9 +161,7 @@ async function loadApplicationConfig(params: {
       return null;
     }
     const parsed = (await res.json()) as ControlUiBootstrapConfig;
-    const config = normalizeApplicationConfig(parsed);
-    loadControlUiPresentation(config.environment, parsed.seamColor);
-    return config;
+    return { config: normalizeApplicationConfig(parsed), seamColor: parsed.seamColor };
   } catch {
     return null;
   }
@@ -169,9 +169,12 @@ async function loadApplicationConfig(params: {
 
 export function createApplicationConfigCapability(params: {
   resourceBasePath: string;
-  auth?: ApplicationConfigAuthSource;
+  getAuth?: () => ApplicationConfigAuthSource;
 }): ApplicationConfigCapability {
   let current = DEFAULT_APPLICATION_CONFIG;
+  let authVersion = 0;
+  let refreshVersion = 0;
+  let publishedVersion = 0;
   const environmentAttribute = document.documentElement.getAttribute(
     CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   );
@@ -180,10 +183,14 @@ export function createApplicationConfigCapability(params: {
       ...current,
       environment: JSON.parse(environmentAttribute),
     };
-    loadControlUiPresentation(current.environment);
+    loadControlUiPresentation(current.environment, undefined, () => publishedVersion === 0);
   }
-  let currentAuth = params.auth;
-  let refreshVersion = 0;
+  const url = `${normalizeRouteBasePath(params.resourceBasePath)}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`;
+  const sameOrigin = new URL(url, window.location.origin).origin === window.location.origin;
+  const resolveAuth = () =>
+    sameOrigin ? resolveControlUiAuthCandidates(params.getAuth?.() ?? {}) : [];
+  let authCandidates: string[] = [];
+  let pending: { signal?: AbortSignal; promise: Promise<ApplicationConfig | null> } | undefined;
   const listeners = new Set<(config: ApplicationConfig) => void>();
 
   return {
@@ -191,29 +198,78 @@ export function createApplicationConfigCapability(params: {
       return current;
     },
     async refresh(options) {
-      currentAuth = options?.auth ?? currentAuth;
-      const version = ++refreshVersion;
-      const next = await loadApplicationConfig({
-        resourceBasePath: params.resourceBasePath,
-        auth: currentAuth,
-        skipWithoutAuthCandidate: options?.skipWithoutAuthCandidate,
-        signal: options?.signal,
-      });
-      if (!next || version !== refreshVersion) {
+      // Queued bootstrap work cannot own credentials: plugin activation may
+      // request its asset grant before that queue reaches the config refresh.
+      const candidates = resolveAuth();
+      if (
+        candidates.length !== authCandidates.length ||
+        candidates.some((candidate, index) => candidate !== authCandidates[index])
+      ) {
+        // Changing credentials retires previous authority even when this refresh
+        // skips its request. Equivalent startup consumers share the live load.
+        authCandidates = candidates;
+        authVersion++;
+        pending = undefined;
+      }
+      if (options?.skipWithoutAuthCandidate && sameOrigin && !candidates.length) {
         return null;
       }
-      const documentTerminalEnabled = readDocumentTerminalEnabled();
-      if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
-        // CSP headers cannot change on a live document. Reload in either
-        // direction so the document and accepted terminal state stay aligned.
-        window.location.reload();
+      if (pending && pending.signal === options?.signal) {
+        return pending.promise;
+      }
+      const version = ++refreshVersion;
+      const authority = authVersion;
+      const signal = options?.signal;
+      const isCurrent = () => {
+        const liveCandidates = resolveAuth();
+        return (
+          authority === authVersion &&
+          !signal?.aborted &&
+          candidates.length === liveCandidates.length &&
+          candidates.every((candidate, index) => candidate === liveCandidates[index])
+        );
+      };
+      const promise = loadApplicationConfig({
+        url,
+        authCandidates: candidates,
+        signal,
+      }).then((loaded) => {
+        if (!loaded || !isCurrent()) {
+          return null;
+        }
+        const next = loaded.config;
+        // Independent callers keep their own abort signals and valid results;
+        // only the newest successful request publishes shared presentation.
+        if (version < publishedVersion) {
+          return next;
+        }
+        publishedVersion = version;
+        loadControlUiPresentation(
+          next.environment,
+          loaded.seamColor,
+          () => isCurrent() && version === publishedVersion,
+        );
+        const documentTerminalEnabled = readDocumentTerminalEnabled();
+        if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
+          // CSP headers cannot change on a live document. Reload in either
+          // direction so the document and accepted terminal state stay aligned.
+          window.location.reload();
+          return next;
+        }
+        current = next;
+        for (const listener of listeners) {
+          listener(current);
+        }
         return next;
+      });
+      pending = { promise, signal };
+      try {
+        return await promise;
+      } finally {
+        if (pending?.promise === promise) {
+          pending = undefined;
+        }
       }
-      current = next;
-      for (const listener of listeners) {
-        listener(current);
-      }
-      return next;
     },
     subscribe(listener) {
       listeners.add(listener);

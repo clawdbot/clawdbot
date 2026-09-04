@@ -644,6 +644,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         ...toCommandPaletteItems(
           getStaticCommandPaletteCatalogItems(
             hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+            this.context?.nativeDeviceSettings,
           ),
         ),
         ...this.catalogItems,

@@ -146,7 +146,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
   onSlashCommand?: (command: string) => void;
-  onSend: (followUpModeOverride?: ChatFollowUpMode, submissionAction?: Event) => void;
+  onSend: (
+    followUpModeOverride?: ChatFollowUpMode,
+    submissionAction?: Event,
+  ) => void | Promise<boolean | void>;
   onToggleRealtimeTalk?: () => void;
   onToggleRealtimeCamera?: () => void;
   onSwitchRealtimeCamera?: () => void;

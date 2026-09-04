@@ -68,11 +68,13 @@ actor GatewayConnection: Observable {
         let deviceAuthGatewayID: String?
         let activationOwnershipFingerprint: String?
 
+        func matches(config: Config) -> Bool {
+            self.url == config.url && self.token == config.token && self.password == config.password
+        }
+
         fileprivate func matches(_ endpoint: EndpointSnapshot) -> Bool {
             self.authority == endpoint.routeAuthority &&
-                self.url == endpoint.config.url &&
-                self.token == endpoint.config.token &&
-                self.password == endpoint.config.password &&
+                self.matches(config: endpoint.config) &&
                 GatewayTLSRoute.hasSameConnectionIdentity(self.tls, endpoint.tls) &&
                 self.deviceAuthGatewayID == endpoint.deviceAuthGatewayID
         }

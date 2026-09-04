@@ -930,6 +930,7 @@ export async function handleControlUiHttpRequest(
       communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
       terminalEnabled,
       cliAgentsEnabled: config?.gateway?.cliAgents?.enabled === true,
+      pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
         pluginId,
         path: grantPath,

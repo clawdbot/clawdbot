@@ -15,6 +15,7 @@ import type {
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
   PluginManifestContracts,
+  PluginManifestControlUi,
   PluginManifestDashboard,
   PluginManifestMediaUnderstandingProviderMetadata,
   PluginManifestMcpServer,
@@ -110,6 +111,7 @@ export type PluginManifestRecord = {
   trustedOfficialInstall?: boolean;
   qaRunners?: PluginManifestQaRunner[];
   dashboard?: PluginManifestDashboard;
+  controlUi?: PluginManifestControlUi;
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills: string[];
   settingsFiles?: string[];
