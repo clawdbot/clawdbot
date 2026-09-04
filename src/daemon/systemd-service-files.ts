@@ -17,7 +17,7 @@ import type {
   GatewayServiceManagedOverrides,
   GatewayServiceReadOptions,
 } from "./service-types.js";
-import { execBusctlUser, readSystemctlDetail } from "./systemd-exec.js";
+import { execBusctlUser } from "./systemd-exec.js";
 import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
@@ -96,8 +96,9 @@ async function readSystemdManagerCommand(
 ): Promise<GatewayServiceCommandConfig | null> {
   const manager = "org.freedesktop.systemd1";
   const unitName = `${resolveSystemdServiceName(env)}.service`;
-  // The manager's own diagnostic (missing user bus, timeout) travels with the
-  // error so callers can classify it instead of reporting a bare inspection failure.
+  // Only the manager's stderr diagnostic (missing user bus, timeout) travels with
+  // the error so callers can classify it; stdout carries ExecStart and Environment
+  // property values that must never reach operator-visible failure text.
   const unavailable = (detail?: string) =>
     new Error(
       detail
@@ -122,7 +123,7 @@ async function readSystemdManagerCommand(
       ) {
         return null;
       }
-      throw unavailable(readSystemctlDetail(result));
+      throw unavailable(result.stderr.trim());
     }
     const properties = result.stdout
       .trim()

@@ -1626,6 +1626,39 @@ describe("readSystemdServiceExecStart", () => {
     );
   });
 
+  it("keeps queried property values out of a failed manager inspection", async () => {
+    // A property read that fails after answering still printed earlier properties.
+    // Only the manager's stderr may describe the failure; the ExecStart and
+    // Environment payload must never travel into later maintenance errors.
+    const stderr =
+      "Failed to connect to user scope bus via local transport: No such file or directory";
+    const answeredProperties = buildSystemdManagerPropertyOutput({
+      programArguments: ["/usr/bin/openclaw", "gateway", "run", "--argument-secret-canary"],
+      environment: ["OPENCLAW_GATEWAY_TOKEN=environment-secret-canary"],
+    });
+    mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_command, args, _options, callback) => {
+      if (args.includes("LoadUnit")) {
+        const unitPath = "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice";
+        callback(null, JSON.stringify({ type: "o", data: [unitPath] }), "");
+        return;
+      }
+      if (args.includes("org.freedesktop.systemd1.Unit")) {
+        callback(null, buildSystemdUnitPropertyOutput({}), "");
+        return;
+      }
+      callback(createExecFileError(stderr, { stderr }), answeredProperties, stderr);
+    });
+
+    const inspection = readSystemdServiceExecStart(
+      { HOME: TEST_SERVICE_HOME },
+      { requireEffective: true },
+    );
+    await expect(inspection).rejects.toThrow(stderr);
+    await expect(inspection).rejects.not.toThrow(/canary/);
+  });
+
   it.each([false, true])(
     "reads a global user fragment without inventing a managed base (local=%s)",
     async (local) => {
