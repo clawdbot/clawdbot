@@ -1,6 +1,7 @@
 // Spawn utilities configure child processes and normalize spawned process handles.
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
 
@@ -48,40 +49,12 @@ async function spawnAndWaitForSpawn(
 ): Promise<ChildProcess> {
   const child = spawnImpl(expectDefined(argv[0], "argv entry at 0"), argv.slice(1), options);
 
-  return await new Promise((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => {
-      child.removeListener("error", onError);
-      child.removeListener("spawn", onSpawn);
-    };
-    const finishResolve = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve(child);
-    };
-    const onError = (err: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(toErrorObject(err, "Non-Error rejection"));
-    };
-    const onSpawn = () => {
-      finishResolve();
-    };
-    child.once("error", onError);
-    child.once("spawn", onSpawn);
-    // Ensure mocked spawns that never emit "spawn" don't stall.
-    process.nextTick(() => {
-      if (typeof child.pid === "number") {
-        finishResolve();
-      }
-    });
-  });
+  try {
+    await once(child, "spawn");
+  } catch (err) {
+    throw toErrorObject(err, "Non-Error rejection");
+  }
+  return child;
 }
 
 export async function spawnWithFallback(
