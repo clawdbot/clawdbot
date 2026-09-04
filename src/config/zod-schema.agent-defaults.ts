@@ -168,6 +168,7 @@ export const AgentDefaultsSchema = z
           .object({
             enabled: z.boolean().optional(),
             model: z.string().optional(),
+            fallbacks: z.array(z.string()).optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
             forceFlushTranscriptBytes: NonNegativeByteSizeSchema.optional(),
           })
