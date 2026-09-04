@@ -13,7 +13,10 @@ import {
   selectHttpRequestRejection,
   sendHttpRequestRejection,
 } from "./http-request-lifecycle.js";
-import { readChunkWithIdleTimeout, withResponseBodyTimeout } from "./http-response-body-timeout.js";
+import {
+  withResponseBodyIdleTimeout,
+  withResponseBodyTimeout,
+} from "./http-response-body-timeout.js";
 
 export { readChunkWithIdleTimeout } from "./http-response-body-timeout.js";
 
@@ -168,29 +171,35 @@ async function readResponsePrefixFromReader(
   let size = 0;
   let truncated = false;
   try {
-    while (true) {
-      const { done, value } = options?.chunkTimeoutMs
-        ? await readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
-        : await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value?.length) {
-        continue;
-      }
-      const remaining = maxBytes - size;
-      size += value.length;
-      if (size > maxBytes || (options?.stopAtLimit && size === maxBytes)) {
-        if (remaining > 0) {
-          chunks.push(value.subarray(0, remaining));
+    await withResponseBodyIdleTimeout(
+      reader,
+      options?.chunkTimeoutMs || undefined,
+      options?.onIdleTimeout,
+      async (refreshTimeout) => {
+        while (true) {
+          refreshTimeout?.();
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          if (!value?.length) {
+            continue;
+          }
+          const remaining = maxBytes - size;
+          size += value.length;
+          if (size > maxBytes || (options?.stopAtLimit && size === maxBytes)) {
+            if (remaining > 0) {
+              chunks.push(value.subarray(0, remaining));
+            }
+            truncated = true;
+            // A capture tee can retain cancellation until the caller releases its request.
+            void reader.cancel().catch(() => undefined);
+            break;
+          }
+          chunks.push(value);
         }
-        truncated = true;
-        // A capture tee can retain cancellation until the caller releases its request.
-        void reader.cancel().catch(() => undefined);
-        break;
-      }
-      chunks.push(value);
-    }
+      },
+    );
   } finally {
     try {
       reader.releaseLock();

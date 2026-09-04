@@ -242,7 +242,13 @@ export function renderPanelTabStrip(params: {
       .active=${params.activeId ?? ""}
       activation="auto"
       without-scroll-controls
-      @wa-tab-show=${(event: CustomEvent<{ name: string }>) => params.onSelect(event.detail.name)}
+      @wa-tab-show=${(event: CustomEvent<{ name: string }>) => {
+        // Web Awesome also emits for controlled selection updates. Echoing those
+        // as user actions can reopen a panel that its owner just focused away.
+        if (event.detail.name !== params.activeId) {
+          params.onSelect(event.detail.name);
+        }
+      }}
     >
       ${repeat(
         params.tabs,

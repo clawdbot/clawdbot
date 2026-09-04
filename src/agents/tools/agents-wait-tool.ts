@@ -11,6 +11,7 @@ import {
 } from "../subagents/registry/subagent-registry-state.js";
 import { getSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { markCollectorReaderTool } from "../subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import { describeAgentsWaitTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
@@ -272,7 +273,7 @@ export function createAgentsWaitTool(opts: {
   config?: OpenClawConfig;
 }): AnyAgentTool {
   const swarm = resolveSwarmConfig(opts.config, opts.agentId);
-  return {
+  return markCollectorReaderTool({
     label: "Wait for Agents",
     name: "agents_wait",
     displaySummary: "Wait for collector children.",
@@ -311,5 +312,5 @@ export function createAgentsWaitTool(opts: {
         Boolean(result.errors?.length);
       return jsonResult(noAuthorizedTargets ? { ...result, success: false } : result);
     },
-  };
+  });
 }

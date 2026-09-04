@@ -122,11 +122,8 @@ function createFixture(overrides: FixtureOverrides = {}) {
         agentSession: {
           activeSession,
           clientToolCallSlots: [],
-          coreReadAuthorized: true,
-          getCodeModeRecoveryCandidate: vi.fn(() => undefined),
           hasDeliveredSourceReply: vi.fn(() => false),
           hookRunner: {},
-          setCodeModeReconciliationReadAuthorized: vi.fn(),
           setActiveSessionSystemPrompt: vi.fn(),
           settingsManager: { getCompactionReserveTokens: vi.fn(() => 1_000) },
         },

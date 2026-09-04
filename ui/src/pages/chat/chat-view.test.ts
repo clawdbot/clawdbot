@@ -6957,6 +6957,53 @@ describe("chat model controls", () => {
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("shows the session's active fallback model without changing its selected preference", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "codex",
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "codex" },
+        { id: "qwen3.5:9b", name: "Qwen 3.5 9B", provider: "ollama" },
+      ],
+    });
+    const selectedSession = expectDefined(state.sessionsResult?.sessions[0], "selected session");
+    Object.assign(selectedSession, {
+      activeModel: "qwen3.5:9b",
+      activeModelProvider: "ollama",
+    });
+
+    const container = renderModelControls(state);
+    const trigger = getChatModelSelect(container);
+
+    expect(trigger.textContent).toContain("Qwen 3.5 9B");
+    expect(trigger.getAttribute("aria-label")).toBe("Chat model: Qwen 3.5 9B");
+    expect(trigger.dataset.chatSelectValue).toBe("codex/gpt-5.5");
+    expect(
+      container
+        .querySelector('[data-chat-model-option="codex/gpt-5.5"]')
+        ?.getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("does not borrow selected-model metadata for an unknown active fallback", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "codex",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "codex", supportsTools: false }],
+    });
+    const selectedSession = expectDefined(state.sessionsResult?.sessions[0], "selected session");
+    Object.assign(selectedSession, {
+      activeModel: "qwen3.5:9b",
+      activeModelProvider: "ollama",
+    });
+
+    const trigger = getChatModelSelect(renderModelControls(state));
+
+    expect(trigger.textContent).toContain("ollama/qwen3.5:9b");
+    expect(trigger.dataset.chatModelTools).toBe("available");
+    expect(trigger.querySelector(".chat-controls__trigger-provider-icon")).toBeNull();
+  });
+
   it("renders an accessible skeleton and reserves hidden effort geometry before the snapshot", () => {
     const { state } = createChatHeaderState();
     const container = renderModelControls(state, {

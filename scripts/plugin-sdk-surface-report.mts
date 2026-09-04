@@ -343,7 +343,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: read-only debug proxy capture reader factory and contract.
       // +2: owner-selected channel groups and their authored config path for safe recovery hints.
       // +1: canonical conversation-to-session binding read for native channel controls.
-      4376,
+      // +1: final callable-tool availability projection for native harnesses.
+      4377,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -461,7 +462,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: read-only debug proxy capture reader factory.
       // +2: owner-selected channel groups and their authored config path for safe recovery hints.
       // +1: canonical conversation-to-session binding read for native channel controls.
-      2609,
+      // +1: final callable-tool availability projection for native harnesses.
+      2610,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -12,15 +12,33 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
+import { formatGoalSummary } from "../shared/session-goal-display.js";
+import { isSessionRunActive } from "../shared/session-run-state.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { resolveAssistantIdentity } from "./assistant-identity.js";
+import type { SessionEntryPair } from "./session-list-order.js";
 import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import type {
+  SessionListActiveRunProjector,
   SessionListRowContext,
   SessionListRowContextProvider,
 } from "./session-utils-contracts.js";
-import { resolveSessionDisplayModelIdentityRefCached } from "./session-utils-model.js";
+import {
+  resolveGatewaySessionDisplayName,
+  resolveGatewaySessionKind,
+  projectGatewaySessionRunState,
+  projectGatewaySessionActiveRun,
+  resolveGatewaySessionGoal,
+} from "./session-utils-display.js";
+import {
+  resolveSessionDisplayModelIdentityRefCached,
+  resolveGatewaySessionRuntimeProjection,
+} from "./session-utils-model.js";
 import {
   buildSingleRowStoreChildSessionsByKey,
+  buildSessionListRowMetadataContext,
+  populateSessionListAcpMetadata,
   resolveSessionSelectedModelRef,
 } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
@@ -31,7 +49,7 @@ import {
 } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-export function resolveSessionListSearchDisplayName(
+function resolveSessionListSearchDisplayName(
   key: string,
   entry?: SessionEntry,
 ): string | undefined {
@@ -65,30 +83,14 @@ function addSessionListSearchModelFields(
   }
 }
 
-export function matchesSessionListSearch(
-  fields: Array<string | undefined>,
-  search: string,
-): boolean {
+function matchesSessionListSearch(fields: Array<string | undefined>, search: string): boolean {
   return fields.some(
     (field) => typeof field === "string" && normalizeLowercaseStringOrEmpty(field).includes(search),
   );
 }
 
-export function appendStoredSessionModelSearchFields(
-  fields: Array<string | undefined>,
-  entry?: SessionEntry,
-) {
-  const provider = normalizeOptionalString(entry?.modelProvider);
-  const model = normalizeOptionalString(entry?.model);
-  fields.push(provider, model);
-  if (provider && model) {
-    fields.push(`${provider}/${model}`);
-  }
-}
-
-export function shouldResolveDerivedSessionModelSearchFields(search: string): boolean {
-  // Agent session-key searches are already covered by cheap key fields; do not
-  // hydrate model metadata for every non-matching row on hot TUI lookups.
+function shouldResolveDerivedSessionModelSearchFields(search: string): boolean {
+  // Preserve key-query semantics: derived model aliases are not agent-key matches.
   return !search.startsWith("agent:");
 }
 
@@ -99,12 +101,13 @@ export function resolveSessionListRowContext(params: {
   return params.rowContext ?? params.getRowContext?.();
 }
 
-export function resolveSessionListSearchModelFields(params: {
+function resolveSessionListSearchModelFields(params: {
   agentId?: string;
   cfg: OpenClawConfig;
   key: string;
   entry?: SessionEntry;
   rowContext?: SessionListRowContext;
+  selectedModel?: ReturnType<typeof resolveSessionSelectedModelRef>;
 }): Array<string | undefined> {
   const parsedAgent = parseAgentSessionKey(params.key);
   const agentId = normalizeAgentId(
@@ -113,14 +116,16 @@ export function resolveSessionListSearchModelFields(params: {
   const subagentRun = params.rowContext
     ? params.rowContext.subagentRuns.getDisplaySubagentRun(params.key)
     : getSessionDisplaySubagentRunByChildSessionKey(params.key);
-  const selectedModel = resolveSessionSelectedModelRef({
-    cfg: params.cfg,
-    sessionKey: params.key,
-    entry: params.entry,
-    agentId,
-    rowContext: params.rowContext,
-    allowPluginNormalization: false,
-  });
+  const selectedModel =
+    params.selectedModel ??
+    resolveSessionSelectedModelRef({
+      cfg: params.cfg,
+      sessionKey: params.key,
+      entry: params.entry,
+      agentId,
+      rowContext: params.rowContext,
+      allowPluginNormalization: false,
+    });
   const resolvedModel = resolveSessionModelIdentityRef(
     params.cfg,
     params.entry,
@@ -144,6 +149,113 @@ export function resolveSessionListSearchModelFields(params: {
   addSessionListSearchModelFields(fields, selectedModel);
   addSessionListSearchModelFields(fields, displayModelIdentity);
   return fields;
+}
+
+export function createSessionListSearchMatcher(params: {
+  cfg: OpenClawConfig;
+  search: string;
+  agentId?: string;
+  now: number;
+  visibleEntries: readonly SessionEntryPair[];
+  getRowContext?: SessionListRowContextProvider;
+  projectActiveRun?: SessionListActiveRunProjector;
+}) {
+  const { cfg, search, now } = params;
+  const identityNames = new Map<string, string>();
+  let rowContext: SessionListRowContext | undefined;
+  const context = () =>
+    (rowContext ??= params.getRowContext?.() ?? buildSessionListRowMetadataContext({ now }));
+  let acpPrepared = false;
+  return (key: string, entry: SessionEntry): boolean => {
+    const fields = [
+      key,
+      entry.label,
+      entry.subject,
+      entry.sessionId,
+      entry.category,
+      resolveSessionListSearchDisplayName(key, entry),
+      resolveGatewaySessionDisplayName(key, entry),
+      resolveGatewaySessionKind(key, entry),
+    ];
+    addSessionListSearchModelFields(fields, { provider: entry.modelProvider, model: entry.model });
+    if (matchesSessionListSearch(fields, search)) {
+      return true;
+    }
+    const agentId = normalizeAgentId(
+      parseAgentSessionKey(key)?.agentId ?? params.agentId ?? resolveSessionStoreAgentId(cfg, key),
+    );
+    const run = projectGatewaySessionRunState({ key, entry, now, rowContext: context() }).fields;
+    const active = params.projectActiveRun?.(key, entry, agentId);
+    const state = projectGatewaySessionActiveRun(active, run.status);
+    const goal = resolveGatewaySessionGoal(entry, now);
+    if (
+      matchesSessionListSearch(
+        [
+          state.status,
+          isSessionRunActive(state)
+            ? "live running"
+            : state.hasActiveRun === false
+              ? "idle"
+              : undefined,
+          goal
+            ? `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`
+            : undefined,
+        ],
+        search,
+      )
+    ) {
+      return true;
+    }
+    if (!identityNames.has(agentId)) {
+      identityNames.set(agentId, resolveAssistantIdentity({ cfg, agentId }).name);
+    }
+    if (matchesSessionListSearch([identityNames.get(agentId)], search)) {
+      return true;
+    }
+    const selected = resolveSessionSelectedModelRef({
+      cfg,
+      sessionKey: key,
+      entry,
+      agentId,
+      rowContext: context(),
+      allowPluginNormalization: false,
+    });
+    if (
+      shouldResolveDerivedSessionModelSearchFields(search) &&
+      matchesSessionListSearch(
+        resolveSessionListSearchModelFields({
+          cfg,
+          key,
+          entry,
+          agentId,
+          rowContext: context(),
+          selectedModel: selected,
+        }),
+        search,
+      )
+    ) {
+      return true;
+    }
+    if (!acpPrepared) {
+      populateSessionListAcpMetadata({
+        cfg,
+        entries: params.visibleEntries,
+        opts: { agentId: params.agentId },
+        rowContext: context(),
+      });
+      acpPrepared = true;
+    }
+    const { agentRuntime } = resolveGatewaySessionRuntimeProjection({
+      cfg,
+      sessionKey: key,
+      entry,
+      agentId,
+      provider: selected.provider,
+      model: selected.model,
+      rowContext: context(),
+    });
+    return matchesSessionListSearch([formatAgentRuntimeLabel(agentRuntime)], search);
+  };
 }
 
 type LoadGatewaySessionRowOptions = {

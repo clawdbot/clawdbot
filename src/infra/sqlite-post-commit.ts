@@ -1,6 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-const pendingPublications = new WeakMap<DatabaseSync, Array<() => void>>();
+// One connection can cross native and transformed SDK module graphs mid-transaction.
+const pendingPublications = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqlitePostCommitPublications"),
+  () => new WeakMap<DatabaseSync, Array<() => void>>(),
+);
 
 /** Publications are non-throwing observers, never part of a durable transaction's result. */
 export function deferSqlitePostCommitPublication(db: DatabaseSync, publish: () => void): boolean {
