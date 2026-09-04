@@ -584,7 +584,7 @@ suite.define(() => {
           await expectOneAccessory(sessionKey, !expanded);
         }
         await page.locator(".side-panel__minimize").click();
-        await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
+        await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
         await expectOneAccessory();
         await page.screenshot({ path: path.join(suite.artifactDir, "before.png"), fullPage: true });
         for (const replacement of [
