@@ -18,6 +18,7 @@ export type CachedPluginToolDescriptor = {
   hideFromChannelProgress?: AnyAgentTool["hideFromChannelProgress"];
   requiredClientCaps?: string[];
   resultContentSource?: AnyAgentTool["resultContentSource"];
+  catalogMode?: AnyAgentTool["catalogMode"];
   optional: boolean;
 };
 
@@ -167,6 +168,7 @@ export function capturePluginToolDescriptor(params: {
     ...(params.tool.resultContentSource
       ? { resultContentSource: params.tool.resultContentSource }
       : {}),
+    ...(params.tool.catalogMode ? { catalogMode: params.tool.catalogMode } : {}),
     optional: params.optional,
     descriptor: {
       name: params.tool.name,

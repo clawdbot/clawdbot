@@ -143,11 +143,13 @@ describe("plugin tool descriptor cache keys", () => {
         outputSchema,
         requiredClientCaps: ["inline-widgets"],
         resultContentSource: "network",
+        catalogMode: "direct-only",
         execute: async () => ({ content: [], details: {} }),
       },
     });
 
     expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
+    expect(cached).toHaveProperty("catalogMode", "direct-only");
     expect(cached.descriptor.outputSchema).toBe(outputSchema);
     expect(cached).toHaveProperty("resultContentSource", "network");
   });
@@ -166,6 +168,7 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(cached).not.toHaveProperty("resultContentSource");
+    expect(cached).not.toHaveProperty("catalogMode");
   });
 
   it("isolates descriptor caches by declared gateway client capabilities", () => {
