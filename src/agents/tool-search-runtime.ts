@@ -499,7 +499,7 @@ export class ToolSearchRuntime {
     // A tool whose name is a stopword ("do") tokenizes to nothing and so never
     // reaches the ranking at all. Naming it exactly is still an unambiguous
     // request for it, which the previous scorer honored.
-    const exactEntries = entries.filter((entry) => isExact(entry) && !ranked.includes(entry));
+    const exactEntries = exactMatches.filter((entry) => !ranked.includes(entry));
     return [...exactEntries, ...ranked]
       .slice(0, limit)
       .map((entry) => compactToolSearchCatalogEntry(entry));
