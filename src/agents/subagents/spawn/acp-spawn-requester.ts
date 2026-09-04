@@ -21,7 +21,7 @@ import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   isSubagentSessionKey,
   parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
@@ -206,6 +206,23 @@ function sessionEntryIsOwnedByRequester(params: {
   );
 }
 
+function resolveStoredSessionOwner(
+  sessionKey: string,
+  storeOwners: ReadonlySet<string>,
+): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+  if (sessionKey.trim().toLowerCase().startsWith("agent:")) {
+    return undefined;
+  }
+  if (storeOwners.size !== 1) {
+    return undefined;
+  }
+  return storeOwners.values().next().value;
+}
+
 async function promoteLegacyAcpResumeEntry(params: {
   cfg: OpenClawConfig;
   entry: SessionEntry;
@@ -214,10 +231,12 @@ async function promoteLegacyAcpResumeEntry(params: {
   sessionOwnerAgentId: string;
 }): Promise<boolean> {
   const parsed = parseAgentSessionKey(params.harnessSessionKey);
-  if (!parsed?.rest) {
-    return false;
-  }
-  const ownerSessionKey = `agent:${params.sessionOwnerAgentId}:${parsed.rest}`;
+  const ownerSessionKey = parsed?.rest
+    ? `agent:${params.sessionOwnerAgentId}:${parsed.rest}`
+    : toAgentStoreSessionKey({
+        agentId: params.sessionOwnerAgentId,
+        requestKey: params.harnessSessionKey,
+      });
   const ownerStorePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.sessionOwnerAgentId,
   });
@@ -297,18 +316,22 @@ export async function validateAcpResumeSessionOwnership(params: {
   }
   for (const [storePath, allowedOwners] of storeOwnersByPath) {
     const entries = listSessionEntriesReadOnly({ storePath, clone: false });
-    const metaByEntry = readAcpSessionMetaBatch({
-      entries: entries.map(({ sessionKey, entry }) => ({
-        sessionKey,
-        agentId: resolveAgentIdFromSessionKey(sessionKey, params.sessionOwnerAgentId),
+    const entryOwners = new Map(
+      entries.map(({ sessionKey, entry }) => [
         entry,
-      })),
+        resolveStoredSessionOwner(sessionKey, allowedOwners),
+      ]),
+    );
+    const metaByEntry = readAcpSessionMetaBatch({
+      entries: entries.flatMap(({ sessionKey, entry }) => {
+        const agentId = entryOwners.get(entry);
+        return agentId ? [{ sessionKey, agentId, entry }] : [];
+      }),
       cfg: params.cfg,
     });
     for (const { sessionKey, entry } of entries) {
-      if (
-        !allowedOwners.has(resolveAgentIdFromSessionKey(sessionKey, params.sessionOwnerAgentId))
-      ) {
+      const entryOwnerAgentId = entryOwners.get(entry);
+      if (!entryOwnerAgentId || !allowedOwners.has(entryOwnerAgentId)) {
         continue;
       }
       const acp = metaByEntry.get(entry);
@@ -331,10 +354,6 @@ export async function validateAcpResumeSessionOwnership(params: {
           requesterSessionKey,
         })
       ) {
-        const entryOwnerAgentId = resolveAgentIdFromSessionKey(
-          sessionKey,
-          params.sessionOwnerAgentId,
-        );
         if (
           entryOwnerAgentId !== params.sessionOwnerAgentId &&
           !(await promoteLegacyAcpResumeEntry({

@@ -210,7 +210,7 @@ vi.mock("../../../acp/runtime/session-meta.js", () => ({
     };
     return new Map(
       params.entries.map(({ sessionKey, agentId, entry }) => {
-        const sessionOwner = sessionKey.match(/^agent:([^:]+):/)?.[1] ?? "main";
+        const sessionOwner = sessionKey.match(/^agent:([^:]+):/)?.[1] ?? agentId;
         return [
           entry,
           agentId === sessionOwner ? hoisted.readAcpSessionMetaMock({ sessionKey }) : undefined,
@@ -1393,6 +1393,101 @@ describe("spawnAcpDirect", () => {
         sessionId: "sess-legacy",
       }),
     );
+  });
+
+  it("promotes requester-owned bare legacy keys from a separate harness store", async () => {
+    const legacySessionKey = "global";
+    hoisted.resolveStorePathMock.mockImplementation(
+      (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
+    );
+    hoisted.loadSessionStoreMock.mockImplementation((storePath: string) =>
+      storePath === "/tmp/codex-sessions.json"
+        ? {
+            [legacySessionKey]: {
+              sessionId: "sess-bare-legacy",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:main",
+            } satisfies SessionEntry,
+          }
+        : {},
+    );
+    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === legacySessionKey
+        ? {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "codex",
+            identity: {
+              state: "resolved",
+              source: "ensure",
+              agentSessionId: "bare-legacy-resume",
+              lastUpdatedAt: Date.now(),
+            },
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          }
+        : undefined;
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Resume bare legacy ACP session",
+        agentId: "codex",
+        resumeSessionId: "bare-legacy-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.upsertSessionEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:global",
+        storePath: "/tmp/main-sessions.json",
+      }),
+      expect.objectContaining({ sessionId: "sess-bare-legacy" }),
+    );
+  });
+
+  it("fails closed for bare legacy keys in a shared owner and harness store", async () => {
+    hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      global: {
+        sessionId: "sess-ambiguous-bare",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+      } satisfies SessionEntry,
+    });
+    hoisted.readAcpSessionMetaMock.mockReturnValue({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex",
+      identity: {
+        state: "resolved",
+        source: "ensure",
+        agentSessionId: "ambiguous-bare-resume",
+        lastUpdatedAt: Date.now(),
+      },
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: Date.now(),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Reject ambiguous bare legacy ACP session",
+        agentId: "codex",
+        resumeSessionId: "ambiguous-bare-resume",
+      },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectRecordFields(result, { status: "forbidden", errorCode: "resume_forbidden" });
+    expect(hoisted.writeAcpSessionMetaForMigrationMock).not.toHaveBeenCalled();
+    expect(hoisted.upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
   it("stops consulting legacy harness stores after the bounded migration window", async () => {
