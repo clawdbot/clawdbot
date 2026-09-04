@@ -95,6 +95,7 @@ export async function handleBuzzInbound(params: {
   const historyLimit = account.config.historyLimit ?? 0;
   if (access.ingress.admission !== "dispatch") {
     if (access.ingress.reasonCode === "activation_skipped") {
+      // SAFETY: Buzz's manifest schema validates this plugin-owned channel section before startup.
       const buzzConfig = cfg.channels?.buzz as BuzzConfigInput | undefined;
       const groupsPath = buzzConfig?.accounts?.[account.accountId]
         ? `channels.buzz.accounts[${JSON.stringify(account.accountId)}].groups`

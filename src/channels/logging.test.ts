@@ -36,7 +36,9 @@ describe("logInboundDrop", () => {
     const log = vi.fn();
     const drop = (onceKey: string) =>
       logInboundDrop({ log, channel: "bounded", reason: "no mention", onceKey });
-    for (let i = 0; i < 512; i++) drop(String(i));
+    for (let i = 0; i < 512; i++) {
+      drop(String(i));
+    }
     drop("0");
     drop("512");
     drop("0");
