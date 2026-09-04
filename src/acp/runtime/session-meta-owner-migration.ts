@@ -68,16 +68,31 @@ export function claimAcpSessionMetaForOwnerMigration(params: {
   let result: AcpOwnerMigrationClaimResult = "missing";
   runOpenClawStateWriteTransaction(
     (database) => {
-      const targetRow = targetDatabaseKeys
-        .map((key) => selectAcpSessionRow(database.db, key))
-        .find((row) => row !== undefined);
-      if (targetRow) {
+      const targetMatch = targetDatabaseKeys
+        .map((key) => ({ key, row: selectAcpSessionRow(database.db, key) }))
+        .find((candidate) => candidate.row !== undefined);
+      if (targetMatch?.row) {
+        const targetRow = targetMatch.row;
         if (
           targetRow.agent !== params.expectedAgent ||
           !acpSessionRowMatchesEntry(targetRow, params.entry)
         ) {
           result = "conflict";
           return;
+        }
+        if (targetMatch.key !== targetDatabaseKey) {
+          insertRow(database.db, {
+            ...targetRow,
+            session_key: targetDatabaseKey,
+            updated_at: params.now?.() ?? Date.now(),
+          });
+          deleteMatchingRows({
+            db: database.db,
+            entry: params.entry,
+            except: targetDatabaseKey,
+            expectedAgent: params.expectedAgent,
+            keys: targetDatabaseKeys,
+          });
         }
         deleteMatchingRows({
           db: database.db,
@@ -100,7 +115,7 @@ export function claimAcpSessionMetaForOwnerMigration(params: {
       if (!sourceRow) {
         return;
       }
-      upsertRow(database.db, {
+      insertRow(database.db, {
         ...sourceRow,
         session_key: targetDatabaseKey,
         updated_at: params.now?.() ?? Date.now(),
@@ -145,15 +160,9 @@ function deleteMatchingRows(params: {
   }
 }
 
-function upsertRow(
+function insertRow(
   db: Parameters<typeof getAcpSessionKysely>[0],
   row: Insertable<AcpSessionsTable>,
 ): void {
-  executeSqliteQuerySync(
-    db,
-    getAcpSessionKysely(db)
-      .insertInto("acp_sessions")
-      .values(row)
-      .onConflict((conflict) => conflict.column("session_key").doNothing()),
-  );
+  executeSqliteQuerySync(db, getAcpSessionKysely(db).insertInto("acp_sessions").values(row));
 }

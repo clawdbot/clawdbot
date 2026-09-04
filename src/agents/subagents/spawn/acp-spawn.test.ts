@@ -1238,6 +1238,53 @@ describe("spawnAcpDirect", () => {
     },
   );
 
+  it("allows requester-owned global resume IDs from an owner-scoped store", async () => {
+    const resumeSessionId = "owner-global-resume";
+    hoisted.resolveStorePathMock.mockImplementation(
+      (_template: unknown, params: { agentId?: string }) => `/tmp/${params.agentId}-sessions.json`,
+    );
+    hoisted.loadSessionStoreMock.mockImplementation((storePath: string) =>
+      storePath === "/tmp/main-sessions.json"
+        ? {
+            global: {
+              sessionId: "sess-owner-global",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:main:main",
+            } satisfies SessionEntry,
+          }
+        : {},
+    );
+    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey?: string };
+      return params.sessionKey === "global"
+        ? {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "codex",
+            identity: {
+              state: "resolved",
+              source: "ensure",
+              agentSessionId: resumeSessionId,
+              lastUpdatedAt: Date.now(),
+            },
+            mode: "oneshot",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          }
+        : undefined;
+    });
+
+    const result = await spawnAcpDirect(
+      { task: "Resume owner global ACP session", agentId: "codex", resumeSessionId },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({ resumeSessionId, backendId: "acpx" });
+    expect(hoisted.resolveStorePathMock).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(hoisted.resolveStorePathMock).not.toHaveBeenCalledWith(undefined, { agentId: "codex" });
+  });
+
   it("rejects ACP resume IDs not recorded for the requester session", async () => {
     const otherSessionKey = "agent:main:acp:other";
     hoisted.loadSessionStoreMock.mockReturnValue({
@@ -1430,6 +1477,10 @@ describe("spawnAcpDirect", () => {
   });
 
   it("fails closed for bare legacy keys in a shared owner and harness store", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      session: { ...hoisted.state.cfg.session, store: "/tmp/shared-sessions.json" },
+    });
     hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
     hoisted.loadSessionStoreMock.mockReturnValue({
       global: {
@@ -1491,6 +1542,10 @@ describe("spawnAcpDirect", () => {
   });
 
   it("keeps bare keys in a shared owner and harness store unavailable at runtime", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      session: { ...hoisted.state.cfg.session, store: "/tmp/shared-sessions.json" },
+    });
     hoisted.resolveStorePathMock.mockReturnValue("/tmp/shared-sessions.json");
     hoisted.loadSessionStoreMock.mockReturnValue({
       global: {

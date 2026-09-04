@@ -1,5 +1,9 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  buildAcpDatabaseSessionKey,
+  selectAcpSessionRow,
+} from "../acp/runtime/session-meta-keys.js";
 import { claimAcpSessionMetaForOwnerMigration } from "../acp/runtime/session-meta-owner-migration.js";
 import {
   readAcpSessionMetaForEntry,
@@ -13,6 +17,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { migrateLegacyAcpOwnerSessions } from "./doctor-acp-owner-sessions.js";
 import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
@@ -223,6 +228,40 @@ describe("Doctor ACP owner migration", () => {
           migrated: 0,
         },
       );
+    });
+  });
+
+  it("canonicalizes matching target metadata left under a legacy key", async () => {
+    await withStateDirEnv("openclaw-doctor-acp-target-meta-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const cfg = createConfig(stateDir);
+      seedLegacySession({ cfg, env });
+      writeAcpSessionMetaForMigration({
+        env,
+        lifecycleRevision: entry.lifecycleRevision,
+        meta: {
+          agent: "codex",
+          backend: "acpx",
+          lastActivityAt: 10,
+          mode: "persistent",
+          runtimeSessionName: "legacy-peer",
+          state: "idle",
+        },
+        sessionKey: targetKey,
+      });
+
+      await expect(migrateLegacyAcpOwnerSessions({ apply: true, cfg, env })).resolves.toMatchObject(
+        { conflicts: 0, eligible: 1, migrated: 1 },
+      );
+      const rows = withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => ({
+          canonical: selectAcpSessionRow(db, buildAcpDatabaseSessionKey(targetKey, "reviewer")),
+          legacy: selectAcpSessionRow(db, targetKey),
+        }),
+        { env },
+      );
+      expect(rows?.canonical?.agent).toBe("codex");
+      expect(rows?.legacy).toBeUndefined();
     });
   });
 

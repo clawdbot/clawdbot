@@ -9,12 +9,18 @@ import {
   loadSessionEntryReadOnly,
   resolveSessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
+import { isPerAgentSessionStoreConfig } from "../../../config/sessions/session-store-config.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { SessionAcpMeta, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  isUnscopedSessionKeySentinel,
+  parseAgentSessionKey,
+} from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
@@ -227,7 +233,15 @@ export async function validateAcpResumeSessionOwnership(params: {
     cfg: params.cfg,
   });
   for (const { sessionKey, entry } of entries) {
-    if (parseAgentSessionKey(sessionKey)?.agentId !== params.sessionOwnerAgentId) {
+    const parsedOwner = parseAgentSessionKey(sessionKey)?.agentId;
+    const persistedOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, sessionKey);
+    const hasCanonicalOwner = parsedOwner
+      ? parsedOwner === params.sessionOwnerAgentId
+      : isUnscopedSessionKeySentinel(sessionKey) &&
+        (isPerAgentSessionStoreConfig(params.cfg.session?.store) ||
+          (persistedOwner.kind === "configured" &&
+            persistedOwner.agentId === params.sessionOwnerAgentId));
+    if (!hasCanonicalOwner) {
       continue;
     }
     const acp = metaByEntry.get(entry);
