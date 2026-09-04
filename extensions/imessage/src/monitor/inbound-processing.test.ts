@@ -130,6 +130,81 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     );
   });
 
+  it("drops paired mirror with reply_to_guid matching outbound echo cache guid", async () => {
+    const echoHas = vi.fn(
+      (_scope: string, lookup: { text?: string; messageId?: string }) => {
+        if (lookup.messageId === "GUID-A" && lookup.text === "Hello") {
+          return true;
+        }
+        return false;
+      },
+    );
+
+    const decision = await resolveDecision({
+      message: {
+        id: 100,
+        guid: "GUID-B",
+        reply_to_guid: "GUID-A",
+        text: "Hello",
+      },
+      messageText: "Hello",
+      bodyText: "Hello",
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "echo" });
+  });
+
+  it("does not drop inline reply with reply_to_guid but different text", async () => {
+    const echoHas = vi.fn(
+      (_scope: string, lookup: { text?: string; messageId?: string }) => {
+        if (lookup.messageId === "GUID-A" && lookup.text === "Hello") {
+          return true;
+        }
+        return false;
+      },
+    );
+
+    const decision = await resolveDecision({
+      message: {
+        id: 101,
+        guid: "GUID-C",
+        reply_to_guid: "GUID-A",
+        text: "Goodbye",
+      },
+      messageText: "Goodbye",
+      bodyText: "Goodbye",
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("does not drop message with identical text but unrelated reply_to_guid", async () => {
+    const echoHas = vi.fn(
+      (_scope: string, lookup: { text?: string; messageId?: string }) => {
+        if (lookup.messageId === "GUID-A" && lookup.text === "Hello") {
+          return true;
+        }
+        return false;
+      },
+    );
+
+    const decision = await resolveDecision({
+      message: {
+        id: 102,
+        guid: "GUID-D",
+        reply_to_guid: "GUID-UNRELATED",
+        text: "Hello",
+      },
+      messageText: "Hello",
+      bodyText: "Hello",
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
   it("drops reflected self-chat duplicates after seeing the from-me copy", async () => {
     const selfChatCache = createSelfChatCache();
     const createdAt = "2026-03-02T20:58:10.649Z";

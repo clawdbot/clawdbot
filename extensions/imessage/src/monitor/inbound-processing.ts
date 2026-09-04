@@ -267,6 +267,7 @@ function hasIMessageEchoMatch(params: {
   messageIds: string[];
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  replyToGuid?: string;
 }): boolean {
   // Outbound sends persist echo scopes keyed by whichever target shape was
   // used (chat_id, chat_guid, chat_identifier, or imessage:<handle>). Inbound
@@ -285,6 +286,19 @@ function hasIMessageEchoMatch(params: {
       if (params.echoCache.has(scope, { messageId })) {
         return true;
       }
+    }
+    // Paired mirror rows carry a distinct GUID but reference the outbound
+    // GUID via reply_to_guid. The messageId short-circuit above cannot cover
+    // this — reply_to_guid is not the inbound row's own GUID. Probe the
+    // cache with reply_to_guid as the lookup ID, but only when text also
+    // matches, so a legitimate inline reply with different body text is not
+    // dropped.
+    if (
+      params.replyToGuid &&
+      params.text &&
+      params.echoCache.has(scope, { messageId: params.replyToGuid, text: params.text })
+    ) {
+      return true;
     }
     const fallbackMessageId = params.messageIds[0];
     if (!params.text && !params.media && !fallbackMessageId) {
@@ -500,6 +514,7 @@ export async function resolveIMessageInboundDecision(params: {
   const inboundMessageIds = resolveInboundEchoMessageIds(params.message);
   const inboundMessageId = inboundMessageIds[0];
   const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
+  const replyToGuid = normalizeReplyField(params.message.reply_to_guid) ?? undefined;
 
   if (params.message.is_from_me) {
     if (isAmbiguousSelfThread) {
@@ -733,6 +748,7 @@ export async function resolveIMessageInboundDecision(params: {
         media: mediaFacts[0],
         messageIds: inboundMessageIds,
         includePendingText: isSelfChat,
+        replyToGuid,
       })
     ) {
       params.logVerbose?.(
