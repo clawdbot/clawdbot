@@ -320,6 +320,7 @@ export function queueAgentHarnessMessage(
 ): boolean {
   return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
 }
+export { finalizeAgentToolAvailability } from "../agents/agent-tool-availability.js";
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {
   logAgentRuntimeToolDiagnostics,

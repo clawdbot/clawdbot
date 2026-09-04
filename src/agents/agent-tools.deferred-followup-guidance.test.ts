@@ -11,7 +11,9 @@ import {
   describeSessionsSendTool,
   describeSessionsSpawnTool,
 } from "./tool-description-presets.js";
+import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
 function findToolDescription(
   toolName: string,
@@ -277,11 +279,9 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
   it("preserves original inline spawn guidance when every follow-up remains available", () => {
     const [tool] = applyToolAvailabilityDescriptions([
-      {
-        name: "sessions_spawn",
-        description: describeSessionsSpawnTool({ acpAvailable: false, swarmEnabled: true }),
-      },
-      ...["agents_list", "agents_wait", "subagents", "sessions_history"].map((name) => ({
+      createSessionsSpawnTool({ config: { tools: { swarm: true } } }),
+      createAgentsWaitTool({}),
+      ...["agents_list", "subagents", "sessions_history"].map((name) => ({
         name,
         description: "available",
       })),
@@ -289,9 +289,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
 
     expect(tool?.description).toContain("configured agent (see agents_list);");
     expect(tool?.description).toContain("`groupId` groups a batch; await with agents_wait.");
-    expect(tool?.description).toContain(
-      "(`all` default: all sessions, cross-agent per tools.agentToAgent)",
-    );
+    expect(tool?.description).toContain("(all: all sessions, cross-agent per tools.agentToAgent)");
     expect(tool?.description).toContain(
       "No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn,",
     );

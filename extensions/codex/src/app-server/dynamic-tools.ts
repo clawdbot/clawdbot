@@ -65,6 +65,7 @@ import {
   sliceToolResultTextToBudget,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
+import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
 import {
   createCodexDynamicToolSpecs,
   projectCodexDynamicTools,
@@ -519,22 +520,30 @@ export function createCodexDynamicToolBridge(params: {
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
     : availableProjection;
+  // Supervised thread declarations are native-owned and fingerprinted. Narrow
+  // executors below, but never rewrite the catalog checked by thread-lifecycle-run.
   const inheritedSpecs = params.registeredSpecs
     ? structuredClone([...params.registeredSpecs])
     : undefined;
   const inheritedNames = inheritedSpecs
     ? new Set(flattenCodexDynamicToolFunctions(inheritedSpecs).map((tool) => tool.name))
     : undefined;
-  const availableTools = availableProjection.tools.filter(
-    (entry) => !inheritedNames || inheritedNames.has(entry.name),
+  const registrationNames =
+    inheritedNames ?? new Set(registeredProjection.tools.map((entry) => entry.name));
+  const finalized = finalizeCodexToolAvailability(
+    availableProjection.tools.filter((entry) => registrationNames.has(entry.name)),
   );
+  const availableTools = finalized.tools;
+  availableProjection.quarantinedTools.push(...finalized.quarantinedTools);
+  const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
   const quarantinedAvailableToolNames = new Set(
     availableProjection.quarantinedTools.map((tool) => tool.tool),
   );
-  const registeredSpecTools = (
-    params.registeredTools ? registeredProjection.tools : availableTools
-  ).filter((entry) => !quarantinedAvailableToolNames.has(entry.name));
-  const toolMap = new Map(availableTools.map((entry) => [entry.name, entry]));
+  const registeredSpecTools = (params.registeredTools ? registeredProjection.tools : availableTools)
+    .filter((entry) => !quarantinedAvailableToolNames.has(entry.name))
+    .map((entry) =>
+      finalized.preparedNames.has(entry.name) ? (toolMap.get(entry.name) ?? entry) : entry,
+    );
   const registeredToolNames =
     inheritedNames ?? new Set(registeredSpecTools.map((entry) => entry.name));
   const quarantinedTools = dedupeQuarantinedDynamicTools([
@@ -1037,9 +1046,10 @@ export function projectCodexExecutableDynamicTools(params: {
   quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
   const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
+  const finalized = finalizeCodexToolAvailability(projected.tools);
   return {
-    availableTools: projected.tools.map((entry) => entry.tool),
-    quarantinedTools: projected.quarantinedTools,
+    availableTools: finalized.tools.map((entry) => entry.tool),
+    quarantinedTools: [...projected.quarantinedTools, ...finalized.quarantinedTools],
   };
 }
 
