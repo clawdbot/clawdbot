@@ -27,6 +27,11 @@ export function isTranscriptScrollKey(event: KeyboardEvent): boolean {
     if (!(target instanceof HTMLElement)) {
       continue;
     }
+    // Native media handles playback, volume, and seeking without preventDefault;
+    // only PageUp/Down on the host yield to transcript scrolling.
+    if (target instanceof HTMLMediaElement && target.controls && !event.key.startsWith("Page")) {
+      return false;
+    }
     if (target instanceof HTMLInputElement) {
       if (target.type === "range") {
         if (event.key !== " ") {

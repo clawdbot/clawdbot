@@ -31,6 +31,27 @@ const controls = [
 ] as const;
 
 export const nativeControlNavigationCases: NativeKeyCase[] = [
+  ...(
+    [
+      ["video", html`<video controls></video>`],
+      ["audio", html`<audio controls></audio>`],
+    ] as const
+  ).flatMap(([name, content]) =>
+    [
+      ...[" ", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].map(
+        (key) => [key, {}] as const,
+      ),
+      ...["Home", "End"].flatMap((key) =>
+        [{ shiftKey: true }, { ctrlKey: true }].map((fixture) => [key, fixture] as const),
+      ),
+    ].map(([key, fixture]): NativeKeyCase => [
+      `${name} ${JSON.stringify(fixture)} ${key}`,
+      key,
+      content,
+      !key.startsWith("Page"),
+      fixture,
+    ]),
+  ),
   ...["Win32", "Linux x86_64"].flatMap((platform) =>
     controls.flatMap(([name, content]) =>
       ["Home", "End", "PageUp", "PageDown"].map((key): NativeKeyCase => [

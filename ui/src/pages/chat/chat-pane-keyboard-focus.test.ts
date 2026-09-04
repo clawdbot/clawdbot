@@ -25,7 +25,7 @@ describe("chat pane keyboard focus", () => {
     ],
     ["transcript", "Home", html`<span>History</span>`, true],
     ...nativeControlNavigationCases
-      .filter(([, key]) => key === "Home" || key === "PageUp")
+      .filter(([, key]) => key === "ArrowUp" || key === "Home" || key === "PageUp")
       .map(
         ([name, key, content, controlOwned, fixture]) =>
           [name, key, content, !controlOwned, fixture] as const,
