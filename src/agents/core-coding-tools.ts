@@ -61,6 +61,7 @@ function guardHostWorkspaceTool(
 ): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, options.containmentRoot, {
     resolutionCwd: options.codingRoot,
+    normalizeGuardedPathParams: true,
     resolveGuardedPath: normalizeLocalGuardPathAlias,
   });
 }
@@ -144,6 +145,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             : {
                 additionalRoots: skillReadRoots,
                 resolutionCwd: options.codingRoot,
+                normalizeGuardedPathParams: true,
                 resolveGuardedPath: normalizeLocalGuardPathAlias,
               },
         )
