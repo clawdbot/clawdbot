@@ -288,7 +288,13 @@ class MessageImageResourceDirective extends AsyncDirective {
   }
 
   protected override disconnected() {
-    this.releaseRetainedImage();
+    if (this.retained?.status === "retaining") {
+      // Disconnect retires a pending native handoff. Reconnect must not treat
+      // cached attachment availability as proof that its pixels loaded.
+      this.failRetainedImage();
+    } else {
+      this.releaseRetainedImage();
+    }
     this.element = undefined;
     this.pendingPreview = undefined;
     this.presentationKey = Symbol("image-presentation");
