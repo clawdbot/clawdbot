@@ -674,8 +674,8 @@ struct DashboardManagerGatewayTargetTests {
         await manager._testOpenWindow(for: .profile("secondary"))
         let secondary = try #require(manager._testAuxiliaryWindows().first?.controller)
         let window = try #require(secondary.window)
-        secondary.showFailure(title: "Unavailable", message: "Synthetic connection failure")
         if scenario == "command-during-refresh" { await catalogGate.hold() }
+        secondary.showFailure(title: "Unavailable", message: "Synthetic connection failure")
         saved.setEndpoint(GatewayConnection.EndpointSnapshot(
             config: (url: server.websocketURL(), token: "suspended", password: nil), routeAuthority: nil))
         manager.dispatchNativeCommand(.newSession)
@@ -695,6 +695,7 @@ struct DashboardManagerGatewayTargetTests {
                 #expect(manager._testAuxiliaryWindows().first?.target == target)
             }
         } else if scenario == "reselect-current" {
+            secondary.show()
             manager.switchFrontmostDashboard(to: .profile("secondary"))
         }
         await gate.release()
@@ -708,6 +709,7 @@ struct DashboardManagerGatewayTargetTests {
                 try await Task.sleep(for: .milliseconds(10))
             }
             #expect(recovered.canDeliverNativeCommands)
+            recovered.show()
             manager.dispatchNativeCommand(.commandPalette)
             await catalogGate.release()
         }
