@@ -12,6 +12,7 @@ import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
   getRuntimeConfig,
@@ -783,33 +784,6 @@ export async function startGatewayServerWithRetries(params: {
   throw new Error("failed to start gateway server after retries");
 }
 
-async function waitForWebSocketOpen(ws: WebSocket, timeoutMs = 10_000): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), timeoutMs);
-    const cleanup = () => {
-      clearTimeout(timer);
-      ws.off("open", onOpen);
-      ws.off("error", onError);
-      ws.off("close", onClose);
-    };
-    const onOpen = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = (err: unknown) => {
-      cleanup();
-      reject(err instanceof Error ? err : new Error(String(err)));
-    };
-    const onClose = (code: number, reason: Buffer) => {
-      cleanup();
-      reject(new Error(`closed ${code}: ${reason.toString()}`));
-    };
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-    ws.once("close", onClose);
-  });
-}
-
 async function openTrackedWebSocket(params: {
   port: number;
   headers?: Record<string, string>;
@@ -819,8 +793,7 @@ async function openTrackedWebSocket(params: {
     params.headers ? { headers: params.headers } : undefined,
   );
   trackConnectChallengeNonce(ws);
-  await waitForWebSocketOpen(ws);
-  return ws;
+  return await acquireGatewayTestWebSocket(ws, 10_000);
 }
 
 export async function withGatewayServer<T>(
@@ -1250,25 +1223,7 @@ export async function connectWebchatClient(params: {
   scopes?: string[];
 }): Promise<WebSocket> {
   const origin = params.origin ?? `http://127.0.0.1:${params.port}`;
-  const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
-    headers: { origin },
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
-    const onOpen = () => {
-      clearTimeout(timer);
-      ws.off("error", onError);
-      resolve();
-    };
-    const onError = (err: Error) => {
-      clearTimeout(timer);
-      ws.off("open", onOpen);
-      reject(err);
-    };
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-  });
+  const ws = await openTrackedWebSocket({ port: params.port, headers: { origin } });
   await connectOk(ws, {
     scopes: params.scopes,
     client:

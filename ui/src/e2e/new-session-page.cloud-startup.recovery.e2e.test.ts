@@ -18,30 +18,71 @@ const suite = createNewSessionPageE2eSuite();
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("retries an ambiguous cloud create with the same session key and machine class", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+  it("retries an ambiguous cloud create with the same account, session key and machine class", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1280, height: 900 },
+      ...(captureUiProof
+        ? { recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } } }
+        : {}),
+    });
     const page = await context.newPage();
     const message = "recover the cloud create";
+    const account = {
+      authProfileId: "personal:person-a:openai:one",
+      provider: "openai",
+      label: "Test Person · Personal account",
+      authType: "api_key",
+      selected: false,
+    };
+    const model = {
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      name: "Luna",
+      reasoning: true,
+      effectiveFastMode: true,
+    };
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.create"],
       agentModel: "openai/gpt-5.6-luna",
-      models: [
-        {
-          id: "gpt-5.6-luna",
-          provider: "openai",
-          name: "Luna",
-          reasoning: true,
-          effectiveFastMode: true,
-        },
-      ],
+      presenceUsers: [{ id: "person-a", name: "Test Person", self: true }],
+      models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
       workspaceGit: true,
       methodResponses: {
+        "users.listModelAccounts": { profileId: "person-a", accounts: [account], links: [] },
+        "chat.metadata": {
+          cases: [
+            {
+              match: { authProfileId: account.authProfileId },
+              response: {
+                commands: [],
+                models: [{ ...model, available: true }],
+                accountSelection: {
+                  kind: "personal",
+                  authProfileId: account.authProfileId,
+                  label: account.label,
+                  source: "user",
+                },
+              },
+            },
+            {
+              match: {},
+              response: {
+                commands: [],
+                models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
+                accountSelection: { kind: "automatic", label: "Automatic" },
+              },
+            },
+          ],
+        },
         "agents.list": {
           agents: [
             {
               id: "cloud",
               identity: { name: "Cloud" },
               name: "Cloud",
+              model: { primary: "openai/gpt-5.6-luna" },
               workspace: WORKSPACE,
               workspaceGit: true,
             },
@@ -90,6 +131,16 @@ suite.define(() => {
         .toBe("fast");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
+      await page.locator('[data-chat-model-select="true"]').click();
+      const picker = page.locator(".chat-model-account__picker");
+      await picker.locator("[data-chat-account-trigger]").click();
+      await picker.getByRole("menuitemradio", { name: account.label, exact: true }).click();
+      await expect
+        .poll(() =>
+          page.getByRole("button", { name: "Start session" }).getAttribute("aria-disabled"),
+        )
+        .toBe("false");
+      await page.keyboard.press("Escape");
       await page.locator('[data-chat-thinking-select="true"]').click();
       const fastMode = page.locator("[data-chat-speed-toggle]");
       await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
@@ -98,7 +149,10 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Start session" }).click();
       const firstCreate = await gateway.waitForRequest("sessions.create");
-      expect(firstCreate.params).toMatchObject({ fastMode: false });
+      expect(firstCreate.params).toMatchObject({
+        fastMode: false,
+        model: `openai/gpt-5.6-luna@${account.authProfileId}`,
+      });
       const firstKey = (firstCreate.params as { key?: string }).key;
       if (!firstKey) {
         throw new Error("expected the first recovery create to include a session key");
@@ -117,6 +171,22 @@ suite.define(() => {
       await pollLocatorText(
         page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
       ).toBe("aws · fast");
+      await gateway.waitForRequest("chat.metadata");
+      try {
+        await expect
+          .poll(() =>
+            page.getByRole("button", { name: "Start session" }).getAttribute("aria-disabled"),
+          )
+          .toBe("false");
+      } finally {
+        if (captureUiProof) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(suite.artifactDir, "personal-account-recovery.png"),
+          });
+        }
+      }
       await page.getByRole("button", { name: "Start session" }).click();
       const retryCreate = await gateway.waitForRequest("sessions.create");
       expect(retryCreate.params).toMatchObject({
@@ -124,6 +194,7 @@ suite.define(() => {
         message: "",
         worktree: true,
         fastMode: false,
+        model: `openai/gpt-5.6-luna@${account.authProfileId}`,
       });
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       await gateway.deferNext("sessions.dispatch");
@@ -145,6 +216,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
       expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+      expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(firstKey), {
         timeout: 30_000,
       });

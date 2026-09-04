@@ -33,7 +33,7 @@ import type {
   ApplicationGatewayConnection,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
+import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -414,7 +414,7 @@ export function createApplicationGateway(
     // split-origin Control UI deployments load uploaded/proxied avatars.
     setAvatarGatewayOrigin(
       nextConnection.gatewayUrl,
-      resolveControlUiAuthHeader({
+      resolveControlUiAuthCandidates({
         settings: { token: nextConnection.token },
         password: nextConnection.password,
       }),
@@ -489,7 +489,7 @@ export function createApplicationGateway(
         }
         setAvatarGatewayOrigin(
           nextConnection.gatewayUrl,
-          resolveControlUiAuthHeader({
+          resolveControlUiAuthCandidates({
             hello,
             settings: { token: nextConnection.token },
             password: nextConnection.password,

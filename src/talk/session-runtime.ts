@@ -1,8 +1,12 @@
-// Talk session runtime manages realtime voice session lifecycle and provider wiring.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import {
+  buildRealtimeVoiceAgentControlSpeechMessage,
+  REALTIME_VOICE_AGENT_CONTROL_FAILURE_MESSAGE,
+} from "./agent-run-control-shared.js";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
@@ -72,6 +76,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   triggerGreetingOnReady?: boolean;
   tools?: RealtimeVoiceTool[];
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
+  handleDelegationInput?: RealtimeVoiceBridgeCallbacks["handleDelegationInput"];
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   /** Admit a host-requested response before the provider can complete it synchronously. */
@@ -94,6 +99,7 @@ export function createRealtimeVoiceBridgeSession(
   params: RealtimeVoiceBridgeSessionParams,
 ): RealtimeVoiceBridgeSession {
   const bridgeRef: { current?: RealtimeVoiceBridge } = {};
+  const handleDelegationInput = params.handleDelegationInput;
   // Local disposal owns provider cleanup. Only a terminal callback fired before bridge
   // adoption may reopen; adopted bridges own reconnects and stale-event fencing internally.
   let phase: RealtimeVoiceSessionPhase = "admitting";
@@ -220,6 +226,37 @@ export function createRealtimeVoiceBridgeSession(
       }
     },
     onTranscript: params.onTranscript,
+    ...(handleDelegationInput
+      ? {
+          handleDelegationInput: (text, respond) => {
+            if (!bridgeRef.current || !isAdmitting()) {
+              return "control";
+            }
+            let responded = false;
+            const reply = (message: string) => {
+              if (!responded && bridgeRef.current && isAdmitting()) {
+                responded = true;
+                respond(message);
+              }
+            };
+            try {
+              return handleDelegationInput(text, reply);
+            } catch (error) {
+              try {
+                reply(
+                  buildRealtimeVoiceAgentControlSpeechMessage(
+                    REALTIME_VOICE_AGENT_CONTROL_FAILURE_MESSAGE,
+                  ),
+                );
+              } catch (replyError) {
+                reportCallbackError(replyError);
+              }
+              reportCallbackError(error);
+              return "control";
+            }
+          },
+        }
+      : {}),
     onEvent: params.onEvent,
     onResponseDone: params.onResponseDone,
     onToolCall: (event) => {

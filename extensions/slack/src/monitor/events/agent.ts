@@ -7,7 +7,7 @@ import { markSlackStreamsStopped } from "../../streaming.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import { resolveStorePath } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
-import { resolveSlackRoutingContext } from "../message-handler/prepare-routing.js";
+import { resolveSlackSessionEventRoute } from "../session-event-route.js";
 import { createSlackCommandHandler, deliverSlackSlashResponseWithWebApi } from "../slash.js";
 import type {
   SlackAgentSessionStoppedEvent,
@@ -117,30 +117,20 @@ export function registerSlackAgentEvents(params: {
       if (!auth.allowed) {
         return;
       }
-      const isDirectMessage = auth.channelType === "im";
-      const isGroupDm = auth.channelType === "mpim";
-      const isRoom = auth.channelType === "channel" || auth.channelType === "group";
-      const routing = resolveSlackRoutingContext({
+      const route = await resolveSlackSessionEventRoute({
         ctx,
         account,
-        message: {
-          type: "message",
-          channel: event.channel,
-          user: event.user,
-          ts: event.event_ts,
-          thread_ts: event.thread_ts,
-        },
-        isDirectMessage,
-        isGroupDm,
-        isRoom,
-        isRoomish: isRoom || isGroupDm,
-        agentViewThreadTs: event.thread_ts,
+        channelId: event.channel,
+        userId: event.user,
+        eventTs: event.event_ts,
+        threadTs: event.thread_ts,
+        channelType: auth.channelType,
         eventScope,
       });
       await getSlackRuntime().agent.session.patchSessionEntry({
-        agentId: routing.route.agentId,
-        storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: routing.route.agentId }),
-        sessionKey: routing.sessionKey,
+        agentId: route.agentId,
+        storePath: resolveStorePath(ctx.cfg.session?.store, { agentId: route.agentId }),
+        sessionKey: route.sessionKey,
         preserveActivity: true,
         update: () => ({ displayName: event.title }),
       });

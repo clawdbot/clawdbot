@@ -2795,12 +2795,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .sidebar-identity-menu .session-menu__shortcut {
-  font-family:
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI Symbol",
-    sans-serif;
+  font-family: var(--font-shortcut);
 }
 
 .session-menu__info {

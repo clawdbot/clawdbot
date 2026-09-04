@@ -16,6 +16,8 @@ Everyone who can operate an agent can make it do anything that agent can do. Ses
 
 If people must not access each other's sessions, tools, credentials, or files, give them separate agents or separate gateway/host trust boundaries. Do not rely on owner avatars or filters for isolation.
 
+An authenticated Control UI administrator with `operator.admin` can [manage any automation conversationally](/automation/cron-jobs#conversational-management) on that Gateway, including jobs created from another channel or by another person. This authority comes from the admitted administrator turn, without matching channel identities to Gateway profiles. It does not transfer the job's creator attribution or scheduled execution policy.
+
 ## The three ownership layers
 
 Every session carries up to three layers of attribution:
@@ -73,6 +75,8 @@ The page reports the exact sign-in operation as pending, connected, cancelled, e
 In **New session** or an existing chat, open the model menu and use **Account for this chat** to choose one of your saved accounts for the selected provider. The account picker remains available when **Automatic** has no eligible models. In New session, choosing an account previews eligible models before your first message. The selection applies to the session you create and can also be used for [draft-title preparation](/web/control-ui#new-session-names) before you press Start; it does not change your new-chat default or saved model preference. Changing accounts discards the old title suggestion. In an existing chat, it changes that chat's selection.
 
 The account control shows a collaborator a person-level label for someone else's personal account, not its private email, provider account label, or account id. The label describes the selection, not a billing receipt: configured shared failover accounts can still be used.
+
+Chat status and model listings identify a selected personal credential as **personal account**, without exposing its private label, email, or account id.
 
 The CLI uses the same Gateway operations through [`openclaw models accounts`](/cli/models#personal-model-accounts). Run `openclaw models accounts login` to choose a provider and method, or supply `login <provider> --method <id>` directly. Use `list` to inspect saved accounts. Each command shows the selected Gateway, verified person, and Personal scope. It targets that person, not `--agent` or the operating-system username.
 

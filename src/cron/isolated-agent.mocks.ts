@@ -76,3 +76,8 @@ vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),
 }));
+
+// These turn fixtures create no browser tabs; lifecycle cleanup has its own owner tests.
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
+}));

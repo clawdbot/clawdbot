@@ -7,10 +7,58 @@ function jsonResponse(body: unknown, ok = true) {
 }
 
 afterEach(() => {
+  setAvatarGatewayOrigin(null);
   vi.unstubAllGlobals();
 });
 
 describe("client geolocation lookup", () => {
+  it.each([401, 403])(
+    "recovers a rejected credential (%s) with the saved password",
+    async (status) => {
+      setAvatarGatewayOrigin("https://gateway.example.test", ["device-token", "saved-password"]);
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status }))
+        .mockResolvedValueOnce(jsonResponse({ found: true, city: "Vienna" }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(lookupClientGeolocation("203.0.113.18")).resolves.toEqual({
+        status: "located",
+        location: { city: "Vienna" },
+      });
+      expect(fetchMock.mock.calls.map((call) => call[1]?.headers)).toEqual([
+        { Authorization: "Bearer device-token" },
+        { Authorization: "Bearer saved-password" },
+      ]);
+    },
+  );
+
+  it("keeps the new Gateway's cached answer when an old request finishes late", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", ["device-token", "old-password"]);
+    let finishOldRequest!: (response: Response) => void;
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            finishOldRequest = resolve;
+          }),
+      )
+      .mockResolvedValue(jsonResponse({ found: true, city: "Vienna" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const oldLookup = lookupClientGeolocation("203.0.113.19");
+    setAvatarGatewayOrigin("https://gateway.example.test", ["device-token", "new-password"]);
+    const currentLookup = lookupClientGeolocation("203.0.113.19");
+    await expect(currentLookup).resolves.toEqual({
+      status: "located",
+      location: { city: "Vienna" },
+    });
+    finishOldRequest(new Response(null, { status: 401 }));
+    await expect(oldLookup).resolves.toEqual({ status: "unavailable" });
+    expect(lookupClientGeolocation("203.0.113.19")).toBe(currentLookup);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("returns the placement and its attribution", async () => {
     vi.stubGlobal(
       "fetch",
@@ -115,7 +163,7 @@ describe("client geolocation lookup", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await lookupClientGeolocation("203.0.113.17");
-    setAvatarGatewayOrigin("https://other-gateway.example.test", "Bearer other-token");
+    setAvatarGatewayOrigin("https://other-gateway.example.test", ["other-token"]);
     await lookupClientGeolocation("203.0.113.17");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);

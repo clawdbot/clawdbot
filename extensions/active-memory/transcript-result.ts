@@ -158,9 +158,8 @@ async function waitForSubagentPartialTimeoutData(
     return await Promise.race([
       subagentPromise.then(
         (result) => ({
-          hasUsableMemoryResult: result.hasUsableMemoryResult === true,
-          // Cleanup can cross the deadline after execution has already failed.
-          resultStatus: result.resultStatus,
+          // Cleanup may remove temporary transcripts before this result settles.
+          ...result,
           settled: true as const,
         }),
         (error: unknown) => ({ ...readPartialTimeoutData(error), settled: true as const }),

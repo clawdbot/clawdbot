@@ -7,6 +7,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { DelegationCapability } from "../agents/delegation-capability.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type {
   SourceReplyDeliveryMode,
@@ -115,6 +116,8 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
   /** Exact host admission retained outside the child-visible request context. */
   admittedRunContext?: AdmittedRunContext;
+  /** Original CLI policy, rebound only to this stored row's exact lifetime. */
+  bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   activeCaptureKey?: string;
   toolAuth?: McpLoopbackToolAuth;
@@ -224,6 +227,7 @@ export function mintMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
   runtimeOwnerToken: string;
   admittedRunContext?: AdmittedRunContext;
+  bindQuestionAnswerAuthority?: StoredMcpLoopbackClientGrant["bindQuestionAnswerAuthority"];
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   toolAuth?: McpLoopbackToolAuth;
 }): McpLoopbackClientGrant {
@@ -240,6 +244,7 @@ export function mintMcpLoopbackClientGrant(params: {
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
     ...(params.admittedRunContext ? { admittedRunContext: params.admittedRunContext } : {}),
+    bindQuestionAnswerAuthority: params.bindQuestionAnswerAuthority,
     ...(params.skillLibraryAuthoring
       ? { skillLibraryAuthoring: params.skillLibraryAuthoring }
       : {}),
@@ -249,6 +254,15 @@ export function mintMcpLoopbackClientGrant(params: {
   return structuredClone({
     token: grant.token,
     context: grant.context,
+  });
+}
+
+function replaceMcpLoopbackClientGrant(grant: StoredMcpLoopbackClientGrant): void {
+  clientGrantsByToken.set(grant.token, grant);
+  // Cached tools capture a row's authority even when token and capture strings stay unchanged.
+  notifyMcpLoopbackClientGrantRevoked({
+    token: grant.token,
+    runtimeOwnerToken: grant.runtimeOwnerToken,
   });
 }
 
@@ -266,10 +280,7 @@ export function bindMcpLoopbackClientGrantAdmission(params: {
   ) {
     return false;
   }
-  clientGrantsByToken.set(params.token, {
-    ...grant,
-    admittedRunContext: params.admittedRunContext,
-  });
+  replaceMcpLoopbackClientGrant({ ...grant, admittedRunContext: params.admittedRunContext });
   return true;
 }
 
@@ -287,7 +298,7 @@ export function activateMcpLoopbackClientGrantCapture(params: {
   if (!grant || grant.runtimeOwnerToken !== params.runtimeOwnerToken) {
     return false;
   }
-  clientGrantsByToken.set(params.token, { ...grant, activeCaptureKey: captureKey });
+  replaceMcpLoopbackClientGrant({ ...grant, activeCaptureKey: captureKey });
   return true;
 }
 
@@ -306,7 +317,7 @@ export function deactivateMcpLoopbackClientGrantCapture(params: {
     return false;
   }
   const { activeCaptureKey: _activeCaptureKey, ...inactiveGrant } = grant;
-  clientGrantsByToken.set(params.token, inactiveGrant);
+  replaceMcpLoopbackClientGrant(inactiveGrant);
   return true;
 }
 
@@ -360,6 +371,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       context: McpLoopbackRequestContext;
       captureKey: string;
       admittedRunContext: AdmittedRunContext;
+      questionAnswerAuthority?: PreparedQuestionAnswerAuthority;
       skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
       isCurrent: () => boolean;
       toolAuth?: McpLoopbackToolAuth;
@@ -380,17 +392,24 @@ export function resolveMcpLoopbackClientGrant(params: {
   ) {
     return undefined;
   }
+  // Every bind, capture change, and transfer replaces the row, fencing even same-reference reuse.
+  const isCurrent = () =>
+    clientGrantsByToken.get(token) === grant &&
+    getAdmittedRunDelegatedAuthority(admittedRunContext) === delegatedAuthority;
+  const questionAnswerAuthority = grant.bindQuestionAnswerAuthority?.(() => {
+    if (!isCurrent()) {
+      throw new Error("question creator MCP grant is no longer active");
+    }
+  });
   // Cached tools and OAuth refreshes must share the prepared store for this
   // grant; cloning on each request would discard refreshed credentials.
   return {
     context: structuredClone(grant.context),
     captureKey: grant.activeCaptureKey,
     admittedRunContext,
+    questionAnswerAuthority,
     ...(grant.skillLibraryAuthoring ? { skillLibraryAuthoring: grant.skillLibraryAuthoring } : {}),
-    // Every bind, capture change, and transfer replaces the row, fencing even same-reference reuse.
-    isCurrent: () =>
-      clientGrantsByToken.get(token) === grant &&
-      getAdmittedRunDelegatedAuthority(admittedRunContext) === delegatedAuthority,
+    isCurrent,
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
   };
 }

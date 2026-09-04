@@ -6,6 +6,7 @@
 {"seq":6,"at":2000,"dir":"in","kind":"partial","data":{"text":"Checking the current Slack behavior and preparing the focused fix."}}
 {"seq":7,"at":2000,"dir":"out","kind":"chat.update","data":{"payload":{"channel":"C0TRACE","text":"_Checking the current Slack behavior and preparing the focused fix._","ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}
 {"seq":8,"at":4000,"dir":"in","kind":"final","data":{"text":"Compact Slack progress is ready."}}
-{"seq":9,"at":4000,"dir":"out","kind":"chat.update","data":{"payload":{"channel":"C0TRACE","text":"Compact Slack progress is ready.","ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}
-{"seq":10,"at":4000,"dir":"in","kind":"idle"}
-{"seq":11,"at":4000,"dir":"out","kind":"agents.sessions.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"active","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":9,"at":4000,"dir":"out","kind":"chat.postMessage","data":{"payload":{"channel":"C0TRACE","text":"Compact Slack progress is ready.","thread_ts":"ts#1","unfurl_links":false},"result":{"ts":"ts#3"},"target":"C0TRACE"}}
+{"seq":10,"at":4000,"dir":"out","kind":"chat.delete","data":{"payload":{"channel":"C0TRACE","ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}
+{"seq":11,"at":4000,"dir":"in","kind":"idle"}
+{"seq":12,"at":4000,"dir":"out","kind":"agents.sessions.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"active","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}

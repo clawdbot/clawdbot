@@ -896,43 +896,6 @@ openclaw-chat-pane {
   min-height: 34px;
 }
 
-.chat-header-session-menu__trigger {
-  position: relative;
-}
-
-.chat-header-session-menu__status-dot {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 6px;
-  height: 6px;
-  border: 1px solid var(--chat-surface);
-  border-radius: 999px;
-  background: var(--info);
-}
-
-.chat-header-session-menu__status-dot[data-tone="warn"],
-.chat-header-session-menu__status-icon[data-tone="warn"] {
-  color: var(--warn);
-}
-
-.chat-header-session-menu__status-dot[data-tone="warn"] {
-  background: var(--warn);
-}
-
-.chat-header-session-menu__status-dot[data-tone="danger"],
-.chat-header-session-menu__status-icon[data-tone="danger"] {
-  color: var(--danger);
-}
-
-.chat-header-session-menu__status-dot[data-tone="danger"] {
-  background: var(--danger);
-}
-
-.chat-header-session-menu__status-icon[data-tone="info"] {
-  color: var(--info);
-}
-
 .chat-header-session-menu--compact .session-menu__back {
   z-index: 1;
   position: sticky;

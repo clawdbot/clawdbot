@@ -8,7 +8,7 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import {
   assertGatewayAuthConfigured,
   authorizeHttpGatewayConnect,
-  authorizeUserProfileAvatarHttpGatewayConnect,
+  authorizeControlUiReadHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
 } from "./auth.js";
@@ -107,7 +107,7 @@ describe("gateway auth", () => {
   async function expectTailscaleHeaderAuthResult(params: {
     authorize:
       | typeof authorizeHttpGatewayConnect
-      | typeof authorizeUserProfileAvatarHttpGatewayConnect
+      | typeof authorizeControlUiReadHttpGatewayConnect
       | typeof authorizeWsControlUiGatewayConnect;
     expected: { ok: false; reason: string } | { ok: true; method: string; user: string };
   }) {
@@ -744,10 +744,10 @@ describe("gateway auth", () => {
     ).resolves.toMatchObject({ ok: false, reason: "password_missing" });
   });
 
-  it("allows an origin-less same-origin image through the profile avatar surface", async () => {
+  it("allows an origin-less same-origin image through the Control UI read surface", async () => {
     const limiter = createLimiterSpy();
     const req = createTailscaleForwardedReq();
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+    const res = await authorizeControlUiReadHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
       tailscaleWhois: createTailscaleWhois(),
@@ -767,7 +767,7 @@ describe("gateway auth", () => {
     req.headers["sec-fetch-site"] = "cross-site";
     const tailscaleWhois = vi.fn(createTailscaleWhois());
 
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+    const res = await authorizeControlUiReadHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
       tailscaleWhois,
@@ -785,7 +785,7 @@ describe("gateway auth", () => {
     req.headers["sec-fetch-site"] = "cross-site";
     const tailscaleWhois = vi.fn(createTailscaleWhois());
 
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+    const res = await authorizeControlUiReadHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
       tailscaleWhois,
@@ -803,7 +803,7 @@ describe("gateway auth", () => {
     req.headers["sec-fetch-site"] = "cross-site";
     const tailscaleWhois = vi.fn(createTailscaleWhois());
 
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+    const res = await authorizeControlUiReadHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
       tailscaleWhois,
@@ -826,7 +826,7 @@ describe("gateway auth", () => {
       }
       const tailscaleWhois = vi.fn(createTailscaleWhois());
 
-      const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+      const res = await authorizeControlUiReadHttpGatewayConnect({
         auth: { mode: "token", token: "secret", allowTailscale: true },
         connectAuth: null,
         tailscaleWhois,
@@ -871,12 +871,12 @@ describe("gateway auth", () => {
       expectedReason: "proxy_attribution_required",
     },
   ])(
-    "rejects $name on the profile avatar HTTP surface",
+    "rejects $name on the Control UI read HTTP surface",
     async ({ mutate, whois, expectedReason }) => {
       const req = createTailscaleForwardedReq();
       mutate(req);
 
-      const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+      const res = await authorizeControlUiReadHttpGatewayConnect({
         auth: { mode: "token", token: "secret", allowTailscale: true },
         connectAuth: null,
         tailscaleWhois: whois,
@@ -901,11 +901,11 @@ describe("gateway auth", () => {
       tailscaleWhois: createTailscaleWhois(),
       method: "password",
     },
-  ])("keeps $method auth on the profile avatar HTTP surface", async (testCase) => {
+  ])("keeps $method auth on the Control UI read HTTP surface", async (testCase) => {
     const req = createTailscaleForwardedReq();
     req.headers.origin = "https://evil.example";
     req.headers["sec-fetch-site"] = "cross-site";
-    const res = await authorizeUserProfileAvatarHttpGatewayConnect({
+    const res = await authorizeControlUiReadHttpGatewayConnect({
       ...testCase,
       req,
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["*"]),
@@ -921,9 +921,9 @@ describe("gateway auth", () => {
     });
   });
 
-  it("enables tailscale header auth on the profile avatar HTTP wrapper", async () => {
+  it("enables tailscale header auth on the Control UI read HTTP wrapper", async () => {
     await expectTailscaleHeaderAuthResult({
-      authorize: authorizeUserProfileAvatarHttpGatewayConnect,
+      authorize: authorizeControlUiReadHttpGatewayConnect,
       expected: { ok: true, method: "tailscale", user: "peter@github" },
     });
   });

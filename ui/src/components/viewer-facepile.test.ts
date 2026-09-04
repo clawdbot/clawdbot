@@ -166,7 +166,7 @@ it.each(
 );
 
 it("shares an authenticated avatar blob between the same user in the roster and profile", async () => {
-  setAvatarGatewayOrigin("https://gateway.example.test", "Bearer viewer-token");
+  setAvatarGatewayOrigin("https://gateway.example.test", ["viewer-token"]);
   const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response(new Uint8Array([1, 2, 3]), {
       headers: { "content-type": "image/png" },

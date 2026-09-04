@@ -1253,6 +1253,7 @@ describe("mcp loopback server", () => {
       runId: "run-bound",
       modelProvider: "anthropic",
       modelId: "claude-opus-4-7",
+      modelHasVision: true,
       messageProvider: "discord",
       clientCaps: ["tool-events"],
       currentChannelId: "discord:bound",

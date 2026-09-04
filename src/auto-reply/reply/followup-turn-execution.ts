@@ -260,7 +260,6 @@ export async function executeFollowupTurn(params: {
               : false,
           )
       : undefined,
-    suppressToolErrorWarnings: sourceOpts?.suppressToolErrorWarnings,
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
         if (!progressAllowed()) {

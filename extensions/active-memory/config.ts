@@ -11,6 +11,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringEntries,
+  normalizeTrimmedStringList,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW,
@@ -71,26 +73,7 @@ function normalizeTranscriptDir(value: unknown): string {
 }
 
 function normalizeChatIdList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim().toLowerCase();
-    if (!trimmed) {
-      continue;
-    }
-    if (seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    out.push(trimmed);
-  }
-  return out;
+  return uniqueStrings(normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase()));
 }
 
 function normalizeConfiguredToolsAllow(value: unknown): string[] | undefined {
@@ -221,13 +204,8 @@ function normalizePluginConfig(
         ? raw.mode
         : DEFAULT_ACTIVE_MEMORY_MODE,
     agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
-    model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
-    modelFallback:
-      typeof raw.modelFallback === "string" && raw.modelFallback.trim()
-        ? raw.modelFallback.trim()
-        : undefined,
-    modelFallbackPolicy:
-      raw.modelFallbackPolicy === "resolved-only" ? "resolved-only" : "default-remote",
+    model: normalizeOptionalString(raw.model),
+    modelFallback: normalizeOptionalString(raw.modelFallback),
     allowedChatTypes: allowedChatTypes.length > 0 ? allowedChatTypes : ["direct"],
     allowedChatIds: normalizeChatIdList(raw.allowedChatIds),
     deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
@@ -283,14 +261,11 @@ function normalizePluginConfig(
   };
 }
 
-function resolveActiveMemoryCleanupConfig(api: OpenClawPluginApi): OpenClawConfig | undefined {
+function readActiveMemoryConfig(api: OpenClawPluginApi): OpenClawConfig {
   try {
-    return (
-      (api.runtime.config?.current?.() as OpenClawConfig | undefined) ??
-      (api.config as OpenClawConfig | undefined)
-    );
+    return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
   } catch {
-    return api.config as OpenClawConfig | undefined;
+    return api.config;
   }
 }
 
@@ -378,7 +353,7 @@ export {
   normalizePluginConfig,
   requireTransientWorkspaceDir,
   resetActiveMemoryConfigForTests,
-  resolveActiveMemoryCleanupConfig,
+  readActiveMemoryConfig,
   resolvePersistentTranscriptBaseDir,
   resolveSafeTranscriptDir,
   setMinimumTimeoutMsForTests,

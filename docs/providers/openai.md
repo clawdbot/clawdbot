@@ -1039,6 +1039,28 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     Set the model explicitly to `gpt-realtime-2.1-mini` when you prefer the
     smaller, lower-cost Realtime 2.1 variant.
 
+    #### Gateway-controlled Realtime call cleanup
+
+    Closing a Gateway-controlled GA Realtime WebRTC session retires its Gateway
+    authority and closes the local sideband before asking OpenAI to hang up the
+    provider call. These are separate events; control closure does not establish
+    provider acknowledgment or recall already queued media.
+
+    If hangup fails, explicit cancellation or cleanup reports the failure. The
+    broker retries automatically after 1 second, then 5 seconds, with the existing
+    30-second timeout for each attempt. After all three attempts fail, the log
+    reports `cleanup INCOMPLETE`. The exact cleanup obligation and its capacity
+    remain reserved, including across plugin replacement: eight sessions globally
+    and two per Gateway client. Restore provider connectivity; a later OpenAI
+    broker/plugin runtime cleanup can retry these retained calls. Repeating End
+    or `talk.client.close` is not that retry boundary because the Gateway session
+    may already be retired.
+
+    Cleanup obligations are in memory only. Gateway exit, crash, or restart can
+    lose them; restarting is not proof that the provider call ended. The
+    adapter's 30-minute active-session lease is not a remote-lifetime guarantee
+    or a fallback after failed hangup.
+
     #### GA Realtime browser Talk over ChatGPT OAuth
 
     Browser Talk can use `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, or

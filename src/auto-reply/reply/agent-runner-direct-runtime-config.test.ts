@@ -28,7 +28,7 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const freshCfg = { runtimeFresh: true };
 const staleCfg = {
@@ -149,52 +149,12 @@ type TestReplyOperation = ReplyOperation & {
 };
 
 function createReplyOperation(): TestReplyOperation {
-  let sessionId = "session-1";
-  return {
-    key: "test",
-    get sessionId() {
-      return sessionId;
-    },
-    turnKind: "visible",
-    abortSignal: new AbortController().signal,
-    resetTriggered: false,
-    phase: "queued",
-    result: null,
-    startedAtMs: Date.now(),
-    lastActivityAtMs: Date.now(),
-    recordActivity: vi.fn(),
-    setPhase: vi.fn(),
-    markWaitingForDeferredMaintenance: vi.fn(),
-    markDeferredMaintenanceWaitEnded: vi.fn(),
-    markWaitingForGlobalLane: vi.fn(),
-    markGlobalLaneWaitEnded: vi.fn(),
-    updateSessionId: vi.fn((nextSessionId: string) => {
-      sessionId = nextSessionId;
-    }),
-    updateSessionKey: vi.fn(),
+  const { replyOperation } = createMockReplyOperation({ key: "test", sessionId: "session-1" });
+  return Object.assign(replyOperation, {
+    phase: "queued" as const,
+    setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     hasOwnedSessionId: vi.fn(() => false),
-    bindToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityProjector: vi.fn(),
-    projectToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityRoute: vi.fn(),
-    attachBackend: vi.fn(),
-    detachBackend: vi.fn(),
-    retainFailureUntilComplete: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn((afterClear: () => void) => {
-      afterClear();
-    }),
-    completeWithAfterClearBarrier: vi.fn(),
-    fail: vi.fn(),
-    freezeAbort: vi.fn(),
-    abortByUser: vi.fn(),
-    abortForRestart: vi.fn(),
-    supersede: vi.fn(),
-    terminalRecovery: false,
-    acceptedSteeredInboundAudio: false,
-    markTerminalRecovery: vi.fn(),
-    markAcceptedSteeredInboundAudio: vi.fn(),
-  };
+  });
 }
 
 function createDirectRuntimeReplyParams({

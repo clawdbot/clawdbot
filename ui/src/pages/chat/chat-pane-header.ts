@@ -47,7 +47,6 @@ import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
-  HeaderMenuStatusAction,
 } from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
@@ -61,7 +60,7 @@ import {
 } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
-import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
@@ -89,23 +88,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       authTokens,
       authReady: Boolean(gateway.snapshot.hello || authTokens.length),
     };
-  }
-
-  private compactHeaderStatusActions(): HeaderMenuStatusAction[] {
-    if (!this.narrow || !this.context.overlays.snapshot.controlUiRefreshRequired) {
-      return [];
-    }
-    return [
-      {
-        id: "refresh",
-        label: `${t("chat.sidebar.serverUpdatedTitle")} · ${t(
-          "chat.sidebar.serverUpdatedRefresh",
-        )}`,
-        icon: icons.refresh,
-        tone: "info",
-        onActivate: () => globalThis.location.reload(),
-      },
-    ];
   }
 
   protected renderPaneHeader(
@@ -144,8 +126,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const branchSwitchWorking = this.state
       ? this.state.chatSending ||
         isChatRunWorking({
-          canAbort: hasAbortableSessionRun(this.state),
-          onAbort: () => undefined,
+          runActive: hasDirectSessionRun(this.state),
           queue: this.state.chatQueue,
           runStatus: this.state.chatRunStatus,
           sessionKey: this.state.sessionKey,
@@ -517,7 +498,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
-              .statusActions=${this.compactHeaderStatusActions()}
               .sharing=${sharing}
               .groups=${knownGroups}
               .currentOwner=${row.owner?.actor ?? null}

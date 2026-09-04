@@ -1,9 +1,10 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
+  callInProcessGatewayTool,
   type InProcessGatewayCaller,
   runWithGatewayToolCleanupContext,
 } from "../agents/tools/in-process-gateway.js";
@@ -30,6 +31,12 @@ import {
 } from "./server-plugin-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+
+// This authority fixture creates no browser tabs; lifecycle cleanup and tab
+// ownership have dedicated coverage without cold-loading Browser's source graph here.
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: async () => {},
+}));
 
 const REQUESTER = "agent:main:dashboard:session-tools-requester";
 const TARGET = "agent:main:dashboard:session-tools-target";
@@ -111,43 +118,31 @@ describe("built-in session tool role authority", () => {
         let childKey: string | undefined;
         let successor: ReturnType<typeof loadSessionEntry>;
         let registeredRun: ReturnType<typeof registerChatAbortController> | undefined;
+        // Use the production spawn transport for every fixture mutation. A request
+        // deadline can reject while setup is still mutating this fixture's state.
         const callGateway: InProcessGatewayCaller = async <T>(
           method: string,
           params: Record<string, unknown>,
         ): Promise<T> => {
           if (method !== "sessions.create") {
             return await runWithGatewayToolCleanupContext(
-              () => callAgentToolGatewayRequest<T>({ method, params, timeoutMs: null }),
+              () => callInProcessGatewayTool<T>(method, params),
               () => context,
             );
           }
           // Keep real creation with default model selection and its response identity.
           // Initial task dispatch and explicit-model catalog preparation are outside rollback.
           const { task: _task, model: _model, ...creation } = params;
-          const created = await callAgentToolGatewayRequest<SessionsCreateResult>({
-            method,
-            params: creation,
-            // Match the worker's lifecycle-owned create and cleanup deadlines.
-            timeoutMs: null,
-          });
+          const created = await callInProcessGatewayTool<SessionsCreateResult>(method, creation);
           if (!created.sessionId) {
             throw new Error("session creation did not return its incarnation");
           }
           childKey = created.key;
           if (generation === "replaced") {
-            await callAgentToolGatewayRequest({
-              method: "sessions.delete",
-              params: { key: childKey },
-            });
-            await callAgentToolGatewayRequest({
-              method: "sessions.create",
-              params: { agentId: "main", key: childKey },
-            });
+            await callInProcessGatewayTool("sessions.delete", { key: childKey });
+            await callInProcessGatewayTool("sessions.create", { agentId: "main", key: childKey });
           } else if (generation === "reset") {
-            await callAgentToolGatewayRequest({
-              method: "sessions.reset",
-              params: { key: childKey },
-            });
+            await callInProcessGatewayTool("sessions.reset", { key: childKey });
           }
           successor = loadSessionEntry({ agentId: "main", sessionKey: childKey });
           if (!successor) {
