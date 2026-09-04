@@ -1,6 +1,7 @@
 import * as cron from "./cron.js";
-import * as logMigrations from "./log-migration-protocol-schemas.js";
-import * as terminal from "./terminal-protocol-schemas.js";
+import * as logsChat from "./logs-chat.js";
+import * as migrations from "./migrations.js";
+import * as terminal from "./terminal.js";
 
 export const SchedulerProtocolSchemas = {
   CronJob: cron.CronJobSchema,
@@ -21,6 +22,22 @@ export const SchedulerProtocolSchemas = {
   CronScratchSetParams: cron.CronScratchSetParamsSchema,
   CronScratchSetResult: cron.CronScratchSetResultSchema,
   CronRunLogEntry: cron.CronRunLogEntrySchema,
-  ...logMigrations.LogMigrationProtocolSchemas,
-  ...terminal.TerminalProtocolSchemas,
+  LogsTailParams: logsChat.LogsTailParamsSchema,
+  LogsTailResult: logsChat.LogsTailResultSchema,
+  ...migrations.MigrationProtocolSchemas,
+  TerminalOpenParams: terminal.TerminalOpenParamsSchema,
+  TerminalOpenResult: terminal.TerminalOpenResultSchema,
+  TerminalInputParams: terminal.TerminalInputParamsSchema,
+  TerminalResizeParams: terminal.TerminalResizeParamsSchema,
+  TerminalCloseParams: terminal.TerminalCloseParamsSchema,
+  TerminalAttachParams: terminal.TerminalAttachParamsSchema,
+  TerminalAttachResult: terminal.TerminalAttachResultSchema,
+  TerminalSessionInfo: terminal.TerminalSessionInfoSchema,
+  TerminalListResult: terminal.TerminalListResultSchema,
+  TerminalUploadParams: terminal.TerminalUploadParamsSchema,
+  TerminalUploadResult: terminal.TerminalUploadResultSchema,
+  TerminalAckResult: terminal.TerminalAckResultSchema,
+  TerminalDataEvent: terminal.TerminalDataEventSchema,
+  TerminalExitEvent: terminal.TerminalExitEventSchema,
+  TerminalEvent: terminal.TerminalEventSchema,
 } as const;

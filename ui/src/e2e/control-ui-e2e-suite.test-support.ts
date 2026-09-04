@@ -219,10 +219,13 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           try {
             result = await run(fixture);
           } catch (error) {
-            await captureControlUiE2eFailureDiagnostics(page, {
-              error: error instanceof Error ? error : new Error(String(error)),
-              label: options.name,
-            });
+            // Keep closed-page diagnostics and capture other live documents before teardown.
+            for (const diagnosticPage of new Set([page, ...context.pages()])) {
+              await captureControlUiE2eFailureDiagnostics(diagnosticPage, {
+                error: error instanceof Error ? error : new Error(String(error)),
+                label: options.name,
+              });
+            }
             throw error;
           }
         },

@@ -5,7 +5,7 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasConfiguredInternalHooks } from "../hooks/configured.js";
+import { resolveInternalHookSelection } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
@@ -18,6 +18,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginServiceCronHost } from "../plugins/service-cron.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   isGatewayRestartDrainError,
@@ -594,6 +595,7 @@ export async function startGatewaySidecars(params: {
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
+  getCronService?: () => PluginServiceCronHost | null | undefined;
   shouldStartChannels?: () => boolean;
   refreshChatMetadata?: () => Promise<void>;
   onChannelsStarted?: () => Awaitable<void>;
@@ -618,28 +620,39 @@ export async function startGatewaySidecars(params: {
 }) {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
 
-  const internalHooksConfigured = hasConfiguredInternalHooks(params.cfg);
+  const internalHooksConfigured = resolveInternalHookSelection(params.cfg).configured;
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
     try {
-      if (internalHooksConfigured) {
-        const [{ setInternalHooksEnabled }, { loadInternalHooks }] = await Promise.all([
-          loadInternalHooksModule(),
-          import("../hooks/loader.js"),
-        ]);
-        setInternalHooksEnabled(params.cfg.hooks?.internal?.enabled !== false);
-        const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
-        if (loadedCount > 0) {
-          params.startupOutcomes?.record({ subsystem: "internal-hooks", status: "loaded" });
-          params.logHooks.info(
-            `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
-          );
-        } else {
-          params.startupOutcomes?.record({
-            subsystem: "internal-hooks",
-            status: "skipped",
-            reason: "no-handlers-loaded",
-          });
-        }
+      const { prepareInternalHooks } = await import("../hooks/loader.js");
+      const prepared = await prepareInternalHooks(params.cfg, params.defaultWorkspaceDir, {
+        failureMode: "best-effort",
+      });
+      if (
+        params.shouldCreatePostReadySidecars?.() === false ||
+        !prepared.commit({ initial: true })
+      ) {
+        params.startupOutcomes?.record({
+          subsystem: "internal-hooks",
+          status: "skipped",
+          reason: "superseded",
+        });
+        return;
+      }
+      if (!internalHooksConfigured) {
+        return;
+      }
+      const { loadedCount } = prepared;
+      if (loadedCount > 0) {
+        params.startupOutcomes?.record({ subsystem: "internal-hooks", status: "loaded" });
+        params.logHooks.info(
+          `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
+        );
+      } else {
+        params.startupOutcomes?.record({
+          subsystem: "internal-hooks",
+          status: "skipped",
+          reason: "no-handlers-loaded",
+        });
       }
     } catch (err) {
       params.startupOutcomes?.record({
@@ -795,6 +808,7 @@ export async function startGatewaySidecars(params: {
             workspaceDir: params.defaultWorkspaceDir,
             startupTrace: params.startupTrace,
             broadcastPluginEvent: params.broadcastPluginEvent,
+            getCronService: params.getCronService,
             onHandle: resolvePluginServicesOwner,
           });
           resolvePluginServicesOwner?.(startedPluginServices);
@@ -1031,7 +1045,7 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
 function createDeferredGatewayUpdateCheck(params: {
   startupTrace?: GatewayStartupTrace;
   runtimeDeps: GatewayPostAttachRuntimeDeps;
-  cfg: OpenClawConfig;
+  getConfig: () => OpenClawConfig;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -1091,7 +1105,7 @@ function createDeferredGatewayUpdateCheck(params: {
     ownerReady = (async () => {
       try {
         owner = await params.runtimeDeps.createGatewayUpdateCheck({
-          cfg: params.cfg,
+          getConfig: params.getConfig,
           log: params.log,
           isNixMode: params.isNixMode,
           ...(params.activeWorkInspectors
@@ -1213,7 +1227,7 @@ export async function startGatewayPostAttachRuntime(
     pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
     getCurrentPluginRegistry?: () => PluginRegistry;
     getCurrentPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
-    getCronService?: () => PluginHookGatewayCronService | null | undefined;
+    getCronService?: () => PluginServiceCronHost | null | undefined;
     onChannelsStarted?: () => Awaitable<void>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
@@ -1238,12 +1252,8 @@ export async function startGatewayPostAttachRuntime(
 ) {
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
   const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
-  const shouldStartControlUiAssets =
-    !params.minimalTestGateway &&
-    (controlUiRootLifecycle?.state?.kind === "preparing" ||
-      controlUiRootLifecycle?.state?.kind === "bundled");
   const controlUiAssetsSidecar =
-    shouldStartControlUiAssets && controlUiRootLifecycle
+    !params.minimalTestGateway && controlUiRootLifecycle
       ? schedulePostReadySidecarTask({
           name: "sidecars.control-ui-assets",
           startupTrace: params.startupTrace,
@@ -1353,7 +1363,7 @@ export async function startGatewayPostAttachRuntime(
     : createDeferredGatewayUpdateCheck({
         startupTrace: params.startupTrace,
         runtimeDeps,
-        cfg: params.cfgAtStart,
+        getConfig: params.getConfig,
         log: params.log,
         isNixMode: params.isNixMode,
         broadcastToConnIds: params.broadcastToConnIds,
@@ -1441,6 +1451,7 @@ export async function startGatewayPostAttachRuntime(
                   pluginRegistry,
                   defaultWorkspaceDir: params.defaultWorkspaceDir,
                   deps: params.deps,
+                  getCronService: params.getCronService,
                   startChannels: params.startChannels,
                   shouldStartChannels: () => params.isClosing?.() !== true,
                   refreshChatMetadata: params.refreshChatMetadata,
@@ -1658,8 +1669,9 @@ export async function startGatewayPostAttachRuntime(
                 config: params.gatewayPluginConfigAtStart,
                 workspaceDir: params.defaultWorkspaceDir,
                 getCron: () =>
-                  params.getCronService?.() ??
-                  (params.deps.cron as PluginHookGatewayCronService | undefined),
+                  (params.getCronService?.() ?? params.deps.cron) as
+                    | PluginHookGatewayCronService
+                    | undefined,
               },
             ),
           );

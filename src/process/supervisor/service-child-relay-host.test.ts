@@ -75,7 +75,7 @@ async function createRelay(platform: "linux" | "win32") {
     if (platform === "win32") {
       stub.child.emit("message", message);
     } else {
-      control.emit("data", encodeServiceChildMessage(message));
+      control.push(Buffer.from(encodeServiceChildMessage(message)));
     }
   };
   emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
@@ -107,11 +107,25 @@ async function createRelay(platform: "linux" | "win32") {
     stub.disconnectMock();
     stub.emitExit(0);
   };
+  const floodControl = (chunk: string | Buffer) => {
+    control.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  };
+  const controlEncoding = () => control.readableEncoding;
+  const killSpy = vi.spyOn(stub.child, "kill");
   cleanups.push(close);
-  return { adapter, cancellations, emit, completeRoot, close };
+  return {
+    adapter,
+    cancellations,
+    emit,
+    completeRoot,
+    close,
+    floodControl,
+    controlEncoding,
+    killSpy,
+  };
 }
 
-it("kills the spawned relay when abortSignal fires before ready", async () => {
+it("reports cleanup uncertainty when construction aborts before ready", async () => {
   platformMock = mockProcessPlatform("linux");
   const stub = createStubChild();
   stub.child.unref = vi.fn();
@@ -140,13 +154,13 @@ it("kills the spawned relay when abortSignal fires before ready", async () => {
   expect(stub.killMock).not.toHaveBeenCalled();
 
   abort.abort();
-  await expect(starting).rejects.toThrow(/construction aborted|cleanup identity lost/);
+  await expect(starting).rejects.toThrow("service child cleanup identity lost");
   expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
   control.destroy();
   stub.emitExit(null, "SIGKILL");
 });
 
-it("settles when construction aborts before deferred start delivery fails", async () => {
+it("reports cleanup loss when deferred start delivery fails after abort", async () => {
   platformMock = mockProcessPlatform("linux");
   const stub = createStubChild();
   stub.child.unref = vi.fn();
@@ -185,14 +199,63 @@ it("settles when construction aborts before deferred start delivery fails", asyn
   await nextTurn();
   expect(startCallbacks).toHaveLength(1);
   abort.abort();
-  await expect(starting).rejects.toThrow(/construction aborted|cleanup identity lost/);
-  expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
-
+  const rejected = expect(starting).rejects.toThrow("service child cleanup identity lost");
   startCallbacks[0]!(new Error("synthetic start delivery failed"));
+  await rejected;
+  expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
   await nextTurn();
   control.destroy();
   stub.emitExit(null, "SIGKILL");
 });
+
+it.each(["linux", "win32"] as const)(
+  "keeps rejected construction ownership failures visible to supervisor joins (%s)",
+  async (platform) => {
+    platformMock = mockProcessPlatform(platform);
+    const stub = createStubChild();
+    const control = new Duplex({
+      autoDestroy: false,
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    Object.defineProperty(stub.child, "stdio", {
+      value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control],
+      configurable: true,
+    });
+    mocks.spawn.mockReturnValue(stub.child);
+    const supervisor = createProcessSupervisor();
+    const scopeKey = "scope:rejected-construction";
+    const pending = supervisor.spawn({
+      runId: "rejected-construction",
+      mode: "anchored-shell",
+      command: "synthetic-command",
+      sessionId: "rejected-construction",
+      backendId: "test",
+      scopeKey,
+    });
+    await nextTurn();
+    supervisor.cancel("rejected-construction");
+    const run = await pending;
+    await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    const outcomes = Promise.allSettled([supervisor.waitForScope(scopeKey), supervisor.shutdown()]);
+    control.destroy();
+    stub.disconnectMock();
+    stub.emitExit(null, "SIGKILL");
+
+    for (const outcome of await outcomes) {
+      expect(outcome).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({
+          message: expect.stringContaining("service child cleanup identity lost"),
+        }),
+      });
+    }
+    await expect(supervisor.waitForScope(scopeKey)).rejects.toThrow("cleanup identity lost");
+    await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+  },
+);
 
 it("refreshes the supervisor deadline from text-only Windows Job output", async () => {
   const { adapter, emit, completeRoot, close } = await createRelay("win32");
@@ -224,6 +287,62 @@ it("refreshes the supervisor deadline from text-only Windows Job output", async 
     await run.waitForExtinction!();
     await supervisor.shutdown();
   }
+});
+
+it.each([
+  { label: "ASCII", chunk: "x".repeat(64 * 1024), overflow: "x" },
+  { label: "multibyte UTF-8", chunk: "é".repeat(32 * 1024), overflow: "é" },
+])("caps an accumulated $label control line by wire bytes", async ({ chunk, overflow }) => {
+  const { adapter, floodControl, killSpy, close } = await createRelay("linux");
+  const rejectedWait = expect(adapter.wait()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  const rejectedExtinction = expect(adapter.waitForExtinction()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  for (let index = 0; index < 4; index += 1) {
+    floodControl(chunk);
+  }
+  expect(killSpy).not.toHaveBeenCalled();
+  floodControl(overflow);
+  await rejectedWait;
+  await rejectedExtinction;
+  expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+  close();
+});
+
+it.each([
+  { label: "ASCII", chunk: "x".repeat(64 * 1024), overflow: "x" },
+  { label: "multibyte UTF-8", chunk: "é".repeat(32 * 1024), overflow: "é" },
+])("caps a completed $label control line before decoding", async ({ chunk, overflow }) => {
+  const { adapter, floodControl, controlEncoding, killSpy, close } = await createRelay("linux");
+  const parseSpy = vi.spyOn(JSON, "parse");
+  expect(controlEncoding()).toBeNull();
+  floodControl(`${chunk.repeat(4)}${overflow}\n`);
+  await expect(adapter.wait()).rejects.toThrow("control pipe pending line exceeded cap");
+  await expect(adapter.waitForExtinction()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  expect(parseSpy).not.toHaveBeenCalled();
+  expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+  close();
+});
+
+it("bounds the newline search before inspecting an oversized control frame", async () => {
+  const { adapter, floodControl, killSpy, close } = await createRelay("linux");
+  const frame = Buffer.alloc(256 * 1024 + 2, 0x78);
+  frame[frame.length - 1] = 0x0a;
+  const fullFrameSearch = vi.spyOn(frame, "indexOf");
+
+  floodControl(frame);
+
+  await expect(adapter.wait()).rejects.toThrow("control pipe pending line exceeded cap");
+  await expect(adapter.waitForExtinction()).rejects.toThrow(
+    "control pipe pending line exceeded cap",
+  );
+  expect(fullFrameSearch).not.toHaveBeenCalled();
+  expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+  close();
 });
 
 describe.each(["linux", "win32"] as const)("service closing authority (%s)", (platform) => {

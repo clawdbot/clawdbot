@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
+import { controlUiSource } from "../src/plugins/package-manifest.js";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
@@ -113,7 +114,6 @@ const repositoryScriptEntries = [
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
-  "scripts/pr-gates-lock.mts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
   // merge.sh invokes this native review-authority parser by path.
   "scripts/pr-lib/clawsweeper-review-gate.mjs!",
@@ -123,8 +123,6 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/print-live-docker-plugin-selection.mjs!",
-  // Maintainer proof harnesses are invoked manually from PR evidence.
-  "scripts/proof-136410-status-harness-record.ts!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
@@ -186,6 +184,8 @@ const rootEntries = [
   "src/docker-healthcheck.ts!",
   // Uploaded in the worker bundle and launched by rsync; no static host import exists.
   "src/worker/workspace-rsync-receiver.ts!",
+  // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
+  "src/gateway/plugin-channel-reload-targets.ts!",
   // Shipped compatibility facade for statusCommand and getStatusSummary.
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
@@ -280,6 +280,7 @@ const bundledPluginEntries = [
   // Provider catalogs and web tools resolve these manifest/convention-owned
   // modules from the plugin root at runtime.
   "provider-discovery.ts!",
+  "capability-catalog.ts!",
   "{web-search,web-fetch}-provider.ts!",
   "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
   "subagent-hooks-api.ts!",
@@ -429,7 +430,6 @@ const config = {
     "scripts/**/*.d.{mts,ts}",
     "**/live-*.ts",
     "src/shared/text/assistant-visible-text.ts",
-    bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
   ],
   // Knip's `ignoreFiles` only suppresses unused-file findings. Test helpers
@@ -900,4 +900,23 @@ const config = {
   },
 } as const;
 
-export default config;
+const configuredWorkspaces = new Map(Object.entries(config.workspaces));
+// Browser roots come from authoring metadata; the runtime manifest names only
+// compiled assets. Keep each plugin's remaining files subject to reachability.
+const browserWorkspaces = Object.fromEntries(
+  fs
+    .globSync(`${BUNDLED_PLUGIN_ROOT_DIR}/*/package.json`)
+    .toSorted()
+    .flatMap((manifestPath) => {
+      const source = controlUiSource(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
+      if (!source) {
+        return [];
+      }
+      const workspace = path.dirname(manifestPath).replaceAll("\\", "/");
+      const settings =
+        configuredWorkspaces.get(workspace) ?? config.workspaces[`${BUNDLED_PLUGIN_ROOT_DIR}/*`];
+      return [[workspace, { ...settings, entry: [...settings.entry, `${source}!`] }]];
+    }),
+);
+
+export default { ...config, workspaces: { ...config.workspaces, ...browserWorkspaces } };

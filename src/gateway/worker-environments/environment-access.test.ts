@@ -110,8 +110,14 @@ describe("worker environment service", () => {
     support.testState.nowMs += 20_000;
     await expect(
       workerService.startTunnel({ environmentId: "worker-tunnel", ownerEpoch: 1 }),
+    ).resolves.toMatchObject({ environmentId: "worker-tunnel", ownerEpoch: 1 });
+    expect(tunnelManager.start).toHaveBeenCalledTimes(2);
+
+    support.testState.store.revokeEnvironmentCredential("worker-tunnel");
+    await expect(
+      workerService.startTunnel({ environmentId: "worker-tunnel", ownerEpoch: 1 }),
     ).rejects.toThrow("owner credential is not current");
-    expect(tunnelManager.start).toHaveBeenCalledOnce();
+    expect(tunnelManager.start).toHaveBeenCalledTimes(2);
 
     await workerService.destroy("worker-tunnel");
     expect(order).toEqual(["tunnel-stop", "provider-destroy"]);

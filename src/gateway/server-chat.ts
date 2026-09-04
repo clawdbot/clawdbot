@@ -59,6 +59,7 @@ import type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+import { roundedChatSendTimingMs } from "./server-methods/chat-server-timing.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import {
@@ -443,10 +444,6 @@ function scheduleLiveTextFlush(
   }, delayMs);
   timer.unref?.();
   pendingFlushes[stream] = { timer, flush };
-}
-
-function roundedChatSendTimingMs(value: number): number {
-  return Math.max(0, Math.round(value * 1000) / 1000);
 }
 
 export function createAgentEventHandler({

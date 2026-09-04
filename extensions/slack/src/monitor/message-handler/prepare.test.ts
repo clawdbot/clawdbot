@@ -521,12 +521,13 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
   it("sends Enterprise pairing codes through the validated listener scope", async () => {
     const postMessage = vi.fn(async () => ({ ok: true, ts: "123.456", channel: "D999" }));
-    const listenerClient = {
+    const writeClient = {
       chat: { postMessage },
     } as unknown as SlackEventScope["client"];
     const eventScope = {
       teamId: "T123ENTERPRISE",
-      client: listenerClient,
+      client: {} as SlackEventScope["client"],
+      writeClient,
     } satisfies SlackEventScope;
     const ctx = createDefaultSlackCtx();
     ctx.allowFrom = [];

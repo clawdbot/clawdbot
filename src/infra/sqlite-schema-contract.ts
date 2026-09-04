@@ -158,11 +158,11 @@ export function collectSqliteSchemaIssues(
     const actualIndexFingerprints = new Set(
       actualTable.indexes.map((index) => JSON.stringify(index)),
     );
-    const expectedIndexFingerprints = new Set(
-      expectedTable.indexes.map((index) => JSON.stringify(index)),
-    );
+    const expectedIndexFingerprints = new Set<string>();
     for (const expectedIndex of expectedTable.indexes) {
-      if (!actualIndexFingerprints.has(JSON.stringify(expectedIndex))) {
+      const fingerprint = JSON.stringify(expectedIndex);
+      expectedIndexFingerprints.add(fingerprint);
+      if (!actualIndexFingerprints.has(fingerprint)) {
         const objectName = expectedIndex.name ?? tableName;
         const namedIndexPresent = expectedIndex.name
           ? actualTable.indexes.some((actualIndex) => actualIndex.name === expectedIndex.name)

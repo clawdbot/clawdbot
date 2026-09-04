@@ -43,7 +43,7 @@ vi.mock("./server/ws-connection/request-start.js", async (importOriginal) => {
   };
 });
 
-describe.sequential("Gateway request entry lifetime", () => {
+describe("Gateway request entry lifetime", { concurrent: false }, () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let kernel: Awaited<ReturnType<typeof createGatewayKernel>>;
   let port: number;

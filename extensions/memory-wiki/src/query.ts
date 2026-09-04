@@ -275,22 +275,21 @@ function buildSnippet(raw: string, query: string): string {
   return matchingLine?.trim() || lines.find((line) => line.trim() !== "---")?.trim() || "";
 }
 
-function buildPageSearchText(page: QueryableWikiPage): string {
+function buildPageSearchFields(
+  page: QueryableWikiPage | QueryDigestPage,
+  relationships: WikiPageSummary["relationships"] | undefined,
+): string[] {
   return [
-    page.title,
-    page.relativePath,
-    page.id ?? "",
-    JSON.stringify(parseWikiMarkdown(page.raw).frontmatter),
     page.pageType ?? "",
     page.entityType ?? "",
     page.canonicalId ?? "",
-    page.aliases.join(" "),
+    page.aliases?.join(" ") ?? "",
     page.sourceIds.join(" "),
     page.questions.join(" "),
     page.contradictions.join(" "),
     page.privacyTier ?? "",
-    page.bestUsedFor.join(" "),
-    page.notEnoughFor.join(" "),
+    page.bestUsedFor?.join(" ") ?? "",
+    page.notEnoughFor?.join(" ") ?? "",
     page.personCard?.canonicalId ?? "",
     page.personCard?.handles.join(" ") ?? "",
     page.personCard?.socials.join(" ") ?? "",
@@ -301,8 +300,8 @@ function buildPageSearchText(page: QueryableWikiPage): string {
     page.personCard?.avoidAskingFor.join(" ") ?? "",
     page.personCard?.bestUsedFor.join(" ") ?? "",
     page.personCard?.notEnoughFor.join(" ") ?? "",
-    page.relationships
-      .flatMap((relationship) => [
+    relationships
+      ?.flatMap((relationship) => [
         relationship.targetId ?? "",
         relationship.targetPath ?? "",
         relationship.targetTitle ?? "",
@@ -310,7 +309,17 @@ function buildPageSearchText(page: QueryableWikiPage): string {
         relationship.evidenceKind ?? "",
         relationship.note ?? "",
       ])
-      .join(" "),
+      .join(" ") ?? "",
+  ];
+}
+
+function buildPageSearchText(page: QueryableWikiPage): string {
+  return [
+    page.title,
+    page.relativePath,
+    page.id ?? "",
+    JSON.stringify(parseWikiMarkdown(page.raw).frontmatter),
+    ...buildPageSearchFields(page, page.relationships),
     page.claims.map((claim) => claim.text).join(" "),
     page.claims.map((claim) => claim.id ?? "").join(" "),
     page.claims
@@ -375,36 +384,7 @@ function buildDigestPageSearchText(page: QueryDigestPage, claims: QueryDigestCla
     page.title,
     page.path,
     page.id ?? "",
-    page.pageType ?? "",
-    page.entityType ?? "",
-    page.canonicalId ?? "",
-    page.aliases?.join(" ") ?? "",
-    page.sourceIds.join(" "),
-    page.questions.join(" "),
-    page.contradictions.join(" "),
-    page.privacyTier ?? "",
-    page.bestUsedFor?.join(" ") ?? "",
-    page.notEnoughFor?.join(" ") ?? "",
-    page.personCard?.canonicalId ?? "",
-    page.personCard?.handles.join(" ") ?? "",
-    page.personCard?.socials.join(" ") ?? "",
-    page.personCard?.emails.join(" ") ?? "",
-    page.personCard?.timezone ?? "",
-    page.personCard?.lane ?? "",
-    page.personCard?.askFor.join(" ") ?? "",
-    page.personCard?.avoidAskingFor.join(" ") ?? "",
-    page.personCard?.bestUsedFor.join(" ") ?? "",
-    page.personCard?.notEnoughFor.join(" ") ?? "",
-    page.topRelationships
-      ?.flatMap((relationship) => [
-        relationship.targetId ?? "",
-        relationship.targetPath ?? "",
-        relationship.targetTitle ?? "",
-        relationship.kind ?? "",
-        relationship.evidenceKind ?? "",
-        relationship.note ?? "",
-      ])
-      .join(" ") ?? "",
+    ...buildPageSearchFields(page, page.topRelationships),
     claims.map((claim) => claim.text).join(" "),
     claims.map((claim) => claim.id ?? "").join(" "),
     claims.map((claim) => claim.evidenceKinds?.join(" ") ?? "").join(" "),
@@ -967,20 +947,7 @@ function applySearchOverrides(
   };
 }
 
-function buildWikiProvenanceLabel(
-  page: Pick<
-    WikiPageSummary,
-    | "sourceType"
-    | "provenanceMode"
-    | "bridgeRelativePath"
-    | "unsafeLocalRelativePath"
-    | "relativePath"
-    | "entityType"
-    | "canonicalId"
-    | "aliases"
-    | "privacyTier"
-  >,
-): string | undefined {
+function buildWikiProvenanceLabel(page: WikiPageSummary): string | undefined {
   if (page.sourceType === "memory-bridge-events") {
     return `bridge events: ${page.bridgeRelativePath ?? page.relativePath}`;
   }
@@ -993,37 +960,7 @@ function buildWikiProvenanceLabel(
   return undefined;
 }
 
-function buildWikiResultMetadata(
-  page: Pick<
-    WikiPageSummary,
-    | "id"
-    | "sourceType"
-    | "provenanceMode"
-    | "sourcePath"
-    | "updatedAt"
-    | "bridgeRelativePath"
-    | "unsafeLocalRelativePath"
-    | "relativePath"
-    | "entityType"
-    | "canonicalId"
-    | "aliases"
-    | "privacyTier"
-  >,
-): Partial<
-  Pick<
-    WikiSearchResult,
-    | "id"
-    | "sourceType"
-    | "provenanceMode"
-    | "sourcePath"
-    | "provenanceLabel"
-    | "updatedAt"
-    | "entityType"
-    | "canonicalId"
-    | "aliases"
-    | "privacyTier"
-  >
-> {
+function buildWikiResultMetadata(page: WikiPageSummary) {
   const provenanceLabel = buildWikiProvenanceLabel(page);
   return {
     ...(page.id ? { id: page.id } : {}),
@@ -1032,10 +969,10 @@ function buildWikiResultMetadata(
     ...(page.sourcePath ? { sourcePath: page.sourcePath } : {}),
     ...(provenanceLabel ? { provenanceLabel } : {}),
     ...(page.updatedAt ? { updatedAt: page.updatedAt } : {}),
-    ...("entityType" in page && page.entityType ? { entityType: page.entityType } : {}),
-    ...("canonicalId" in page && page.canonicalId ? { canonicalId: page.canonicalId } : {}),
-    ...("aliases" in page && page.aliases.length > 0 ? { aliases: [...page.aliases] } : {}),
-    ...("privacyTier" in page && page.privacyTier ? { privacyTier: page.privacyTier } : {}),
+    ...(page.entityType ? { entityType: page.entityType } : {}),
+    ...(page.canonicalId ? { canonicalId: page.canonicalId } : {}),
+    ...(page.aliases.length > 0 ? { aliases: [...page.aliases] } : {}),
+    ...(page.privacyTier ? { privacyTier: page.privacyTier } : {}),
   };
 }
 

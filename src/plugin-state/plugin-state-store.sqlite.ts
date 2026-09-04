@@ -16,7 +16,10 @@ import {
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  hasOpenClawStateTablesBeyondStartupCheckpoint,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -68,8 +71,6 @@ type PluginStateSeedEntryForTests = {
   createdAt?: number;
   expiresAt?: number | null;
 };
-
-let cachedDatabase: PluginStateDatabase | null = null;
 
 function createPluginStateError(params: {
   code: PluginStateStoreErrorCode;
@@ -408,20 +409,8 @@ function openPluginStateDatabase(
 ): PluginStateDatabase {
   const env = options.env ?? process.env;
   const pathname = resolveOpenClawStateSqlitePath(env);
-  if (cachedDatabase && cachedDatabase.path === pathname && cachedDatabase.db.isOpen) {
-    return cachedDatabase;
-  }
-  if (cachedDatabase && !cachedDatabase.db.isOpen) {
-    cachedDatabase = null;
-  }
-
   try {
-    const database = openOpenClawStateDatabase(options);
-    cachedDatabase = {
-      db: database.db,
-      path: database.path,
-    };
-    return cachedDatabase;
+    return openOpenClawStateDatabase(options);
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -438,16 +427,6 @@ function isMissingPluginStateTableError(error: unknown): boolean {
     error instanceof Error &&
     (error as NodeJS.ErrnoException).code === "ERR_SQLITE_ERROR" &&
     error.message === "no such table: plugin_state_entries"
-  );
-}
-
-function hasStateTablesBeyondStartupCheckpoint(db: DatabaseSync): boolean {
-  return (
-    /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
-      .prepare(
-        "SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name NOT IN ('schema_meta', 'state_leases') LIMIT 1",
-      )
-      .get() !== undefined
   );
 }
 
@@ -468,7 +447,7 @@ function withPluginStateDatabaseReadOnly<T>(
         if (isMissingPluginStateTableError(error)) {
           // The lease bootstrap creates exactly schema_meta + state_leases before the first write;
           // any other table means the missing plugin-state table is damage, not fresh state.
-          if (!hasStateTablesBeyondStartupCheckpoint(db)) {
+          if (!hasOpenClawStateTablesBeyondStartupCheckpoint(db)) {
             return undefined;
           }
         }
@@ -498,11 +477,12 @@ function runWriteTransaction<T>(
   write: (store: PluginStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T {
-  const store = openPluginStateDatabase(operation, options);
-  return runOpenClawStateWriteTransaction(() => {
-    const result = write(store);
-    return result;
-  }, options);
+  // Only cold acquisition failures are open errors. A held owner's ownership or
+  // transaction failure must remain a write error, with its callback supplying the handle.
+  if (!isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env ?? process.env))) {
+    openPluginStateDatabase(operation, options);
+  }
+  return runOpenClawStateWriteTransaction(write, options);
 }
 
 type PluginStateRetention = {
@@ -1551,7 +1531,6 @@ function seedPluginStateDatabaseEntriesForTests(
 function probePluginStateStore(): PluginStateStoreProbeResult {
   const databasePath = resolveOpenClawStateSqlitePath(process.env);
   const steps: PluginStateStoreProbeStep[] = [];
-  const wasOpen = cachedDatabase !== null;
   const stateWasOpen = isOpenClawStateDatabaseOpen();
 
   const pushOk = (name: string) => steps.push({ name, ok: true });
@@ -1627,7 +1606,7 @@ function probePluginStateStore(): PluginStateStoreProbeResult {
   } catch (error) {
     pushFailure("probe", error);
   } finally {
-    if (!wasOpen && !stateWasOpen) {
+    if (!stateWasOpen) {
       closePluginStateDatabase();
     }
   }
@@ -1636,7 +1615,6 @@ function probePluginStateStore(): PluginStateStoreProbeResult {
 }
 
 export function closePluginStateDatabase(): void {
-  cachedDatabase = null;
   closeOpenClawStateDatabase();
 }
 

@@ -1,15 +1,163 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
+  requireString,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
+function canvasPreview(viewId: string) {
+  return {
+    kind: "canvas",
+    surface: "assistant_message",
+    render: "url",
+    viewId,
+    title: `Preview ${viewId}`,
+    url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+    preferredHeight: 120,
+    sandbox: "scripts",
+  };
+}
+
+function canvasToolResult(viewId: string, toolCallId: string, timestamp: number) {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "show_widget",
+    timestamp,
+    content: JSON.stringify({
+      kind: "canvas",
+      view: {
+        backend: "canvas",
+        id: viewId,
+        url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+      },
+      presentation: {
+        target: "assistant_message",
+        title: `Preview ${viewId}`,
+        preferred_height: 120,
+        sandbox: "scripts",
+      },
+    }),
+  };
+}
+
+function canvasBlock(viewId: string) {
+  return { type: "canvas", preview: canvasPreview(viewId) };
+}
+
 suite.define(() => {
+  const canvasView = useCanvasSandboxFixture();
+  it("renders each persisted Canvas view once after reload", async () => {
+    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-canvas-history-stability", artifactRoot)
+      : undefined;
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const documentIds = ["cv_first", "cv_second"];
+    const finalText = "Both previews are ready.";
+    const messages = [
+      {
+        role: "user",
+        timestamp: 1_000,
+        content: [{ type: "text", text: "Show both previews." }],
+      },
+      canvasToolResult("cv_first", "call-first", 1_001),
+      canvasToolResult("cv_second", "call-second", 1_002),
+      {
+        role: "assistant",
+        timestamp: 1_003,
+        content: [
+          {
+            type: "text",
+            text: `[embed ref="cv_first" /]\n[embed ref="cv_second" /]\n${finalText}`,
+          },
+          canvasBlock("cv_first"),
+          canvasBlock("cv_second"),
+        ],
+      },
+    ];
+
+    try {
+      const gateway = await installMockGateway(page, {
+        historyMessages: messages,
+        methodResponses: {
+          "canvas.document.view": {
+            cases: documentIds.map((docId) => ({
+              match: { docId },
+              response: canvasView(
+                buildWidgetDocument(`Preview ${docId}`, `<p>Rendered ${docId}</p>`),
+              ),
+            })),
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const readPreviews = () =>
+        page
+          .locator(".chat-tool-card__widget-host iframe")
+          .evaluateAll((frames) => frames.map((frame) => frame.getAttribute("title")));
+      const expectedPreviews = ["Preview cv_first", "Preview cv_second"];
+      const expectRenderedPreviews = async () => {
+        await expect.poll(readPreviews).toEqual(expectedPreviews);
+        for (const docId of documentIds) {
+          await page
+            .locator(`.chat-tool-card__widget-host iframe[title="Preview ${docId}"]`)
+            .contentFrame()
+            .frameLocator("iframe")
+            .getByText(`Rendered ${docId}`, { exact: true })
+            .waitFor();
+        }
+        expect(
+          (await gateway.getRequests("canvas.document.view"))
+            .map((request) =>
+              requireString(requireRecord(request.params).docId, "Canvas document ID"),
+            )
+            .toSorted((left, right) => left.localeCompare(right)),
+        ).toEqual(documentIds);
+      };
+
+      await expectRenderedPreviews();
+      await expect.poll(() => page.getByText(finalText, { exact: true }).isVisible()).toBe(true);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "before-reload.png"),
+        });
+      }
+
+      await page.reload();
+      // Reload reinstalls the in-page mock Gateway and its request ring, so the
+      // first startup request in the new document is the synchronization point.
+      await gateway.waitForRequest("chat.startup");
+      await expectRenderedPreviews();
+      await expect.poll(() => page.getByText(finalText, { exact: true }).isVisible()).toBe(true);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "after-reload.png"),
+        });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps multiple live replies after their delayed prompt before history catches up", async () => {
     const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot

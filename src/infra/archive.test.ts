@@ -391,6 +391,7 @@ describe("archive utils", () => {
           limits: { maxEntries: 1 },
         }),
       ).rejects.toThrow("archive entry count exceeds limit");
+      expect(await fs.readdir(extractDir)).toEqual([]);
     });
   });
 

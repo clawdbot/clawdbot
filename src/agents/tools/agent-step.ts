@@ -31,32 +31,18 @@ let agentStepDeps: {
   agentCommandFromIngress: AgentCommandRunner;
 } = defaultAgentStepDeps;
 
-function extractAgentCommandReply(result: unknown): string | undefined {
-  const candidate = result as { meta?: { error?: unknown }; payloads?: unknown } | null | undefined;
-  const error =
-    candidate?.meta?.error &&
-    typeof candidate.meta.error === "object" &&
-    !Array.isArray(candidate.meta.error)
-      ? (candidate.meta.error as { kind?: unknown; terminalPresentation?: unknown })
-      : undefined;
+function extractAgentCommandReply(
+  result: Awaited<ReturnType<AgentCommandRunner>>,
+): string | undefined {
+  const error = result?.meta.error;
   // Plain incomplete-turn output is a control failure; trusted terminal tool presentations remain deliverable.
   if (error?.kind === "incomplete_turn" && error.terminalPresentation !== true) {
     return undefined;
   }
-  const payloads = candidate?.payloads;
-  if (!Array.isArray(payloads)) {
-    return undefined;
-  }
-  const texts = payloads
-    .map((payload) =>
-      payload &&
-      typeof payload === "object" &&
-      typeof (payload as { text?: unknown }).text === "string"
-        ? (payload as { text: string }).text
-        : "",
-    )
-    .filter((text) => text.trim().length > 0);
-  return texts.length > 0 ? texts.join("\n\n") : undefined;
+  const texts = result?.payloads
+    ?.map((payload) => payload.text)
+    .filter((text): text is string => Boolean(text?.trim()));
+  return texts?.length ? texts.join("\n\n") : undefined;
 }
 
 /** Sends one annotated message to a target session and returns the resulting assistant text. */

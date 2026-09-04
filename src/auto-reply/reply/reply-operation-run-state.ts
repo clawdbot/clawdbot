@@ -1,3 +1,4 @@
+import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -18,7 +19,7 @@ type ReplyOperationAdmissionSnapshot =
 export type ReplyOperationRunState = {
   admission?: ReplyOperationAdmissionSnapshot;
   messageInjectionAborted?: true;
-  agentTurn?: "ok" | "failed" | "cancelled";
+  agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;
   agentTurnOwner?: ReplyOperation;
 };
 
@@ -39,15 +40,12 @@ export function resolveReplyOperationRunState(
 export function recordReplyOperationAgentTurn(
   states: readonly ReplyOperationRunState[] | undefined,
   owner: ReplyOperation | undefined,
-  outcome?: { kind: "aborted" | "rejected" } | { kind: "settled"; status: "ok" | "failed" },
+  outcome?: Parameters<typeof resolveAgentTurnExecutionStatus>[0],
 ): void {
   for (const state of states ?? []) {
-    state.agentTurn =
-      outcome?.kind === "aborted" || (!outcome && owner?.result?.kind === "aborted")
-        ? "cancelled"
-        : outcome?.kind === "settled"
-          ? outcome.status
-          : "failed";
+    state.agentTurn = resolveAgentTurnExecutionStatus(
+      outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
+    );
     state.agentTurnOwner = owner;
   }
 }

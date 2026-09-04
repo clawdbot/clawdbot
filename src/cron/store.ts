@@ -139,7 +139,7 @@ export function assertCronJobsStoreUnchanged(
   db: DatabaseSync,
   storePath: string,
   expectedJobsFingerprint: string,
-): void {
+): undefined {
   const resolvedStorePath = path.resolve(storePath);
   if (readCronJobsFingerprint(db, cronStoreKey(resolvedStorePath)) !== expectedJobsFingerprint) {
     throw new CronJobsStoreChangedError(resolvedStorePath);
@@ -155,7 +155,7 @@ function repairLoadedCronRuntimeAuthority(params: {
   }
   const repaired = runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const rows = loadCronRows(db, params.storeKey);
+      const rows = loadCronRows(db, params.storeKey, new Set(params.jobIds));
       if (rows.length === 0) {
         return false;
       }
@@ -266,6 +266,7 @@ type SaveCronStoreOptions = {
 };
 
 type SaveCronJobsStoreOptions = SaveCronStoreOptions & {
+  transactionHooks?: CronStoreTransactionHooks;
   quarantine?: {
     entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
     nowMs: number;
@@ -278,10 +279,6 @@ type CronStoreReplacementOptions = Pick<
   SaveCronJobsStoreOptions,
   "deleteQuarantineEntries" | "preserveRuntimeState" | "quarantine"
 >;
-
-type SaveCronJobsStoreInternalOptions = SaveCronJobsStoreOptions & {
-  transactionHooks?: CronStoreTransactionHooks;
-};
 
 function mergeCronRuntimeChanges(
   previous: CronJobState,
@@ -441,11 +438,6 @@ export async function saveCronJobsStore(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronJobsStoreOptions,
-): Promise<void>;
-export async function saveCronJobsStore(
-  storePath: string,
-  store: CronStoreFile,
-  opts?: SaveCronJobsStoreInternalOptions,
 ): Promise<void> {
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);

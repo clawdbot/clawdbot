@@ -19,6 +19,9 @@ const ENVIRONMENT_INPUTS = [
   ".github/workflows/ci-check-testbox.yml",
   ".node-version",
   "scripts/crabbox-wrapper.mjs",
+  "scripts/crabbox-wrapper.mts",
+  "scripts/crabbox-source-capsule.mts",
+  "scripts/crabbox-source-receiver.mts",
 ];
 
 function optionValue(args: readonly string[], name: string, fallback = "") {
@@ -77,7 +80,6 @@ function buildTestboxLeaseFingerprint(repoRoot: string, args: readonly string[])
     version: STATE_VERSION,
     baseSha,
     headSha: git(repoRoot, ["rev-parse", "HEAD"]),
-    workingTreeClean: git(repoRoot, ["status", "--porcelain=v1"]) === "",
     dependencyDigest: digestInputs(repoRoot, [...DEPENDENCY_INPUTS, "patches"]),
     environmentDigest: digestInputs(repoRoot, ENVIRONMENT_INPUTS),
     workflow: optionValue(args, "--blacksmith-workflow", ".github/workflows/ci-check-testbox.yml"),

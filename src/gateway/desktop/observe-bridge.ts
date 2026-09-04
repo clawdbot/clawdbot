@@ -39,27 +39,15 @@ type DesktopObserverTokenEntry = {
   attachment: DesktopRfbAttachment;
   preauth?: RfbPreauthDescriptor;
   expiresAt: number;
+  expiryTimer: ReturnType<typeof setTimeout>;
 };
 
 const observerTokens = new Map<string, DesktopObserverTokenEntry>();
-const observerTokenExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const desktopObserverWss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
 
 function deleteDesktopObserverToken(token: string): void {
+  clearTimeout(observerTokens.get(token)?.expiryTimer);
   observerTokens.delete(token);
-  const expiryTimer = observerTokenExpiryTimers.get(token);
-  if (expiryTimer) {
-    clearTimeout(expiryTimer);
-    observerTokenExpiryTimers.delete(token);
-  }
-}
-
-function pruneDesktopObserverTokens(nowMs: number): void {
-  for (const [token, entry] of observerTokens) {
-    if (entry.expiresAt <= nowMs) {
-      deleteDesktopObserverToken(token);
-    }
-  }
 }
 
 export function mintDesktopObserverToken(params: {
@@ -71,24 +59,19 @@ export function mintDesktopObserverToken(params: {
   nowMs?: number;
 }): { token: string; expiresAtMs: number } {
   const nowMs = params.nowMs ?? Date.now();
-  pruneDesktopObserverTokens(nowMs);
   const token = crypto.randomBytes(24).toString("hex");
   const expiresAtMs = nowMs + TOKEN_TTL_MS;
-  const entry: DesktopObserverTokenEntry = {
+  const expiryTimer = setTimeout(() => deleteDesktopObserverToken(token), TOKEN_TTL_MS);
+  expiryTimer.unref?.();
+  observerTokens.set(token, {
     sourceKey: params.sourceKey,
     ownerEpoch: params.ownerEpoch,
     control: params.control,
     attachment: params.attachment,
     ...(params.preauth ? { preauth: params.preauth } : {}),
     expiresAt: expiresAtMs,
-  };
-  observerTokens.set(token, entry);
-  const expiryTimer = setTimeout(() => {
-    observerTokens.delete(token);
-    observerTokenExpiryTimers.delete(token);
-  }, TOKEN_TTL_MS);
-  expiryTimer.unref?.();
-  observerTokenExpiryTimers.set(token, expiryTimer);
+    expiryTimer,
+  });
   return { token, expiresAtMs };
 }
 
@@ -96,7 +79,6 @@ function consumeDesktopObserverToken(
   token: string,
   nowMs = Date.now(),
 ): DesktopObserverTokenEntry | undefined {
-  pruneDesktopObserverTokens(nowMs);
   const normalized = token.trim();
   if (!TOKEN_PATTERN.test(normalized)) {
     return undefined;
@@ -234,6 +216,8 @@ export function handleDesktopObserveUpgrade(
     let negotiating = Boolean(entry.preauth);
     let resumeTimer: ReturnType<typeof setInterval> | undefined;
     const stopKeepalive = startWebSocketKeepalive(ws);
+    const resumeWebSocket = () => ws.resume();
+    desktopSocket.on("drain", resumeWebSocket);
 
     const closeBoth = (code: number, reason: string, trigger: DesktopCloseTrigger) => {
       if (closeCause) {
@@ -245,6 +229,9 @@ export function handleDesktopObserveUpgrade(
       clearInterval(resumeTimer);
       resumeTimer = undefined;
       observer.release();
+      desktopSocket.off("drain", resumeWebSocket);
+      // A blocked desktop cannot drain, but the browser must still acknowledge close.
+      ws.resume();
       desktopSocket.destroy();
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close(code, reason);
@@ -258,17 +245,14 @@ export function handleDesktopObserveUpgrade(
             startPhase: preauthenticated ? "clientInit" : "version",
           });
       const forwardClientChunk = (chunk: Buffer) => {
-        if (!clientMessageFilter) {
-          desktopSocket.write(chunk);
-          return;
-        }
-        const result = clientMessageFilter.filter(chunk);
-        if ("error" in result) {
+        const result = clientMessageFilter?.filter(chunk);
+        if (result && "error" in result) {
           closeBoth(1008, "invalid view-only RFB stream", "invalid-view-only-stream");
           return;
         }
-        if (result.forward.length > 0) {
-          desktopSocket.write(result.forward);
+        const forward = result?.forward ?? chunk;
+        if (forward.length > 0 && !desktopSocket.write(forward)) {
+          ws.pause();
         }
       };
       ws.on("message", (data, isBinary) => {

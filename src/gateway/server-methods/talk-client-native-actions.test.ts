@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { extractText } from "../../../ui/src/lib/chat/message-extract.ts";
+import * as admission from "../../agents/admitted-run-context.js";
 import {
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
   ACTIVE_EMBEDDED_RUNS,
@@ -56,6 +57,12 @@ import {
   withParkedNativeTask,
   withNativePlugin,
 } from "./talk-client-native-control.test-support.js";
+
+// Observe the real admission function before the consult loader captures it for later tests.
+vi.mock("../../agents/admitted-run-context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/admitted-run-context.js")>();
+  return { ...actual, prepareAgentRunAdmission: vi.fn(actual.prepareAgentRunAdmission) };
+});
 
 function rawTranscriptRows() {
   return readTranscriptEventRows(openOpenClawAgentDatabase({ agentId: AGENT_ID }), SESSION_ID);
@@ -563,6 +570,42 @@ describe("native Talk action ownership through public plugin registration", () =
         expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
       },
     );
+  });
+
+  it("preserves the connection source when reconnect controls precede a new consult", async () => {
+    const prepareAdmission = vi.mocked(admission.prepareAgentRunAdmission);
+    prepareAdmission.mockClear();
+    await withParkedNativeTask(async ({ create, offer, result, queueMessage, settleBackend }) => {
+      const replacement = await connectNativeSession(
+        { create, offer },
+        true,
+        requireString(result, "voiceSessionId"),
+      );
+      replacement.socket.serverEvent(
+        nativeDelegation("replacement-control", "use the release branch instead"),
+      );
+      await vi.waitFor(() => expect(queueMessage).toHaveBeenCalledOnce());
+      await settleBackend();
+      replacement.socket.serverEvent(nativeDelegation("replacement-task", "Start a fresh task."));
+      await vi.waitFor(() =>
+        expect(spokenMessages(replacement.socket.sent)).toContain("Subsequent task completed."),
+      );
+      expect(upstream.runEmbeddedAgent).toHaveBeenCalledTimes(2);
+      expect(prepareAdmission.mock.calls.map(([params]) => params.facts.ingress)).toEqual([
+        {
+          kind: "gateway-client",
+          boundary: "talk-agent-consult",
+          state: "present",
+          rawSourceRef: CONNECTION_ID,
+        },
+        {
+          kind: "gateway-client",
+          boundary: "talk-agent-consult",
+          state: "present",
+          rawSourceRef: CONNECTION_ID,
+        },
+      ]);
+    });
   });
 
   it.each(activeControls)(

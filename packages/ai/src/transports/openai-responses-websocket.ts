@@ -1,11 +1,15 @@
+import { stableStringify } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
 import type {
+  ResponseInput,
   ResponsesClientEvent,
   ResponsesServerEvent,
 } from "openai/resources/responses/responses.js";
 import { ResponsesWS } from "openai/resources/responses/ws.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import type { StreamOptions, UserMessage } from "../types.js";
 import {
   resolveResponsesContinuationRequest,
   type ResponsesContinuationRequest,
@@ -18,6 +22,11 @@ import {
   OpenAIResponsesWebSocketPreDispatchError,
   OpenAIResponsesWebSocketSafeRetryError,
 } from "./openai-responses-contracts.js";
+import {
+  responsesInputFingerprint,
+  type ResponsesInputReplay,
+} from "./openai-responses-input-replay.js";
+import { createResponsesSteering, omitAcceptedSteering } from "./openai-responses-steering.js";
 import { transportAbortError } from "./transport-stream-shared.js";
 import { sha256Hex } from "./transport-utils.js";
 
@@ -32,10 +41,21 @@ type CachedWebSocketConnection = {
   createdAt: number;
   idleTimer?: ReturnType<typeof setTimeout>;
   continuation?: ResponsesContinuationState;
+  steeringContinuation?: SteeringContinuation;
 };
 
 type ResponsesWebSocketStreamMessage =
   ReturnType<ResponsesWS["stream"]> extends AsyncIterable<infer T> ? T : never;
+
+type SteeringContinuation = {
+  iterator: AsyncIterator<ResponsesWebSocketStreamMessage>;
+  buffered: ResponsesWebSocketStreamMessage[];
+  acceptedInput: ResponseInput;
+  requiresInput: boolean;
+  steering: ReturnType<typeof createResponsesSteering>;
+  instructions: unknown;
+  tools: unknown;
+};
 
 export type OpenAIResponsesWebSocketMode = "websocket" | "websocket-cached" | "auto";
 
@@ -44,6 +64,7 @@ type OpenAIResponsesWebSocketStream = {
   request: ResponsesContinuationRequest;
   reusedConnection: boolean;
   continuationStatus: ResponsesContinuationStatus | "socket_not_cached";
+  inputReplay?: ResponsesInputReplay;
   finish: (options?: { keep?: boolean }) => void;
 };
 
@@ -99,6 +120,9 @@ function invalidateOwnedWebSocketSession(
     entry.idleTimer = undefined;
   }
   closeWebSocketSilently(entry.socket, reason);
+  entry.steeringContinuation?.steering.close(new Error("Responses steering connection closed"));
+  void entry.steeringContinuation?.iterator.return?.().catch(() => undefined);
+  entry.steeringContinuation = undefined;
   if (websocketSessionCache.get(cacheKey) === entry) {
     websocketSessionCache.delete(cacheKey);
   }
@@ -181,6 +205,7 @@ type WebSocketLease = {
   iterator: AsyncIterator<ResponsesWebSocketStreamMessage>;
   entry?: CachedWebSocketConnection;
   reusedConnection: boolean;
+  steeringContinuation?: SteeringContinuation;
   release: (options?: { keep?: boolean }) => void;
 };
 
@@ -202,11 +227,14 @@ function createCachedWebSocketLease(
   reusedConnection: boolean,
 ): WebSocketLease {
   entry.busy = true;
+  const steeringContinuation = entry.steeringContinuation;
+  entry.steeringContinuation = undefined;
   return {
     socket: entry.socket,
-    iterator: entry.socket.stream(),
+    iterator: steeringContinuation?.iterator ?? entry.socket.stream(),
     entry,
     reusedConnection,
+    steeringContinuation,
     release: ({ keep } = {}) => {
       if (!keep || entry.socket.socket.readyState !== WEBSOCKET_OPEN_STATE) {
         invalidateOwnedWebSocketSession(cacheKey, entry);
@@ -323,6 +351,8 @@ export function createOpenAIResponsesWebSocketStream(params: {
   signal?: AbortSignal;
   callerSignal?: AbortSignal;
   degradeCooldownMs?: number;
+  onActiveResponse?: StreamOptions["onActiveResponse"];
+  steeringInput?: (messages: readonly UserMessage[]) => ResponseInput | Promise<ResponseInput>;
 }): OpenAIResponsesWebSocketStream {
   const connection = prepareWebSocketConnection(params.client, params.headers);
   const fullRequest = sanitizeWebSocketRequest(params.request);
@@ -352,13 +382,18 @@ export function createOpenAIResponsesWebSocketStream(params: {
     markDegraded();
     throw new OpenAIResponsesWebSocketPreDispatchError(error);
   }
-  let prepared: Pick<OpenAIResponsesWebSocketStream, "continuationStatus" | "request">;
+  let prepared: Omit<ReturnType<typeof resolveResponsesContinuationRequest>, "continuationStatus"> &
+    Pick<OpenAIResponsesWebSocketStream, "continuationStatus">;
   try {
     const continuation = lease.entry?.continuation;
     if (continuation && lease.entry) {
       // Consume before dispatch so incomplete/error terminals cannot reuse stale state.
       lease.entry.continuation = undefined;
-      prepared = resolveResponsesContinuationRequest(continuation, fullRequest);
+      prepared = resolveResponsesContinuationRequest(continuation, fullRequest, {
+        // Accepted steering is already queued before our next input. Its continuation
+        // inherits effort; a new update here would be recorded before a user it never preceded.
+        allowNewReasoningUpdate: !lease.steeringContinuation,
+      });
     } else {
       prepared = {
         request: fullRequest,
@@ -377,6 +412,72 @@ export function createOpenAIResponsesWebSocketStream(params: {
     | undefined;
   let terminalReceived = false;
   let released = false;
+  let retainIterator = false;
+  const resumedSteering = lease.steeringContinuation;
+  let deferredInput = false;
+  let inputReplay: ResponsesInputReplay | undefined;
+  if (resumedSteering) {
+    try {
+      if (prepared.continuationStatus !== "continued" || !prepared.request.previous_response_id) {
+        throw new Error("Responses steering continuation changed its request or history");
+      }
+      const input = omitAcceptedSteering(
+        prepared.request.input ?? [],
+        resumedSteering.acceptedInput,
+      );
+      if (
+        !resumedSteering.requiresInput &&
+        (stableStringify(fullRequest.instructions) !==
+          stableStringify(resumedSteering.instructions) ||
+          stableStringify(fullRequest.tools) !== stableStringify(resumedSteering.tools))
+      ) {
+        throw new Error(
+          "Responses automatic steering continuation cannot change instructions or tools",
+        );
+      }
+      const baseline = prepared.fullRequest ?? fullRequest;
+      const priorLength = (baseline.input?.length ?? 0) - (prepared.request.input?.length ?? 0);
+      const fingerprints = input.map(responsesInputFingerprint);
+      if (fingerprints.length > 0) {
+        inputReplay = {
+          afterResponseId: prepared.request.previous_response_id,
+          before: resumedSteering.requiresInput ? fingerprints : [],
+          after: resumedSteering.requiresInput ? [] : fingerprints,
+        };
+      }
+      // The server prepends accepted steering. An automatic response receives
+      // none of the later local input; transcript replay owns its eventual delivery.
+      const delivered = resumedSteering.requiresInput ? input : [];
+      prepared.fullRequest = {
+        ...baseline,
+        input: [
+          ...(baseline.input ?? []).slice(0, priorLength),
+          ...resumedSteering.acceptedInput,
+          ...delivered,
+        ],
+      };
+      prepared.request = { ...prepared.request, input: delivered };
+      deferredInput = !resumedSteering.requiresInput && input.length > 0;
+    } catch (error) {
+      void lease.iterator.return?.().catch(() => undefined);
+      lease.release({ keep: false });
+      throw new OpenAIResponsesWebSocketPostDispatchError(error);
+    }
+  }
+  const steering =
+    lease.entry && params.onActiveResponse && params.steeringInput
+      ? createResponsesSteering({
+          onActiveResponse: params.onActiveResponse,
+          toInput: params.steeringInput,
+          send: (event) => lease.socket.sendRaw(JSON.stringify(event)),
+          needsContinuation: () => deferredInput,
+          assertActive: () => {
+            if (released || terminalReceived || params.signal?.aborted) {
+              throw new Error("Responses steering is no longer active");
+            }
+          },
+        })
+      : undefined;
   const finish = ({ keep = true }: { keep?: boolean } = {}) => {
     if (released) {
       return;
@@ -384,7 +485,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
     released = true;
     if (keep && lease.entry && terminalResponse) {
       lease.entry.continuation = {
-        lastRequest: fullRequest,
+        lastRequest: prepared.fullRequest ?? fullRequest,
         lastResponseId: terminalResponse.id,
         lastResponseItems: terminalResponse.output,
       };
@@ -404,8 +505,22 @@ export function createOpenAIResponsesWebSocketStream(params: {
           throw transportAbortError(params.signal);
         }
 
+        // An automatic continuation may start immediately after the old terminal.
+        // Retain the SDK iterator across the handoff so those events cannot be lost.
+        if (resumedSteering) {
+          requestDispatched = true;
+          if (resumedSteering.requiresInput) {
+            lease.socket.send({
+              ...prepared.request,
+              type: "response.create",
+            } as ResponsesClientEvent); // SAFETY: Valid create request with newer SDK input items.
+          }
+        }
         for (;;) {
-          const next = await nextWebSocketMessage(iterator, params.signal);
+          const buffered = resumedSteering?.buffered.shift();
+          const next = buffered
+            ? { value: buffered, done: false }
+            : await nextWebSocketMessage(iterator, params.signal);
           if (next.done) {
             throw new Error("OpenAI Responses WebSocket closed before a terminal response event");
           }
@@ -424,6 +539,20 @@ export function createOpenAIResponsesWebSocketStream(params: {
           if (!event) {
             continue;
           }
+          if (
+            isRecord(event) &&
+            typeof event.type === "string" &&
+            event.type.startsWith("response.steer.")
+          ) {
+            const owner =
+              isRecord(event.steer) && event.steer.previous_response_id === steering?.responseId
+                ? steering
+                : (resumedSteering?.steering ?? steering);
+            if (owner?.handle(event)) {
+              continue;
+            }
+          }
+          steering?.handle(event);
           if (event.type === "response.completed") {
             terminalResponse = event.response;
           }
@@ -431,6 +560,66 @@ export function createOpenAIResponsesWebSocketStream(params: {
             event.type === "response.completed" ||
             event.type === "response.incomplete" ||
             event.type === "response.failed";
+          if (terminalReceived) {
+            steering?.seal();
+            if (event.type === "response.failed") {
+              steering?.close(new Error("Responses failed before steering could be applied"));
+            }
+            const continuationBuffer: ResponsesWebSocketStreamMessage[] = [];
+            for (;;) {
+              if (!steering?.pending) {
+                break;
+              }
+              const acknowledgement = await nextWebSocketMessage(iterator, params.signal);
+              if (acknowledgement.done) {
+                throw new Error("Responses closed before acknowledging steering");
+              }
+              const acknowledgedEvent = readServerEvent(acknowledgement.value);
+              if (!steering.handle(acknowledgedEvent)) {
+                continuationBuffer.push(acknowledgement.value);
+              }
+            }
+            const acceptedInput = steering?.acceptedInput ?? [];
+            const isSteered =
+              event.type === "response.incomplete" &&
+              isRecord(event.response.incomplete_details) &&
+              event.response.incomplete_details.reason === "steered";
+            if (
+              lease.entry &&
+              steering &&
+              acceptedInput.length > 0 &&
+              (event.type === "response.completed" || isSteered)
+            ) {
+              if (event.type === "response.incomplete") {
+                terminalResponse = event.response;
+              }
+              lease.entry.steeringContinuation = {
+                iterator,
+                buffered: continuationBuffer,
+                acceptedInput,
+                requiresInput: (terminalResponse?.output ?? []).some(
+                  (item) =>
+                    ((item.type === "function_call" || item.type === "custom_tool_call") &&
+                      !(isRecord(item) && item.async === true)) ||
+                    item.type === "mcp_approval_request",
+                ),
+                steering,
+                instructions: fullRequest.instructions,
+                tools: fullRequest.tools,
+              };
+              retainIterator = true;
+              if (isSteered) {
+                // A steered response is a successful segment, not a failed agent turn.
+                // The next stream consumes its already-running server continuation.
+                yield {
+                  ...event,
+                  type: "response.completed",
+                  response: { ...event.response, status: "completed", incomplete_details: null },
+                };
+                return;
+              }
+            }
+          }
           yield event;
           if (terminalReceived) {
             degradedWebSocketConnections.delete(degradationKey);
@@ -438,10 +627,15 @@ export function createOpenAIResponsesWebSocketStream(params: {
           }
         }
       } catch (error) {
+        const steeringDispatched = Boolean(
+          steering?.pending || steering?.acceptedInput.length || resumedSteering,
+        );
+        steering?.close(error instanceof Error ? error : new Error("Responses steering failed"));
         if (lease.entry) {
           lease.entry.continuation = undefined;
         }
-        const safeRetry = error instanceof OpenAIResponsesWebSocketSafeRetryError;
+        const safeRetry =
+          error instanceof OpenAIResponsesWebSocketSafeRetryError && !steeringDispatched;
         if (!params.callerSignal?.aborted && !safeRetry) {
           markDegraded();
         }
@@ -453,7 +647,11 @@ export function createOpenAIResponsesWebSocketStream(params: {
         }
         throw new OpenAIResponsesWebSocketPostDispatchError(error);
       } finally {
-        await iterator.return?.().catch(() => undefined);
+        steering?.seal();
+        if (!retainIterator) {
+          steering?.close(new Error("Responses stream ended before steering was confirmed"));
+          await iterator.return?.().catch(() => undefined);
+        }
         if (!terminalReceived) {
           finish({ keep: false });
         }
@@ -466,6 +664,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
     request: prepared.request,
     reusedConnection: lease.reusedConnection,
     continuationStatus: prepared.continuationStatus,
+    inputReplay,
     finish,
   };
 }

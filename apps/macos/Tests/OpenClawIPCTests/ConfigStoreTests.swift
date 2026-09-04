@@ -8,18 +8,16 @@ struct ConfigStoreTests {
     @Test func `load uses remote in remote mode`() async {
         var localHit = false
         var remoteHit = false
-        await ConfigStore._testSetOverrides(.init(
+        let result = await self.withOverrides(.init(
             isRemoteMode: { true },
             loadLocal: { localHit = true
                 return ["local": true]
             },
             loadRemote: { remoteHit = true
                 return ["remote": true]
-            }))
-
-        let result = await ConfigStore.load()
-
-        await ConfigStore._testClearOverrides()
+            })) {
+                await ConfigStore.load()
+            }
         #expect(remoteHit)
         #expect(!localHit)
         #expect(result.root["remote"] as? Bool == true)
@@ -28,18 +26,16 @@ struct ConfigStoreTests {
     @Test func `load uses local in local mode`() async {
         var localHit = false
         var remoteHit = false
-        await ConfigStore._testSetOverrides(.init(
+        let result = await self.withOverrides(.init(
             isRemoteMode: { false },
             loadLocal: { localHit = true
                 return ["local": true]
             },
             loadRemote: { remoteHit = true
                 return ["remote": true]
-            }))
-
-        let result = await ConfigStore.load()
-
-        await ConfigStore._testClearOverrides()
+            })) {
+                await ConfigStore.load()
+            }
         #expect(localHit)
         #expect(!remoteHit)
         #expect(result.root["local"] as? Bool == true)
@@ -82,20 +78,20 @@ struct ConfigStoreTests {
     @Test func `save routes to local in local mode`() async throws {
         var localHit = false
         var remoteHit = false
-        await ConfigStore._testSetOverrides(.init(
+        try await self.withOverrides(.init(
             isRemoteMode: { false },
             loadLocal: { [:] },
             saveLocal: { _ in localHit = true },
             saveRemote: { _ in remoteHit = true }))
-
-        try await self.saveLoadedDocument(["local": true])
-
-        await ConfigStore._testClearOverrides()
+        {
+            try await self.saveLoadedDocument(["local": true])
+        }
         #expect(localHit)
         #expect(!remoteHit)
     }
 
     @Test func `failed save does not announce config change`() async {
+        let failure = NSError(domain: "ConfigStoreTests", code: 1)
         let notificationCenter = NotificationCenter()
         let changeCount = NotificationCount()
         let observer = notificationCenter.addObserver(
@@ -113,14 +109,16 @@ struct ConfigStoreTests {
                 await Task.detached {
                     NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
                 }.value
-                throw NSError(domain: "ConfigStoreTests", code: 1)
+                throw failure
             },
             notificationCenter: notificationCenter))
         {
             do {
                 try await self.saveLoadedDocument(["remote": true])
                 Issue.record("Expected save to fail")
-            } catch {}
+            } catch {
+                #expect(error as NSError == failure)
+            }
         }
 
         #expect(changeCount.value == 0)
@@ -132,7 +130,13 @@ struct ConfigStoreTests {
         let configPath = stateDir.appendingPathComponent("openclaw.json")
         defer { try? FileManager().removeItem(at: stateDir) }
 
-        try await TestIsolation.withEnvValues([
+        let failure = NSError(domain: "Gateway", code: 0, userInfo: [
+            NSLocalizedDescriptionKey: "config changed since last load; re-run config.get and retry",
+        ])
+        try await self.withOverrides(.init(
+            isRemoteMode: { false },
+            loadLocal: { OpenClawConfigFile.loadDict() },
+            saveGateway: { _ in throw failure }), env: [
             "OPENCLAW_STATE_DIR": stateDir.path,
             "OPENCLAW_CONFIG_PATH": configPath.path,
         ]) {
@@ -146,22 +150,13 @@ struct ConfigStoreTests {
                 ],
             ])
             let before = try String(contentsOf: configPath, encoding: .utf8)
-            await ConfigStore._testSetOverrides(.init(
-                isRemoteMode: { false },
-                loadLocal: { OpenClawConfigFile.loadDict() },
-                saveGateway: { _ in
-                    throw NSError(domain: "Gateway", code: 0, userInfo: [
-                        NSLocalizedDescriptionKey: "config changed since last load; re-run config.get and retry",
-                    ])
-                }))
-
             var didThrow = false
             do {
                 try await self.saveLoadedDocument(["browser": ["enabled": false]])
             } catch {
                 didThrow = true
+                #expect(error as NSError == failure)
             }
-            await ConfigStore._testClearOverrides()
 
             #expect(didThrow)
             let after = try String(contentsOf: configPath, encoding: .utf8)
@@ -175,23 +170,21 @@ struct ConfigStoreTests {
         let configPath = stateDir.appendingPathComponent("openclaw.json")
         defer { try? FileManager().removeItem(at: stateDir) }
 
-        try await TestIsolation.withEnvValues([
+        try await self.withOverrides(.init(
+            isRemoteMode: { false },
+            loadLocal: { OpenClawConfigFile.loadDict() },
+            saveGateway: { _ in
+                throw NSError(domain: "Gateway", code: 0, userInfo: [
+                    NSLocalizedDescriptionKey: "gateway not configured",
+                ])
+            }), env: [
             "OPENCLAW_STATE_DIR": stateDir.path,
             "OPENCLAW_CONFIG_PATH": configPath.path,
         ]) {
-            await ConfigStore._testSetOverrides(.init(
-                isRemoteMode: { false },
-                loadLocal: { OpenClawConfigFile.loadDict() },
-                saveGateway: { _ in
-                    throw NSError(domain: "Gateway", code: 0, userInfo: [
-                        NSLocalizedDescriptionKey: "gateway not configured",
-                    ])
-                }))
             try await self.saveLoadedDocument([
                 "gateway": ["mode": "local"],
                 "browser": ["enabled": false],
             ])
-            await ConfigStore._testClearOverrides()
 
             let data = try Data(contentsOf: configPath)
             let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -208,16 +201,21 @@ struct ConfigStoreTests {
 
     private func withOverrides<T>(
         _ overrides: ConfigStore.Overrides,
+        env: [String: String?] = [:],
         _ body: () async throws -> T) async rethrows -> T
     {
-        await ConfigStore._testSetOverrides(overrides)
-        do {
-            let result = try await body()
-            await ConfigStore._testClearOverrides()
-            return result
-        } catch {
-            await ConfigStore._testClearOverrides()
-            throw error
+        // Overrides and document origins share process state with other suites.
+        // Hold the same lease through async load/save and restore before releasing it.
+        try await TestIsolation.withIsolatedState(env: env) {
+            await ConfigStore._testSetOverrides(overrides)
+            do {
+                let result = try await body()
+                await ConfigStore._testClearOverrides()
+                return result
+            } catch {
+                await ConfigStore._testClearOverrides()
+                throw error
+            }
         }
     }
 }

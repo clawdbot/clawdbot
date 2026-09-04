@@ -1,10 +1,5 @@
 import Foundation
 
-struct GatewayOperatorFleetResolvedConfig: Sendable {
-    let config: GatewayConnectConfig
-    let name: String
-}
-
 enum GatewaySetupRouteProbeBudget {
     static let tcpConnectTimeoutSeconds = 2.0
 }

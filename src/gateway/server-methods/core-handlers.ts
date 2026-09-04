@@ -37,6 +37,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   conversations: () => import("./conversations.js").then((module) => module.conversationHandlers),
   connect: () => import("./connect.js").then((module) => module.connectHandlers),
   "control-ui": () => import("./control-ui.js").then((module) => module.controlUiHandlers),
+  "plugins-control-ui": () =>
+    import("./plugins-control-ui.js").then((module) => module.pluginsControlUiHandlers),
   cron: () => import("./cron.js").then((module) => module.cronHandlers),
   devices: () => import("./devices.js").then((module) => module.deviceHandlers),
   "device-pair-setup": () =>
@@ -132,6 +134,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   skills: () => import("./skills.js").then((module) => module.skillsHandlers),
   system: () => import("./system.js").then((module) => module.systemHandlers),
   talk: () => import("./talk.js").then((module) => module.talkHandlers),
+  // Mode synchronization does not depend on loading speech or realtime providers.
+  "talk-mode": () => import("./talk-mode.js").then((module) => module.talkModeHandlers),
   tasks: () => import("./tasks.js").then((module) => module.tasksHandlers),
   "task-suggestions": () =>
     import("./task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
@@ -141,6 +145,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./tools-effective.js").then((module) => module.toolsEffectiveHandlers),
   "tools-invoke": () => import("./tools-invoke.js").then((module) => module.toolsInvokeHandlers),
   "mcp-app": () => import("./mcp-app.js").then((module) => module.mcpAppHandlers),
+  canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
   update: () => import("./update.js").then((module) => module.updateHandlers),
   usage: () => import("./usage.js").then((module) => module.usageHandlers),

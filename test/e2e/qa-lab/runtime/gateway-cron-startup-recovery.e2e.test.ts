@@ -197,9 +197,27 @@ describe("Gateway cron startup recovery", () => {
         clientDisplayName: "vitest-gateway-cron-startup-recovery",
       });
       await gateway.server.startupSettled;
-      const response = await gateway.client.request<{
-        jobs: Array<{ id: string; enabled: boolean; state: { nextRunAtMs?: number } }>;
-      }>("cron.list", { includeDisabled: true });
+      // Cron recovery runs in post-ready maintenance. Observe retirement of
+      // every seeded running marker before inspecting its finalized schedule.
+      const response = await vi.waitUntil(
+        async () => {
+          const snapshot = await gateway!.client.request<{
+            jobs: Array<{
+              id: string;
+              enabled: boolean;
+              state: { runningAtMs?: number; nextRunAtMs?: number };
+            }>;
+          }>("cron.list", { includeDisabled: true });
+          return jobs.every((seeded) =>
+            snapshot.jobs.some(
+              (job) => job.id === seeded.id && job.state.runningAtMs === undefined,
+            ),
+          )
+            ? snapshot
+            : false;
+        },
+        { timeout: 30_000 },
+      );
       const recovered = new Map(response.jobs.map((job) => [job.id, job] as const));
 
       expect(recovered.get("persisted-retry-without-history")).toMatchObject({

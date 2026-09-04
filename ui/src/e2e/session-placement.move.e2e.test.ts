@@ -593,10 +593,11 @@ suite.define(() => {
         ).runnerFreshnessPresentation = state;
         inspect();
       });
-      const listCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list", { agentId: "main" });
+      const rosterMatch = { includeGlobal: true, agentId: "main" };
+      const listCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
-      await gateway.waitForRequest("sessions.list", { after: listCount });
+      await gateway.waitForRequest("sessions.list", { after: listCount, match: rosterMatch });
       await gateway.resolveDeferred("sessions.list", chatSessionListResponse([parent, offline]));
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       expect(

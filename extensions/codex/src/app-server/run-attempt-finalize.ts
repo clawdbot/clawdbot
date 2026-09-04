@@ -314,8 +314,15 @@ export async function finalizeCodexAttempt(
     ),
   ]) {
     if (message?.role === "assistant") {
-      message.stopReason = finalAborted ? "aborted" : finalPromptError ? "error" : "stop";
-      message.errorMessage = finalPromptError ? formatErrorMessage(finalPromptError) : undefined;
+      const providerRefusal = message.diagnostics?.some(
+        (diagnostic) => diagnostic.type === "provider_refusal",
+      );
+      // The projector owns refusal classification. Preserve it unless a stronger
+      // local abort or prompt failure supersedes this turn's provider outcome.
+      if (!providerRefusal || finalAborted || finalPromptError) {
+        message.stopReason = finalAborted ? "aborted" : finalPromptError ? "error" : "stop";
+        message.errorMessage = finalPromptError ? formatErrorMessage(finalPromptError) : undefined;
+      }
     }
   }
   const modelCallFailureKind =
@@ -367,6 +374,8 @@ export async function finalizeCodexAttempt(
             mirroredMessages: mirrorOutcome.mirroredMessages,
             settledMessages: result.messagesSnapshot,
             turnId: activeTurnId,
+            signal: params.abortSignal,
+            assertActive: () => params.hostCapabilities.assertActive(),
           })
         : undefined) ?? Object.freeze({ source: "unavailable" as const }))
     : undefined;

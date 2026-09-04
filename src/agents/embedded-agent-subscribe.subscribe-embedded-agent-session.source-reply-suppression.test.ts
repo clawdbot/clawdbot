@@ -43,9 +43,14 @@ function createBlockReplyHarness(
       typeof event.toolCallId === "string" &&
       details?.messageDelivery !== undefined
     ) {
-      recordEmbeddedToolReceipt(sessionManager, event.toolCallId, {
-        messageDelivery: details.messageDelivery,
-      });
+      recordEmbeddedToolReceipt(
+        sessionManager,
+        event.toolCallId,
+        {
+          messageDelivery: details.messageDelivery,
+        },
+        true,
+      );
     }
     rawEmit(evt);
   };
@@ -512,39 +517,59 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.getSourceReplyDelivered()).toBeUndefined();
   });
 
-  it("retains source delivery without destination arguments or visible result details", async () => {
-    const { session, emit } = createStubSessionHarness();
-    const sessionManager = {};
-    Object.assign(session, { sessionManager });
-    const subscription = subscribeEmbeddedAgentSession({ session, runId: "implicit-source" });
-    emit({
-      type: "tool_execution_start",
-      toolName: "message",
-      toolCallId: "source-send",
-      args: { action: "send", message: "Delivered once." },
-    });
-    await Promise.resolve();
-    recordEmbeddedToolReceipt(sessionManager, "source-send", {
-      messageDelivery: {
-        status: "settled",
-        partialDelivery: false,
-        createdThreadIds: [],
-        sourceReplyDelivered: true,
-      },
-    });
-    emit({
-      type: "tool_execution_end",
-      toolName: "message",
-      toolCallId: "source-send",
-      isError: false,
-      result: { content: [], details: { redacted: true } },
-    });
-    await Promise.resolve();
+  it.each(["send", "reply", "thread-reply", "poll"])(
+    "suppresses later replies after a recorded source %s with rewritten output",
+    async (action) => {
+      const { session, emit } = createStubSessionHarness();
+      const sessionManager = {};
+      Object.assign(session, { sessionManager });
+      const onBlockReply = vi.fn();
+      const onDeliveredMessageToolOnlySourceReply = vi.fn();
+      const subscription = subscribeEmbeddedAgentSession({
+        session,
+        runId: "implicit-source",
+        sourceReplyDeliveryMode: "message_tool_only",
+        blockReplyBreak: "message_end",
+        onBlockReply,
+        onDeliveredMessageToolOnlySourceReply,
+      });
+      emit({
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId: "source-send",
+        args: { action, target: "channel:source", message: "Delivered once." },
+      });
+      await Promise.resolve();
+      recordEmbeddedToolReceipt(
+        sessionManager,
+        "source-send",
+        {
+          messageDelivery: {
+            status: "settled",
+            partialDelivery: false,
+            createdThreadIds: [],
+            sourceReplyDelivered: true,
+          },
+        },
+        true,
+      );
+      emit({
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId: "source-send",
+        isError: false,
+        result: { content: [], details: { redacted: true } },
+      });
+      await Promise.resolve();
 
-    expect(subscription.getMessagingToolSentTargets()).toEqual([]);
-    expect(subscription.getSourceReplyDelivered()).toBe(true);
-    subscription.unsubscribe();
-  });
+      expect(subscription.getSourceReplyDelivered()).toBe(true);
+      emitAssistantMessageEnd(emit, "A later assistant response must stay suppressed.");
+      await Promise.resolve();
+      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledOnce();
+      subscription.unsubscribe();
+    },
+  );
 
   it("suppresses text-only tool summaries after message-tool-only delivery", async () => {
     const onToolResult = vi.fn();

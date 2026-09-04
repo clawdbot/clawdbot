@@ -15,6 +15,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
@@ -29,6 +30,8 @@ import type {
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
 import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
+
+registerSettingsEnglish();
 
 export type ModelProviderRowMessage = {
   kind: "success" | "error";

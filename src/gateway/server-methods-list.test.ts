@@ -9,6 +9,7 @@ import {
 } from "./methods/core-descriptors.js";
 import { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
+import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fixtures.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("GATEWAY_EVENTS", () => {
@@ -58,90 +59,6 @@ describe("GATEWAY_EVENTS", () => {
 });
 
 describe("listGatewayMethods", () => {
-  const expectedMethodsAfterModelProbe = [
-    "models.probe",
-    "migrations.memory.plan",
-    "migrations.memory.apply",
-    "ui.command",
-    "approval.history",
-    "plugin.surface.refresh",
-    "conversations.list",
-    "session.discussion.info",
-    "session.discussion.open",
-    "board.prompt.authorize",
-    "board.data.read",
-    "board.action",
-    "sessions.observer.visibility",
-    "session.visibility.set",
-    "session.members.list",
-    "session.members.add",
-    "session.members.remove",
-    "session.suggestions.add",
-    "session.suggestions.list",
-    "session.suggestions.resolve",
-    "session.typing",
-    "sessions.companion.ask",
-    "sessions.companion.state",
-    "sessions.companion.reset",
-    "memory.search",
-    "skills.proposals.events.list",
-    "skills.proposals.evaluate",
-    "hooks.status",
-    "tasks.retry",
-    "tasks.dismiss",
-    "audit.run.inspect",
-    "sessions.patchMany",
-    "update.hold",
-    "sessions.catalog.startTerminal",
-    "worker.desktop.observe",
-    "projects.list",
-    "projects.register",
-    "projects.remove",
-    "worker.desktop.launch",
-    "secrets.store.list",
-    "secrets.store.set",
-    "secrets.store.delete",
-    "users.prefs.get",
-    "users.prefs.set",
-    "projects.add",
-    "projects.searchRemote",
-    "desktop.observe",
-    "desktop.launch",
-    "device.scopes.requestUpgrade",
-    "device.scopes.waitUpgrade",
-    "portal.list",
-    "portal.open",
-    "portal.close",
-    "sessions.move",
-    "sessions.assignOwner",
-    "progressCard.get",
-    "progressCard.put",
-    "tools.github.status",
-    "tools.github.configure",
-    "tools.github.authorize.start",
-    "tools.github.authorize.poll",
-    "tools.github.authorize.cancel",
-    "sessions.github.publish",
-    "diagnostics.lanes",
-    "session.members.listEvidence",
-    "plugins.inspect",
-    "users.github.status",
-    "users.github.authorize.start",
-    "users.github.authorize.poll",
-    "users.github.authorize.cancel",
-    "users.github.disconnect",
-    "sessions.github.options",
-    "sessions.github.status",
-    "sessions.github.confirm",
-    "sessions.title.prepare",
-    "users.mentionable",
-    "mentions.list",
-    "mentions.dismiss",
-    "transcripts.list",
-    "transcripts.get",
-    "models.authOrderSet",
-  ];
-
   it("advertises plugin surface refresh for capability rotation", () => {
     expect(listGatewayMethods()).toContain("plugin.surface.refresh");
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
@@ -161,17 +78,17 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("approval.resolve");
   });
 
-  it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-expectedMethodsAfterModelProbe.length)).toEqual(
-      expectedMethodsAfterModelProbe,
-    );
+  it("appends plugin UI methods without changing the complete legacy method prefix", () => {
     const methods = listGatewayMethods();
-    expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
-      methods.indexOf("node.describe") + 1,
-    );
-    expect(methods.indexOf("node.pluginTools.update")).toBe(
-      methods.indexOf("node.pluginSurface.refresh") + 1,
-    );
+    const legacyCount = LEGACY_ADVERTISED_GATEWAY_METHODS.length;
+
+    expect(methods.slice(0, legacyCount)).toEqual(LEGACY_ADVERTISED_GATEWAY_METHODS);
+    expect(methods.slice(legacyCount, legacyCount + 4)).toEqual([
+      "plugins.controlUi.list",
+      "plugins.controlUi.reload",
+      "plugins.controlUi.report",
+      "plugins.controlUi.status",
+    ]);
   });
 
   it("advertises ClawHub skill trust methods", () => {
@@ -276,79 +193,6 @@ describe("listGatewayMethods", () => {
       scope: "node",
       advertise: false,
     });
-  });
-
-  it("preserves the legacy advertised method order", () => {
-    const methods = listGatewayMethods();
-    const coreMethods = listCoreGatewayMethodNames();
-    expect(methods.slice(0, 5)).toEqual([
-      "health",
-      "diagnostics.stability",
-      "doctor.memory.status",
-      "doctor.memory.dreamDiary",
-      "doctor.memory.backfillDreamDiary",
-    ]);
-    expect(methods.slice(31, 36)).toEqual([
-      "exec.approvals.get",
-      "exec.approvals.set",
-      "exec.approvals.node.get",
-      "exec.approvals.node.set",
-      "exec.approval.get",
-    ]);
-    expect(methods).toContain("tts.speak");
-    const expectedCoreSuffix = [
-      "sessions.catalog.continue",
-      "sessions.catalog.archive",
-      "approval.get",
-      "approval.resolve",
-      "sessions.search",
-      "sessions.dispatch",
-      "sessions.reclaim",
-      ...expectedMethodsAfterModelProbe,
-    ];
-    expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
-    expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
-    expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
-    expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
-    expect(methods.indexOf("sessions.patchMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
-    expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.patchMany") + 1);
-    expect(methods.indexOf("sessions.catalog.startTerminal")).toBe(
-      methods.indexOf("update.hold") + 1,
-    );
-    expect(methods.indexOf("worker.desktop.observe")).toBe(
-      methods.indexOf("sessions.catalog.startTerminal") + 1,
-    );
-    expect(methods.indexOf("projects.list")).toBe(methods.indexOf("worker.desktop.observe") + 1);
-    expect(methods.indexOf("projects.register")).toBe(methods.indexOf("projects.list") + 1);
-    expect(methods.indexOf("projects.remove")).toBe(methods.indexOf("projects.register") + 1);
-    expect(methods.indexOf("worker.desktop.launch")).toBe(methods.indexOf("projects.remove") + 1);
-    expect(methods.indexOf("secrets.store.list")).toBe(
-      methods.indexOf("worker.desktop.launch") + 1,
-    );
-    expect(methods.indexOf("secrets.store.set")).toBe(methods.indexOf("secrets.store.list") + 1);
-    expect(methods.indexOf("secrets.store.delete")).toBe(methods.indexOf("secrets.store.set") + 1);
-    expect(methods.indexOf("users.prefs.get")).toBe(methods.indexOf("secrets.store.delete") + 1);
-    expect(methods.indexOf("users.prefs.set")).toBe(methods.indexOf("users.prefs.get") + 1);
-    expect(methods.indexOf("projects.add")).toBe(methods.indexOf("users.prefs.set") + 1);
-    expect(methods.indexOf("projects.searchRemote")).toBe(methods.indexOf("projects.add") + 1);
-    expect(methods.indexOf("desktop.observe")).toBe(methods.indexOf("projects.searchRemote") + 1);
-    expect(methods.indexOf("desktop.launch")).toBe(methods.indexOf("desktop.observe") + 1);
-    expect(methods.indexOf("device.scopes.requestUpgrade")).toBe(
-      methods.indexOf("desktop.launch") + 1,
-    );
-    expect(methods.indexOf("device.scopes.waitUpgrade")).toBe(
-      methods.indexOf("device.scopes.requestUpgrade") + 1,
-    );
-    expect(methods.indexOf("portal.list")).toBe(methods.indexOf("device.scopes.waitUpgrade") + 1);
-    expect(methods.indexOf("portal.open")).toBe(methods.indexOf("portal.list") + 1);
-    expect(methods.indexOf("portal.close")).toBe(methods.indexOf("portal.open") + 1);
-    expect(methods.indexOf("sessions.move")).toBe(methods.indexOf("portal.close") + 1);
-    expect(methods.indexOf("sessions.assignOwner")).toBe(methods.indexOf("sessions.move") + 1);
-    expect(methods.indexOf("progressCard.get")).toBe(methods.indexOf("sessions.assignOwner") + 1);
-    expect(methods.indexOf("progressCard.put")).toBe(methods.indexOf("progressCard.get") + 1);
-    expect(methods.indexOf("session.members.listEvidence")).toBe(
-      methods.indexOf("diagnostics.lanes") + 1,
-    );
   });
 
   it("advertises the versioned Talk session RPCs", () => {

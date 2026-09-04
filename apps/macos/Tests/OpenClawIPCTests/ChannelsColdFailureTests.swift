@@ -100,6 +100,9 @@ struct ChannelsColdFailureTests {
                 }
                 #expect(!after.labels.contains { $0.contains(message) })
                 await acquisitionGate.open()
+                // Resuming acquisition does not wait for SwiftUI to replace its loading view.
+                let ready = try await Self.waitForContent(hosting) { $0.contains(retryLabel) }
+                try #require(ready.actions[retryLabel] == true)
                 try await Self.press(retryLabel, in: hosting)
                 let replacementMessage = "Synthetic Gateway B unavailable"
                 let replacement = try await Self.waitForContent(hosting) { labels in

@@ -6,6 +6,7 @@ import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
+import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import {
   redactLoginFailureError,
   resolveAuthHintKind,
@@ -16,6 +17,8 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
+
+registerLoginEnglish();
 
 type LoginFailureKind =
   | "auth-required"

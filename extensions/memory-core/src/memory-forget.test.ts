@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -28,8 +27,6 @@ import {
   closeMemoryForgetFixture,
   seedMemoryForgetSession,
 } from "./memory-forget.test-helpers.js";
-import * as memoryDatabase from "./memory/manager-db.js";
-import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { runSessionBackfill } from "./session-backfill.js";
 import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
@@ -38,7 +35,6 @@ describe("memory forget", () => {
   let stateDir: string;
   let workspaceDir: string;
   let cfg: OpenClawConfig;
-  let vectorDatabase: DatabaseSync | undefined;
 
   beforeEach(async () => {
     stateDir = tempDirs.make("openclaw-memory-forget-");
@@ -47,10 +43,6 @@ describe("memory forget", () => {
 
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(() => {
-      if (vectorDatabase) {
-        closeMemoryDatabase(vectorDatabase);
-        vectorDatabase = undefined;
-      }
       closeMemoryForgetFixture();
       cleanup();
     }),
@@ -548,8 +540,7 @@ describe("memory forget", () => {
       });
 
       const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
-      const db = openMemoryDatabaseAtPath(agentDatabase.path, true, "main");
-      vectorDatabase = db;
+      const db = agentDatabase.db;
       const loaded = await loadSqliteVecExtension({ db });
       expect(loaded.ok).toBe(true);
       db.exec(`
@@ -723,27 +714,12 @@ describe("memory forget", () => {
               : failure === "index"
                 ? "BEFORE DELETE ON memory_index_chunks WHEN OLD.id = 'chunk-0'"
                 : "BEFORE DELETE ON memory_entry_origins WHEN OLD.entry_key = 'mixed-entry'";
-          const injectFailure = (connection: DatabaseSync) =>
-            connection.exec(
-              `CREATE TEMP TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
-            );
           // Attach the fault to the actual purge connection after schema validation,
           // so an unexpected persistent trigger cannot fail database admission first.
           const faultDb = failure === "backup" ? openOpenClawStateDatabase().db : agentDatabase.db;
-          const openDatabase = openMemoryDatabaseAtPath;
-          const fault =
-            failure === "index"
-              ? vi
-                  .spyOn(memoryDatabase, "openMemoryDatabaseAtPath")
-                  .mockImplementation((...args) => {
-                    const connection = openDatabase(...args);
-                    injectFailure(connection);
-                    return connection;
-                  })
-              : undefined;
-          if (!fault) {
-            injectFailure(faultDb);
-          }
+          faultDb.exec(
+            `CREATE TEMP TRIGGER abort_forget ${trigger} BEGIN SELECT RAISE(ABORT, '${failureMessage}'); END`,
+          );
           try {
             await expect(
               forgetMemoryEntries({ cfg, agentId: "main", hookSources: ["gmail"] }),
@@ -753,11 +729,7 @@ describe("memory forget", () => {
                 : { message: failureMessage },
             );
           } finally {
-            if (fault) {
-              fault.mockRestore();
-            } else {
-              faultDb.exec("DROP TRIGGER abort_forget");
-            }
+            faultDb.exec("DROP TRIGGER abort_forget");
           }
         }
         expect(listMemorySessionTombstones({ agentId: "main" })).toMatchObject([

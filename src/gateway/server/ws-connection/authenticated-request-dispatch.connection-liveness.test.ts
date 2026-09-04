@@ -27,7 +27,7 @@ vi.mock("./authenticated-request-dispatch.server-methods.runtime.js", async () =
   };
 });
 
-describe.sequential("authenticated request connection liveness", () => {
+describe("authenticated request connection liveness", { concurrent: false }, () => {
   beforeEach(() => {
     runtime.beforeHandler.mockReset();
   });

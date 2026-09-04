@@ -14,12 +14,14 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { focusChatSidePanel, restoreChatAsMain } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const sessionKey = "agent:main:board-mcp-app";
+const rosterMatch = { includeGlobal: true };
 
 let browser: Browser;
 let controlUi: ControlUiE2eServer;
@@ -374,7 +376,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       mcpView: (await gateway.getRequests("mcp.app.view")).length,
     };
     const stablePatchCount = (await gateway.getRequests("sessions.patch")).length;
-    const stableListCount = (await gateway.getRequests("sessions.list")).length;
+    const stableListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
     const sidePanel = page.locator(".sidebar-region__right-runtime .side-panel");
     const appContent = page
       .frameLocator("mcp-app-view iframe")
@@ -386,11 +388,12 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       await page.screenshot({ path: `${artifactDir}/01-dashboard.png`, fullPage: true });
     }
 
-    await sidePanel.getByRole("button", { name: "Expand side panel" }).click();
+    await focusChatSidePanel(page);
     await expectRetainedBoardPresentation(page, "expanded");
 
-    await sidePanel.getByRole("button", { name: "Collapse" }).click();
+    await sidePanel.getByRole("button", { name: "Restore split", exact: true }).click();
     await expectRetainedBoardPresentation(page, "split");
+    await restoreChatAsMain(page);
 
     const draftNote = page
       .frameLocator("mcp-app-view iframe")
@@ -400,7 +403,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     if (artifactDir) {
       await page.screenshot({ path: `${artifactDir}/04-note-before-minimize.png` });
     }
-    await sidePanel.locator(".side-panel__minimize").click();
+    await sidePanel
+      .locator('[data-region-header="side"]')
+      .getByRole("button", { name: "Close", exact: true })
+      .click();
     await page.locator(".chat-thread").waitFor();
     await expect
       .poll(() => readBoardIdentity(page))
@@ -440,7 +446,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await expectRetainedBoardPresentation(page, "split");
     expect(await gateway.getRequests("board.update")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.patch")).toHaveLength(stablePatchCount);
-    expect(await gateway.getRequests("sessions.list")).toHaveLength(stableListCount);
+    expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(stableListCount);
     expect(await gateway.getRequests("board.get")).toHaveLength(stableCounts.boardGet);
     expect(await gateway.getRequests("board.widget.appView")).toHaveLength(stableCounts.appView);
     expect(await gateway.getRequests("mcp.app.view")).toHaveLength(stableCounts.mcpView);

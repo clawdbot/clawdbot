@@ -24,6 +24,7 @@ export {
 } from "./reply-run-registry.operation.js";
 export {
   abortActiveReplyRuns,
+  captureGatewayReplyRunRestartAbort,
   abortReplyRunBySessionId,
   clearReplyRunForResetBySessionId,
   expireStaleReplyRunBySessionId,

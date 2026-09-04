@@ -70,6 +70,7 @@ import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl 
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
+import { ensureSelectedAgentHarnessPlugin } from "./runtime-plugin.js";
 import {
   agentHarnessBuildsOpenClawTools,
   agentHarnessExposesOpenClawTools,
@@ -114,10 +115,6 @@ const contextEngineTurnAttemptMocks = vi.hoisted(() => ({
 const builtInHarnesses = vi.hoisted(() => new WeakSet<object>());
 const privateHarnessParamCases = [
   { field: "__openclawSourceReplyDeliveryRuntime", value: { currentMode: "automatic" } },
-  {
-    field: "codeModeRecovery",
-    value: { kind: "resume", blockedActionKeys: new Set<string>(), mutationAttempt: "available" },
-  },
   { field: "compactionCountOwner", value: "caller" },
   { field: "onContextAccountingEvent", value: () => undefined },
 ] as const;
@@ -1512,6 +1509,13 @@ describe("runAgentHarnessAttempt", () => {
       runtimeSource: "implicit",
     });
 
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      workspaceDir: "/tmp/workspace",
+      pluginRegistry: getActivePluginRegistry() ?? undefined,
+    });
+
     const result = await runAgentHarnessAttempt({
       ...createAttemptParams(),
       provider: "openai",
@@ -1560,15 +1564,9 @@ describe("runAgentHarnessAttempt", () => {
     );
 
     const params = createAttemptParams();
-    params.codeModeRecovery = {
-      kind: "resume",
-      blockedActionKeys: new Set(),
-      mutationAttempt: "available",
-    };
     const result = await runAgentHarnessAttempt(params);
 
     const classifyCall = classify.mock.calls.at(0);
-    expect(runAttempt.mock.calls[0]?.[0]).not.toHaveProperty("codeModeRecovery");
     expect(classifyCall?.[0].sessionIdUsed).toBe("codex");
     expect(classifyCall?.[1]).toEqual(
       expect.objectContaining({
@@ -1579,7 +1577,6 @@ describe("runAgentHarnessAttempt", () => {
       }),
     );
     expect(classifyCall?.[1]).not.toHaveProperty("admittedRunContext");
-    expect(classifyCall?.[1]).not.toHaveProperty("codeModeRecovery");
     expect(classifyCall?.[1]).not.toHaveProperty("operationalRunInstance");
     expect(result.agentHarnessId).toBe("codex");
     expect(result.agentHarnessResultClassification).toBe("empty");
@@ -3142,11 +3139,18 @@ describe("selectAgentHarness", () => {
 
   it.each(["default", "auto"] as const)(
     "falls back from configured %s to OpenClaw when implicit Codex is unavailable or unsupported",
-    (runtime) => {
+    async (runtime) => {
       const config = providerRuntimeConfig("openai", runtime);
       expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4", config })).toEqual(
         { runtime: "codex", runtimeSource: "implicit" },
       );
+      await ensureSelectedAgentHarnessPlugin({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        config,
+        workspaceDir: "/tmp/workspace",
+        pluginRegistry: getActivePluginRegistry() ?? undefined,
+      });
       expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4", config }).id).toBe(
         "openclaw",
       );

@@ -29,6 +29,7 @@ import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environ
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
+import { raiseGatewayReceiverPayloadLimit } from "./request-start.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
 import {
   dispatchWorkerRequest,
@@ -65,13 +66,6 @@ type WorkerWsMessageHandlerParams = {
   logWsControl: WorkerLogger;
   publicAdmission?: PublicWorkerIngressContext;
 };
-
-function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
-  const receiver = (socket as { _receiver?: unknown })["_receiver"];
-  if (receiver) {
-    (receiver as { _maxPayload?: number })["_maxPayload"] = maxPayload;
-  }
-}
 
 /** Dedicated ingress handler: worker frames never enter the generic message handler. */
 export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParams): () => void {
@@ -204,9 +198,23 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       rejectAdmission({ id, reason: admission.reason, opaqueOnPublicIngress: true });
       return;
     }
+    if (!raiseGatewayReceiverPayloadLimit(params.socket, workerMaxPayload(admission.identity))) {
+      // Worker frames may exceed the pre-auth cap; without a writable receiver
+      // limit they would close mid-frame later instead of failing visibly here.
+      rejectAdmission({
+        id,
+        reason: "gateway-unavailable",
+        internalReason: "unsupported-websocket-receiver",
+        error: workerProtocolError("gateway-unavailable", {
+          code: ErrorCodes.UNAVAILABLE,
+          message: "unsupported Gateway WebSocket receiver",
+        }),
+        code: 1011,
+      });
+      return;
+    }
     params.setHandshakeState("connected");
     params.advanceHandshakePhase("session_attached");
-    setSocketMaxPayload(params.socket, workerMaxPayload(admission.identity));
     params.advanceHandshakePhase("hello_payload_prepared");
     params.send({ type: "res", id, ok: true, payload: buildWorkerHello(admission.identity) });
     if (disposed || params.isClosed()) {

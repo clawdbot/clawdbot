@@ -127,6 +127,21 @@ describe("release closeout prepare gates", () => {
       name: "finalizes bare Unreleased",
       before: preamble + releaseSection("Unreleased") + history,
     },
+    {
+      name: "finalizes the matching draft",
+      before: preamble + releaseSection("2026.9.1 (Unreleased)") + history,
+    },
+    {
+      name: "finalizes an earlier correction draft",
+      version: "2026.9.1-10",
+      before: preamble + releaseSection("2026.9.1-2 (Unreleased)") + history,
+    },
+    {
+      name: "preserves a newer unreleased train while adding the shipped release",
+      before: preamble + releaseSection("2026.9.2 (Unreleased)") + history,
+      after:
+        preamble + releaseSection("2026.9.1") + releaseSection("2026.9.2 (Unreleased)") + history,
+    },
   ])("$name without an override and preserves tagged text", ({ name: _name, ...options }) => {
     const { result, repo, after } = runCloseout(options);
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -145,6 +160,18 @@ describe("release closeout prepare gates", () => {
     { name: "local-only tag", published: false },
     { name: "different section version", after: preamble + releaseSection("2026.9.2") + history },
     { name: "unreleased section", after: preamble + releaseSection("Unreleased") + history },
+    {
+      name: "replaces a newer unreleased train",
+      before: preamble + releaseSection("2026.9.2 (Unreleased)") + history,
+    },
+    {
+      name: "replaces a newer unreleased month",
+      before: preamble + releaseSection("2026.10.1 (Unreleased)") + history,
+    },
+    {
+      name: "replaces a newer unreleased correction",
+      before: preamble + releaseSection("2026.9.1-2 (Unreleased)") + history,
+    },
     {
       name: "edits older release",
       after: preamble + releaseSection("2026.9.1") + history.replace("Previous", "Changed"),

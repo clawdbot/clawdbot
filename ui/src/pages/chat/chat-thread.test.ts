@@ -7,6 +7,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
@@ -4498,6 +4499,133 @@ describe("buildCachedChatItems", () => {
     expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
   });
 
+  it("renders Gateway-embedded App previews once without removing assistant-only views", () => {
+    const first = mcpAppResult("mcp-app-first", "call-first", 1_001);
+    const second = mcpAppResult("mcp-app-second", "call-second", 1_002);
+    const groups = messageGroups({
+      messages: [
+        userMessage("Show both Apps", 1_000),
+        first,
+        second,
+        assistantMessage(
+          [
+            { type: "text", text: "Both Apps are ready." },
+            mcpAppCanvasBlock("mcp-app-first", "call-first"),
+            mcpAppCanvasBlock("mcp-app-second", "call-second"),
+            mcpAppCanvasBlock("mcp-app-assistant-only", "call-assistant-only"),
+          ],
+          1_003,
+        ),
+      ],
+      showToolCalls: false,
+    });
+
+    expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(3);
+    expect(
+      groups.flatMap((group) =>
+        group.messages.flatMap(({ message }) => normalizeMessage(message).content),
+      ),
+    ).toContainEqual({ type: "text", text: "Both Apps are ready." });
+  });
+
+  it.each([false, true])(
+    "renders the real widget history representations once (showToolCalls=%s)",
+    (showToolCalls) => {
+      const viewId = "cv_widget_history";
+      const groups = messageGroups({
+        messages: [
+          userMessage("Show a widget", 1_000),
+          toolResultMessage(
+            "call-widget",
+            "show_widget",
+            [{ type: "text", text: canvasToolOutput(viewId, "Widget", 320) }],
+            1_001,
+          ),
+          assistantMessage(
+            [
+              { type: "text", text: `[embed ref="${viewId}" title="Widget" /]\n\nReady.` },
+              {
+                type: "canvas",
+                preview: {
+                  kind: "canvas",
+                  surface: "assistant_message",
+                  render: "url",
+                  viewId,
+                  url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+                  sandbox: "scripts",
+                },
+              },
+            ],
+            1_002,
+          ),
+        ],
+        showToolCalls,
+      });
+
+      expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(1);
+    },
+  );
+
+  it("deduplicates a Gateway Canvas copy that matches only by URL", () => {
+    const viewId = "cv_url_match";
+    const result = toolResultMessage(
+      "call-url-match",
+      "show_widget",
+      canvasToolOutput(viewId, "URL match", 320),
+      1_001,
+    );
+    const gatewayCopy = {
+      type: "canvas",
+      preview: {
+        kind: "canvas",
+        surface: "assistant_message",
+        render: "url",
+        url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+      },
+    };
+    const groups = messageGroups({
+      messages: [
+        userMessage("Show the App", 1_000),
+        result,
+        assistantMessage([{ type: "text", text: "The App is ready." }, gatewayCopy], 1_002),
+      ],
+      showToolCalls: false,
+    });
+
+    expect(groups.flatMap((group) => canvasBlocksAcross(group))).toHaveLength(1);
+    expect(
+      groups.flatMap((group) =>
+        group.messages.flatMap(({ message }) => normalizeMessage(message).content),
+      ),
+    ).toContainEqual({ type: "text", text: "The App is ready." });
+  });
+
+  it("keeps an App preview row stable when live state becomes persisted history", () => {
+    const paneId = "canvas-live-to-history";
+    const liveGroups = messageGroups({
+      paneId,
+      messages: [userMessage("Show the App", 1_000)],
+      toolMessages: [mcpAppLiveResult("mcp-app-stable", "call-stable", 1_001)],
+      showToolCalls: false,
+    });
+    const liveCanvas = liveGroups.find((group) => canvasBlocksAcross(group).length > 0);
+
+    const persistedGroups = messageGroups({
+      paneId,
+      messages: [
+        userMessage("Show the App", 1_000),
+        mcpAppResult("mcp-app-stable", "call-stable", 1_001),
+      ],
+      toolMessages: [],
+      showToolCalls: false,
+    });
+    const persistedCanvas = persistedGroups.find((group) => canvasBlocksAcross(group).length > 0);
+
+    expect(liveCanvas).toBeDefined();
+    expect(persistedCanvas).toBeDefined();
+    expect(persistedCanvas?.key).toBe(liveCanvas?.key);
+  });
+
   it("deduplicates timestamp-less persisted and live copies in the same turn", () => {
     const persisted = {
       ...mcpAppResult("mcp-app-untimestamped", "call-untimestamped", 1_001),
@@ -5273,6 +5401,12 @@ function canvasBlocksIn(group: MessageGroup): unknown[] {
   return firstMessageContent(group).filter((block) => isCanvasBlock(block));
 }
 
+function canvasBlocksAcross(group: MessageGroup): unknown[] {
+  return group.messages.flatMap(({ message }) =>
+    normalizeMessage(message).content.filter(isCanvasBlock),
+  );
+}
+
 function isCanvasBlock(block: unknown): boolean {
   return (
     Boolean(block) &&
@@ -5294,6 +5428,28 @@ function createAssistantCanvasBlock(params: { suffix: string }) {
       title: "Inline demo",
       url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
       preferredHeight: 360,
+    },
+  };
+}
+
+function mcpAppCanvasBlock(viewId: string, toolCallId: string) {
+  return {
+    type: "canvas",
+    preview: {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId,
+      title: "Demo App",
+      url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+      sandbox: "scripts",
+      mcpApp: {
+        viewId,
+        serverName: "demo",
+        toolName: "show",
+        uiResourceUri: "ui://demo/app.html",
+        toolCallId,
+      },
     },
   };
 }

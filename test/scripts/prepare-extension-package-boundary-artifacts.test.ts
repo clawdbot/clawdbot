@@ -1,5 +1,5 @@
 // Prepare Extension Package Boundary Artifacts tests cover prepare extension package boundary artifacts script behavior.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { getEventListeners, once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
+import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   createPrefixedOutputWriter,
@@ -59,11 +60,29 @@ async function waitForFile(
 
 describe("prepare-extension-package-boundary-artifacts", () => {
   it.for(["package-boundary", "all"])(
-    "prunes only obsolete native declarations after success and repairs a failed partial emit (%s)",
+    "prepares cold worktrees, prunes obsolete declarations, and repairs failed partial emits (%s)",
     { timeout: 30_000 },
     (mode, { signal }) =>
       fixture.run(async () => {
-        const root = fs.realpathSync(createTempDir("native-preparer-"));
+        const primary = fs.realpathSync(createTempDir("native-preparer-"));
+        const root = path.join(primary, ".worktrees/cold");
+        const git = (...args: string[]) =>
+          execFileSync("git", ["-C", primary, ...args], { timeout: 10_000, stdio: "pipe" });
+        git("init", "-q");
+        git(
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "-qm",
+          "Synthetic fixture",
+          "--allow-empty",
+          "--no-verify",
+        );
+        git("worktree", "add", "-q", "--detach", root);
         const write = (file: string, text: string) => {
           signal.throwIfAborted();
           const target = path.join(root, file);
@@ -109,10 +128,11 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         ]) {
           copy(file);
         }
+        const modulesRoot = path.dirname(path.dirname(resolveRepoToolBinPath("tsgo")));
         for (const name of ["tsx", "typescript", "@typescript", "@openclaw/fs-safe", ".bin/tsgo"]) {
-          const target = path.join(root, "node_modules", name);
+          const target = path.join(primary, "node_modules", name);
           fs.mkdirSync(path.dirname(target), { recursive: true });
-          fs.symlinkSync(path.resolve("node_modules", name), target);
+          fs.symlinkSync(path.join(modulesRoot, name), target);
         }
         fs.symlinkSync(
           path.resolve("packages/normalization-core"),
@@ -124,8 +144,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           '{"name":"fixture-sdk","type":"module","types":"./dist/src/plugin-sdk/core.d.ts"}',
         );
         fs.symlinkSync(
-          "../packages/plugin-sdk",
-          path.join(root, "node_modules/fixture-sdk"),
+          path.join(root, "packages/plugin-sdk"),
+          path.join(primary, "node_modules/fixture-sdk"),
           "dir",
         );
         const plugins = mode === "all" ? BOUNDARY_PLUGIN_UNITS : [];
@@ -171,7 +191,12 @@ describe("prepare-extension-package-boundary-artifacts", () => {
             signal.removeEventListener("abort", abort);
           }
         };
+        // Imports resolve through the primary; preparation owns the worktree's dependency link.
+        expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
         await run();
+        expect(fs.realpathSync(path.join(root, "node_modules"))).toBe(
+          path.join(primary, "node_modules"),
+        );
         if (mode === "all") {
           const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
           if (!slackBoundaryEntry) {
@@ -233,8 +258,10 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         await run();
         expect(readArtifactRecord(recordPath)?.outputs).toEqual(repaired.outputs);
         const unchanged = fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs;
+        const unchangedRecord = fs.statSync(recordPath).mtimeMs;
         await run();
         expect(fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs).toBe(unchanged);
+        expect(fs.statSync(recordPath).mtimeMs).toBe(unchangedRecord);
       }),
   );
   it("prefixes each completed line and flushes the trailing partial line", () => {
