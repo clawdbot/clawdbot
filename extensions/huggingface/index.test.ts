@@ -1,7 +1,21 @@
 import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
-import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  buildManifestModelProviderConfig,
+  type ProviderCatalogContext,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+const bundledProvider = {
+  baseUrl: "https://router.huggingface.co/v1",
+  api: "openai-completions",
+  models: [
+    { id: "deepseek-ai/DeepSeek-R1", name: "DeepSeek R1", contextWindow: 131072 },
+    { id: "deepseek-ai/DeepSeek-V3.1", name: "DeepSeek V3.1" },
+    { id: "openai/gpt-oss-120b", name: "GPT-OSS 120B" },
+  ],
+};
 
 function registerProvider() {
   const register = vi.fn<NonNullable<TestPluginApiInput["registerProvider"]>>();
@@ -12,6 +26,15 @@ function registerProvider() {
 describe("huggingface plugin", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("exposes the bundled catalog to manifest-only model selection", () => {
+    expect(
+      buildManifestModelProviderConfig({
+        providerId: "huggingface",
+        catalog: manifest.modelCatalog.providers.huggingface,
+      }),
+    ).toMatchObject(bundledProvider);
   });
 
   it.each([
@@ -40,17 +63,7 @@ describe("huggingface plugin", () => {
     resolveProviderApiKey.mockClear();
     const result = await provider?.staticCatalog?.run(context);
 
-    expect(result).toMatchObject({
-      provider: {
-        baseUrl: "https://router.huggingface.co/v1",
-        api: "openai-completions",
-        models: [
-          { id: "deepseek-ai/DeepSeek-R1", name: "DeepSeek R1", contextWindow: 131072 },
-          { id: "deepseek-ai/DeepSeek-V3.1", name: "DeepSeek V3.1" },
-          { id: "openai/gpt-oss-120b", name: "GPT-OSS 120B" },
-        ],
-      },
-    });
+    expect(result).toMatchObject({ provider: bundledProvider });
     expect(result).not.toHaveProperty("provider.apiKey");
     expect(resolveProviderApiKey).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
