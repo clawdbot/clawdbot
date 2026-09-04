@@ -8,6 +8,10 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import {
+  configureNativeKeyTarget,
+  nativeControlNavigationCases,
+} from "./test-helpers/chat-scroll-input.ts";
 
 describe("chat pane keyboard focus", () => {
   it.each([
@@ -20,9 +24,15 @@ describe("chat pane keyboard focus", () => {
       false,
     ],
     ["transcript", "Home", html`<span>History</span>`, true],
+    ...nativeControlNavigationCases
+      .filter(([, key]) => key === "Home" || key === "PageUp")
+      .map(
+        ([name, key, content, controlOwned, fixture]) =>
+          [name, key, content, !controlOwned, fixture] as const,
+      ),
   ] as const)(
     "loads older history only when %s yields navigation",
-    async (_name, key, content, loadsHistory) => {
+    async (_name, key, content, loadsHistory, fixture = {}) => {
       vi.useFakeTimers();
       const request = vi.fn(async () => ({ messages: [], hasMore: false }));
       const { pane, state } = createTestChatPane({
@@ -34,11 +44,14 @@ describe("chat pane keyboard focus", () => {
       vi.stubGlobal("IntersectionObserver", undefined);
       const thread = document.createElement("div");
       render(content, thread);
+      const restorePlatform = configureNativeKeyTarget(thread.firstElementChild!, fixture);
       thread.addEventListener("keydown", (event) => pane.handleTranscriptHistoryIntent(event));
       try {
         thread.firstElementChild!.dispatchEvent(
           new KeyboardEvent("keydown", {
             key,
+            shiftKey: fixture.shiftKey,
+            ctrlKey: fixture.ctrlKey,
             bubbles: true,
             cancelable: true,
           }),
@@ -47,6 +60,7 @@ describe("chat pane keyboard focus", () => {
         expect(request).toHaveBeenCalledTimes(loadsHistory ? 1 : 0);
         expect(pane.historyAutoLoadBlocked).toBe(!loadsHistory);
       } finally {
+        restorePlatform();
         vi.unstubAllGlobals();
         vi.useRealTimers();
       }

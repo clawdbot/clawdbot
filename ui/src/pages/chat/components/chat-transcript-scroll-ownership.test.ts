@@ -5,6 +5,10 @@ import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import {
+  configureNativeKeyTarget,
+  nativeControlNavigationCases,
+} from "../test-helpers/chat-scroll-input.ts";
+import {
   installTranscriptDomMocks,
   mountTestTranscript,
   resetTranscriptTestDom,
@@ -55,9 +59,10 @@ describe("chat transcript scroll ownership", () => {
     ],
     ["transcript text", "PageUp", html`<span>History</span>`, false],
     ["readonly content", "End", html`<div contenteditable="false">History</div>`, false],
+    ...nativeControlNavigationCases,
   ] as const)(
     "resolves pending restoration ownership for %s",
-    async (command, key, content, preservesRestore) => {
+    async (command, key, content, preservesRestore, fixture = {}) => {
       const flushFrames = stubAnimationFrames();
       const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
         kind: "content",
@@ -86,6 +91,10 @@ describe("chat transcript scroll ownership", () => {
       if (key) {
         const target = container.appendChild(document.createElement("div"));
         render(content, target);
+        const restorePlatform = configureNativeKeyTarget(
+          expectDefined(target.firstElementChild, "native control"),
+          fixture,
+        );
         const keyboardTarget = expectDefined(
           target.querySelector("span") ?? target.firstElementChild,
           "keyboard target",
@@ -94,8 +103,16 @@ describe("chat transcript scroll ownership", () => {
           target.attachShadow({ mode: "open" }).append(keyboardTarget);
         }
         keyboardTarget.dispatchEvent(
-          new KeyboardEvent("keydown", { key, bubbles: true, composed: true, cancelable: true }),
+          new KeyboardEvent("keydown", {
+            key,
+            shiftKey: fixture.shiftKey,
+            ctrlKey: fixture.ctrlKey,
+            bubbles: true,
+            composed: true,
+            cancelable: true,
+          }),
         );
+        restorePlatform();
       } else if (["wheel", "downward wheel", "stationary wheel", "pointer"].includes(command)) {
         container.dispatchEvent(
           command === "pointer"
