@@ -24,11 +24,18 @@ struct ChatCodeBlockView: View {
 
     private var codeBody: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let language = self.block.language {
-                Text(language)
-                    .font(OpenClawChatTypography.caption2)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                if let language = self.block.language {
+                    Text(language).font(OpenClawChatTypography.caption2)
+                }
+                Spacer(minLength: 0)
+                // Always visible: with no language the control is the header's only content, so a
+                // hover-only reveal would leave an empty strip. Keep the header caption-height; the
+                // control's larger hit target overflows into the block padding.
+                ChatCopyButton(text: self.block.code, label: "Copy code")
+                    .frame(height: 20)
             }
+            .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(self.attributedCode)
                     .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))

@@ -45,6 +45,7 @@ type DraftGatewaySnapshot = Readonly<{
     recoveryScope: string;
   }>;
   agentsHydrated: boolean;
+  runtimeId: string;
 }>;
 
 type DraftGatewayCallbacks = {
@@ -113,9 +114,10 @@ export class DraftGatewayState {
           hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null),
           this.read().isAdmin,
           this.gatewayRecoveryScopeValue,
+          this.read().runtimeId,
         ] as const,
-      task: ([client, _connectionEpoch, canWrite, isAdmin]) =>
-        client ? discoverPlaceCatalog(client, canWrite, isAdmin) : initialState,
+      task: ([client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId]) =>
+        client ? discoverPlaceCatalog(client, canWrite, isAdmin, runtimeId) : initialState,
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();
         this.environmentsValue = placeCatalog.environments;
@@ -362,7 +364,7 @@ export class DraftGatewayState {
       this.catalogRetryingValue ||
       !this.gatewayConnectedValue ||
       (data?.group && context?.sessions.groupsStatus() === "loading") ||
-      !catalog.isRoutePending(data, context?.sessions)
+      (!data?.startTerminal && !catalog.isRoutePending(data, context?.sessions))
     ) {
       return;
     }

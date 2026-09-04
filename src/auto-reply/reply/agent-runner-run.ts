@@ -27,6 +27,7 @@ import {
   createShouldEmitToolResult,
   isAudioPayload,
 } from "./agent-runner-helpers.js";
+import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
@@ -51,7 +52,7 @@ import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import {
-  createFollowupRunToolAuthorityProjector,
+  prepareReplyToolAuthority,
   resolveFollowupRunToolAuthorityFingerprint,
 } from "./reply-tool-authority.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
@@ -209,6 +210,13 @@ export async function runReplyAgent(
     return undefined;
   }
 
+  const questionInput = await runReplyQuestionInput(params);
+  if (questionInput.handled) {
+    releaseAdmissionTicket();
+    typing.cleanup();
+    return questionInput.payload;
+  }
+
   const baseShouldEmitToolResult = createShouldEmitToolResult({
     sessionKey,
     storePath,
@@ -230,7 +238,8 @@ export async function runReplyAgent(
     if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
       return;
     }
-    const updatedAt = Date.now();
+    // Keep the in-memory snapshot aligned with the pending-reset write boundary.
+    const updatedAt = activeSessionEntry.updatedAt === 0 ? 0 : Date.now();
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
@@ -269,7 +278,7 @@ export async function runReplyAgent(
     messageInjectionDisposition === "none"
   ) {
     replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
-    await runActiveReplySteer({
+    const result = await runActiveReplySteer({
       followupRun,
       opts,
       providedReplyOperation,
@@ -289,7 +298,7 @@ export async function runReplyAgent(
         ? activeToolAuthorityFingerprint
         : undefined,
     });
-    return undefined;
+    return result === "handled" ? undefined : result;
   }
 
   const activeRunQueueAction = resolveActiveRunQueueAction({
@@ -507,10 +516,7 @@ export async function runReplyAgent(
       }
     }
   }
-  replyOperation.bindToolAuthorityProjector(createFollowupRunToolAuthorityProjector(followupRun));
-  replyOperation.bindToolAuthorityFingerprint(
-    resolveFollowupRunToolAuthorityFingerprint(followupRun),
-  );
+  replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
   bindReplyOperationTyping(replyOperation, typing);
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;

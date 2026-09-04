@@ -6,18 +6,15 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { probeClaudeCliAuthStatus } from "./cli-auth-seam.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_NATIVE_AUTH_MARKER } from "./cli-constants.js";
 
-const nativeLoginAvailabilityByConfig = new WeakMap<object, boolean>();
-
-export function resolveClaudeCliSyntheticAuth(config: object | undefined) {
+export async function prepareClaudeCliSyntheticAuth(
+  config: object | undefined,
+  params?: { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+) {
+  params?.signal?.throwIfAborted();
   if (!config) {
     return undefined;
   }
-  let available = nativeLoginAvailabilityByConfig.get(config);
-  if (available === undefined) {
-    available = probeClaudeCliAuthStatus().status === "available";
-    nativeLoginAvailabilityByConfig.set(config, available);
-  }
-  if (!available) {
+  if ((await probeClaudeCliAuthStatus(params)).status !== "available") {
     return undefined;
   }
   return {
@@ -32,8 +29,8 @@ const anthropicProviderDiscovery: ProviderPlugin = {
   label: "Claude CLI",
   docsPath: "/providers/models",
   auth: [],
-  resolveSyntheticAuth: ({ config, provider }) =>
-    provider === CLAUDE_CLI_BACKEND_ID ? resolveClaudeCliSyntheticAuth(config) : undefined,
+  prepareSyntheticAuth: ({ config, provider, ...params }) =>
+    prepareClaudeCliSyntheticAuth(provider === CLAUDE_CLI_BACKEND_ID ? config : undefined, params),
 };
 
 export default anthropicProviderDiscovery;

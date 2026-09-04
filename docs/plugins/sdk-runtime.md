@@ -55,6 +55,18 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
+Native command probes should use `runCommandWithTimeout` from
+`openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
+`killProcessTree: true`. Await its result so timeout or cancellation cleanup finishes
+before returning. For commands whose output is always UTF-8, such as JSON status
+probes, use `runUtf8CommandWithTimeout` from the same subpath.
+
+Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
+signaling or the bounded Windows `taskkill` attempt, not proof that every process
+exited. Keep the probe pending through cleanup, use `detached: true` only for a
+process group you created, and start Windows tree termination while its root is
+still alive.
+
 Channel plugins that deliver agent replies directly can call
 `renderPresentationForDelivery(handler, payload)` from
 `openclaw/plugin-sdk/interactive-runtime` at delivery, after modifying hooks. Supply
@@ -493,6 +505,41 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
   <Accordion title="api.runtime.subagent">
     Launch and manage background subagent runs.
 
+    For a tool-free completion that needs no retained session or reply delivery,
+    use `complete(...)`:
+
+    ```typescript
+    const { text } = await api.runtime.subagent.complete({
+      agentId: "research", // required configured agent that owns this work
+      message: "Summarize these notes.",
+      extraSystemPrompt: "Return a concise summary.", // optional
+      timeoutMs: 30_000, // optional; defaults to 30 seconds
+      // model: "openai/gpt-5.6-luna", // optional authorized override
+      // signal: abortController.signal, // optional cancellation
+    });
+    ```
+
+    `agentId` and `message` are required. `extraSystemPrompt`, `model`,
+    `timeoutMs`, and `signal` are optional. The selected agent supplies its
+    configured default model and credential owner when `model` is omitted.
+    The result is `{ text: string }`; no session creation, message polling,
+    deletion, or completion delivery is needed. The configured runtime must
+    support fresh, tool-free isolated inference; unsupported runtimes fail
+    before inference.
+
+    Completions use the [shared background queue](/concepts/queue#background-work),
+    with up to three runs per plugin within the three-run total budget.
+    Cancellation removes queued work immediately. Running work keeps its slot
+    until underlying runtime cleanup finishes, then rejects; late output is not
+    returned after cancellation, timeout, or runtime retirement. Calls require
+    a live Gateway binding and plugin identity. Request-scoped calls retain the
+    caller's operator scopes and agent access; completions started inside an
+    operator tool invocation are cancelled when that invocation ends.
+    Model overrides retain the
+    existing subagent authorization and `allowedModels` policy below.
+
+    Use `run(...)` when you need a session or an agent tool surface:
+
     ```typescript
     // Start a subagent run
     const { runId, sessionKey } = await api.runtime.subagent.run({
@@ -526,8 +573,12 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `waitForRun(...)` returns the canonical Gateway wait result. `status` is `"ok"`, `"error"`, `"timeout"`, or `"pending"`; pending is a normal nonterminal observation, not an exception. Optional `error`, `startedAt`, `endedAt`, `stopReason`, `livenessState`, `yielded`, `pendingError`, `timeoutPhase`, `providerStarted`, and `terminalReply` metadata is preserved so callers can distinguish observation timeouts from terminal outcomes. `timeoutMs` bounds the wait call; it does not cancel the run.
 
     <Warning>
-    Model overrides (`provider`/`model`) require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Untrusted plugins can still run subagents, but override requests are rejected.
+    Outside an authorized Gateway request, model overrides require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Plugins without that opt-in can use the configured model, but override requests are rejected.
     </Warning>
+
+    `plugins.entries.<id>.subagent.allowedModels` can restrict overrides to
+    canonical `provider/model` targets. The same policy applies to `complete`;
+    request-scoped calls retain their authenticated client's override authority.
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
 
@@ -1106,6 +1157,8 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     Use `saveRemoteMedia(...)` when a remote URL should become OpenClaw media. Use `saveResponseMedia(...)` when the plugin already fetched a `Response` with plugin-owned auth, redirect, or allowlist handling. Use `readRemoteMediaBuffer(...)` only when the plugin needs raw bytes for inspection, transforms, decryption, or reupload. `fetchRemoteMedia(...)` remains a deprecated compatibility alias for `readRemoteMediaBuffer(...)`.
 
     Remote media options and `fetchWithSsrFGuard(...)` from `openclaw/plugin-sdk/ssrf-runtime` accept a synchronous `beforeRequest` callback for final-dispatch authorization checks. It runs after proxy, DNS, and dispatcher preparation and immediately before every physical request. Redirects invoke it once per hop; media retries invoke it again for every attempt and hop. If it throws, that request is not sent and the same error propagates. Promise or thenable results are rejected before transport dispatch.
+
+    Guarded fetch also accepts a synchronous `resolveDispatcherPolicy(url)` override, reevaluated for each redirect. An undefined result uses `dispatcherPolicy`, or direct routing when no default policy is supplied. Providers preserving operator-configured proxy routing can use `resolveEnvHttpProxyAgentOptions` and `matchesNoProxy` from `openclaw/plugin-sdk/fetch-runtime` to select each hop. The `trusted_explicit_proxy` mode permits HTTP, HTTPS, `socks:` and `socks5:` proxy URLs and delegates target DNS to the explicitly trusted proxy; proxy-host validation and target-host policy still apply. Direct hops keep DNS pinning. Strict mode rejects SOCKS proxies, and the separate trusted-env-proxy gate remains HTTP(S)-only.
 
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 

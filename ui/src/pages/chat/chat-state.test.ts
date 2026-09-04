@@ -3702,13 +3702,24 @@ describe("refreshChatMetadata", () => {
   it.each(["metadata", "picker"] as const)(
     "fences a late %s result across same-client reconnect",
     async (kind) => {
-      const old = createDeferred<{ commands: never[]; models: typeof state.chatModelCatalog }>();
+      const old = createDeferred<{
+        commands: never[];
+        models: typeof state.chatModelCatalog;
+        accountSelection: NonNullable<ChatPageHost["chatAccountSelection"]>;
+      }>();
       const ready = { id: "model", name: "Model", provider: "test", available: true };
+      const accountSelection: NonNullable<ChatPageHost["chatAccountSelection"]> = {
+        kind: "personal",
+        label: "Current owner's account",
+        authProfileId: "test:current",
+        source: "user",
+      };
       const request = vi
         .fn()
         .mockReturnValueOnce(old.promise)
-        .mockResolvedValue({ commands: [], models: [ready] });
+        .mockResolvedValue({ commands: [], models: [ready], accountSelection });
       const state = createMetadataState(request);
+      state.chatAccountSelection = { kind: "automatic", label: "Automatic account selection" };
       const pending =
         kind === "picker" ? refreshChatModelCatalogOnDemand(state) : refreshChatMetadata(state);
       state.connected = false;
@@ -3716,15 +3727,22 @@ describe("refreshChatMetadata", () => {
       invalidateModelCatalogCache(state.client!);
       invalidateChatMetadataStore(state.client!);
       expect(state.chatModelCatalog).toEqual([]);
+      expect(state.chatAccountSelection).toBeNull();
       state.connectionEpoch += 1;
       state.connected = true;
       await refreshChatMetadata(state);
       old.resolve({
         commands: [],
         models: [{ ...ready, available: false, unavailableReason: "missing-auth" }],
+        accountSelection: {
+          kind: "shared",
+          label: "Old connection's account",
+          authProfileId: "test:old",
+        },
       });
       await pending;
       expect(state.chatModelCatalog).toEqual([ready]);
+      expect(state.chatAccountSelection).toEqual(accountSelection);
       expect(state.chatModelCatalogError).toBeNull();
       retireChatMetadataRequests(state);
     },

@@ -27,24 +27,26 @@ export function renderSkillWorkshopProposalList(
         />
       </div>
       <div class="sw-queue__body">
-        ${total === 0
-          ? html`<div class="sw-queue__empty">${emptyText}</div>`
-          : groups.map(
-              (group) => html`
-                <div class="sw-queue__group">
-                  ${t(group.label)}
-                  <span class="settings-count">${group.items.length}</span>
-                </div>
-                ${group.items.map((proposal) =>
-                  renderProposalRow(
-                    props,
-                    proposal,
-                    selected,
-                    appliedSkillsBySlug.get(proposal.slug),
-                  ),
-                )}
-              `,
-            )}
+        ${
+          total === 0
+            ? html`<div class="sw-queue__empty">${emptyText}</div>`
+            : groups.map(
+                (group) => html`
+                  <div class="sw-queue__group">
+                    ${t(group.label)}
+                    <span class="settings-count">${group.items.length}</span>
+                  </div>
+                  ${group.items.map((proposal) =>
+                    renderProposalRow(
+                      props,
+                      proposal,
+                      selected,
+                      appliedSkillsBySlug.get(proposal.slug),
+                    ),
+                  )}
+                `,
+              )
+        }
       </div>
     </aside>
   `;
@@ -76,16 +78,18 @@ function renderProposalRow(
         <span class="sw-row__title">${appliedSkill?.slug ?? proposal.name}</span>
         <span class="sw-row__desc">${latest.oneLine}</span>
       </span>
-      ${appliedSkill
-        ? html`
-            <span class="sw-row__meta sw-row__meta--applied">
-              <span class="sw-row__revision-count">
-                ${t(revisionCountKey, { count: String(appliedSkill.revisions.length) })}
+      ${
+        appliedSkill
+          ? html`
+              <span class="sw-row__meta sw-row__meta--applied">
+                <span class="sw-row__revision-count">
+                  ${t(revisionCountKey, { count: String(appliedSkill.revisions.length) })}
+                </span>
+                <span>${latest.ageLabel}</span>
               </span>
-              <span>${latest.ageLabel}</span>
-            </span>
-          `
-        : html`<span class="sw-row__meta">${proposal.ageLabel}</span>`}
+            `
+          : html`<span class="sw-row__meta">${proposal.ageLabel}</span>`
+      }
     </button>
   `;
 }

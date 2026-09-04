@@ -662,13 +662,6 @@ export const resolveBuildRequirement = (deps: RunNodeRequirementDeps): BuildRequ
     return { shouldBuild: true, reason: "missing_dist_entry" };
   }
 
-  for (const filePath of deps.configFiles) {
-    const mtime = statMtime(filePath, deps.fs);
-    if (mtime != null && mtime > stamp.mtime) {
-      return { shouldBuild: true, reason: "config_newer" };
-    }
-  }
-
   const currentHead = resolveGitHead(deps);
   if (currentHead && !stamp.head) {
     return { shouldBuild: true, reason: "build_stamp_missing_head" };
@@ -686,6 +679,13 @@ export const resolveBuildRequirement = (deps: RunNodeRequirementDeps): BuildRequ
         return { shouldBuild: true, reason: "missing_bundled_plugin_dist_entry" };
       }
       return { shouldBuild: false, reason: "clean" };
+    }
+  }
+
+  for (const filePath of deps.configFiles) {
+    const mtime = statMtime(filePath, deps.fs);
+    if (mtime != null && mtime > stamp.mtime) {
+      return { shouldBuild: true, reason: "config_newer" };
     }
   }
 

@@ -1,4 +1,5 @@
 import Foundation
+@testable import OpenClaw
 @testable import OpenClawKit
 
 extension WebSocketTasking {
@@ -63,11 +64,13 @@ enum GatewayWebSocketTestSupport {
         id: String,
         tickIntervalMs: Int = 30000,
         deviceToken: String? = nil,
+        mainSessionKey: String? = nil,
         canvasPluginSurfaceURL: String? = nil,
         methods: [String] = [],
         capabilities: [String] = []) -> Data
     {
         let deviceTokenField = deviceToken.map { #", "deviceToken": "\#($0)""# } ?? ""
+        let sessionDefaultsField = mainSessionKey.map { #", "sessionDefaults": {"mainSessionKey": "\#($0)"}"# } ?? ""
         let pluginSurfaceField = canvasPluginSurfaceURL.map {
             #", "pluginSurfaceUrls": { "canvas": "\#($0)" }"#
         } ?? ""
@@ -91,7 +94,7 @@ enum GatewayWebSocketTestSupport {
               "presence": [ { "ts": 1 } ],
               "health": {},
               "stateVersion": { "presence": 0, "health": 0 },
-              "uptimeMs": 0
+              "uptimeMs": 0\(sessionDefaultsField)
             },
             "auth": { "role": "operator", "scopes": []\(deviceTokenField) },
             "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": \(tickIntervalMs) }
@@ -141,6 +144,13 @@ enum GatewayWebSocketTestSupport {
             return nil
         }
         return obj["id"] as? String
+    }
+
+    static func requestMethod(from message: URLSessionWebSocketTask.Message) -> String? {
+        guard let obj = requestFrameObject(from: message), (obj["type"] as? String) == "req" else {
+            return nil
+        }
+        return obj["method"] as? String
     }
 
     private static func requestFrameObject(from message: URLSessionWebSocketTask.Message) -> [String: Any]? {
@@ -193,6 +203,7 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private var connectRequestID: String?
     private var sendCount = 0
     private var receiveCount = 0
+    private var callbackReceiveCount = 0
     private var cancelCount = 0
     private var pendingReceiveHandler: (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
 
@@ -216,6 +227,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     func snapshotSendCount() -> Int {
         self.lock.withLock { self.sendCount }
+    }
+
+    func snapshotCallbackReceiveCount() -> Int {
+        self.lock.withLock { self.callbackReceiveCount }
     }
 
     func resume() {
@@ -267,7 +282,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     func receive(
         completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
     {
-        self.lock.withLock { self.pendingReceiveHandler = completionHandler }
+        self.lock.withLock {
+            self.callbackReceiveCount += 1
+            self.pendingReceiveHandler = completionHandler
+        }
     }
 
     func emitReceiveSuccess(_ message: URLSessionWebSocketTask.Message) {

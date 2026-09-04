@@ -192,9 +192,9 @@ export function extractToolResultText(
     const text = (
       options?.includeStructured ? [...explicitTexts, ...structuredTexts] : explicitTexts
     ).join("\n");
-    return sanitizeSurrogates(options?.includeStructured ? truncateProviderToolText(text) : text);
+    return options?.includeStructured ? truncateProviderToolText(text) : text;
   }
-  return sanitizeSurrogates(truncateProviderToolText(structuredTexts.join("\n")));
+  return truncateProviderToolText(structuredTexts.join("\n"));
 }
 
 type ToolResultMediaSupport = { images: boolean; audio: boolean };

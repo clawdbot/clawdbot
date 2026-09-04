@@ -103,7 +103,7 @@ describe("delivery queue SQLite dispatch ownership", () => {
       }
       const claimed = { ...params, claimId };
       expect(dispatchDeliveryQueueEntryPlatformSend(claimed)).toBe(true);
-      vi.advanceTimersByTime(30_001);
+      vi.advanceTimersByTime(60_001);
       expect(
         reserveDeliveryQueueEntryAttempt({
           ...params,
@@ -147,7 +147,7 @@ describe("delivery queue SQLite dispatch ownership", () => {
       if (!expiredClaimId) {
         throw new Error("test invariant: the first producer claim must be available");
       }
-      vi.advanceTimersByTime(30_001);
+      vi.advanceTimersByTime(60_001);
       expect(
         dispatchDeliveryQueueEntryPlatformSend({
           queueName,
@@ -183,11 +183,11 @@ describe("delivery queue SQLite dispatch ownership", () => {
         platformSendAttemptId: claimId,
         platformSendStartedAt: Date.now(),
         effectiveReplyToId: "thread-1",
-        availableAt: Date.now() + 30_000,
+        availableAt: Date.now() + 60_000,
       });
       expect(loadDeliveryQueueEntry(queueName, id, stateDir)?.producerClaimId).toBeUndefined();
 
-      vi.advanceTimersByTime(30_001);
+      vi.advanceTimersByTime(60_001);
       expect(dispatchDeliveryQueueEntryPlatformSend({ queueName, id, claimId, stateDir })).toBe(
         false,
       );

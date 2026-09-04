@@ -387,7 +387,7 @@ openclaw plugins list --json
 </ParamField>
 
 <Note>
-`plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It is useful for checking whether a plugin is installed, enabled, and visible to cold startup planning, but it is not a live runtime probe of an already-running Gateway process. After changing plugin code, enablement, hook policy, or `plugins.load.paths`, restart the Gateway that serves the channel before expecting new `register(api)` code or hooks to run. For remote/container deployments, verify you are restarting the actual `openclaw gateway run` child, not only a wrapper process.
+`plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It is useful for checking whether a plugin is installed, enabled, and visible to cold startup planning, but it is not a live runtime probe of an already-running Gateway process. After changing plugin code or `plugins.load.paths`, restart the Gateway that serves the channel before expecting new `register(api)` code or hooks to run. With the default hybrid reload mode, enablement and hook policy changes hot-reload the existing plugin runtime unless the plugin declares a restart-triggering prefix. For remote/container deployments, verify you are restarting the actual `openclaw gateway run` child, not only a wrapper process.
 
 `plugins list --json` includes each plugin's `dependencyStatus` from `package.json`
 `dependencies` and `optionalDependencies`. OpenClaw checks whether those package
@@ -469,9 +469,11 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
     The narrow exception is a trusted official package completing a catalog-declared plugin id replacement. That update starts from the catalog package selector so the renamed manifest can replace the legacy id.
 
-    During `update <id> --dry-run`, exact pinned npm installs stay pinned. If OpenClaw can also resolve the package's registry default line and that default line is newer than the installed pinned version, the dry run reports the pin and prints the explicit `@latest` package update command to follow the registry default line.
+    Exact pinned npm installs stay pinned during targeted and bulk updates, including dry runs. If OpenClaw can resolve a newer release on the package's registry default line, it reports the pin and prints an explicit package update command to replace it. Official plugins still follow the configured core-channel compatibility policy after the selector changes.
 
     Bulk `openclaw plugins update --all` also preserves ordinary exact pins and explicit tags. Floating trusted official records follow the current registry-channel policy. Doctor separately refreshes stale official runtime plugins bound to the current OpenClaw release cohort, keeping the recorded registry and recording an exact replacement version when the previous npm record was pinned.
+
+    Older official-plugin syncs could record an exact version automatically. That record is indistinguishable from an intentional user pin, so OpenClaw reports newer releases without silently unpinning it. Use the printed package command when you want to change the recorded selector.
 
     For npm installs, you can also pass an explicit npm package spec with a dist-tag or exact version. OpenClaw resolves that package name back to the tracked plugin record, updates that installed plugin, and records the new npm spec for future id-based updates.
 
@@ -529,6 +531,8 @@ See [Plugin shapes](/plugins/architecture#plugin-shapes) for more on the capabil
 
 <Note>
 The `--json` flag outputs a machine-readable report suitable for scripting and auditing. `inspect --all` renders a fleet-wide table with shape, capability kinds, compatibility notices, bundle capabilities, and hook summary columns. `info` is an alias for `inspect`.
+
+Global discovery diagnostics go to stderr, including with `--json`. This explains partial inventory when workspace discovery has no selected system owner, even when no plugins are found. Plugin-specific diagnostics stay in each report. Policy fields use the same case-insensitive plugin ID matching as runtime configuration; the reported plugin ID retains its declared spelling.
 </Note>
 
 ## Doctor

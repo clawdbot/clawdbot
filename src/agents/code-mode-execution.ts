@@ -79,7 +79,7 @@ export async function runCodeModeExec(params: {
   });
   params.onRuntime?.(runtime);
   const bridgeDispatch = createCodeModeBridgeDispatchState();
-  const deadlineMs = Date.now() + config.timeoutMs;
+  const deadlineMs = performance.now() + config.timeoutMs;
   const namespaceCatalog = runtime.namespaceEntries();
   const swarmEnabled = resolveSwarmConfig(
     params.ctx.runtimeConfig ?? params.ctx.config,
@@ -101,7 +101,7 @@ export async function runCodeModeExec(params: {
   const signal = owner.bindCall(params.signal);
   const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);
   try {
-    const remainingMs = deadlineMs - Date.now();
+    const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
       throw new Error("interrupted");
     }
@@ -170,7 +170,7 @@ function usableResumeBudgetMs(deadlineMs: number, config: CodeModeConfig): numbe
   // resuming with less than this floor converts an otherwise successful run
   // into an immediate interrupt timeout, so callers park the snapshot instead.
   const minimum = Math.min(250, Math.max(1, Math.floor(config.timeoutMs / 2)));
-  const remaining = deadlineMs - Date.now();
+  const remaining = deadlineMs - performance.now();
   return remaining >= minimum ? remaining : undefined;
 }
 
@@ -202,16 +202,16 @@ async function waitForPending(
       bridgeReady,
       new Promise<boolean>((resolve) => {
         let remainingMs = timeoutMs;
-        let resumedAtMs = Date.now();
+        let resumedAtMs = performance.now();
         const arm = () => {
-          resumedAtMs = Date.now();
+          resumedAtMs = performance.now();
           timer = setTimeout(() => resolve(false), Math.max(1, remainingMs));
         };
         approvalWait.onChange = (approvalPending) => {
           if (approvalPending) {
             // Preserve the unused guest budget while its owning approval remains inline.
             clearTimeout(timer);
-            remainingMs = Math.max(1, remainingMs - (Date.now() - resumedAtMs));
+            remainingMs = Math.max(1, remainingMs - (performance.now() - resumedAtMs));
           } else {
             arm();
           }
@@ -267,7 +267,7 @@ async function settleCodeModeResult(params: {
   }
   const activeRunId = params.owner.runId;
   const output = params.output;
-  // One exec/wait call shares a single wall-clock deadline across its initial
+  // One exec/wait call shares a single monotonic deadline across its initial
   // worker run and this inline settle phase, so auto-draining bridge calls
   // cannot stack a second full `timeoutMs` budget on top of the run that
   // produced them. The deadline is also the only bound on sequential drain
@@ -296,7 +296,7 @@ async function settleCodeModeResult(params: {
     ) {
       break;
     }
-    const remainingMs = settleDeadline() - Date.now();
+    const remainingMs = settleDeadline() - performance.now();
     if (remainingMs <= 0) {
       break;
     }
@@ -314,15 +314,14 @@ async function settleCodeModeResult(params: {
         (request) => !pendingIds.has(request.id),
       );
       pending.push(
-        ...createPendingBridgeStates({
-          pendingRequests: newPendingRequests,
+        ...createPendingBridgeStates(newPendingRequests, {
           config: params.config,
           runtime: params.runtime,
           catalogProjection: params.catalogProjection,
           namespaceRuntime: params.namespaceRuntime,
           parentToolCallId: params.parentToolCallId,
           codeModeRunId: params.codeModeReplayId,
-          remainingMs: settleDeadline() - Date.now(),
+          remainingMs: settleDeadline() - performance.now(),
           activeRunId,
           ctx: params.ctx,
           signal: params.signal,
@@ -442,15 +441,14 @@ async function settleCodeModeResult(params: {
         (request) => !pendingIds.has(request.id),
       );
       pending.push(
-        ...createPendingBridgeStates({
-          pendingRequests: newPendingRequests,
+        ...createPendingBridgeStates(newPendingRequests, {
           config: params.config,
           runtime: params.runtime,
           catalogProjection: params.catalogProjection,
           namespaceRuntime: params.namespaceRuntime,
           parentToolCallId: params.parentToolCallId,
           codeModeRunId: params.codeModeReplayId,
-          remainingMs: settleDeadline() - Date.now(),
+          remainingMs: settleDeadline() - performance.now(),
           activeRunId,
           ctx: params.ctx,
           signal: params.signal,
@@ -535,9 +533,9 @@ export async function runWait(params: {
   }
   params.onRuntime?.(state.runtime);
   resumingRunIds.add(state.runId);
-  // One wait call shares a single wall-clock deadline across draining the prior
+  // One wait call shares a single monotonic deadline across draining the prior
   // pending calls, the resume worker, and the inline settle phase.
-  const deadlineMs = Date.now() + state.config.timeoutMs;
+  const deadlineMs = performance.now() + state.config.timeoutMs;
   const approvalWait = observeAgentRunApprovalWait(state.ctx);
   const signal = state.owner.bindCall(
     params.ctx.abortSignal && params.signal
@@ -549,7 +547,7 @@ export async function runWait(params: {
     const ready = await waitForPending(
       state.pending,
       state.settlementMode,
-      Math.max(1, deadlineMs - Date.now()),
+      Math.max(1, deadlineMs - performance.now()),
       approvalWait,
       signal,
     );

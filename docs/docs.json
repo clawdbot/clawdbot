@@ -2160,6 +2160,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.1",
                   "releases/2026.8.2",
                   "releases/2026.8.1",
                   "releases/2026.7.1",

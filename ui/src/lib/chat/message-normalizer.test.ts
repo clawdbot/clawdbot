@@ -568,6 +568,18 @@ describe("message-normalizer", () => {
               width: value,
               height: value,
             },
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                url: "/media/document",
+                label: "Document",
+                sizeBytes: value,
+                durationMs: value,
+                width: value,
+                height: value,
+              },
+            },
           ],
         });
         expect(result.content).toEqual([
@@ -582,6 +594,10 @@ describe("message-normalizer", () => {
             rawText: null,
           },
           { type: "attachment", attachment: { kind: "video", url: "/media/clip", label: "Video" } },
+          {
+            type: "attachment",
+            attachment: { kind: "document", url: "/media/document", label: "Document" },
+          },
         ]);
       },
     );

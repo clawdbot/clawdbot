@@ -78,6 +78,7 @@ describe("renderPanelTabStrip", () => {
     const container = renderStrip({ tabs: [TAB], onClose });
     const closeButton = container.querySelector<HTMLButtonElement>(".tabstrip-tab__close");
 
+    expect(closeButton?.hasAttribute("title")).toBe(false);
     expect(closeButton?.getAttribute("aria-label")).toBe(TAB.closeLabel);
     closeButton?.click();
     expect(onClose).toHaveBeenCalledWith(TAB.id);

@@ -97,6 +97,7 @@ describe("Talk relay audio base64", () => {
     const sendAudio = vi.fn<(audio: Buffer) => void>();
     const { context: relayContext, events } = context();
     const session = createTalkRealtimeRelaySession({
+      controlSource: "transcript",
       context: relayContext,
       connId: "conn",
       provider: voiceProvider(sendAudio),
@@ -123,6 +124,7 @@ describe("Talk relay audio base64", () => {
     const sendAudio = vi.fn<(audio: Buffer) => void>();
     const { context: relayContext, events } = context();
     const session = createTalkRealtimeRelaySession({
+      controlSource: "transcript",
       context: relayContext,
       connId: "conn",
       provider: voiceProvider(sendAudio),

@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { gte as semverGte, valid as validSemver } from "semver";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
@@ -169,8 +169,12 @@ function withTarball(
     // against restrictive host umasks the way the packer normalizes artifacts.
     chmodTreeWorldReadable(packageRoot);
 
-    const tarball = join(root, "openclaw.tgz");
-    const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package"], {
+    const tarball = join(
+      root,
+      process.platform === "win32" ? "openclaw.tgz" : "openclaw:local.tgz",
+    );
+    const pack = spawnSync("tar", ["-czf", `./${basename(tarball)}`, "package"], {
+      cwd: root,
       encoding: "utf8",
     });
     expect(pack.status, pack.stderr).toBe(0);
@@ -261,6 +265,32 @@ describe("check-openclaw-package-tarball", () => {
     expect(extra.stderr).not.toContain("OpenClaw package tarball does not exist");
   });
 
+  it.skipIf(process.platform === "win32").each(["missing", "relative", "empty"])(
+    "validates packages without executing archive-neighbor gzip (%s PATH)",
+    (pathKind) => {
+      withTarball(["dist/index.js"], { "dist/index.js": "export {};\n" }, (tarball) => {
+        const callerDir = join(dirname(tarball), "caller");
+        const pathEntry = pathKind === "relative" ? "bin" : "";
+        const archiveGzip = join(dirname(tarball), pathEntry, "gzip");
+        mkdirSync(callerDir);
+        mkdirSync(dirname(archiveGzip), { recursive: true });
+        // GNU tar looks up gzip through PATH; an archive must not become that lookup's cwd.
+        writeFileSync(archiveGzip, '#!/bin/sh\n: > "$0.executed"\nexit 73\n', { mode: 0o755 });
+        const result = spawnSync(process.execPath, [resolve(CHECK_SCRIPT), tarball], {
+          cwd: callerDir,
+          encoding: "utf8",
+          env:
+            pathKind === "missing"
+              ? {}
+              : { ...process.env, PATH: `${pathEntry}${delimiter}${process.env.PATH ?? ""}` },
+        });
+        expect.soft(existsSync(`${archiveGzip}.executed`)).toBe(false);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      });
+    },
+  );
+
   it.skipIf(process.platform === "win32")("rejects owner-only tar entry modes", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-modes-"));
     try {
@@ -274,7 +304,8 @@ describe("check-openclaw-package-tarball", () => {
       chmodTreeWorldReadable(packageRoot);
       chmodSync(join(packageRoot, "dist", "index.js"), 0o600);
       const tarball = join(root, "openclaw.tgz");
-      const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package"], {
+      const pack = spawnSync("tar", ["-czf", `./${basename(tarball)}`, "package"], {
+        cwd: root,
         encoding: "utf8",
       });
       expect(pack.status, pack.stderr).toBe(0);
@@ -303,7 +334,8 @@ describe("check-openclaw-package-tarball", () => {
       ["dist/index.js"],
       { "dist/index.js": "export {};\n", ...largeEntryList },
       (tarball) => {
-        const listing = spawnSync("tar", ["-tf", tarball], {
+        const listing = spawnSync("tar", ["-tf", `./${basename(tarball)}`], {
+          cwd: dirname(tarball),
           encoding: "utf8",
           maxBuffer: NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES * 2,
         });
@@ -312,7 +344,10 @@ describe("check-openclaw-package-tarball", () => {
           NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES,
         );
 
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+        const result = spawnSync("node", [resolve(CHECK_SCRIPT), basename(tarball)], {
+          cwd: dirname(tarball),
+          encoding: "utf8",
+        });
 
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
@@ -321,7 +356,7 @@ describe("check-openclaw-package-tarball", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "removes the extract dir when tar extraction fails",
+    "resolves caller-relative tar and removes the extract dir when extraction fails",
     () => {
       const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-extract-fail-"));
       try {
@@ -335,9 +370,9 @@ describe("check-openclaw-package-tarball", () => {
             "#!/usr/bin/env node",
             "const fs = require('node:fs');",
             "const args = process.argv.slice(2);",
-            "if (args[0] === '-tf') { console.log('package/package.json'); process.exit(0); }",
-            "if (args[0] === '-tvf') { console.log('-rw-r--r-- 0/0 0 2026-08-29 package/package.json'); process.exit(0); }",
-            "if (args[0] !== '-xf') { throw new Error('unexpected tar operation'); }",
+            "if (args[0].includes('v')) { console.log('-rw-r--r-- 0/0 0 2026-08-29 package/package.json'); process.exit(0); }",
+            "if (args[0].includes('t')) { console.log('package/package.json'); process.exit(0); }",
+            "if (!args[0].includes('x')) { throw new Error('unexpected tar operation'); }",
             "const outputDir = args[args.indexOf('-C') + 1];",
             "if (!fs.statSync(outputDir).isDirectory()) { throw new Error('missing extract dir'); }",
             "fs.writeFileSync(process.env.OPENCLAW_TEST_EXTRACT_DIR_FILE, outputDir);",
@@ -354,13 +389,13 @@ describe("check-openclaw-package-tarball", () => {
           env: {
             ...process.env,
             OPENCLAW_TEST_EXTRACT_DIR_FILE: extractDirFile,
-            PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ""}`,
+            PATH: `${relative(process.cwd(), fakeBin)}${delimiter}${process.env.PATH ?? ""}`,
           },
         });
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain("extract denied");
-        expect(result.stderr).toContain("tar -xf failed");
+        expect(result.stderr).toMatch(/tar -x(?:z)?f failed/u);
         const extractDir = readFileSync(extractDirFile, "utf8");
         expect(isAbsolute(extractDir)).toBe(true);
         expect(existsSync(extractDir)).toBe(false);

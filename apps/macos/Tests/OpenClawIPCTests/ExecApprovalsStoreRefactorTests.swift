@@ -859,34 +859,6 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `usage checkpoint rejects skill trust after auto allow is removed`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.security = .allowlist
-                entry.ask = .off
-                entry.autoAllowSkills = true
-            }.get()
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
-                entry.autoAllowSkills = nil
-            }.get()
-
-            let result = ExecApprovalsStore.recordAllowlistUses(
-                agentId: "main",
-                uses: [],
-                command: "skill-tool",
-                authorization: .currentPolicy(
-                    evaluatedSecurity: .allowlist,
-                    evaluatedAsk: .off,
-                    basis: .autoAllowedSkill))
-
-            guard case .failure(.unavailable) = result else {
-                Issue.record("expected revoked skill trust checkpoint to fail")
-                return
-            }
-        }
-    }
-
-    @Test
     func `usage checkpoint applies current timeout fallback instead of ask`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in

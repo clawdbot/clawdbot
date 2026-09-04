@@ -33,7 +33,7 @@ type ClearChatViewOwner = {
 
 type RewindChatHistoryState = ChatState &
   Parameters<typeof scheduleChatScroll>[0] & {
-    handleChatDraftChange: (next: string) => void;
+    handleChatDraftChange: (next: string, mentions?: ChatState["chatMentions"]) => void;
     sessions: Pick<SessionCapability, "rewind">;
   };
 
@@ -233,6 +233,7 @@ export async function rewindChatHistory(
       persistChatComposerState(state, sessionKey, {
         agentId: agentParams.agentId,
         draft: editorText,
+        mentions: [],
       });
     }
     if (!viewMatches()) {
@@ -249,7 +250,7 @@ export async function rewindChatHistory(
       state.chatAttachments,
       result.editorAttachments,
     );
-    state.handleChatDraftChange(editorText);
+    state.handleChatDraftChange(editorText, []);
     return result;
   } catch (error) {
     if (viewIsCurrent()) {

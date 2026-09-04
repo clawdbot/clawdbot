@@ -139,7 +139,6 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         this.config.onError?.(new Error(readXaiRealtimeErrorDetail(event.error)));
         return;
       case "response.done": {
-        const status = event.response?.status;
         const output = Array.isArray(event.response?.output)
           ? event.response.output.filter(isRecord)
           : [];
@@ -157,11 +156,14 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           }
         };
         try {
-          invoke(() => this.config.onResponseDone?.(outcome));
-          invoke(emitBridgeEvent);
+          // Deliver output before completion retires its response owner. Tool callbacks
+          // may close the connection, so remaining output must recheck that owner.
           invoke(() => {
-            if (status === "completed") {
+            if (outcome.status === "completed") {
               for (const [itemId, toolCall] of this.toolCallBuffers) {
+                if (!this.acceptsEvent(connection)) {
+                  return;
+                }
                 this.emitToolCallOnce({
                   itemId,
                   callId: toolCall.callId,
@@ -170,8 +172,14 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
                 });
               }
               for (const item of output) {
+                if (!this.acceptsEvent(connection)) {
+                  return;
+                }
                 this.emitCompletedToolCall(item, event);
               }
+            }
+            if (!this.acceptsEvent(connection)) {
+              return;
             }
             const terminalTranscript = output
               .filter((item) => item.type === "message" && item.role === "assistant")
@@ -186,6 +194,8 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
               .join("");
             this.flushAssistantTranscript(terminalTranscript);
           });
+          invoke(() => this.config.onResponseDone?.(outcome));
+          invoke(emitBridgeEvent);
         } finally {
           // Keep the response active through terminal tool discovery: callbacks can
           // submit results synchronously and must not start the next response early.

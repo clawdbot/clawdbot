@@ -17,6 +17,7 @@ declare const WORKER_DEPLOY_BUILD: boolean;
 type PtyAdapter = SpawnProcessAdapter;
 
 export async function createPtyAdapter(params: {
+  assertCurrent?: () => void;
   shell: string;
   args: string[];
   cwd?: string;
@@ -24,6 +25,7 @@ export async function createPtyAdapter(params: {
   cols?: number;
   rows?: number;
   name?: string;
+  abortSignal?: AbortSignal;
 }): Promise<PtyAdapter> {
   // Worker deploys are portable JavaScript artifacts; exec falls back to the child adapter
   // instead of binding the Gateway host's native PTY binary into the bundle.
@@ -47,6 +49,11 @@ export async function createPtyAdapter(params: {
   if (spawnEnv) {
     setPtyTerminalName({ env: spawnEnv, name: terminalName, platform: process.platform });
   }
+  params.assertCurrent?.();
+  // Construction can be cancelled while the native module loads.
+  if (params.abortSignal?.aborted) {
+    throw new Error("PTY construction aborted");
+  }
   const pty = spawn(preparedSpawn.command, preparedSpawn.args, {
     cwd: params.cwd,
     env: spawnEnv,
@@ -54,7 +61,6 @@ export async function createPtyAdapter(params: {
     cols: params.cols ?? 120,
     rows: params.rows ?? 30,
   });
-
   let dataListener: IDisposable | null = null;
   let exitListener: IDisposable | null = null;
   const completion = createDeferredCore<{

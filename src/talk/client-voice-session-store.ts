@@ -41,11 +41,11 @@ export type ClientVoiceSessionRecord = {
   hasUserTranscript?: boolean;
 };
 
-export type ClientVoiceRunBinding = {
+export type ClientVoiceRunBinding = Readonly<{
   agentId: string;
   voiceSessionId: string;
   sessionKey: string;
-};
+}>;
 
 const TRANSCRIPT_FAILURE_KEY_PATTERN = /^[0-9a-f]{64}$/;
 

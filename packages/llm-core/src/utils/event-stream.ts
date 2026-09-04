@@ -1,4 +1,3 @@
-// LLM Core module implements event stream behavior.
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -7,33 +6,25 @@ import type {
 
 /** Generic async-iterable event stream with a separately awaited final result. */
 export class EventStream<T, R = T> implements AsyncIterable<T> {
-  private queue: T[] = [];
+  private queue: (T | undefined)[] = [];
   private queueHead = 0;
   private waiting: ((value: IteratorResult<T>) => void)[] = [];
   private done = false;
   private resultSettled = false;
   private finalResultPromise: Promise<R>;
-  private resolveFinalResult: (result: R) => void;
-  private rejectFinalResult: (error: Error) => void;
+  // Promise invokes its executor before construction returns.
+  private resolveFinalResult!: (result: R) => void;
+  private rejectFinalResult!: (error: Error) => void;
   private isComplete: (event: T) => boolean;
   private extractResult: (event: T) => R;
 
   constructor(isComplete: (event: T) => boolean, extractResult: (event: T) => R) {
     this.isComplete = isComplete;
     this.extractResult = extractResult;
-    const resolvers: Array<(result: R) => void> = [];
-    const rejecters: Array<(error: Error) => void> = [];
     this.finalResultPromise = new Promise((resolve, reject) => {
-      resolvers.push(resolve);
-      rejecters.push(reject);
+      this.resolveFinalResult = resolve;
+      this.rejectFinalResult = reject;
     });
-    const resolveFinalResult = resolvers.at(0);
-    const rejectFinalResult = rejecters.at(0);
-    if (!resolveFinalResult || !rejectFinalResult) {
-      throw new Error("event stream result promise did not initialize its resolver");
-    }
-    this.resolveFinalResult = resolveFinalResult;
-    this.rejectFinalResult = rejectFinalResult;
   }
 
   push(event: T): void {
@@ -85,6 +76,8 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
     while (true) {
       if (this.queueHead < this.queue.length) {
         const event = this.queue[this.queueHead] as T;
+        // The consumer owns this event now; compaction must not delay payload release.
+        this.queue[this.queueHead] = undefined;
         this.queueHead += 1;
         // Compact only after a substantial consumed prefix reaches half the
         // backing array, keeping dequeue amortized O(1) when consumers lag.

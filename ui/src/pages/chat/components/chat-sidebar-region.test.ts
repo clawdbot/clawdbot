@@ -168,7 +168,7 @@ describe("chat sidebar region", () => {
       Array.from(root(region).querySelectorAll(".side-panel-type-option__shortcut"), (node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Ctrl+`", "Ctrl+Shift+B"]);
+    ).toEqual(["Ctrl+`", "Ctrl+Shift+B", "Ctrl+Shift+S"]);
     const reviewItem = Array.from(
       root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
     ).find((item) => Reflect.get(item, "value") === "detail");
@@ -215,7 +215,7 @@ describe("chat sidebar region", () => {
       Array.from(selector?.querySelectorAll(".side-panel-empty__type") ?? [], (item) =>
         item.textContent?.replace(/\s+/gu, " ").trim(),
       ),
-    ).toEqual(["Review", "Terminal Ctrl+`", "Files Ctrl+Shift+B", "Side chat"]);
+    ).toEqual(["Review", "Terminal Ctrl+`", "Files Ctrl+Shift+B", "Side chat Ctrl+Shift+S"]);
     root(region).querySelector<HTMLButtonElement>(".side-panel-empty__type")?.click();
     expect(region.callbacks?.openSlot).toHaveBeenCalledWith("detail");
   });
@@ -257,7 +257,7 @@ describe("chat sidebar region", () => {
       "tasks",
       "desktop",
       "discussion",
-      "chat",
+      "dashboard",
     ];
     await region.updateComplete;
 
@@ -269,11 +269,11 @@ describe("chat sidebar region", () => {
       "Terminal Ctrl+`",
       "Browser",
       "Files Ctrl+Shift+B",
-      "Side chat",
+      "Side chat Ctrl+Shift+S",
       "Tasks",
       "Desktop",
       "Discussion",
-      "Board chat",
+      "Dashboard",
     ]);
 
     const browserMenuItem = Array.from(
@@ -293,7 +293,7 @@ describe("chat sidebar region", () => {
     expect(browserEmptyItem?.querySelector('path[d="M2 12h20"]')).not.toBeNull();
   });
 
-  it("expands, restores, and minimizes without closing tabs", async () => {
+  it("expands, collapses, and minimizes without closing tabs", async () => {
     const region = await createRegion();
     root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
     root(region).querySelector<HTMLButtonElement>(".side-panel__minimize")?.click();
@@ -302,7 +302,9 @@ describe("chat sidebar region", () => {
 
     region.layout = setSidebarExpanded(region.layout, true);
     await region.updateComplete;
-    root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
+    const collapse = root(region).querySelector<HTMLButtonElement>(".side-panel__expand");
+    expect(collapse?.getAttribute("aria-label")).toBe("Collapse");
+    collapse?.click();
     expect(region.callbacks?.setExpanded).toHaveBeenLastCalledWith(false);
   });
 

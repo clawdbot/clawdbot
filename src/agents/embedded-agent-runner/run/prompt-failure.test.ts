@@ -1,5 +1,6 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../failover-error.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 
 type Params = Parameters<typeof handleEmbeddedPromptFailure>[0];
@@ -143,6 +144,42 @@ describe("handleEmbeddedPromptFailure", () => {
       expect(params.maybeRefreshRuntimeAuthForAuthError).toHaveBeenCalledOnce();
     },
   );
+
+  it("never refreshes auth or retries a recorded CLI terminal stop, even with an auth-shaped reason", async () => {
+    // The stop message repeats the backend's own terminal_reason; a value like
+    // `unauthorized` reads as an auth failure to text classifiers, and a retry
+    // would replay tool effects the terminal-stop policy exists to protect.
+    const promptError = new FailoverError(
+      "Claude CLI ended the turn without a reply (terminal_reason: unauthorized, stop_reason: end_turn). " +
+        "Tool actions may already have run; verify their effects before retrying.",
+      { reason: "unknown", code: "cli_turn_stopped", provider: "claude-cli", model: "sonnet" },
+    );
+    const params = makeParams({
+      promptError,
+      provider: "claude-cli",
+      modelId: "sonnet",
+      activeErrorContext: { provider: "claude-cli", model: "sonnet" },
+      maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => true),
+      maybeRetryTransient: vi.fn(async () => true),
+      resolveAuthProfileFailureReason: vi.fn(() => null),
+    });
+
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toMatchObject({
+      code: "cli_turn_stopped",
+    });
+
+    for (const callback of [
+      params.maybeRefreshRuntimeAuthForAuthError,
+      params.maybeRetryTransient,
+      params.advanceAuthProfile,
+      params.advanceRateLimitAuthProfile,
+    ]) {
+      expect(callback).not.toHaveBeenCalled();
+    }
+    expect(params.traceAttempts).toEqual([
+      expect.objectContaining({ result: "surface_error", stage: "prompt" }),
+    ]);
+  });
 
   it("returns the profile-rotation retry before failure marking finishes", async () => {
     const events: string[] = [];

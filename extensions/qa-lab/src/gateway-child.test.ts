@@ -103,6 +103,7 @@ function createParams(baseEnv?: NodeJS.ProcessEnv) {
     bundledPluginsDir: "/tmp/openclaw-qa/bundled-plugins",
     stagedBundledPluginsRoot: "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
     compatibilityHostVersion: "2026.4.8",
+    developmentSourceRoot: "/repo/openclaw",
     baseEnv,
   };
 }
@@ -755,6 +756,34 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_SKIP_PROVIDERS).toBe("patched-providers");
   });
 
+  it("binds plugin authority to the source candidate after caller environment patches", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/current-harness",
+      }),
+      developmentSourceRoot: "/repo/release-candidate",
+      runtimeEnvPatch: {
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
+      },
+    });
+
+    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe("/repo/release-candidate");
+  });
+
+  it("clears inherited and patched source roots for packaged candidates", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/current-harness",
+      }),
+      developmentSourceRoot: null,
+      runtimeEnvPatch: {
+        OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
+      },
+    });
+
+    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBeUndefined();
+  });
+
   it("maps live frontier key aliases into provider env vars", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({
@@ -985,7 +1014,7 @@ describe("buildQaRuntimeEnv", () => {
     },
   );
 
-  it("re-scrubs blocked credentials in the spawned gateway child env", async () => {
+  it("re-scrubs blocked credentials and source authority in a packaged gateway child", async () => {
     const tempParent = await tempDirs.makeTempDir("qa-gateway-env-scrub-");
     qaTempPathState.preferredTmpDir = tempParent;
     const observedEnvPath = path.join(tempParent, "observed-env.json");
@@ -1000,6 +1029,7 @@ describe("buildQaRuntimeEnv", () => {
       "OPENCLAW_QA_TELEGRAM_GROUP_ID: process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID,",
       "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN,",
       "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN,",
+      "OPENCLAW_DEV_SOURCE_ROOT: process.env.OPENCLAW_DEV_SOURCE_ROOT,",
       "};",
       `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
     ].join("\n");
@@ -1015,6 +1045,7 @@ describe("buildQaRuntimeEnv", () => {
         },
         runtimeEnvPatch: {
           SAFE_VALUE: "patched",
+          OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
           OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
           OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: "anthropic-setup-token",
           OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
@@ -1035,6 +1066,73 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(
       JSON.stringify({ SAFE_VALUE: "patched" }),
     );
+  });
+
+  it("clears inherited source authority when the repo CLI resolves to packaged plugins", async () => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-repo-cli-source-root-");
+    const repoRoot = await tempDirs.makeTempDir("qa-gateway-repo-cli-");
+    qaTempPathState.preferredTmpDir = tempParent;
+    const observedEnvPath = path.join(tempParent, "observed-source-root");
+    const runnerPath = path.join(repoRoot, "scripts", "run-node.mjs");
+    await mkdir(path.dirname(runnerPath), { recursive: true });
+    await writeFile(
+      runnerPath,
+      [
+        'import fs from "node:fs";',
+        `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
+      ].join("\n"),
+      "utf8",
+    );
+    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", "/repo/current-harness");
+
+    const owner = ownGateway();
+    await expect(
+      owner.start({
+        repoRoot,
+        useRepoCli: true,
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("gateway exited before listening");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
+
+    await expect(readFile(observedEnvPath, "utf8")).resolves.toBe("");
+  });
+
+  it("binds a spawned source gateway to the candidate repo root", async () => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-source-root-");
+    qaTempPathState.preferredTmpDir = tempParent;
+    const observedEnvPath = path.join(tempParent, "observed-source-root");
+    const candidateRepoRoot = process.cwd();
+    const captureScript = [
+      'const fs = require("node:fs");',
+      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
+    ].join("\n");
+
+    const owner = ownGateway();
+    await expect(
+      owner.start({
+        repoRoot: candidateRepoRoot,
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: ["--eval", captureScript],
+        },
+        runtimeEnvPatch: {
+          OPENCLAW_DEV_SOURCE_ROOT: "/repo/caller-override",
+        },
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("gateway exited before listening");
+    await expect(owner.stop()).resolves.toMatchObject({ errors: [] });
+
+    await expect(readFile(observedEnvPath, "utf8")).resolves.toBe(candidateRepoRoot);
   });
 
   it("requires an Anthropic key for live Claude CLI API-key mode", async () => {

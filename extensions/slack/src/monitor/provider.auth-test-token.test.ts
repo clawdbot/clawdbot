@@ -151,6 +151,36 @@ describe("auth.test boot call", () => {
     }
   });
 
+  it("omits the empty body on the shipped Socket Mode startup path", async () => {
+    for (const key of PROXY_ENV_KEYS) {
+      vi.stubEnv(key, "");
+    }
+    const actualClient = await vi.importActual<typeof import("../client.js")>("../client.js");
+    useSlackStartupAuthClientOnce(actualClient.createSlackStartupAuthClient);
+    const globalFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          bot_id: "BBOT",
+          is_enterprise_install: false,
+          ok: true,
+          team_id: "T1",
+          user_id: "UBOT",
+        }),
+        { headers: { "content-type": "application/json" }, status: 200 },
+      ),
+    );
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    try {
+      await stopSlackMonitor(monitor);
+
+      expect(globalFetch).toHaveBeenCalledOnce();
+      expect(globalFetch.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+      expect(globalFetch.mock.calls[0]?.[1]).not.toHaveProperty("body");
+    } finally {
+      globalFetch.mockRestore();
+    }
+  });
+
   it("warns when auth.test returns a user id without bot_id", async () => {
     const runtimeLog = vi.fn();
     const client = getSlackClient();

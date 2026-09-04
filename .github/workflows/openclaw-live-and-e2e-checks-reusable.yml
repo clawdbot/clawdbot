@@ -110,7 +110,7 @@ on:
           - stable
           - full
       use_github_hosted_runners:
-        description: Use GitHub-hosted runners where supported; OpenWebUI always uses a large-disk Blacksmith runner
+        description: Use GitHub-hosted runners where supported, including OpenWebUI
         required: false
         default: false
         type: boolean
@@ -234,6 +234,11 @@ on:
         type: boolean
       release_soak:
         description: Effective release soak policy recorded in candidate evidence
+        required: false
+        default: false
+        type: boolean
+      package_published:
+        description: Whether the selected package candidate is already published
         required: false
         default: false
         type: boolean
@@ -452,7 +457,7 @@ on:
         default: stable
         type: string
       use_github_hosted_runners:
-        description: Use GitHub-hosted runners where supported; OpenWebUI always uses a large-disk Blacksmith runner
+        description: Use GitHub-hosted runners where supported, including OpenWebUI
         required: false
         default: true
         type: boolean
@@ -1975,7 +1980,7 @@ jobs:
     if: inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -2399,6 +2404,7 @@ jobs:
         env:
           ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+          PACKAGE_PUBLISHED: ${{ inputs.package_published }}
           RELEASE_PROFILE: ${{ inputs.release_test_profile }}
           RELEASE_SOAK: ${{ inputs.release_soak }}
           SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
@@ -2419,6 +2425,7 @@ jobs:
             --arg toolingSha "$TOOLING_SHA" \
             --arg releaseProfile "$RELEASE_PROFILE" \
             --argjson releaseSoak "$RELEASE_SOAK" \
+            --argjson packagePublished "$PACKAGE_PUBLISHED" \
             --arg upgradeSurvivorBaseline "$UPGRADE_SURVIVOR_BASELINE" \
             --arg upgradeSurvivorBaselines "$UPGRADE_SURVIVOR_BASELINES" \
             --arg upgradeSurvivorScenarios "$UPGRADE_SURVIVOR_SCENARIOS" \

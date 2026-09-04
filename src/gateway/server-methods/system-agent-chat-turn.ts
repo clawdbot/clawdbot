@@ -2,13 +2,9 @@ import type {
   SystemAgentChatParams,
   SystemAgentChatResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveGatewayPublicOrigin } from "../../config/gateway-public-origin.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatExecApprovalExpiresIn } from "../../infra/exec-approval-reply.js";
-import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
-import { normalizeControlUiBasePath } from "../control-ui-shared.js";
-import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { appendTranscriptTurn } from "../../system-agent/transcript-store.js";
+import type { GatewaySystemAgentSession } from "./shared-types.js";
 
 type SystemAgentChatReply = Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
 type SystemAgentChatEngineInput = Pick<
@@ -98,7 +94,6 @@ export async function runSystemAgentChatInput(params: {
 export function buildSystemAgentChatResult(params: {
   sessionId: string;
   reply: SystemAgentChatReply;
-  proposalId?: string;
 }): SystemAgentChatResult {
   const action =
     params.reply.action === "open-tui"
@@ -114,6 +109,9 @@ export function buildSystemAgentChatResult(params: {
         ? "Setup here is done — continue with your agent."
         : "Nothing to change."),
     action,
+    ...(params.reply.handoff?.kind === "model-accounts"
+      ? { handoff: { kind: "model-accounts" as const } }
+      : {}),
     ...(action === "open-agent" && params.reply.agentDraft
       ? { agentDraft: params.reply.agentDraft }
       : {}),
@@ -126,29 +124,16 @@ export function buildSystemAgentChatResult(params: {
     ...(params.reply.wizardInputPending === true ? { wizardInputPending: true } : {}),
     ...(params.reply.question ? { question: params.reply.question } : {}),
     ...(params.reply.step ? { step: params.reply.step } : {}),
-    ...(params.proposalId ? { needsApproval: true, proposalId: params.proposalId } : {}),
   };
 }
 
-export function buildDelegatedApprovalPendingReply(params: {
-  cfg: OpenClawConfig;
-  manager: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
-  approvalId: string;
-  nowMs?: number;
-}): string {
-  const snapshot = params.manager.getSnapshot(params.approvalId);
-  if (!snapshot) {
-    throw new Error("system-agent approval snapshot unavailable after registration");
+export function persistSystemAgentEngineHistory(
+  engine: GatewaySystemAgentSession["engine"],
+  startIndex: number,
+): void {
+  const at = Date.now();
+  for (const turn of engine.historySince(startIndex)) {
+    // Engine history has already masked sensitive user input.
+    appendTranscriptTurn({ ...turn, at });
   }
-  const origin = resolveGatewayPublicOrigin(params.cfg);
-  const reviewUrl =
-    origin && params.cfg.gateway?.controlUi?.enabled !== false
-      ? `${origin}${normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath)}/approve/${encodeURIComponent(params.approvalId)}`
-      : undefined;
-  return [
-    `OpenClaw change pending approval: ${snapshot.request.description}.`,
-    ...(reviewUrl ? [`Review: ${reviewUrl}.`] : []),
-    "No change has been made.",
-    `Expires in ${formatExecApprovalExpiresIn(snapshot.expiresAtMs, params.nowMs ?? Date.now())}.`,
-  ].join(" ");
 }

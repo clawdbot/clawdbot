@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { renderChatQueue } from "./components/chat-composer-queue.ts";
 
 afterEach(async () => {
@@ -442,6 +443,48 @@ describe("chat composer queue reordering", () => {
     expect(legacyImeEscape.defaultPrevented).toBe(false);
     expect(onQueueEditSubmit).not.toHaveBeenCalled();
     expect(onQueueEditCancel).not.toHaveBeenCalled();
+  });
+
+  it("edits and explicitly removes queued recipients without reassigning identical labels", () => {
+    let editingText = "@Alex @Alex";
+    let editingMentions: readonly HumanMention[] = [
+      { profileId: "first-alex", start: 0, end: 5 },
+      { profileId: "second-alex", start: 6, end: 11 },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const draw = () =>
+      render(
+        renderChatQueue({
+          queue: [{ ...waiting("a", 1), text: "@Alex @Alex" }],
+          editingId: "a",
+          editingText,
+          editingMentions,
+          onQueueRemove: vi.fn(),
+          onQueueEditChange: (text, mentions) => {
+            editingText = text;
+            editingMentions = mentions ?? [];
+            draw();
+          },
+        }),
+        container,
+      );
+    draw();
+    const editor = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    editor.setSelectionRange(0, 6);
+    editor.dispatchEvent(
+      new InputEvent("beforeinput", { bubbles: true, inputType: "deleteContentBackward" }),
+    );
+    editor.value = "@Alex";
+    editor.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }),
+    );
+    expect(editingMentions).toEqual([{ profileId: "second-alex", start: 0, end: 5 }]);
+    expect(container.textContent).toContain("Will notify: @Alex");
+    container.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
+    expect(editingMentions).toEqual([]);
+    expect(editor.value).toBe("@Alex");
+    expect(container.textContent).not.toContain("Will notify:");
   });
 
   it("projects one offline state on each row without a queue header", () => {

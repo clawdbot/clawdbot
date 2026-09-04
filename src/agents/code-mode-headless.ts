@@ -300,8 +300,7 @@ export async function runCodeModeScriptHeadless(params: {
       }
 
       pending.push(
-        ...createPendingBridgeStates({
-          pendingRequests: newRequests,
+        ...createPendingBridgeStates(newRequests, {
           config,
           runtime,
           catalogProjection,

@@ -257,8 +257,8 @@ async function seedHiddenBoardSlot(page: Page) {
                 {
                   id: "side-panel-column",
                   side: "right",
-                  panels: [{ id: "chat", slot: "chat" }],
-                  activePanelId: "chat",
+                  panels: [{ id: "dashboard", slot: "dashboard" }],
+                  activePanelId: "dashboard",
                   height: 360,
                   width: 480,
                 },

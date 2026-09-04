@@ -426,6 +426,7 @@ export type CodexDynamicToolBridge = {
   telemetry: {
     didSendViaMessagingTool: boolean;
     didDeliverSourceReplyViaMessageTool: boolean;
+    sourceReplyDelivered?: true;
     messagingToolSentTexts: string[];
     messagingToolSentMediaUrls: string[];
     messagingToolSentTargets: MessagingToolSend[];
@@ -730,6 +731,15 @@ export function createCodexDynamicToolBridge(params: {
         }
         const rawResult = await Reflect.apply(tool.execute, tool, executionArgs);
         captureExecutionBoundary();
+        // Delivery is committed before result middleware; presentation changes
+        // cannot erase the source owner's confirmation or infer a new one.
+        if (
+          toolName === "message" &&
+          asOptionalRecord(asOptionalRecord(rawResult.details)?.messageDelivery)
+            ?.sourceReplyDelivered === true
+        ) {
+          telemetry.sourceReplyDelivered = true;
+        }
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isToolResultError(rawResult);
         const rawResultFailureKind = resolveToolResultFailureKind(rawResult);

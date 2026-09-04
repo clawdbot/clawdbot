@@ -7,6 +7,7 @@ import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
   readGeneratedBundledChannelConfigs,
+  resolvePluginRuntimeChannelMetadata,
 } from "./lib/plugin-npm-package-manifest.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
@@ -16,6 +17,7 @@ import {
 } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
+const PACKAGE_ICON_PATH = path.join("assets", "icon.png");
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
@@ -33,12 +35,8 @@ function rewritePackageExtensions(entries: unknown, extension: string): string[]
   }
 
   return entries
-    .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => {
-      const normalized = entry.replace(/^\.\//, "");
-      const rewritten = normalized.replace(/\.[^.]+$/u, extension);
-      return `./${rewritten}`;
-    });
+    .map((entry) => rewritePackageEntry(entry, extension))
+    .filter((entry) => entry !== undefined);
 }
 
 function rewritePackageEntry(entry: unknown, extension: string): string | undefined {
@@ -220,6 +218,24 @@ function linkSourcePluginDependencies(pluginDir: string, distNodeModules: string
   }
 }
 
+function copyPackageIcon(pluginDir: string, distPluginDir: string): void {
+  const source = path.join(pluginDir, PACKAGE_ICON_PATH);
+  const target = path.join(distPluginDir, PACKAGE_ICON_PATH);
+  let sourceIsFile = false;
+  try {
+    sourceIsFile = fs.lstatSync(source).isFile();
+  } catch {
+    // Missing or unreadable presentation assets must not invalidate the plugin package.
+  }
+  if (!sourceIsFile) {
+    removePathIfExists(target);
+    return;
+  }
+  removePathIfExists(target);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(source, target);
+}
+
 /**
  * Copies bundled plugin metadata and package extension files.
  */
@@ -293,18 +309,26 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
         ? { ...mergedManifest, skills: copiedSkills }
         : mergedManifest;
       writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
+      copyPackageIcon(pluginDir, distPluginDir);
     } else {
       removeFileIfExists(distManifestPath);
+      removeFileIfExists(path.join(distPluginDir, PACKAGE_ICON_PATH));
     }
 
     if (!fs.existsSync(packageJsonPath)) {
       removeFileIfExists(distPackageJsonPath);
       continue;
     }
-    if (packageJson && isRecord(packageJson.openclaw) && "extensions" in packageJson.openclaw) {
+    if (packageJson && isRecord(packageJson.openclaw)) {
       const extension = buildEntry.runtimeExtension;
+      const channel = resolvePluginRuntimeChannelMetadata(packageJson.openclaw.channel, {
+        pluginDir: dirent.name,
+        runtimeBuildOutputs: rewritePackageExtensions(buildEntry.sourceEntries, extension) ?? [],
+        runtimeRoot: ".",
+      });
       packageJson.openclaw = {
         ...packageJson.openclaw,
+        ...(channel ? { channel } : {}),
         extensions: rewritePackageExtensions(packageJson.openclaw.extensions, extension),
         ...(typeof packageJson.openclaw.setupEntry === "string"
           ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry, extension) }

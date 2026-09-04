@@ -63,6 +63,8 @@ export type ControlUiBootstrapConfig = {
   automaticallyFetchFavicons?: boolean;
   seamColor?: string;
   environment?: ControlUiEnvironment;
+  /** Whether this Gateway's served UI may show the Discord community invitation. */
+  communityInvite?: boolean;
   /**
    * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
    * The Control UI hides the terminal entirely when false so a disabled kill

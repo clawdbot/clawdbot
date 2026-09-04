@@ -25,8 +25,29 @@ export {
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
-export function createChatFlowE2eSuite() {
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  directory: string,
+  fileName: string,
+): Promise<void> {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  const artifactDir = path.join(owner.artifactDir, directory);
+  await mkdir(artifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(artifactDir, fileName),
+  });
+}
+
+export function createChatFlowE2eSuite(
+  browserLaunchOptions?: Parameters<typeof createControlUiE2eSuite>[0]["browserLaunchOptions"],
+) {
   return createControlUiE2eSuite({
+    browserLaunchOptions,
     name: "Control UI mocked Gateway E2E",
     trackBrowserContexts: true,
     unavailableMessage: (executablePath) =>

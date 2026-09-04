@@ -520,6 +520,49 @@ describe("session companion asks", () => {
     harness.service.dispose();
   });
 
+  it("times out a pending context read and fences it from a replacement ask", async () => {
+    vi.useFakeTimers();
+    const context = {
+      kind: "ready" as const,
+      context: { empty: true, messages: [], sessionId: "session-1" },
+    };
+    const pendingContext = deferred<Awaited<ReturnType<SessionCompanionContextReader["read"]>>>();
+    let reads = 0;
+    const harness = createHarness({
+      readContext: () => (reads++ === 0 ? pendingContext.promise : Promise.resolve(context)),
+    });
+    const request = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      question: "Old?",
+      connId: "conn-1",
+    };
+    let failure: unknown;
+    const active = harness.service.ask(request).catch((error: unknown) => {
+      failure = error;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(failure).toMatchObject({ reason: "unavailable", message: "Side chat timed out." });
+      await expect(
+        harness.service.ask({ ...request, question: "Replacement?" }),
+      ).resolves.toMatchObject({
+        answer: "Evidence says the build is green.",
+      });
+      pendingContext.resolve(context);
+      await active;
+      await Promise.resolve();
+      expect(harness.run).toHaveBeenCalledOnce();
+      expect(harness.service.state(request).exchanges).toEqual([
+        { question: "Replacement?", answer: "Evidence says the build is green.", ts: 100 },
+      ]);
+    } finally {
+      pendingContext.resolve(context);
+      await active;
+      harness.service.dispose();
+    }
+  });
+
   it("reset clears state and cancels an active ask", async () => {
     vi.useFakeTimers();
     const pending = deferred<string>();

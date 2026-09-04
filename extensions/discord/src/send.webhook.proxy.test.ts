@@ -197,7 +197,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: false,
     });
 
-    expect(result.messageId).toBe("unknown");
+    expect(result.messageId).toBe("");
     expect(jsonSpy).not.toHaveBeenCalled();
     globalFetchMock.mockRestore();
   });
@@ -217,7 +217,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: true,
     });
 
-    expect(result.messageId).toBe("unknown");
+    expect(result.messageId).toBe("");
     expect(tracked.wasCanceled()).toBe(true);
     globalFetchMock.mockRestore();
   });
@@ -235,7 +235,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: true,
     });
 
-    expect(result.messageId).toBe("unknown");
+    expect(result.messageId).toBe("");
     globalFetchMock.mockRestore();
   });
 

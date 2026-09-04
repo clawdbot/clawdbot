@@ -81,6 +81,8 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
 };
 
 type SpawnBaseInput = {
+  /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
+  assertCurrent?: () => void;
   runId?: string;
   sessionId: string;
   backendId: string;

@@ -36,17 +36,6 @@ type AssistantAttachmentAvailability =
       unconfirmed?: true;
     };
 
-export type ManagedAttachmentAvailability =
-  | { status: "checking"; refreshAfter?: number; refreshAttempts?: number }
-  | {
-      status: "available";
-      url: string;
-      expiresAt?: number;
-      refreshAfter?: number;
-      refreshAttempts?: number;
-    }
-  | { status: "unavailable"; reason: string; checkedAt: number };
-
 export const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS = 30_000;
 export const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
@@ -331,19 +320,6 @@ function scheduleAssistantAttachmentRefresh(
     // replacement is minted; a checking card would reset native playback.
     notifyChatMediaResourceSubscribers(resource);
   });
-}
-
-export function managedAttachmentRefreshDelayMs(refreshAttempts: number): number {
-  return ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS * 2 ** Math.max(0, refreshAttempts - 1);
-}
-
-export function selectLaterExpiringManagedAttachment(
-  current: Extract<ManagedAttachmentAvailability, { status: "available" }> | null,
-  incoming: Extract<ManagedAttachmentAvailability, { status: "available" }>,
-): Extract<ManagedAttachmentAvailability, { status: "available" }> {
-  return current?.expiresAt !== undefined && current.expiresAt >= (incoming.expiresAt ?? 0)
-    ? current
-    : incoming;
 }
 
 export function isManagedOutgoingMediaSource(source: string): boolean {

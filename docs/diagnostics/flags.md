@@ -72,7 +72,11 @@ without editing the file.
 
 ## Profiler flags
 
-Profiler flags gate lightweight timing spans; they add no overhead when off.
+Slow reply preparation and Codex startup are logged at the default log level
+without profiler flags: a stage taking at least 5 seconds or a tracked total
+taking at least 10 seconds emits a warning. Fast paths remain quiet. Profiler
+flags lower the timing thresholds to 500 milliseconds per stage and 1 second
+total, and enable additional detail.
 
 Enable all profiler-gated spans for one gateway run:
 

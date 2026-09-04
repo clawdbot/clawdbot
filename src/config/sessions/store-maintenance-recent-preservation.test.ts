@@ -116,7 +116,7 @@ describe("recent session maintenance preservation", () => {
     store[staleKey] = { sessionId: "stale-2", updatedAt: now - 8 * DAY_MS };
     expect(capEntryCount(store, 1, { preserveRecentMs })).toBe(1);
     expect(store).toHaveProperty(recentKey);
-    expect(store).not.toHaveProperty(staleKey);
+    expect(store[staleKey]?.archivedAt).toEqual(expect.any(Number));
   });
 
   it("keeps recent and external sessions under disk pressure without invoking plugins", async () => {
@@ -136,6 +136,8 @@ describe("recent session maintenance preservation", () => {
           [staleKey]: {
             sessionId: "stale",
             updatedAt: now - 8 * DAY_MS,
+            archivedAt: now - 8 * DAY_MS,
+            archiveReason: "active-session-cap",
             displayName: "s".repeat(4_000),
           },
           [externalKey]: {
