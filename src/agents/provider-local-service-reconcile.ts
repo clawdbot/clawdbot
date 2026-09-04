@@ -20,6 +20,7 @@ export function attachModelProviderLocalServiceReconciler<TModel extends object>
   model: TModel,
   reconcile: ProviderLocalServiceReconciler | undefined,
 ): TModel {
+  // SAFETY: the spread preserves TModel; the intersection exposes only the symbol assigned below.
   const next = { ...model } as TModel & ModelWithProviderLocalServiceReconciler;
   next[MODEL_PROVIDER_LOCAL_SERVICE_RECONCILER_SYMBOL] = reconcile;
   return next;
@@ -28,6 +29,7 @@ export function attachModelProviderLocalServiceReconciler<TModel extends object>
 export function getModelProviderLocalServiceReconciler(
   model: object,
 ): ProviderLocalServiceReconciler | undefined {
+  // SAFETY: only the attach helper writes this optional symbol; absent carriers read as undefined.
   return (model as ModelWithProviderLocalServiceReconciler)[
     MODEL_PROVIDER_LOCAL_SERVICE_RECONCILER_SYMBOL
   ];
