@@ -163,11 +163,22 @@ describe("echo cache — reply_to_guid reflections", () => {
       expectedKind: "drop",
     },
     {
-      label: "keeps a self-chat reply with different text",
+      label: "keeps a matching inline reply sent from a verified self-chat",
       cachedScope: SELF_CHAT_SCOPE,
       message: selfChatMessage({
         id: 201,
         guid: "p:0/user-reply-guid",
+        reply_to_guid: outboundGuid,
+        text: "Reflected reply",
+      }),
+      expectedKind: "dispatch",
+    },
+    {
+      label: "keeps a self-chat reply with different text",
+      cachedScope: SELF_CHAT_SCOPE,
+      message: selfChatMessage({
+        id: 206,
+        guid: "p:0/user-reply-guid-different-text",
         reply_to_guid: outboundGuid,
         text: "User response",
         is_from_me: false,
