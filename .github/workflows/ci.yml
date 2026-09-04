@@ -4472,10 +4472,10 @@ jobs:
       max-parallel: 2
       matrix:
         phase: [release, tests]
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
-    # Hosted paths include untrusted first-attempt PRs, so their timeout must
-    # follow the runner rather than inheriting Blacksmith's tighter budget.
-    timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 30 || 20 }}
+    # Unassigned Blacksmith Mac jobs can hold both non-canceling main slots.
+    # Use the existing hosted image and budget from the first attempt.
+    runs-on: macos-26
+    timeout-minutes: 30
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
       OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
