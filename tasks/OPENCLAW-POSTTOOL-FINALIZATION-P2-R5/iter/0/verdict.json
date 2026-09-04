@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "iter": 0,
+  "ts": "2026-09-04T11:34:16.307Z",
+  "decision": "hold",
+  "metric": null,
+  "audit_notes": "G1 PASS — merge-base 194b7f2a…, instruction hashes match, Codex HEAD 1f7b9992…; inspected bespoke_event_handling.rs:~1128/~1394 and thread_data.rs:~381.\nG2 HOLD — owner GREEN independently 25/25; RED only in iter-0/eval_output.json summaries + chat narrative, no staged pre-fix stdout/SHA.\nG3 PASS — delivery E2E independently 19/19; matrix cases present at integration test :562–:564.\nG4 PASS — sibling suites exit 0 on corrected path src/agents/harness/settled-turn-finalization-result.test.ts (goal.json path still stale/missing).\nG5 HOLD — docs:list+build OK via pnpm-native 12.1.0; check:docs/check:changed/check/check:test-types fail on recursive literal `pnpm` ENOENT (allowed exception recorded, but static gate not actually green).\nG6 HOLD — log sha 3e72b3b6… matches; 109 FAIL headings are host/env (systemd unsafe-permissions, git-root /tmp, backup timeout, exec-render `/usr/bin/rg`); Playwright missing + OOM present; no outer exit marker; claimed failure_extract_sha256 c782dd8c… unreproducible (FAIL-line hash 9986964d…); many unclassified `×` lines (snapshot/doctor) absent from coder failure_files.\nG7 PASS — six allowed product paths; prod TS +14/−14 net 0; candidate c0774e8d…; base→candidate diff sha ecca96d3…; PR head still 3590b70f…; iter-0/diff.patch ledger-only.\nG8 HOLD — ClawSweeper P2 rank-ups (detached isolation + committed-append cancellation) addressed in settled-turn-finalization.ts:116/:206/:214/:256 and docs, but ADVANCE blocked by G2/G5/G6 evidence gaps.\nNot rollback: candidate unchanged this iter; not net-negative.",
+  "flags": [
+    "unreproducible_failure_extract_sha256",
+    "red_evidence_summary_only",
+    "static_pnpm_enoent",
+    "full_suite_no_exit_marker"
+  ]
+}

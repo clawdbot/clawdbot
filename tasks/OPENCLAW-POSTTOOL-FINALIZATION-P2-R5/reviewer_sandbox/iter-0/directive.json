@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "iter": 0,
+  "ts": "2026-09-04T11:17:47.888Z",
+  "goal": "Resume from the preserved five-file candidate and ledger evidence. Do not rerun the full suite. Run only the remaining goal.json gates that are executable without recursively requiring a literal pnpm binary, using `/home/openclaw/.cache/node/corepack/v1/pnpm/12.1.0/pnpm-native` wherever pnpm is invoked. Capture exact outputs and digests, verify scope and production-versus-test LOC, and emit iter_complete for Reviewer handoff.",
+  "constraints": [
+    "Preserve the five-file candidate unless a remaining authoritative gate demonstrates a candidate failure.",
+    "Do not rerun RED, focal GREEN suites, sibling GREEN suites, or the completed full suite.",
+    "Do not substitute npx, pnpm 12.0.0, the wrapper placeholder, package-manager overrides, or workarounds.",
+    "If a command recursively requires unavailable literal pnpm, record the exact failure as an environment/evaluator exception.",
+    "Do not run or restart runtime services.",
+    "Do not touch a sixth product file.",
+    "Do not reimplement the fix.",
+    "Do not push.",
+    "Reviewer must remain read-only."
+  ],
+  "success_criteria": [
+    "All remaining executable gates have exact command/output evidence and digests.",
+    "Scope and LOC classification are verified.",
+    "Preserved RED/GREEN evidence and full-suite environmental failures remain intact and correctly classified.",
+    "Coder emits iter_complete.",
+    "Reviewer independently audits the exact candidate, RED/GREEN evidence, environmental classification, latest ClawSweeper P2 moves, and current PR state."
+  ],
+  "max_attempts": 1
+}
