@@ -154,7 +154,7 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
     }));
     const started = createDeferred();
     const release = createDeferred();
-    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
     let active = 0;
     fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
       if (url.endsWith("/health")) {
@@ -195,6 +195,60 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
     } finally {
       release.resolve();
       now.mockRestore();
+      await withTestTimeout(resultPromise, 1_000, "property probes did not settle during cleanup");
+    }
+  });
+
+  it("keeps scheduling router property probes through a forward wall-clock step", async () => {
+    const models = Array.from({ length: 17 }, (_, index) => ({
+      id: `model-${index}`,
+      status: { value: "loaded" },
+    }));
+    const started = createDeferred();
+    const release = createDeferred();
+    const now = Date.now;
+    let offset = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
+    let active = 0;
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.endsWith("/health")) {
+        return guarded(new Response(null, { status: 200 }));
+      }
+      if (url.endsWith("/models")) {
+        return guarded(new Response(JSON.stringify({ data: models })));
+      }
+      active += 1;
+      if (active === 8) {
+        started.resolve();
+      }
+      await release.promise;
+      return guarded(new Response(JSON.stringify({ n_ctx: 8192 })));
+    });
+
+    const resultPromise = discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama-server",
+      healthPath: "/health",
+      modelsPathOrder: "server-first",
+      routerModelProps: true,
+      timeoutMs: 1_000,
+      rawResult: true,
+    });
+
+    try {
+      await withTestTimeout(started.promise, 1_000, "initial eight property probes did not start");
+      // The wall clock jumps far past the budget; the remaining probes must still be scheduled.
+      offset = 60_000;
+      release.resolve();
+      const result = await withTestTimeout(resultPromise, 1_000, "discovery did not finish");
+
+      expect(result.kind === "success" ? result.rows : []).toHaveLength(17);
+      expect(
+        fetchWithSsrFGuardMock.mock.calls.filter(([call]) => call.url.includes("/props?")).length,
+      ).toBe(17);
+    } finally {
+      release.resolve();
+      clock.mockRestore();
       await withTestTimeout(resultPromise, 1_000, "property probes did not settle during cleanup");
     }
   });
