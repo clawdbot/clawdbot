@@ -281,8 +281,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Stage AppImage GStreamer plugins
-        run:
-          | # zizmor: ignore[github-env] static runner-temporary path consumed by the Tauri build in this secretless job
+        run: | # zizmor: ignore[github-env] static runner-temporary path consumed by the Tauri build in this secretless job
           plugins="${RUNNER_TEMP}/openclaw-gstreamer-plugins"
           .release-tooling/apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins" \
             | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
